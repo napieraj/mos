@@ -73,33 +73,52 @@ below that struct is pure and Linux-testable.
   identical — DR returns an empty array on runners, same as IOKit
   matching today); `nub_invariant_check` untouched.
 
-## Phase 2 — watch: DR doorbells on the existing pump
+## Phase 2 — watch: DR doorbell replaces DA (revised same day)
 
 The watch keeps its architecture: private-mode CFRunLoop pump, poll
 engine as authority, per-probe open/close by registry ID, TUR⊕GESN
-probe. DR changes only who rings the doorbell:
+probe. DR changes only who rings the doorbell — and DA retires here,
+not in a follow-up:
 
 - Add `DRNotificationCenterCreateRunLoopSource` to the existing
   `MOS_WATCH_RUN_LOOP_MODE` runloop (same single-thread contract;
-  callbacks fire only inside `mos_watch_next_event`'s pump, like DA
-  today).
+  callbacks fire only inside `mos_watch_next_event`'s pump).
 - `kDRDeviceStatusChangedNotification` → `mos_internal_watch_notify_wake`
-  (same pull-the-poll-forward path as the DA callback). Net new
-  coverage: DR's notification is **device-scoped**, so it wakes on
-  tray-open / no-media drives where DA's media-scoped wake cannot —
-  closing the documented poll-only gap (`mos_watch.c` ~:348).
-- `kDRDeviceDisappearedNotification` → terminal-removal wake,
-  backstopping `kIOGeneralInterest` (keep both initially; they're one
-  registration each and removal is the event a watch must never miss).
+  (the same pull-the-poll-forward path the DA callback used). It is
+  device-scoped, so it also wakes on tray-open / no-media drives where
+  DA's media-scoped, bsd_unit-filtered wake matched nothing
+  (`mos_watch.c` ~:348) — strictly better scope match.
+- **DA session deleted in this phase.** Rationale (resolves former
+  decision 2): polling is the correctness floor by the watch's own
+  contract — poll-only is an already-shipped degraded mode
+  (`mos_watch.c` ~:341) — so a doorbell source is latency-only, and
+  the worst case for any missed wake is `stable_poll_ms` (2s) on top
+  of the kernel's own 1000ms media-poll quantization
+  (`IOSCSIMultimediaCommandsDevice.cpp:2528`, vendored). The event
+  that must never be missed is removal, which rides
+  `kIOGeneralInterest`, not DA. Two doorbells would buy bounded
+  latency insurance at the price of a second setup/teardown/failure
+  matrix; one doorbell + poll floor is the same shape the watch has
+  today. If DR notification setup fails, the watch falls back to
+  poll-only — the identical, documented fallback DA had.
+- `kIOGeneralInterest` remains the terminal-removal source unchanged.
+  DR's `Disappeared` notification is NOT additionally registered —
+  redundant with a proven direct-IOKit mechanism; revisit only if the
+  falsification runs show a removal `kIOGeneralInterest` misses.
 - Poll engine: untouched rates. Do NOT lengthen transition/stable
   polling on the promise of DR doorbells — that's a tuning decision
   for after falsification runs show doorbell coverage/latency
-  (iterate up on evidence).
-- DA session: keep in v0.4 alongside DR; retire in a follow-up only
-  after the integration matrix shows DR's wake is a superset. Two
-  doorbells are cheap; a missed wake is not.
+  (iterate up on evidence). The integration-matrix doorbell run is
+  observational (latency/coverage measurement), not a gate.
 - Events/schemas: `mos.event.v1` unchanged (registry_id, states, error
   codes all as today). No schema work in this pivot.
+- Net effect on `mos_watch.c`: DA setup/teardown, the
+  description-changed callback, and the bsd_unit wake filter are
+  deleted; DR source + one callback added. Net-negative LOC, and the
+  DiskArbitration framework dependency drops from the watch path
+  entirely (link line: it remains only if nothing else uses DA —
+  check at implementation; if so, remove `-framework DiskArbitration`
+  from CMake/README/amalgamate-header in the same commit).
 
 ## Phase 3 — retirements + docs
 
@@ -145,7 +164,11 @@ GESN-failing bridge if one enters the fixture set.
 1. **INQUIRY retirement** in Phase 1 (identity from CopyInfo) vs
    keeping it one release as a fallback. Plan assumes retire; the
    seam keeps the slot if we keep it.
-2. **DA retirement** deferred (plan keeps DA+DR in v0.4) — confirm.
+2. ~~DA retirement~~ **Resolved same day: DA retires in Phase 2.**
+   Doorbells are latency-only (poll is the correctness floor, kernel
+   media discovery is 1000ms-quantized regardless), so the
+   keep-until-proven-superset hedge bought bounded insurance at the
+   cost of a second wake mechanism's failure matrix. See Phase 2.
 3. **Index contract wording**: document "index = DR device-array
    order (drutil-identical)" in mos.h + README once Phase 1 lands.
 4. Multi-device watch via `kDRDeviceAppearedNotification`: out of

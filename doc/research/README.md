@@ -67,10 +67,12 @@ in `AGENTS.md`. The chain of files is the audit trail.
   plan for the DR pivot under the "DR is the doorbell and the
   directory; MMC is the inspector" doctrine: probe tool + fixtures,
   enumeration/identity/addressing on the DR snapshot (drutil-parity
-  index, registry-path→ID identity), DR doorbells joining the
-  existing watch pump, retirements, coexistence falsification runs,
-  and the four sign-off decisions (INQUIRY retirement, DA retention,
-  index contract wording, multi-device watch out of scope).
+  index, registry-path→ID identity), the DR doorbell replacing DA on
+  the existing watch pump (same-day revision: DA retires in Phase 2 —
+  doorbells are latency-only over the poll floor and the kernel's own
+  1000ms media poll), retirements, coexistence falsification runs,
+  and the remaining sign-off decisions (INQUIRY retirement, index
+  contract wording, multi-device watch out of scope).
 
 - `2026-06-10-gesn-single-poll-rebuttal.md` — Dated rebuttal of the
   2026-05-29 note per this README's append rule: the 2026-05-30
