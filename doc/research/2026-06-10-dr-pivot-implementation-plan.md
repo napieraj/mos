@@ -32,7 +32,9 @@ below that struct is pure and Linux-testable.
   CI compiles it so the TU can't bitrot.
 - One hardware capture session on Tahoe → committed fixtures (plist
   dumps + extracted plain-struct forms) with a dated
-  `tests/fixtures/README.md` entry, per the hardware ADR.
+  `tests/fixtures/README.md` entry, per the hardware ADR. The capture
+  includes, per drive, both identity-string forms (INQUIRY-trimmed vs
+  `DRDeviceCopyInfo` CFStrings) for the decision-1 byte-shape diff.
 - Phase 1 does NOT block on this: the dict→struct extraction is built
   to the vendored header's documented key types, with synthetic
   fixtures; real captures later validate or falsify (and become the
@@ -53,7 +55,7 @@ below that struct is pure and Linux-testable.
   - `kDRDeviceMediaBSDNameKey` → existing `parse_bsd_unit` (absent ⇒
     -1, same media-scoped semantics as today).
   - vendor/product/revision from `DRDeviceCopyInfo` — retires
-    per-open INQUIRY (decision 1 below).
+    per-open INQUIRY (decision 1, resolved: retire).
 - Rewired public paths (signatures and ABI unchanged):
   - `mos_enumerate_devices` walks the snapshot.
   - `mos_open_by_index` = snapshot[i] → registry path/ID →
@@ -159,20 +161,38 @@ timelines; commit as fixture. Matrix additions: DR-array order vs
 `drutil list` (parity claim), doorbell latency vs poll schedule,
 GESN-failing bridge if one enters the fixture set.
 
-## Decisions needing sign-off
+## Decisions (all resolved same day)
 
-1. **INQUIRY retirement** in Phase 1 (identity from CopyInfo) vs
-   keeping it one release as a fallback. Plan assumes retire; the
-   seam keeps the slot if we keep it.
-2. ~~DA retirement~~ **Resolved same day: DA retires in Phase 2.**
-   Doorbells are latency-only (poll is the correctness floor, kernel
-   media discovery is 1000ms-quantized regardless), so the
-   keep-until-proven-superset hedge bought bounded insurance at the
-   cost of a second wake mechanism's failure matrix. See Phase 2.
-3. **Index contract wording**: document "index = DR device-array
-   order (drutil-identical)" in mos.h + README once Phase 1 lands.
-4. Multi-device watch via `kDRDeviceAppearedNotification`: out of
-   scope for v0.4 (single-target watch unchanged).
+1. **INQUIRY: retire in Phase 1.** Condition was "unless it gives us
+   something the pivot doesn't" — verified no: `mos_internal_mmc_inquiry`
+   (mos_scsi.c:707) extracts exactly vendor/product/revision, all three
+   covered by `DRDeviceCopyInfo` keys; no peripheral-type validation to
+   lose (IOKit class matching already owns device-type filtering), and
+   INQUIRY failure is already the non-fatal empty-strings path DR-key
+   absence maps onto. Residual: DR's pre-parsed CFStrings vs the SPC-4
+   space-trimmed copies may differ in byte shape (consumer-visible in
+   JSON identity fields) — Phase 0 captures both forms per drive and
+   diffs; existing SCSI-width buffers remain the truncation bound.
+2. **DA retires in Phase 2.** Doorbells are latency-only (poll is the
+   correctness floor, kernel media discovery is 1000ms-quantized
+   regardless), so the keep-until-proven-superset hedge bought bounded
+   insurance at the cost of a second wake mechanism's failure matrix.
+   See Phase 2.
+3. **Index contract: provenance wording, not a stability promise.**
+   mos.h + README document "index = position in the system's device
+   array — the same array drutil enumerates — stable only within an
+   enumerate→open window." Parity is stated as provenance (both
+   readers of one array; cannot diverge); cross-run order stability is
+   promised by neither substrate and stays explicitly unpromised,
+   matching the existing snapshot-index semantics.
+4. **Multi-device watch: out of scope, not foreclosed.** Guard against
+   foreclosure: the DR StatusChanged callback filters by registry ID
+   at the callback level (a parameter, not a structural assumption),
+   so a future watch-all mode widens the filter rather than rewiring
+   the pump. Honest cost note: after the schema freeze, watch-all's
+   new event kinds are a `mos.event.v2`-class change (the v1 event
+   enum is closed and drift-pinned by schemas/validate.py) — deferral
+   prices the feature, it does not block it.
 
 ## Sizing / order
 
