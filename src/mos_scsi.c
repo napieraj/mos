@@ -35,15 +35,6 @@ _Static_assert(sizeof(SCSI_Sense_Data) == kSenseDefaultSize,
 _Static_assert(kSenseDefaultSize == 18,
                "kSenseDefaultSize changed — update sense[18] in mos.h and mos_internal.h");
 
-/* ---- Class list. Order matters: broadest → narrowest. --------------- */
-
-static const char *const mos_internal_classes[] = {
-    "IOBDBlockStorageDevice",
-    "IODVDBlockStorageDevice",
-    "IOCDBlockStorageDevice",
-    NULL
-};
-
 /* ---- Registry helpers --------------------------------------------- */
 
 /* The pure BSD-name helpers live in src/mos_pure.c (declared in mos_pure.h,
@@ -148,110 +139,33 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out)
 
 #define MOS_ENUM_CAP 64
 
-typedef struct {
-    uint64_t seen[MOS_ENUM_CAP];
-    size_t   seen_count;
-} mos_internal_dedup;
-
-static void mos_internal_visit_collect(io_service_t s,
-                                       mos_internal_dedup *dedup,
-                                       struct mos_device_info *slots,
-                                       size_t slot_cap, size_t *slot_n)
-{
-    /* Registry ID is the public index contract: mos_open_by_index()
-       reopens via IORegistryEntryIDMatching against the stored ID.
-       If we can't get a valid ID for this entry, skip it — surfacing
-       an entry that can't be reopened by index would violate the
-       enumeration/index correspondence the public API documents.
-       Also guards dedup: id==0 from a failure would collide against
-       every other failed lookup, treating unrelated devices as
-       duplicates. */
-    uint64_t id = 0;
-    if (IORegistryEntryGetRegistryEntryID(s, &id) != KERN_SUCCESS || id == 0) {
-        return;
-    }
-
-    /* Dedup: the same drive can match the IOBD and IODVD classes both.
-       If we can't store this ID (seen[] full) we must drop the drive —
-       accepting it without storing would let the same drive appear
-       twice. The cap itself is documented at the public enumerate API. */
-    for (size_t i = 0; i < dedup->seen_count; ++i) {
-        if (dedup->seen[i] == id) return;
-    }
-    if (dedup->seen_count >= MOS_ENUM_CAP) return;
-    dedup->seen[dedup->seen_count++] = id;
-
-    if (*slot_n >= slot_cap) return; /* silently drop beyond cap */
-
-    /* Resolve the BSD unit but do NOT gate on it: an empty/open-tray drive
-       has no IOMedia child and returns -1, yet we still surface it. Identity
-       is registry_id, which mos_open_by_index reopens via
-       IORegistryEntryIDMatching (not BSD name), so a nameless drive stays
-       reachable by index/enumeration — just not by mos_open_by_bsd_name,
-       which is correct. */
-    struct mos_device_info *info = &slots[(*slot_n)++];
-    memset(info, 0, sizeof(*info));
-    info->registry_id  = id;
-    info->bsd_unit     = mos_internal_bsd_unit(s, NULL);   /* -1 if no media */
-
-    /* TODO: INQUIRY at enumeration time is expensive and requires
-       opening the drive. We skip it here; vendor/product/revision come
-       back NULL from the enumeration callback. Callers who need them
-       should mos_open_by_bsd_name() and inspect mos_state_result.vendor
-       et al. */
-}
-
-static int mos_internal_info_cmp_by_id(const void *a, const void *b)
-{
-    uint64_t ia = ((const struct mos_device_info *)a)->registry_id;
-    uint64_t ib = ((const struct mos_device_info *)b)->registry_id;
-    if (ia < ib) return -1;
-    if (ia > ib) return  1;
-    return 0;
-}
-
 void mos_enumerate_devices(mos_enumerate_cb cb, void *ctx)
 {
     if (!cb) return;
 
-    /* Two-phase enumeration: collect into a local array, sort by
-       registry ID (to satisfy the public ordering contract — see the
-       mos_enumerate_devices() docstring in mos.h), then invoke the
-       callback in sorted order. */
-    struct mos_device_info slots[MOS_ENUM_CAP];
-    size_t slot_n = 0;
+    /* DR-backed (the directory — mos_dr.c): the snapshot arrives in
+       DR device-array order, which is the public ordering contract
+       (the same array drutil enumerates; drutil parity by provenance,
+       not by sort approximation). DR already dedups — one DRDevice
+       per drive — so the pre-pivot class-walk dedup died with the
+       walk. Identity strings ride the snapshot but mos_device_info_t
+       deliberately doesn't surface them yet: identity is handle data
+       (open the device), not enumeration data — unchanged contract. */
+    mos_internal_dr_snapshot snap[MOS_ENUM_CAP];
+    size_t n = mos_internal_dr_copy_snapshot(snap, MOS_ENUM_CAP);
 
-    mos_internal_dedup dedup = { {0}, 0 };
-
-    for (const char *const *cls = mos_internal_classes; *cls; ++cls) {
-        CFMutableDictionaryRef m = IOServiceMatching(*cls);
-        if (!m) continue;
-
-        /* IOServiceGetMatchingServices consumes the matching dictionary
-           reference regardless of success — same contract as in
-           mos_open_by_bsd_name (below in this file). */
-        io_iterator_t it MOS_IO_AUTO = IO_OBJECT_NULL;
-        if (IOServiceGetMatchingServices(kIOMainPortDefault, m, &it)
-                != KERN_SUCCESS) continue;
-
-        for (;;) {
-            io_service_t s MOS_IO_AUTO = IOIteratorNext(it);
-            if (s == IO_OBJECT_NULL) break;
-            mos_internal_visit_collect(s, &dedup, slots, MOS_ENUM_CAP, &slot_n);
-        }
-    }
-
-    if (slot_n > 1) {
-        qsort(slots, slot_n, sizeof(slots[0]), mos_internal_info_cmp_by_id);
-    }
-
-    for (size_t i = 0; i < slot_n; ++i) {
-        if (!cb(&slots[i], ctx)) break;
+    for (size_t i = 0; i < n; ++i) {
+        struct mos_device_info info = {
+            .bsd_unit    = snap[i].bsd_unit,
+            .registry_id = snap[i].registry_id,
+        };
+        if (!cb(&info, ctx)) break;
     }
 }
 
-/* Enumeration yields bsd_unit + registry_id only (no INQUIRY — see the
-   skip in visit_collect). Returns -1 for an empty/open-tray drive. */
+/* Enumeration yields bsd_unit + registry_id only (identity is handle
+   data — see mos_enumerate_devices). Returns -1 for an empty/open-tray
+   drive. */
 int64_t mos_device_info_bsd_unit(const mos_device_info_t *i) { return i ? i->bsd_unit : -1; }
 uint64_t mos_device_info_registry_id(const mos_device_info_t *i) { return i ? i->registry_id : 0; }
 
@@ -289,7 +203,8 @@ static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
             != KERN_SUCCESS) {
         h->drive_registry_id = 0;
     }
-    /* Best-effort, not a gate (as in visit_collect): a nameless empty drive
+    /* Best-effort, not a gate (same posture as the enumeration snapshot):
+       a nameless empty drive
        opens fine since the MMC plug-in and queries run off `svc`. Must
        assign unconditionally — the handle is calloc'd, so an unset bsd_unit
        would read 0 ("disk0"), a valid unit, not "no media". */
@@ -319,8 +234,14 @@ static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
         return NULL;
     }
 
-    /* Populate vendor/product via INQUIRY. Non-fatal on failure. */
-    (void)mos_internal_mmc_inquiry(h);
+    /* Identity from the DR directory (device-static; the open-time
+       INQUIRY retired with the DR pivot). Non-fatal on failure —
+       empty strings, the same contract the INQUIRY path had. */
+    (void)mos_internal_dr_copy_identity_for_service(
+        h->svc,
+        h->vendor_str,   sizeof h->vendor_str,
+        h->product_str,  sizeof h->product_str,
+        h->revision_str, sizeof h->revision_str);
 
     if (err) *err = MOS_OK;
     return h;
@@ -334,39 +255,32 @@ mos_handle_t *mos_open_by_bsd_name(const char *want, mos_error *err_out)
     /* parse_bsd_unit accepts disk4 / rdisk4 / /dev/ forms and returns -1 for
        anything invalid. An empty drive has no unit, so this never resolves to
        "whichever nameless drive came first" — empty drives are index/
-       enumeration-only. (err_out is already MOS_ERR_INVALID_ARG.) */
+       enumeration-only. (err_out is already MOS_ERR_INVALID_ARG.) This gate
+       also preserves the CLI contract: malformed name = invalid_arg/64,
+       well-formed-but-absent = no_device/66. */
     int64_t want_unit = mos_internal_parse_bsd_unit(want);
     if (want_unit < 0) return NULL;
 
-    for (const char *const *cls = mos_internal_classes; *cls; ++cls) {
-        CFMutableDictionaryRef m = IOServiceMatching(*cls);
-        if (!m) continue;
-
-        /* IOServiceGetMatchingServices consumes the matching dictionary
-           reference regardless of success (Apple docs), so we do NOT
-           release m on either path. */
-        io_iterator_t it MOS_IO_AUTO = IO_OBJECT_NULL;
-        if (IOServiceGetMatchingServices(kIOMainPortDefault, m, &it)
-                != KERN_SUCCESS) continue;
-
-        for (;;) {
-            io_service_t s MOS_IO_AUTO = IOIteratorNext(it);
-            if (s == IO_OBJECT_NULL) break;
-
-            if (mos_internal_bsd_unit(s, NULL) == want_unit) {
-                /* Transfer ownership of `s` to mos_internal_open_service:
-                   null the local to disable MOS_IO_AUTO so it isn't
-                   double-released (the callee owns it on both success and
-                   failure). `s`'s +1 from IOIteratorNext is independent of
-                   `it`, so it stays valid past the iterator's release. */
-                io_service_t consumed = s;
-                s = IO_OBJECT_NULL;
-                return mos_internal_open_service(consumed, err_out);
-            }
-        }
+    /* DR resolves the name (the directory). Reconstruct the canonical
+       "diskN" form first — DRDeviceCopyDeviceForBSDName documents the
+       plain /dev entry name, and normalization authority stays with
+       parse_bsd_unit, not with whatever prefix the caller typed. The
+       resulting registry ID reopens atomically below, same TOCTOU
+       posture as open-by-index: a name that DR resolved but whose
+       entry terminated in between returns NO_DEVICE, never a
+       different drive. This replaced the pre-pivot class-walk-and-
+       match enumeration (and dissolved ARCHITECTURE's never-built
+       walk-up resolution). */
+    char disk_name[MOS_BSD_NAME_CAP];
+    if (!mos_bsd_name_format(want_unit, disk_name, sizeof disk_name)) {
+        return NULL;
     }
-    if (err_out) *err_out = MOS_ERR_NO_DEVICE;
-    return NULL;
+    uint64_t id = mos_internal_dr_registry_id_for_bsd_name(disk_name);
+    if (id == 0) {
+        if (err_out) *err_out = MOS_ERR_NO_DEVICE;
+        return NULL;
+    }
+    return mos_internal_open_by_registry_id(id, err_out);
 }
 
 /* Collects registry IDs (not BSD names) for by-index reopen: BSD names can
@@ -428,11 +342,11 @@ mos_handle_t *mos_open_by_index(int one_based, mos_error *err_out)
     if (one_based < 1) return NULL;
 
     /* Two-stage but race-free: enumerate to collect registry IDs in
-       canonical sort order, then reopen the captured ID via
-       IORegistryEntryIDMatching. The kernel resolves that second match
-       atomically, so a hot-plug between passes either succeeds or returns
-       NO_DEVICE — never silently opens a different drive that inherited the
-       original BSD name. */
+       DR device-array order (the public index contract), then reopen the
+       captured ID via IORegistryEntryIDMatching. The kernel resolves that
+       second match atomically, so a hot-plug between passes either succeeds
+       or returns NO_DEVICE — never silently opens a different drive that
+       inherited the original BSD name. */
 
     mos_internal_id_collect c = { {0}, 0 };
     mos_enumerate_devices(mos_internal_collect_cb, &c);
@@ -441,6 +355,19 @@ mos_handle_t *mos_open_by_index(int one_based, mos_error *err_out)
         return NULL;
     }
     return mos_internal_open_by_registry_id(c.ids[one_based - 1], err_out);
+}
+
+mos_handle_t *mos_open_device(const mos_device_info_t *info,
+                              mos_error *err_out)
+{
+    if (err_out) *err_out = MOS_ERR_INVALID_ARG;
+    if (!info || info->registry_id == 0) return NULL;
+
+    /* The info's registry ID reopens atomically (IORegistryEntryIDMatching
+       — see mos_internal_open_by_registry_id), so opening from inside the
+       enumeration callback carries no TOCTOU window and no re-enumeration:
+       this is the one-snapshot path the CLI list/status use. */
+    return mos_internal_open_by_registry_id(info->registry_id, err_out);
 }
 
 void mos_close(mos_handle_t *h)
@@ -593,17 +520,18 @@ mos_error mos_internal_mmc_test_unit_ready(mos_handle_t *h,
     return MOS_OK;
 }
 
-/* RETURN-CONVENTION NOTE (deliberate asymmetry with mmc_inquiry): this
-   function returns MOS_ERR_IO for command-reached-drive-but-unusable
-   replies (non-GOOD status, truncated GOOD), while mmc_inquiry returns
-   MOS_OK with cleared strings for the same shape. The asymmetry is
-   load-bearing, not drift: the profile's in-band "absent" value, 0x0000,
-   is a REAL drive answer ("no current profile"), so a malformed reply
-   must be distinguishable out-of-band or it masquerades as legitimate
-   no-media — the exact silent-0x0000 bug the third review fixed. Identity
-   strings have no such collision: an empty vendor is never a meaningful
-   drive answer, so in-band clearing suffices there. Both callers treat
-   both shapes as non-fatal enrichment skips. */
+/* RETURN-CONVENTION NOTE: this function returns MOS_ERR_IO for
+   command-reached-drive-but-unusable replies (non-GOOD status,
+   truncated GOOD) rather than clearing the out-param in-band. That is
+   load-bearing, not pedantry: the profile's in-band "absent" value,
+   0x0000, is a REAL drive answer ("no current profile"), so a
+   malformed reply must be distinguishable out-of-band or it
+   masquerades as legitimate no-media — the exact silent-0x0000 bug
+   the third review fixed. (Identity strings, by contrast, have no
+   such collision — an empty vendor is never a meaningful drive answer
+   — which is why the retired INQUIRY path, and the DR identity seam
+   that replaced it, clear in-band and stay non-fatal.) The caller
+   treats both shapes as non-fatal enrichment skips. */
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile)
 {
     if (!h || !h->mmc || !profile) return MOS_ERR_INVALID_ARG;
@@ -678,82 +606,14 @@ mos_error mos_internal_mmc_get_features(mos_handle_t *h)
     return MOS_ERR_UNSUPPORTED;        /* not implemented until the issuance lands */
 }
 
-/* Copy a fixed-width, space-padded SCSI string field of `len` bytes into
-   `dst`, NUL-terminating at dst[len] and trimming trailing spaces/NULs per
-   SPC-4. Interior bytes are preserved verbatim; the output layer
-   (mos_json_escape / mos_safe_ascii) sanitizes hostile content.
-
-   No runtime length clamp, by design: `len` is never drive-controlled — it
-   is a compile-time INQUIRY field width (SPC-4: VENDOR=8, PRODUCT=16,
-   REVISION=4) — and a _Static_assert at each call site checks
-   sizeof(dst) > len, so a mis-sized buffer fails the build rather than
-   truncating silently. The drive controls the contents, never the width. */
-static void mos_internal_copy_scsi_string(char *dst,
-                                          const char *src, size_t len)
-{
-    memcpy(dst, src, len);
-    dst[len] = 0;
-    for (size_t i = len; i > 0; --i) {
-        unsigned char c = (unsigned char)dst[i - 1];
-        if (c != ' ' && c != 0) break;
-        dst[i - 1] = 0;
-    }
-}
-
-/* Returns MOS_OK with CLEARED identity strings when the command reached
-   the drive but the reply is unusable — see the return-convention note
-   on mos_internal_mmc_get_current_profile for why this differs from the
-   profile path on purpose. */
-mos_error mos_internal_mmc_inquiry(mos_handle_t *h)
-{
-    if (!h || !h->mmc) return MOS_ERR_INVALID_ARG;
-
-    /* Inquiry fills a typed SCSICmd_INQUIRY_StandardData struct (not a raw
-       byte array); we read VENDOR_IDENTIFICATION and PRODUCT_IDENTIFICATION,
-       space-padded per SPC-4 (trimmed on copy below). */
-    SCSICmd_INQUIRY_StandardData inq  = {0};
-    SCSITaskStatus               st   = 0;
-    SCSI_Sense_Data              sd   = {0};
-
-    IOReturn rc = (*h->mmc)->Inquiry(
-        h->mmc,
-        &inq, (UInt32)sizeof(inq),
-        &st, &sd);
-
-    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
-        h->vendor_str[0]  = 0;
-        h->product_str[0] = 0;
-        h->revision_str[0] = 0;
-        return (rc == kIOReturnSuccess) ? MOS_OK
-                                        : mos_internal_ioreturn_to_mos_error(rc);
-    }
-
-    /* Each destination is sized field+1; pin that at build time so a
-       buffer resize can't silently start truncating. sizeof(h->field)
-       is a constant expression (non-VLA array member), so these are
-       compile-time checks despite `h` being a runtime pointer. */
-    _Static_assert(sizeof(h->vendor_str) > kINQUIRY_VENDOR_IDENTIFICATION_Length,
-                   "vendor_str must hold the INQUIRY vendor field + NUL");
-    mos_internal_copy_scsi_string(h->vendor_str,
-                                  inq.VENDOR_IDENTIFICATION,
-                                  kINQUIRY_VENDOR_IDENTIFICATION_Length);
-
-    _Static_assert(sizeof(h->product_str) > kINQUIRY_PRODUCT_IDENTIFICATION_Length,
-                   "product_str must hold the INQUIRY product field + NUL");
-    mos_internal_copy_scsi_string(h->product_str,
-                                  inq.PRODUCT_IDENTIFICATION,
-                                  kINQUIRY_PRODUCT_IDENTIFICATION_Length);
-
-    /* PRODUCT_REVISION_LEVEL is 4 ASCII bytes per SPC-4 §6.4.2,
-       space-padded like the vendor/product fields. */
-    _Static_assert(sizeof(h->revision_str) > kINQUIRY_PRODUCT_REVISION_LEVEL_Length,
-                   "revision_str must hold the INQUIRY revision field + NUL");
-    mos_internal_copy_scsi_string(h->revision_str,
-                                  inq.PRODUCT_REVISION_LEVEL,
-                                  kINQUIRY_PRODUCT_REVISION_LEVEL_Length);
-
-    return MOS_OK;
-}
+/* The open-time INQUIRY (and its fixed-width SPC-4 string copier with
+   per-call-site _Static_assert width pins) retired with the DR pivot:
+   identity is directory data from DRDeviceCopyInfo — the same INQUIRY
+   bytes, pre-parsed by the framework — copied through the bounded
+   truncating seam in mos_dr.c. The output layer's escaping
+   (mos_cli_json_str / mos_cli_safe_ascii) is unchanged: it guards the
+   terminal and the JSON encoding against hostile bytes regardless of
+   which substrate produced the string. */
 
 /* ---- Raw CDB (diagnostic only) ------------------------------------- */
 

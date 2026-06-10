@@ -154,7 +154,8 @@ _Static_assert(sizeof(mos_xfer_dir) == sizeof(int32_t),
  * valid until the next mos_query_state() call or mos_close(); copy out any
  * fields (strings included) you need to retain past that.
  *
- * vendor / product / revision may be NULL if INQUIRY failed or was not issued.
+ * vendor / product / revision may be NULL when the device directory has
+ * no identity for the drive.
  */
 typedef struct mos_state_result mos_state_result;
 
@@ -192,8 +193,9 @@ uint64_t       mos_state_result_registry_id(const mos_state_result *r);
    mos_bsd_name_format), and for a cap too small for the rendering. */
 bool           mos_bsd_dev_node(int64_t unit, char *out, size_t out_cap);
 
-/* INQUIRY identity strings; NULL when INQUIRY failed or was not issued.
-   Borrowed, with the same lifetime as the result object. */
+/* Drive identity strings (the INQUIRY vendor/product/revision fields,
+   sourced from the system's device directory at open); NULL when
+   unavailable. Borrowed, with the same lifetime as the result object. */
 const char    *mos_state_result_vendor(const mos_state_result *r);
 const char    *mos_state_result_product(const mos_state_result *r);
 const char    *mos_state_result_revision(const mos_state_result *r);
@@ -218,10 +220,14 @@ void           mos_state_result_sense(const mos_state_result *r,
  */
 typedef bool (*mos_enumerate_cb)(const mos_device_info_t *info, void *ctx);
 
-/* Walk all optical drives in stable registry-id order, invoking cb once
- * per drive (return false to stop early). The mos_device_info_t is opaque
- * — read it through the accessors below; strings are valid only for the
- * callback's duration, copy if needed.
+/* Walk all optical drives, invoking cb once per drive (return false to
+ * stop early). Order: position in the system's device array — the same
+ * array drutil enumerates, so the 1-based index agrees with drutil's
+ * by provenance. The order is stable only within an enumerate→open
+ * window; cross-run stability is not promised. The mos_device_info_t
+ * is opaque — read it through the accessors below; it is valid only
+ * for the callback's duration (open it there via mos_open_device(),
+ * or copy what you need).
  *
  * Up to 64 drives per call; any beyond that are silently dropped. If you
  * exceed this, please get help from someone qualified. */
@@ -229,9 +235,9 @@ void mos_enumerate_devices(mos_enumerate_cb cb, void *ctx);
 
 /* Accessors for the opaque device-info handle passed to the callback.
    bsd_unit is -1 for an empty/open-tray drive (no media, hence no
-   IOMedia child to name); such drives still enumerate, identified by
-   their stable registry index for mos_open_by_index. Render to a string
-   with mos_bsd_name_format(). */
+   IOMedia child to name); such drives still enumerate and stay openable
+   by snapshot position (mos_open_by_index) or in-callback
+   (mos_open_device). Render to a string with mos_bsd_name_format(). */
 int64_t mos_device_info_bsd_unit(const mos_device_info_t *);
 
 /* The drive service's IORegistry entry ID for an enumeration entry —
@@ -256,6 +262,19 @@ bool mos_bsd_name_format(int64_t unit, char *buf, size_t cap);
  */
 mos_handle_t *mos_open_by_index(int one_based, mos_error *err_out);
 mos_handle_t *mos_open_by_bsd_name(const char *bsd_name, mos_error *err_out);
+
+/*
+ * Open the drive an enumeration callback is currently visiting. Call
+ * ONLY from inside the callback (the info object dies when the
+ * callback returns); the returned handle is independent of the info
+ * and outlives it. This is the one-snapshot pattern: enumerate once
+ * and open each drive of interest without re-enumerating per open —
+ * the open resolves atomically against the kernel registry, so a
+ * drive that vanished since the snapshot yields MOS_ERR_NO_DEVICE,
+ * never a different drive.
+ */
+mos_handle_t *mos_open_device(const mos_device_info_t *info,
+                              mos_error *err_out);
 
 /*
  * Return the whole-disk BSD unit a handle was opened against (the N in
@@ -330,7 +349,7 @@ void mos_close(mos_handle_t *h);
  * mos_watch_open_*, mos_watch_next_event, and mos_watch_close must all run
  * on the thread that called open — the watch captures that thread's run
  * loop (CFRunLoopGetCurrent) at open and schedules its IOKit and
- * DiskArbitration sources in a private run-loop mode, not
+ * DiscRecording sources in a private run-loop mode, not
  * kCFRunLoopDefaultMode. The pump runs that same private mode, so wake
  * callbacks dispatch only while mos_watch_next_event is waiting: host-app
  * default-mode work runs alongside undisturbed, and the watch's
@@ -346,6 +365,12 @@ typedef enum {
     MOS_EVENT_MEDIA_CHANGED = 5, /* same-state media swap: drive stayed READY
                                     but the disc was replaced (whole-disk
                                     IOMedia identity changed) */
+    MOS_EVENT_DEVICE_APPEARED = 6, /* watch-all only: a drive joined the
+                                      stream mid-flight (hot-plug). Carries
+                                      the same full payload as a snapshot;
+                                      a drive present at open emits snapshot
+                                      instead. Single-target watches never
+                                      emit this. */
 } mos_event_kind;
 
 /* ABI-width pin — same FFI rationale as mos_state_enum / mos_xfer_dir
@@ -427,6 +452,33 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
                                      uint32_t stable_poll_ms,
                                      uint32_t transition_poll_ms,
                                      mos_error *err_out);
+
+/* Open a watch on EVERY optical drive — sit on the bus. The stream
+   multiplexes per-drive events, demuxed by registry_id (and bsd when
+   media is present); seq is stream-global. Contract differences from
+   the single-target handles, documented here because the handle type
+   is shared:
+     - Each drive present at open emits a snapshot. A drive arriving
+       later emits MOS_EVENT_DEVICE_APPEARED (same payload shape as a
+       snapshot).
+     - MOS_EVENT_DEVICE_REMOVED is PER-DRIVE and non-terminal: the
+       stream continues, and the same physical drive replugged joins
+       again (new registry_id) with device_appeared. The stream ends
+       only at mos_watch_close. Removal detection rides the system's
+       device-disappeared notification with the poll as the floor, so
+       worst-case removal latency is stable_poll_ms (single-target
+       watches additionally hold a kernel interest notification and
+       typically see removal faster).
+     - Zero drives at open is a valid empty stream that waits for
+       arrivals; mos_watch_next_event returns MOS_ERR_TIMEOUT slices
+       until something appears.
+     - Up to 16 concurrently watched drives; arrivals beyond that are
+       ignored until a slot frees.
+   mos_watch_bsd_unit() returns -1 on an all-watch (no single unit).
+   Threading/run-loop contract is identical to the single-target opens. */
+mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
+                                uint32_t transition_poll_ms,
+                                mos_error *err_out);
 
 /* Block until the next event or until timeout_ms elapses with no
    transition. On event, returns MOS_OK and points *out at a watch-owned

@@ -84,35 +84,6 @@ int64_t mos_internal_parse_bsd_unit(const char *name)
     return (int64_t)v;
 }
 
-/* See mos_pure.h. Copy the borrowed source into the caller's buffer with a
-   bounded byte loop, then repoint — or NULL it. Hand-rolled rather than
-   strlcpy: pure code must compile against any C11 libc, and strlcpy is a BSD
-   extension (glibc only gained it in 2.38). The Apple adapters may use it. */
-static void rehome_one(char *buf, size_t cap, const char **field)
-{
-    const char *src = *field;            /* borrowed at call time */
-    if (src && *src && cap > 0) {
-        size_t i = 0;
-        for (; i + 1 < cap && src[i]; i++) buf[i] = src[i];
-        buf[i] = 0;
-        *field = buf;                     /* repoint into caller buffer */
-    } else {
-        if (cap > 0) buf[0] = 0;
-        *field = NULL;
-    }
-}
-
-void mos_internal_rehome_identity_strings(mos_state_result *r,
-                                          char *vendor_buf,   size_t vendor_cap,
-                                          char *product_buf,  size_t product_cap,
-                                          char *revision_buf, size_t revision_cap)
-{
-    if (!r) return;
-    rehome_one(vendor_buf,   vendor_cap,   &r->vendor);
-    rehome_one(product_buf,  product_cap,  &r->product);
-    rehome_one(revision_buf, revision_cap, &r->revision);
-}
-
 /* SAM-5 §5.3: four status values that all mean "drive is contended."
      0x08 BUSY                — standard busy
      0x18 RESERVATION_CONFLICT — another initiator holds it

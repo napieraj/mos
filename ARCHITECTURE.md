@@ -131,7 +131,7 @@ The design uses both, gated by what we need and when:
 is ever called — both the tray-bit GESN and caller-issued diagnostics route
 through it.
 
-## 4. The four commands we issue
+## 4. The MMC commands we issue (three on the state path)
 
 Byte-exact CDB layouts. All fields are big-endian unless noted.
 
@@ -139,8 +139,12 @@ Byte-exact CDB layouts. All fields are big-endian unless noted.
 by hand — the GESN tray probe (§4.2), issued raw through `mos_raw_cdb()`
 precisely because the `GetTrayState` convenience wrapper masks failure
 (§3, §9.7). The rest go through `MMCDeviceInterface` convenience methods
-(`TestUnitReady`, `GetConfiguration`, `Inquiry`) which are wired into the
-kernel SCSI stack and issue equivalent CDBs on our behalf. We document
+(`TestUnitReady`, `GetConfiguration`) which are wired into the
+kernel SCSI stack and issue equivalent CDBs on our behalf. (INQUIRY
+retired 2026-06-10 with the DR pivot: identity strings come from the
+DiscRecording directory — `DRDeviceCopyInfo`, the same INQUIRY bytes
+pre-parsed by the framework — so mos no longer issues it; the layout
+knowledge lives on in §6's identity-width notes.) We document
 all the byte layouts here because:
 
 1. They are part of the protocol contract. When the drive returns a
@@ -383,7 +387,8 @@ and runs first without a lock; the raw GESN tray bit is the secondary tool,
 reached only when TUR is not ready.
 
 ```
-1. (at open time) INQUIRY → populate vendor / product / revision strings.
+1. (at open time) vendor / product / revision strings come from the
+   DiscRecording directory (DR pivot 2026-06-10) — no INQUIRY issued.
 
 2. TestUnitReady  (convenience, non-exclusive, ONE shot)
       transport EXCLUSIVE/BUSY      → BUSY  (another client holds the
@@ -506,42 +511,46 @@ UNIT ATTENTION variant the single-TUR doctrine (§4.1) bets the kernel
 consumes. One insert-under-watch hardware run retires both (STATUS,
 hardware gate).
 
-## 6. IOKit matching and BSD-name resolution
+## 6. Discovery, addressing, and BSD-name resolution (DR directory)
 
-**Guaranteed.** We match three driver classes in order:
+**Since the DR pivot (2026-06-10), DiscRecording is the directory and
+the doorbell; MMC stays the inspector** (doc/research/
+2026-06-10-dr-pivot-implementation-plan.md). Discovery is
+`DRCopyDeviceArray` — the same array drutil enumerates, so the 1-based
+`--index` agrees with drutil's by provenance, not by a sort
+approximation (order is a snapshot, stable only within an
+enumerate→open window). DR exposes each device's IORegistry *path*;
+mos resolves path → entry → uint64 entry ID as the one surviving
+IOKit step of discovery, because the entry ID remains the identity
+currency: reopen uses `IORegistryEntryIDMatching` (atomic; same drive
+or `NO_DEVICE` if terminated), never by-name re-resolution, which
+would land on whatever currently holds a recycled name after a
+hot-unplug. Coverage is unchanged: `DRCopyDeviceArray` returns
+writers only, which is the same set §9.1's SCSITaskUserClient attach
+gate already limited mos to.
 
-```
-IOBDBlockStorageDevice
-IODVDBlockStorageDevice
-IOCDBlockStorageDevice
-```
+The pre-pivot class-walk enumerator (`IOBDBlockStorageDevice` /
+`IODVDBlockStorageDevice` / `IOCDBlockStorageDevice` matching with
+registry-ID dedupe and sort) is deleted; the kexts behind those
+classes are of course still the substrate DR itself rides.
 
-Drives can match multiple classes (a BD-ROM drive matches all three);
-we dedupe by `IORegistryEntryGetRegistryEntryID`. The 1-based `--index`
-is stable within a macOS session per sort by registry ID. Registry ID is
-the drive-identity authority across a watch lifetime: reopen uses
-`IORegistryEntryIDMatching` (atomic; same drive or `NO_DEVICE` if
-terminated), never by-name re-resolution, which would land on whatever
-currently holds the recycled name after a hot-unplug.
+Two name operations remain, with one registry walk between them:
 
-Two registry directions are involved, for two different operations:
-
-- **Naming a drive during enumeration** walks **down** from the
-  BlockStorageDevice to its `IOMedia` child using
-  `kIORegistryIterateRecursively` *without* `kIORegistryIterateParents`
-  — the `BSD Name` property lives on the descendant media node, not on the
-  parent device. An empty/open-tray drive has no media child and therefore
-  no name (unit -1); enumeration still finds the drive, which is why
-  discovery/index/list cannot be replaced by a name lookup.
-- **Resolving a named input** (`--bsd diskN`) is decided to walk **up**:
-  `IOBSDNameMatching` → the `IOMedia` node → up to its BlockStorageDevice
-  (matching the canonical Mac tools, and normalising a `diskNsM` slice to
-  its whole disk). The current `mos_open_by_bsd_name` instead enumerates and
-  matches by walking down. The walk-up was decided but never implemented,
-  and is now **superseded** by the DiscRecording substrate plan —
-  `DRDeviceCopyDeviceForBSDName` dissolves the resolution question entirely
-  (see ROADMAP, "Architectural"); it remains the fallback only if the DR
-  pivot is rejected.
+- **Naming a drive at open** still walks **down** from the
+  BlockStorageDevice to its `IOMedia` child
+  (`kIORegistryIterateRecursively` without parents) — the `BSD Name`
+  property and the whole-disk IOMedia entry ID (`media_id`, the F1
+  swap fingerprint, which DR has no equivalent for) live on the
+  descendant media node. An empty/open-tray drive has no media child
+  and therefore no name (unit -1); it still enumerates and opens —
+  which is why discovery/index can never be replaced by a name lookup.
+  Enumeration itself takes the media BSD name from DR's status
+  media-info dictionary instead (same media-scoped semantics).
+- **Resolving a named input** (`--bsd diskN`) goes through
+  `DRDeviceCopyDeviceForBSDName` behind the unchanged
+  `parse_bsd_unit` gate (malformed → `invalid_arg`, well-formed-but-
+  absent → `no_device`). This dissolved the never-implemented v0.3
+  walk-up plan (ROADMAP, "Architectural").
 
 Per-poll reopen never re-resolves by name — it uses `IORegistryEntryIDMatching`
 on the registry ID captured at open, which is what protects a watch from
@@ -588,7 +597,7 @@ same drive.
 | GET EVENT STATUS NOTIFICATION   | 2000         | **mos** (`mos_raw_cdb`) |
 | GET CONFIGURATION               | kernel default | convenience wrapper |
 | READ DISC INFORMATION           | (not issued on the state path) | — |
-| INQUIRY                         | kernel default | convenience wrapper |
+| INQUIRY                         | (retired — identity from the DR directory) | — |
 
 Only the raw GESN carries a timeout mos chooses; the convenience methods
 expose no timeout parameter, so the kernel's SCSI stack owns theirs. The
@@ -688,15 +697,17 @@ unchanged from Sequoia 15.x):
   through.
 - `IOSCSIMultimediaCommandsDevice` (545.100.10) — provides the
   MMC convenience methods (`GetTrayState`, `TestUnitReady`,
-  `GetConfiguration`, `Inquiry`, `ReadDiscInformation`) that
-  the default query path uses.
-- `IOStorageFamily` (2.1) — provides `IOMedia`, which mos walks
-  to for BSD-name resolution (§6).
+  `GetConfiguration`, `Inquiry`, `ReadDiscInformation`); the
+  default query path uses `TestUnitReady` and `GetConfiguration`
+  (INQUIRY retired to the DR directory, 2026-06-10).
+- `IOStorageFamily` (2.1) — provides `IOMedia`, which mos still
+  walks at open for the media_id fingerprint and bsd_unit (§6).
 - `IOCDStorageFamily` / `IODVDStorageFamily` /
   `IOBDStorageFamily` (1.8) — provide the
   `IOCDBlockStorageDevice` / `IODVDBlockStorageDevice` /
-  `IOBDBlockStorageDevice` matching classes mos enumerates
-  against.
+  `IOBDBlockStorageDevice` classes mos matched against pre-pivot;
+  discovery now rides `DRCopyDeviceArray` on the same kext
+  substrate (DiscRecording sits above these families too).
 
 `SCSITaskUserClient` (545.100.10) is also loaded. mos's raw-CDB
 diagnostic path (`mos_raw_cdb()`, C API) opens this user-client
@@ -1008,6 +1019,13 @@ Headers (authoritative):
   `/System/Library/Frameworks/IOKit.framework/Headers/scsi/SCSITaskLib.h`).
   Historical copy (10.2, UUIDs and method signatures unchanged):
   https://github.com/phracker/MacOSX-SDKs/blob/master/MacOSX10.2.8.sdk/System/Library/Frameworks/IOKit.framework/Versions/A/Headers/scsi-commands/SCSITaskLib.h
+- `DRCoreDevice.h` / `DRCoreNotifications.h` (Apple DiscRecording —
+  the directory/doorbell substrate since the 2026-06-10 pivot).
+  Vendored dev-tree-only at `docs/apple/DiscRecording/` from the
+  macOS 15.5 SDK; public mirror (byte-stable since ~10.13 modulo
+  include/import cosmetics):
+  https://github.com/alexey-lysiuk/macos-sdk/blob/main/MacOSX15.5.sdk/System/Library/Frameworks/DiscRecording.framework/Versions/A/Headers/DRCoreDevice.h
+  Feasibility evidence: doc/research/2026-06-10-dr-pivot-feasibility.md.
 
 Specs:
 

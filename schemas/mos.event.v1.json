@@ -25,7 +25,8 @@
         "state_changed",
         "media_changed",
         "error",
-        "device_removed"
+        "device_removed",
+        "device_appeared"
       ]
     },
     "registry_id": {
@@ -196,12 +197,13 @@
   },
   "oneOf": [
     {
-      "title": "snapshot or state_changed: full media payload, no error",
+      "title": "snapshot, state_changed, or device_appeared: full media payload, no error",
       "properties": {
         "event": {
           "enum": [
             "snapshot",
-            "state_changed"
+            "state_changed",
+            "device_appeared"
           ]
         }
       },

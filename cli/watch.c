@@ -30,6 +30,7 @@ static const char *event_kind_string(mos_event_kind k)
         case MOS_EVENT_MEDIA_CHANGED:  return "media_changed";
         case MOS_EVENT_ERROR:          return "error";
         case MOS_EVENT_DEVICE_REMOVED: return "device_removed";
+        case MOS_EVENT_DEVICE_APPEARED: return "device_appeared";
     }
     return "unknown";
 }
@@ -102,19 +103,20 @@ static watch_emit_status emit_watch_ndjson(const mos_watch_event *e)
     fputs(",\"prev_state\":\"", stdout); fputs(prev, stdout); fputc('"', stdout);
 
     if (kind_e == MOS_EVENT_SNAPSHOT || kind_e == MOS_EVENT_STATE_CHANGED ||
-        kind_e == MOS_EVENT_MEDIA_CHANGED) {
+        kind_e == MOS_EVENT_MEDIA_CHANGED ||
+        kind_e == MOS_EVENT_DEVICE_APPEARED) {
         fprintf(stdout, ",\"current_profile\":\"0x%04x\"", profile);
         /* Match emit_json's suppression: skip current_profile_name when
            current_profile is the SCSI sentinel 0x0000. See emit_json
            comment for rationale. */
-        if (profile != 0x0000 && pname) {
+        if (mos_cli_profile_present(profile) && pname) {
             fputs(",\"current_profile_name\":", stdout);
             mos_cli_json_str(stdout, pname);
         }
         /* Same derivation + suppression as emit_json's media_class. */
         {
             const char *mclass = mos_profile_class(profile);
-            if (profile != 0x0000 && mclass) {
+            if (mos_cli_profile_present(profile) && mclass) {
                 fputs(",\"media_class\":", stdout);
                 mos_cli_json_str(stdout, mclass);
             }
@@ -199,7 +201,11 @@ int run_watch(void)
 
     mos_error err = MOS_OK;
     mos_watch_t *w = NULL;
-    if (opt_bsd) {
+    if (flag_all) {
+        /* Sit on the bus: every drive, hot-plug joins, per-drive
+           removal. Selector conflicts were rejected in main(). */
+        w = mos_watch_open_all(stable_ms, transition_ms, &err);
+    } else if (opt_bsd) {
         /* Same as run_query: the library parse normalizes; don't duplicate. */
         w = mos_watch_open_by_bsd_name(opt_bsd, stable_ms, transition_ms, &err);
     } else {
@@ -272,10 +278,13 @@ int run_watch(void)
             return EX_IOERR;
         }
 
-        if (mos_watch_event_kind(ev) == MOS_EVENT_DEVICE_REMOVED) {
+        if (!flag_all &&
+            mos_watch_event_kind(ev) == MOS_EVENT_DEVICE_REMOVED) {
             rc = EX_OK;  /* Clean exit on device removal — watch ended. */
             break;
         }
+        /* In --all mode device_removed is per-drive and the stream
+           continues (mos.h open_all contract); only SIGINT/pipe ends it. */
     }
 
     mos_watch_close(w);

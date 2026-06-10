@@ -479,3 +479,122 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
     d.next_poll_at_mono_ms = w->next_poll_at_mono_ms;
     return d;
 }
+
+/* ---- Watch-all multiplexer (DR pivot Phase 2b) --------------------- *
+ *
+ * See mos_pure.h for the contract. Iteration order is ascending
+ * registry_id over active slots on EVERY entry, so same-tick event
+ * interleave is deterministic and independent of slot assignment
+ * history — the property the fixture tests pin. */
+
+void mos_internal_watch_all_init(mos_watch_all_state *a)
+{
+    if (!a) return;
+    memset(a, 0, sizeof *a);
+}
+
+int mos_internal_watch_all_free_slot(const mos_watch_all_state *a)
+{
+    if (!a) return -1;
+    for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
+        if (!a->active[i]) return i;
+    }
+    return -1;
+}
+
+int mos_internal_watch_all_find(const mos_watch_all_state *a,
+                                uint64_t registry_id)
+{
+    if (!a || registry_id == 0) return -1;
+    for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
+        if (a->active[i] && a->cores[i].registry_id == registry_id) return i;
+    }
+    return -1;
+}
+
+int mos_internal_watch_all_add(mos_watch_all_state *a,
+                               const mos_watch_ops_t *ops, void *ctx,
+                               int64_t bsd_unit, uint64_t registry_id,
+                               uint64_t start_mono_ms,
+                               uint64_t start_wall_ms,
+                               uint32_t stable_poll_ms,
+                               uint32_t transition_poll_ms,
+                               bool mid_stream)
+{
+    if (!a || registry_id == 0) return -1;
+
+    /* Dedupe by attachment identity: the DR Appeared notification can
+       announce a device the open-time snapshot already carried (or
+       fire twice across a bus rescan). Same id ⇒ same plug session ⇒
+       same slot; a REPLUG has a fresh id by xnu construction and lands
+       in a new slot. */
+    int existing = mos_internal_watch_all_find(a, registry_id);
+    if (existing >= 0) return existing;
+
+    int i = mos_internal_watch_all_free_slot(a);
+    if (i < 0) return -1;
+
+    mos_internal_watch_init(&a->cores[i], ops, ctx, bsd_unit, registry_id,
+                            start_mono_ms, start_wall_ms,
+                            stable_poll_ms, transition_poll_ms);
+    a->active[i]       = true;
+    a->join_pending[i] = mid_stream;
+    return i;
+}
+
+mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
+{
+    mos_watch_decision out;
+    memset(&out, 0, sizeof out);
+    out.kind                 = MOS_WATCH_DECIDE_SLEEP_UNTIL;
+    out.next_poll_at_mono_ms = UINT64_MAX;
+    if (!a) return out;
+
+    /* Visit active slots in ascending registry_id (selection scan; CAP
+       is 16, an index sort would be ceremony). Returning on the first
+       EMIT keeps per-call work bounded; the next call re-enters at the
+       lowest id, so same-tick events drain in id order. */
+    uint64_t visited = 0; /* bitmask of slots already pumped this call */
+    for (;;) {
+        int best = -1;
+        for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
+            if (!a->active[i] || (visited & (1ull << i))) continue;
+            if (best < 0 ||
+                a->cores[i].registry_id < a->cores[best].registry_id) {
+                best = i;
+            }
+        }
+        if (best < 0) break;
+        visited |= (1ull << best);
+
+        mos_watch_decision d = mos_internal_watch_pump(&a->cores[best]);
+
+        if (d.kind == MOS_WATCH_DECIDE_EMIT_EVENT) {
+            d.event.seq = ++a->seq;            /* stream-global numbering */
+            if (a->join_pending[best]) {
+                if (d.event.kind == MOS_EVENT_SNAPSHOT) {
+                    d.event.kind = MOS_EVENT_DEVICE_APPEARED;
+                }
+                a->join_pending[best] = false; /* first event only */
+            }
+            if (d.event.kind == MOS_EVENT_DEVICE_REMOVED) {
+                /* Per-slot, not stream-terminal: free the slot AFTER
+                   taking the event. A replug arrives as a new id. */
+                a->active[best] = false;
+            }
+            return d;
+        }
+        if (d.kind == MOS_WATCH_DECIDE_TERMINAL) {
+            /* The core's device_removed was emitted on an earlier call
+               and the slot somehow pumped again (external notify after
+               emission). Nothing to emit — just free the slot. */
+            a->active[best] = false;
+            continue;
+        }
+        /* SLEEP_UNTIL: fold the earliest deadline. */
+        if (d.next_poll_at_mono_ms < out.next_poll_at_mono_ms) {
+            out.next_poll_at_mono_ms = d.next_poll_at_mono_ms;
+        }
+    }
+    return out;
+}

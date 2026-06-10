@@ -33,3 +33,11 @@ xcuserdata/
 *.cer
 credentials.json
 mt_tests
+
+## Python bytecode (schemas/validate.py local runs)
+__pycache__/
+
+## Vendored Apple SDK headers / APSL sources — dev-tree-only reference
+## copies, not redistributable under 0BSD (release-preflight enforces
+## the same rule on archives). See doc/dr-field-mapping.md.
+docs/apple/

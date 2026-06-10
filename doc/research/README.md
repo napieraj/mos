@@ -50,6 +50,33 @@ in `AGENTS.md`. The chain of files is the audit trail.
   --index / --bsd / --registry-id selector decision with the
   identity/addressing/format role split.
 
+- `2026-06-10-dr-pivot-feasibility.md` — Web-verified feasibility and
+  advisability check on the DiscRecording substrate pivot against
+  current macOS (15.5 SDK headers vendored and diffed, deprecation
+  status, coverage parity, runloop/entitlement caveats, survival
+  risk). Verdict: feasible and advisable for enumeration/status/watch
+  with the MMC sense path retained. Same-day revision in the file:
+  the original tray-validation gate was wrong-shaped — the vendored
+  kernel source proves GetTrayState's failure collapse is
+  kernel-level and undetectable from userspace, so positive hardware
+  runs cannot bless DR's tray bit; the GESN hybrid is the design,
+  not the fallback. Also records that public kernel source for the
+  MMC kext froze at Tiger-era 139.0.2.
+
+- `2026-06-10-dr-pivot-implementation-plan.md` — Phased implementation
+  plan for the DR pivot under the "DR is the doorbell and the
+  directory; MMC is the inspector" doctrine: probe tool + fixtures,
+  enumeration/identity/addressing on the DR snapshot (drutil-parity
+  index, registry-path→ID identity), the DR doorbell replacing DA on
+  the existing watch pump (same-day revision: DA retires in Phase 2 —
+  doorbells are latency-only over the poll floor and the kernel's own
+  1000ms media poll), retirements, coexistence falsification runs.
+  All four design decisions resolved in-file same day: INQUIRY
+  retires (identity-only, source-verified), DA retires, index gets
+  provenance-grade wording, and watch-all pulled INTO scope as Phase
+  2b (snapshot-as-join needs no schema motion; the DR notification
+  center is the bus the watch was always meant to sit on).
+
 - `2026-06-10-gesn-single-poll-rebuttal.md` — Dated rebuttal of the
   2026-05-29 note per this README's append rule: the 2026-05-30
   state-detection redesign adopted raw GESN issuance for the tray

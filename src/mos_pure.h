@@ -132,22 +132,6 @@ int64_t mos_internal_parse_bsd_unit(const char *name);
    filtering. */
 bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit);
 
-/* ---- Identity-string re-homing (mos_pure.c) ---------------------- *
- *
- * Re-home the three handle-borrowed identity strings (vendor, product,
- * revision) of a result into caller-owned buffers, repointing each field at
- * its buffer — or NULL when the source is empty/absent. watch_probe fills a
- * result from a short-lived handle then closes it, so any identity pointer
- * still aimed into the handle would dangle; routing all three through one
- * helper is what stops a field silently riding the struct copy. Pure and
- * IOKit-free so the no-dangle invariant is ASan-gatable headlessly — no Mac,
- * no drive. Each (buf, cap) backs one field in source order; bsd_unit is an
- * integer value, not a borrowed pointer, so it has no re-home concern. */
-void mos_internal_rehome_identity_strings(mos_state_result *r,
-                                          char *vendor_buf,   size_t vendor_cap,
-                                          char *product_buf,  size_t product_cap,
-                                          char *revision_buf, size_t revision_cap);
-
 /* ---- GET CONFIGURATION feature walk (mos_config.c) --------------- *
  *
  * One decoded MMC feature descriptor. `data` borrows into the caller's
@@ -546,5 +530,61 @@ void mos_internal_watch_notify_removed(mos_watch_state *w);
    (e.g., a kIOGeneralInterest notification). The next pump call will
    probe immediately rather than waiting for the scheduled poll. */
 void mos_internal_watch_notify_wake(mos_watch_state *w);
+
+/* ---- Watch-all multiplexer (DR pivot Phase 2b) --------------------- *
+ *
+ * Pure fan-in over up to MOS_WATCH_ALL_CAP per-device watch cores:
+ * join/leave lifecycle, stream-global seq, deterministic same-tick
+ * interleave (ascending registry_id). Each slot is a full
+ * mos_watch_state driven through its own ops/ctx — the multiplexer
+ * adds NO probing or classification of its own, it only schedules,
+ * relabels mid-stream joins (snapshot → device_appeared), and makes
+ * device_removed per-slot instead of stream-terminal. */
+
+#define MOS_WATCH_ALL_CAP 16
+
+typedef struct {
+    mos_watch_state cores[MOS_WATCH_ALL_CAP];
+    bool            active[MOS_WATCH_ALL_CAP];
+    /* Slot joined after the stream opened: its first event (the core's
+       snapshot) is relabeled MOS_EVENT_DEVICE_APPEARED, then cleared. */
+    bool            join_pending[MOS_WATCH_ALL_CAP];
+    uint64_t        seq;   /* stream-global; overrides per-core seq */
+} mos_watch_all_state;
+
+void mos_internal_watch_all_init(mos_watch_all_state *a);
+
+/* First free slot index, or -1 when full. Exposed so the adapter can
+   point a slot's ctx at per-slot storage BEFORE add() initializes the
+   core with it (add() uses the same first-free scan, single-threaded
+   by the watch contract). */
+int mos_internal_watch_all_free_slot(const mos_watch_all_state *a);
+
+/* Add a device. Same parameters as mos_internal_watch_init, plus
+   mid_stream (true ⇒ first event is device_appeared). Returns the slot
+   index used; the index of the EXISTING slot if registry_id is already
+   active (dedupe — DR can announce a device the open-time snapshot
+   already carried); -1 when full or registry_id == 0. */
+int mos_internal_watch_all_add(mos_watch_all_state *a,
+                               const mos_watch_ops_t *ops, void *ctx,
+                               int64_t bsd_unit, uint64_t registry_id,
+                               uint64_t start_mono_ms,
+                               uint64_t start_wall_ms,
+                               uint32_t stable_poll_ms,
+                               uint32_t transition_poll_ms,
+                               bool mid_stream);
+
+/* Active slot index for a registry id, or -1. The adapter's
+   Disappeared handler resolves the leaving device with this and calls
+   mos_internal_watch_notify_removed on cores[i]. */
+int mos_internal_watch_all_find(const mos_watch_all_state *a,
+                                uint64_t registry_id);
+
+/* One multiplexer iteration. EMIT_EVENT carries the next event with
+   stream-global seq (join relabeling and per-slot removal applied);
+   SLEEP_UNTIL carries the earliest deadline over active slots, or
+   UINT64_MAX when no slot is active (empty stream: sleep until an
+   external add/wake). NEVER returns TERMINAL — removal is per-slot. */
+mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a);
 
 #endif /* MOS_PURE_H */

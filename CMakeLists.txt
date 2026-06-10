@@ -167,6 +167,7 @@ add_library(mos_core STATIC
     src/mos_scsi.c
     src/mos_state.c
     src/mos_watch.c
+    src/mos_dr.c
 )
 
 target_include_directories(mos_core
@@ -188,13 +189,16 @@ set_target_properties(mos_core PROPERTIES
 
 find_library(IOKIT_FRAMEWORK          IOKit          REQUIRED)
 find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
-find_library(DISKARBITRATION_FRAMEWORK DiskArbitration REQUIRED)
+find_library(DISCRECORDING_FRAMEWORK  DiscRecording  REQUIRED)
 
+# DiskArbitration left the library link line in DR pivot Phase 2a (the
+# watch's DA wake retired; the notification probe still links DA via
+# its own target flags below).
 target_link_libraries(mos_core
     PUBLIC  mos_pure
             ${IOKIT_FRAMEWORK}
             ${COREFOUNDATION_FRAMEWORK}
-            ${DISKARBITRATION_FRAMEWORK}
+            ${DISCRECORDING_FRAMEWORK}
     PRIVATE mos_warnings
 )
 
@@ -230,8 +234,10 @@ endif()
 # tools/mos_notification_probe.c is a standalone diagnostic that
 # subscribes to every plausible push-notification source for a given
 # drive (kIOGeneralInterest, kIOBusyInterest, DA disk-appeared,
-# DA disk-disappeared, DA description-changed) and logs every event
-# as NDJSON. Purpose: characterize empirically which IOKit / DA
+# DA disk-disappeared, DA description-changed, and the DiscRecording
+# Appeared/Disappeared/StatusChanged doorbells) and logs every event
+# as NDJSON; --dr-dump is the one-shot DR Info/Status plist capture
+# (DR-pivot Phase 0). Purpose: characterize empirically which
 # notifications actually fire for which events on which drive class,
 # at what latency. See ROADMAP §"Notification-source empirical probe".
 # Does NOT link against mos_core — uses raw IOKit/DA so observations
@@ -245,6 +251,7 @@ if(MOS_BUILD_NOTIFICATION_PROBE)
         "-framework CoreFoundation"
         "-framework IOKit"
         "-framework DiskArbitration"
+        "-framework DiscRecording"   # DR doorbell legs + --dr-dump (Phase 0)
         mos_pure        # for mos_internal_normalize_bsd_name and bsd_name_is_whole_shape
         mos_warnings)
     set_target_properties(mos_notification_probe PROPERTIES

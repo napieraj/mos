@@ -10,6 +10,27 @@
 #include <string.h>
 #include <sysexits.h>
 
+/* Reserved v0.4 subcommand names — single source of truth for the
+   dispatch rejection, the usage text, and the unknown-subcommand
+   diagnostic, so promoting a name in v0.4 is a one-site edit.
+   tests/cli/test_cli.sh (Test 18) loops over the same set. */
+static const char *const reserved_subcommands[] = {
+    "capacity", "identity", "tray", "speed", "features", NULL
+};
+
+static bool is_reserved_subcommand(const char *cmd)
+{
+    for (const char *const *r = reserved_subcommands; *r; ++r)
+        if (strcmp(cmd, *r) == 0) return true;
+    return false;
+}
+
+static void print_reserved_subcommands(FILE *f)
+{
+    for (const char *const *r = reserved_subcommands; *r; ++r)
+        fprintf(f, "%s%s", r == reserved_subcommands ? "" : ", ", *r);
+}
+
 void print_usage(FILE *f)
 {
     fprintf(f,
@@ -22,7 +43,10 @@ void print_usage(FILE *f)
         "  list              List all drives with their states.\n"
         "  watch  [drive]    Stream state events (NDJSON) until SIGINT.\n"
         "Future subcommands (v0.4+ typed APIs, not yet implemented):\n"
-        "  capacity, identity, tray, speed, features.\n"
+        "  ",
+        progname);
+    print_reserved_subcommands(f);
+    fputs(".\n"
         "\n"
         "Drive (positional): an Index from 'mos list' (all digits), or a\n"
         "BSD form (disk4, rdisk4, /dev/disk4). With one drive attached it\n"
@@ -34,6 +58,9 @@ void print_usage(FILE *f)
         "      --bsd NAME    BSD form; explicit form of the positional\n"
         "  -l, --list        List drives and exit\n"
         "  -w, --watch       Stream state events (NDJSON) until SIGINT\n"
+        "      --all         With watch: stream events for EVERY drive\n"
+        "                    (hot-plug joins as device_appeared; removal\n"
+        "                    is per-drive, the stream continues)\n"
         "  -j, --json        Emit JSON (mos.state.v1 / mos.error.v1 /\n"
         "                    mos.list.v1). watch is always NDJSON\n"
         "                    (mos.event.v1); --json is a no-op there.\n"
@@ -49,7 +76,7 @@ void print_usage(FILE *f)
         "        media_unreadable, device_fault, empty_or_open, unknown\n"
         "Exit:   sysexits.h codes — 0 on observed state, 64 usage, 66 no\n"
         "        device, 69 unavailable, 71 OS err, 74 I/O, 75 temp-fail.\n",
-        progname);
+        f);
 }
 
 static void print_version(void)
@@ -67,6 +94,7 @@ static void print_version(void)
 enum {
     OPT_BSD = 1000,
     OPT_VERSION,
+    OPT_ALL,
 };
 
 static const struct option long_options[] = {
@@ -74,6 +102,7 @@ static const struct option long_options[] = {
     { "bsd",     required_argument, 0, OPT_BSD },
     { "list",    no_argument,       0, 'l' },
     { "watch",   no_argument,       0, 'w' },
+    { "all",     no_argument,       0, OPT_ALL },
     /* optional_argument, not no_argument: lets --json=v2 reach the
        legacy-rejection diagnostic (no_argument would silently discard the
        =value). Bare --json works — optarg defaults to NULL. */
@@ -144,11 +173,7 @@ int main(int argc, char **argv)
             flag_list = true;
         } else if (strcmp(cmd, "watch") == 0) {
             flag_watch = true;
-        } else if (strcmp(cmd, "capacity")  == 0 ||
-                   strcmp(cmd, "identity")  == 0 ||
-                   strcmp(cmd, "tray")      == 0 ||
-                   strcmp(cmd, "speed")     == 0 ||
-                   strcmp(cmd, "features")  == 0) {
+        } else if (is_reserved_subcommand(cmd)) {
             /* cmd is provably one of the five literals here, so escaping is
                unnecessary — done anyway so a future edit that broadens the
                cmd source can't silently regress the escape-all-user-bytes
@@ -165,8 +190,9 @@ int main(int argc, char **argv)
             fprintf(stderr, "%s: unknown subcommand: ", progname);
             mos_cli_safe_ascii(stderr, cmd);
             fputs("\nRecognized: status, list, watch.\n"
-                  "Reserved (v0.4): capacity, identity, tray, speed, "
-                  "features.\n", stderr);
+                  "Reserved (v0.4): ", stderr);
+            print_reserved_subcommands(stderr);
+            fputs(".\n", stderr);
             return EX_USAGE;
         }
         /* Shift past the subcommand word so getopt parses the
@@ -195,6 +221,7 @@ int main(int argc, char **argv)
                 break;
             case 'l': flag_list  = true;  break;
             case 'w': flag_watch = true;  break;
+            case OPT_ALL: flag_all = true; break;
             case 'j':
                 if (!reject_legacy_json_version(optarg)) return EX_USAGE;
                 flag_json = true;
@@ -263,6 +290,20 @@ int main(int argc, char **argv)
 
     if (flag_list && flag_watch) {
         fprintf(stderr, "%s: --list and --watch are mutually exclusive\n",
+                progname);
+        return EX_USAGE;
+    }
+
+    /* --all is watch-only (sit on the bus) and takes the whole bus —
+       a drive selector contradicts it. */
+    if (flag_all && !flag_watch) {
+        fprintf(stderr, "%s: --all requires --watch (or the watch "
+                        "subcommand)\n", progname);
+        return EX_USAGE;
+    }
+    if (flag_all && (opt_index || opt_bsd)) {
+        fprintf(stderr, "%s: --all watches every drive; a selector "
+                        "(--index/--bsd/positional) contradicts it\n",
                 progname);
         return EX_USAGE;
     }
