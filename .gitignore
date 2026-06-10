@@ -8,9 +8,6 @@ cmake_install.cmake
 Makefile.cmake
 CTestTestfile.cmake
 
-## Release artifacts
-dist/
-
 ## Local overrides (not committed)
 .env.make
 

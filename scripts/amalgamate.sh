@@ -160,10 +160,15 @@ strip_file() {
     strip_file "$SRC/mos_scsi.c"
 } >> "$H"
 
+# The manifest is deterministic on purpose: dist/ is committed, and CI
+# regenerates it expecting byte-identical output. No timestamps, no git
+# state (a PR's synthetic merge commit would describe differently than
+# the branch head) — the version is the MOS_VERSION_STRING consumers
+# compile against.
+MOS_VERSION=$(sed -n 's/^#define MOS_VERSION_STRING "\(.*\)"$/\1/p' "$INC/mos.h")
 {
     echo "mac-optical-state amalgamated distribution"
-    echo "Version:  $(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo dev)"
-    echo "Built:    $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    echo "Version:  ${MOS_VERSION:-unknown}"
     echo ""
     echo "Files:"
     echo "  mos.h — public API"
