@@ -58,8 +58,14 @@ Shipped: frozen CLI/JSON contract (`ok`/`error`, `revision`), event-driven
 correctness/hardening arc, and F1 — the `media_changed` event (see CHANGELOG);
 pure suite green in CI. The typed APIs that originally defined v0.3 were never
 built and have moved to v0.4. With F1 landed, the v0.3 event contract is
-considered final: `mos.event.v1` is frozen, and any later event kind is
-`mos.event.v2`.
+considered complete — but not frozen: per the schema-evolution ADR in
+AGENTS.md (revision 2026-06-10, "when the freeze begins"), `mos.event.v1`
+remains mutable in place until the first tag that ships it (zero external
+consumers; the CI validation suite is the consumer until a real one
+exists). The freeze, and with it the any-new-kind-is-`mos.event.v2` rule,
+takes effect at that tag. (This paragraph previously declared v1 frozen
+outright — corrected 2026-06-10 to match the ADR, which was already
+exercised the same day by the in-place `registry_id` reshape.)
 
 *The DiscRecording (`DRCore*`) substrate is the next arc — see "Architectural"
 below. It is spec/SDK-driven and not hardware-gated, but it is a large adapter

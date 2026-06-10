@@ -125,16 +125,28 @@ not in a follow-up:
 ## Phase 2b — watch-all: sit on the bus (added same day, supersedes
 ## the out-of-scope call in former decision 4)
 
-Why in scope now: (a) it needs **zero schema motion** — the
-mos.event.v1 snapshot branch has no position constraint, so a device
-joining the stream emits `snapshot`, a device leaving emits
-`device_removed` (per-device, non-terminal in all-mode), and every
-event already carries `registry_id` + `bsd` for demuxing; ROADMAP's
-"any later event kind is mos.event.v2" freeze is not triggered.
-(b) The DR pivot installs exactly the missing primitive — the
-notification center IS the bus — and the watch core is already a pure
-per-device machine, so all-mode is a multiplexer, not a rewrite.
-Deferring would re-price the same work behind a schema rev later.
+Why in scope now: (a) the schema is still open — no tag exists, so
+per the AGENTS schema-evolution ADR `mos.event.v1` is mutable in
+place (the ROADMAP line claiming it frozen was corrected 2026-06-10
+to match the ADR); landing watch-all pre-tag means its vocabulary
+ships in v1 instead of costing a v2 rev later. (b) The DR pivot
+installs exactly the missing primitive — the notification center IS
+the bus — and the watch core is already a pure per-device machine,
+so all-mode is a multiplexer, not a rewrite.
+
+Event vocabulary (chosen on merits, not freeze-constrained): a
+device present at open emits `snapshot` (existing semantics
+untouched); a device arriving mid-stream emits a new
+**`device_appeared`** kind — symmetric with `device_removed`, same
+payload constraints as the snapshot branch (full media payload, no
+error), and it preserves the hot-plug vs watch-start distinction an
+orchestrating consumer needs (snapshot-as-join, the freeze-era
+design, conflated them). A device leaving emits `device_removed`
+(per-device, non-terminal in all-mode). Demux on the
+`registry_id`/`bsd` every event already carries. The in-place v1
+change lands per the ADR rule: schema + example + negative fixtures
++ emitter + `event_kind_string` + the validate.py drift pin, one
+commit.
 
 - **Pure layer** (the bulk, fully fixture-testable): a multiplexer
   over N per-device `mos_watch_state` cores — join/leave lifecycle,
@@ -226,13 +238,16 @@ GESN-failing bridge if one enters the fixture set.
    matching the existing snapshot-index semantics.
 4. ~~Multi-device watch out of scope~~ **Superseded same day:
    watch-all is IN scope as Phase 2b.** The deferral rested on a
-   priced schema bump that doesn't exist (snapshot-as-join needs no
-   new event kind — the v1 snapshot branch has no position
-   constraint) and on a substrate gap the pivot itself closes (the DR
-   notification center is the bus). Sitting on the bus and emitting
-   events for every drive is the watch's product intent; the
-   single-target watch becomes the filtered special case of the
-   general mechanism, not the other way around. See Phase 2b.
+   schema-freeze premise that is not in force (no tag exists; the
+   AGENTS ADR keeps v1 mutable in place until the first tag — the
+   contradicting ROADMAP line was corrected) and on a substrate gap
+   the pivot itself closes (the DR notification center is the bus).
+   With the freeze constraint gone, the vocabulary was re-chosen on
+   merits: explicit `device_appeared` for mid-stream joins rather
+   than snapshot-as-join. Sitting on the bus and emitting events for
+   every drive is the watch's product intent; the single-target
+   watch becomes the filtered special case of the general mechanism,
+   not the other way around. See Phase 2b.
 
 ## Sizing / order
 
