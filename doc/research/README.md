@@ -73,8 +73,9 @@ in `AGENTS.md`. The chain of files is the audit trail.
   1000ms media poll), retirements, coexistence falsification runs.
   All four design decisions resolved in-file same day: INQUIRY
   retires (identity-only, source-verified), DA retires, index gets
-  provenance-grade wording, multi-device watch deferred without
-  foreclosure (callback-level registry-ID filter).
+  provenance-grade wording, and watch-all pulled INTO scope as Phase
+  2b (snapshot-as-join needs no schema motion; the DR notification
+  center is the bus the watch was always meant to sit on).
 
 - `2026-06-10-gesn-single-poll-rebuttal.md` — Dated rebuttal of the
   2026-05-29 note per this README's append rule: the 2026-05-30

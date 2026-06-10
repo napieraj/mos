@@ -75,7 +75,7 @@ below that struct is pure and Linux-testable.
   identical — DR returns an empty array on runners, same as IOKit
   matching today); `nub_invariant_check` untouched.
 
-## Phase 2 — watch: DR doorbell replaces DA (revised same day)
+## Phase 2a — watch: DR doorbell replaces DA (revised same day)
 
 The watch keeps its architecture: private-mode CFRunLoop pump, poll
 engine as authority, per-probe open/close by registry ID, TUR⊕GESN
@@ -121,6 +121,45 @@ not in a follow-up:
   entirely (link line: it remains only if nothing else uses DA —
   check at implementation; if so, remove `-framework DiskArbitration`
   from CMake/README/amalgamate-header in the same commit).
+
+## Phase 2b — watch-all: sit on the bus (added same day, supersedes
+## the out-of-scope call in former decision 4)
+
+Why in scope now: (a) it needs **zero schema motion** — the
+mos.event.v1 snapshot branch has no position constraint, so a device
+joining the stream emits `snapshot`, a device leaving emits
+`device_removed` (per-device, non-terminal in all-mode), and every
+event already carries `registry_id` + `bsd` for demuxing; ROADMAP's
+"any later event kind is mos.event.v2" freeze is not triggered.
+(b) The DR pivot installs exactly the missing primitive — the
+notification center IS the bus — and the watch core is already a pure
+per-device machine, so all-mode is a multiplexer, not a rewrite.
+Deferring would re-price the same work behind a schema rev later.
+
+- **Pure layer** (the bulk, fully fixture-testable): a multiplexer
+  over N per-device `mos_watch_state` cores — join/leave lifecycle,
+  stream-global `seq`, deterministic same-tick interleave
+  (registry_id ascending), per-core poll deadlines folded to one pump
+  timeout. Test suite in the `test_watch_core.c` mold.
+- **API**: `mos_watch_open_all(err)` returning the same `mos_watch_t`
+  surface (`next_event`/`close`/accessors unchanged). Handle-contract
+  differences documented on the new function: `device_removed` is
+  per-device (stream continues; ends only at `mos_watch_close`), new
+  devices join mid-stream with a `snapshot` event. The single-target
+  handles' terminal contract (mos.h:434) is untouched.
+- **Adapter**: `kDRDeviceAppearedNotification` and
+  `kDRDeviceDisappearedNotification` become load-bearing for all-mode
+  lifecycle (Appeared → construct core + snapshot; Disappeared →
+  device_removed + drop core) — the registry-ID callback filter from
+  the foreclosure guard widens to all-pass. Single-target watches
+  keep `kIOGeneralInterest` unchanged. Per-probe open/close per
+  device as today (same reservation argument, ×N).
+- **CLI**: `mos watch --all` / `--watch --all` (explicit flag; the
+  no-selector single-drive default and multi-drive EX_USAGE behavior
+  are unchanged). NDJSON shape identical; consumers demux on
+  registry_id.
+- Falsification additions: hot-plug during all-watch (join/leave
+  ordering), two-drive interleave fixture.
 
 ## Phase 3 — retirements + docs
 
@@ -185,20 +224,25 @@ GESN-failing bridge if one enters the fixture set.
    readers of one array; cannot diverge); cross-run order stability is
    promised by neither substrate and stays explicitly unpromised,
    matching the existing snapshot-index semantics.
-4. **Multi-device watch: out of scope, not foreclosed.** Guard against
-   foreclosure: the DR StatusChanged callback filters by registry ID
-   at the callback level (a parameter, not a structural assumption),
-   so a future watch-all mode widens the filter rather than rewiring
-   the pump. Honest cost note: after the schema freeze, watch-all's
-   new event kinds are a `mos.event.v2`-class change (the v1 event
-   enum is closed and drift-pinned by schemas/validate.py) — deferral
-   prices the feature, it does not block it.
+4. ~~Multi-device watch out of scope~~ **Superseded same day:
+   watch-all is IN scope as Phase 2b.** The deferral rested on a
+   priced schema bump that doesn't exist (snapshot-as-join needs no
+   new event kind — the v1 snapshot branch has no position
+   constraint) and on a substrate gap the pivot itself closes (the DR
+   notification center is the bus). Sitting on the bus and emitting
+   events for every drive is the watch's product intent; the
+   single-target watch becomes the filtered special case of the
+   general mechanism, not the other way around. See Phase 2b.
 
 ## Sizing / order
 
 Phase 0 ≈ a 150-line tool + CMake/CI lines. Phase 1 ≈ 250–350 lines
-in `mos_dr.c` plus rewiring deletions. Phase 2 ≈ 100–150 lines in
-`mos_watch.c`. Phase 3 is net-negative LOC. Strictly in order, each
-phase landing green (with dist regen) before the next; hardware
-sessions at Phase 0 (capture) and after Phase 2 (falsification),
-neither blocking the code phases.
+in `mos_dr.c` plus rewiring deletions. Phase 2a ≈ 100–150 lines in
+`mos_watch.c` (net-negative with the DA deletion). Phase 2b is the
+largest single piece: a pure multiplexer + its test suite (think
+test_watch_core.c scale) + ~150 adapter/CLI lines — the cost lives in
+the pure layer where it is cheapest to test. Phase 3 is net-negative
+LOC. Strictly in order (2b after 2a proves the DR wiring), each phase
+landing green (with dist regen) before the next; hardware sessions at
+Phase 0 (capture) and after Phase 2b (falsification incl. hot-plug
+interleave), neither blocking the code phases.
