@@ -1,0 +1,11 @@
+{
+  "_comment": "Tests the explicit RFC 3339 pattern on ts. JSON Schema 2020-12 treats format='date-time' as annotation by default, so we rely on the pattern to reject malformed timestamps. Without the pattern, this fixture would validate against a vanilla format-annotation validator.",
+  "schema": "mos.event.v1",
+  "event": "device_removed",
+  "registry_id": 4295032831,
+  "stream_open_ms": 1,
+  "bsd": "/dev/disk4",
+  "seq": 1,
+  "ts": "not-a-date",
+  "prev_state": "ready"
+}

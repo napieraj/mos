@@ -1,0 +1,25 @@
+{
+  "schema": "mos.list.v1",
+  "drives": [
+    {
+      "index": 1,
+      "state": "ready",
+      "volume_name": null,
+      "bsd": "/dev/disk4",
+      "registry_id": 4295032832,
+      "vendor": "HL-DT-ST",
+      "product": "BD-RE WH16NS60",
+      "revision": "1.00"
+    },
+    {
+      "index": 2,
+      "state": "empty_or_open",
+      "volume_name": null,
+      "bsd": null,
+      "registry_id": 4295032833,
+      "vendor": "HL-DT-ST",
+      "product": "BD-RE WH16NS60",
+      "revision": "1.00"
+    }
+  ]
+}

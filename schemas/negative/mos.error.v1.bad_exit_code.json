@@ -1,0 +1,10 @@
+{
+  "schema": "mos.error.v1",
+  "exit_code": 1,
+  "error": {
+    "code": "io",
+    "message": "device I/O error",
+    "context": "could not query state",
+    "recoverable": false
+  }
+}

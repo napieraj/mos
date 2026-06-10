@@ -1,0 +1,273 @@
+# AGENTS.md
+
+`mos` (mac-optical-state) — pure-C macOS optical drive state library. 0BSD.
+Public API in `include/mos.h`, opaque handle. Repo:
+`github.com/napieraj/mos`. Binary and repo `mos`, project name
+`mac-optical-state`. Both names are correct.
+
+For build, layout, and contribution flow, see `README.md` and
+`CONTRIBUTING.md`. For Claude-specific failure modes and process rules
+documented during v0.1–v0.2 development, see `CLAUDE.md`.
+
+## Decisions that look wrong but aren't
+
+ADR-style entries. These were correct under the constraints in force
+when written; constraints drift. If you believe one no longer applies,
+**don't edit the historical entry** — append a new dated entry that
+argues against the original on the merits. Naming the prior decision,
+stating what changed, and explaining why the new constraint dominates
+forces the override to be auditable rather than silent. An entry from
+2026-04-22 read in 2027 is not load-bearing on its own; the chain of
+appends is.
+
+A bare timestamp without the argument is just a date on a folk
+ritual. The append must rebut.
+
+### Opaque `mos_device_info_t` + callback enumeration
+Date: 2026-04-22
+
+Your first instinct will be `drives[16]; mos_enumerate(...)`. That
+doesn't compile. Intentional — ABI stability across versions. The
+callback pattern is shown in the `mos.h` docstring.
+
+### Binary `mos`, repo `mac-optical-state`
+Date: 2026-04-22
+
+You will want to rename one to match the other for "consistency" —
+don't. Both correct. Binary gets the ergonomic name; repo keeps the
+descriptive one. CMake target name and Homebrew formula match the
+binary. README title and `project()` id keep the repo name.
+
+### Single-retry on UNIT ATTENTION
+Date: 2026-04-22
+
+You will want to escalate the single retry to a bounded loop because
+the 2-3-stack case looks unhandled — don't, not in v0.2. Source
+comment acknowledges the 2-3-stack case explicitly. Escalation to a
+bounded retry loop is a v0.3 decision contingent on observed hardware
+behavior, not a v0.2 fix. Don't preemptively expand.
+
+### No UA retry at all (supersedes "Single-retry on UNIT ATTENTION")
+Date: 2026-06-10
+
+The 2026-04-22 entry above describes a retry that no longer exists.
+The 2026-05-30 state-detection redesign removed the UA drain entirely:
+TEST UNIT READY is issued exactly once per query (`mos_state_core.c`),
+and a stray UNIT ATTENTION is taken at face value and classified to
+`unknown` (`ARCHITECTURE.md` §4.1, §7). What changed: the macOS peers
+(drutil, cdrom_id-equivalents) demonstrably rely on the kernel's own
+device initialization having consumed the power-on / reset /
+media-change UA before a userspace client ever holds a handle, so an
+application-level retry was re-armoring a layer that is already
+armored — and it complicated the single-shot decision tree the GESN
+redesign needed. The old entry's advice ("don't expand to a loop")
+is now vacuously satisfied; the thing not to do today is reintroduce
+*any* retry. If hardware capture ever shows stacked UAs surviving to
+mos's first TUR, that evidence goes in a new dated entry here before
+any code changes.
+
+### CMake floor 12.0, Homebrew floor 14
+Date: 2026-04-22
+
+You will want to bump the CMake floor to match Homebrew for
+"consistency" — don't. Library technically builds on Monterey
+(`kIOMainPortDefault`). Homebrew distribution policy is a separate
+axis: `:sonoma`. Both floors are correct for their respective scopes;
+collapsing them removes a real capability (building on older
+toolchains for non-Homebrew consumers).
+
+### Homebrew floor aligned to Monterey (supersedes the entry above)
+Date: 2026-06-10
+
+The second external review pass (CHANGELOG 2026-05-14, finding 9)
+found the `:sonoma` Homebrew floor excluded Monterey/Ventura users for
+no reason — the library builds and runs on 12.0. `homebrew/mos.rb` now
+declares `depends_on macos: :monterey`, matching the CMake
+`CMAKE_OSX_DEPLOYMENT_TARGET 12.0` floor. The two-axes argument above
+was correct in form (distribution policy *is* a separate axis) but the
+specific `:sonoma` value had no justification behind it. Today both
+floors point at Monterey; if they ever diverge again, the divergence
+needs a reason recorded here, not just "consistency" in either
+direction.
+
+## Process
+
+1. If a test fails, the test is right; the library is wrong. Don't
+   rewrite the test to make it pass.
+2. Don't change behavior based on a review alone. Review points become
+   comment updates or v0.next flags until hardware validation is in.
+   See `CLAUDE.md` → "Over-doing what was asked" for
+   the behavioral pattern this rule prevents.
+3. Hardware validation requires a real Mac with a real optical drive
+   attached. The pure-data tests (sense parsing, CDB layouts, BSD-name
+   normalization, status classification, string tables) link only
+   against `mos_pure`, which has no Apple framework dependency — the
+   v0.2 split made `mos_core` (IOKit shell) sit on top of `mos_pure`
+   so the test binary genuinely compiles and runs without IOKit. CI
+   runs on `macos-latest`; non-macOS execution of the pure tests is
+   feasible without further work and the symbol-hygiene check covers
+   both archives.
+
+## ADR: hardware's role is falsification and fixtures, never design input
+
+**Date:** 2026-06-10. **Status:** active.
+
+**Decision.** Code is built to spec (T10/MMC), to in-repo fixtures, and
+to verified platform source (Apple OSS kernel, vendored headers).
+Hardware runs exist for exactly two purposes: (a) **falsifying axioms
+no spec governs** (the §5.5 interleaving slivers, DR array ordering),
+and (b) **capturing hex that becomes committed fixtures**. A surprise
+observed on a drive never changes behavior directly — it lands as a
+`.bin` fixture (the `getconfig_dvdrom_current.bin` pipeline), the pure
+layer is built to the fixture, and the defense is expressed
+generically (validity gates keyed on the reply's own length fields),
+never special-cased to the device that produced it.
+
+**Why.** This is already the repo's revealed pattern — the GESN
+trust-the-reply's-own-length rule and the profile-only-on-READY
+suppression are both bridge/firmware observations generalized into
+spec-citable gates. Stating it as doctrine closes the remaining leak
+path: without it, a hardware-validation pass invites exactly the
+device-quirk special-casing that makes optical stacks unmaintainable
+(every legacy burner tool is a fossil record of this failure mode).
+It also keeps Process rule 3 honest: "hardware validation" means the
+matrix can *refute* us or *feed* us, not steer us.
+
+**Consequences.** STATUS's hardware gate is scoped to falsification +
+fixture-acquisition runs. Quirk findings reach `src/` only through
+committed hex with a dated fixture README entry. If a falsification
+run fails, the deliverable is the captured sense/timeline as a
+fixture — not a behavior tuned to the failing drive.
+
+## ADR: JSON output schema evolution policy
+
+**Decision:** schema versioning is per-document-type, not per-CLI-
+invocation. Each emitted JSON document carries a `schema` field with a
+name and version: `mos.state.v1` (one-shot success), `mos.error.v1`
+(failure envelope), `mos.list.v1` (`--list --json`), `mos.event.v1`
+(`--watch --json`). Within a schema's current version the **field set
+is closed**: the published schemas declare `additionalProperties:
+false`, so any field addition — like removals, renames, type changes,
+and semantic changes — requires a new schema name (e.g. `mos.state.v2`)
+with the v1 emit path preserved for a deprecation window. Consumers may
+rely on the closed key set; a v1 consumer never sees a key the v1
+schema doesn't name. The one open axis within a version is the `state`
+/ `prev_state` **enum**: additive state values are forward-compatible
+(the C↔schema drift guard in `schemas/validate.py` keeps the enum in
+lockstep with `mos_state_description()`), and consumers MUST treat an
+unknown `state` string as equivalent to "unclassifiable."
+
+(Revised 2026-06-10: an earlier version of this ADR permitted additive
+fields within a version and required consumers to ignore unknown keys.
+That contradicted the published schemas, which had declared the field
+set fixed since they landed — and the schemas, being machine-enforced
+and already public, win. Closed-by-default is also the stronger
+contract: it is what makes the negative-fixture suite meaningful.)
+
+The `--json` CLI flag takes no argument. Passing `--json=anything`
+returns `EX_USAGE` (64) with a diagnostic naming `mos.state.v1`.
+Per-CLI-invocation pinning (the `--json=v2`/`--json=v3` mechanism in
+the v2-lock design) is not needed because the schema name on each
+document already carries the version: consumers parse `.schema` and
+dispatch on it.
+
+**Why per-document rather than per-CLI-invocation:** a single `mos`
+invocation can emit different schemas. `--watch --json` produces a
+stream of `mos.event.v1` lines that may include `mos.error.v1`
+records for transient failures, and one-shot calls produce
+`mos.state.v1` or `mos.error.v1` depending on outcome. Per-document
+tagging lets a heterogeneous-stream consumer dispatch by `.schema`
+without inferring from field presence. Per-CLI versioning cannot
+express this cleanly. The per-document `schema` field follows the
+JSON Schema `$schema` convention and the protobuf practice of
+carrying type identity inside each message.
+
+**What this means in practice for contributors:**
+
+- New field on any envelope: schema-name bump (e.g. `mos.state.v2`),
+  same as any other shape change — the v1 field set is closed
+  (`additionalProperties: false`). Update the README contract section
+  and add positive + negative fixtures in the same commit.
+- Rename / drop / type change / semantic change on an existing
+  field: forbidden within current version. Goes into a new schema
+  name with the v1 emit path preserved for a deprecation window.
+- New `state` enum value: fine under `mos.state.v1`. Forward-compat
+  rule explicitly tells parsers to handle unknown state strings as
+  "unclassifiable."
+- New error code value (new `mos_error` enum variant surfaced
+  through `mos_error_to_code`): fine under `mos.error.v1`. Same
+  rationale; `.error.code` is a string the consumer pattern-matches
+  against.
+
+**Revision 2026-06-10 — when the freeze begins.** The closed-field-set
+rule above governs SHIPPED schemas. Before the first tagged release
+there are zero external consumers, so v1 documents are mutable in
+place: shape changes land in `mos.*.v1` directly, with schema, example
++ negative fixtures, emitter, and docs updated in the same commit (the
+CI validation suite is the consumer until a real one exists). Exercised
+the same day: `mos.event.v1` replaced the composite `stream_id` string
+with `registry_id` + `stream_open_ms`. The freeze — and with it every
+rule above — takes effect at the first tag that ships the schema.
+
+## Scope doctrine: command surface vs input space (2026-06-10)
+
+Three layers, so "are we drifting into general SCSI" never needs
+re-deriving:
+
+1. **Command surface: MMC only, kernel-authored by default.** mos does
+   not build CDBs. TUR, GET CONFIGURATION, and (v0.4) READ DISC
+   INFORMATION go through the `MMCDeviceInterface` convenience methods —
+   Apple's optical kext constructs, dispatches, and retries them. mos
+   authors exactly **one** raw CDB in the entire codebase: GESN 0x4A,
+   and only because the convenience `GetTrayState` is
+   information-destroying (it hard-codes closed+success on any failure —
+   ARCHITECTURE §9.7). That is the template for any future raw verb: a
+   raw CDB requires (a) a documented showing that no convenience method
+   can carry the needed information, and (b) the nub-collision analysis,
+   because raw means `ObtainExclusiveAccess` and the exclusive lock is
+   the only reason the §5.5 invariant exists at all. Convenience methods
+   never take the lock; every new raw verb re-raises it. Future tray
+   verbs (eject/load, ROADMAP) follow the same rule — convenience first,
+   raw only with the GESN-grade justification.
+
+2. **No SPC ambition.** No mode pages, no log pages, no reservations, no
+   classification of sense semantics beyond what the optical decision
+   tree needs. The verification oracle is Apple's optical kext
+   (`IOSCSIMultimediaCommandsDevice`), never SAM/SPC in the abstract.
+
+3. **Privilege footprint: the SCSITaskUserClient console grant, and
+   nothing more.** mos never requires elevation beyond what the
+   platform's attach rule already gives a console user on a burner —
+   no root, no operator group, no TCC Full Disk Access. Concretely:
+   no block-device I/O (`/dev/rdiskN` reads are a third I/O modality
+   AND a privilege acquisition; both disqualify). Data that needs more
+   privilege than mos holds is the CONSUMER's to obtain AND to parse —
+   anyone doing filesystem-level reads owns their own filesystem
+   parsing. mos does not ship parsers for bytes it refuses to read
+   (a public PVD parser was shipped and struck the same session,
+   2026-06-10: zero internal call sites, and its only imagined
+   consumers are tools already deep in makemkvcon territory).
+
+4. **Input space: the full octet domain, adversarial.** MMC bounds what
+   a conforming drive emits; it bounds nothing about what bytes arrive
+   through a crossflashed drive behind a USB-SATA bridge. Response
+   parsing and the nub gate are therefore verified over the entire
+   status × key × ASC × ASCQ space (`tests/audit/nub_invariant_check.c`)
+   — and the correct handling of unclassifiable bytes is LESS action,
+   not more: no lock, no probe, `UNKNOWN`. MMC defines the command
+   surface; nothing defines the input space.
+
+## Naming standard: the BSD vocabulary (Apple-canonical, 2026-06-10)
+
+Three concepts, three names, no synonyms:
+- **bsd_unit** — the integer N (Apple: kIOBSDUnitKey). int64; the
+  sentinel comment is always verbatim "-1 = no whole-disk IOMedia node
+  (media absent)".
+- **bsd_name** — the string "diskN" (Apple: kIOBSDNameKey).
+  `mos_bsd_name_format` renders it.
+- **dev node** — "/dev/" + bsd_name (Apple/diskutil: "Device Node").
+  `mos_bsd_dev_node` renders it; the JSON field `bsd`, flag `--bsd`,
+  and column `BSD` carry this form.
+Banned synonyms: bsd_path, bsd_number, "device path". CLI-layer
+identifiers carry the `mos_cli_` prefix uniformly (io, human, all of
+cli/).

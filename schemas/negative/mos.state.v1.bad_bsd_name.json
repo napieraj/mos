@@ -1,0 +1,6 @@
+{
+  "schema": "mos.state.v1",
+  "state": "ready",
+  "bsd": "diskN",
+  "current_profile": "0x0040"
+}

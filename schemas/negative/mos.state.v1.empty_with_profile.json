@@ -1,0 +1,7 @@
+{
+  "_comment": "state=empty must imply current_profile=0x0000 — stale profile data must not leak across media changes.",
+  "schema": "mos.state.v1",
+  "state": "empty",
+  "bsd": "/dev/disk4",
+  "current_profile": "0x0040"
+}

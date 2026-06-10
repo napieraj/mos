@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/napieraj/mos/schemas/mos.error.v1.json",
+  "title": "mos.error.v1",
+  "description": "Failure envelope for any mos one-shot operation that produced no observation. Routes to stdout (not stderr) so a single `mos --json | jq` pipeline can read both success and failure envelopes; stderr carries the human-readable diagnostic in parallel. The bsd_name field is conditional — present only when a handle was open at the time of failure (partial-failure path), absent when the failure preceded handle acquisition (pure-open-failure path).",
+  "type": "object",
+  "required": ["schema", "exit_code", "error"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "mos.error.v1"
+    },
+    "bsd": {
+      "type": "string",
+      "pattern": "^/dev/disk[0-9]+$",
+      "description": "BSD name of the drive a handle was open against when the failure occurred. Absent when the failure occurred before handle acquisition (e.g. drive not present at all)."
+    },
+    "exit_code": {
+      "type": "integer",
+      "enum": [64, 66, 69, 70, 71, 74, 75, 77],
+      "description": "sysexits.h exit code that the process will return. Mirrors the kernel-visible exit and is intended for consumers that read JSON without also gating on $?."
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "context", "recoverable"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_arg",
+            "no_device",
+            "driver_rejected",
+            "exclusive_access",
+            "busy",
+            "timeout",
+            "io",
+            "unsupported",
+            "oom"
+          ],
+          "description": "Stable string contract for programmatic pattern-matching. The set is pinned in include/mos.h alongside the mos_error enum. 'ok' is deliberately excluded — an error envelope reporting code=ok is internally contradictory; success cases route to mos.state.v1 / mos.list.v1 instead. (Previously this enum included 'ok'; that was a schema bug, not an emitter behavior — the CLI never produces error envelopes with code=ok. Removed in v0.3.1-dev. Same as mos.event.v1::error.code.)"
+        },
+        "message": {
+          "type": "string",
+          "description": "Opaque human-readable text from mos_error_description. Do not pattern-match on this; pattern-match on `code` instead."
+        },
+        "context": {
+          "type": "string",
+          "description": "What mos was attempting when the failure occurred (e.g. \"could not open drive\"). Human-readable; opaque for pattern matching."
+        },
+        "recoverable": {
+          "type": "boolean",
+          "description": "Hint for consuming adapters: true means the error typically clears on retry within seconds (BUSY, TIMEOUT, EXCLUSIVE_ACCESS); false means it won't clear without external action."
+        }
+      }
+    }
+  }
+}

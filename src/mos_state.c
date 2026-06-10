@@ -1,0 +1,63 @@
+/*
+ * mos_state.c — Apple-side adapter for the pure decision-tree core.
+ *
+ * Fills mos_state_env_t from a mos_handle_t and calls the pure core; the
+ * split lets tests/test_state_core.c drive the tree with scripted MMC
+ * responses instead of real hardware. Contract:
+ * mos_internal_query_state_core in mos_pure.h.
+ */
+
+#include "mos_internal.h"
+
+/* vtable trampolines, static — only this file binds the Apple ops table. */
+
+static mos_error adapter_get_tray_state(void *ctx, bool *tray_open)
+{
+    return mos_internal_mmc_get_tray_state((mos_handle_t *)ctx, tray_open);
+}
+
+static mos_error adapter_test_unit_ready(void *ctx,
+                                         uint32_t *status,
+                                         uint8_t sense[18])
+{
+    return mos_internal_mmc_test_unit_ready((mos_handle_t *)ctx, status, sense);
+}
+
+static mos_error adapter_get_current_profile(void *ctx, uint16_t *profile)
+{
+    return mos_internal_mmc_get_current_profile((mos_handle_t *)ctx, profile);
+}
+
+static const mos_mmc_ops_t apple_mmc_ops = {
+    .get_tray_state      = adapter_get_tray_state,
+    .test_unit_ready     = adapter_test_unit_ready,
+    .get_current_profile = adapter_get_current_profile,
+};
+
+mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
+{
+    if (out) *out = NULL;
+    if (!h || !out) return MOS_ERR_INVALID_ARG;
+
+    mos_state_env_t env = {
+        .ops                 = &apple_mmc_ops,
+        .ctx                 = h,
+        .bsd_unit            = h->bsd_unit,
+        .registry_id         = h->drive_registry_id,
+        .media_id            = h->media_id,
+        .vendor              = h->vendor_str[0]  ? h->vendor_str  : NULL,
+        .product             = h->product_str[0] ? h->product_str : NULL,
+        .revision            = h->revision_str[0] ? h->revision_str : NULL,
+    };
+
+    /* TODO: ReadDiscInformation — not needed for any state decision, but
+       NOTE(v0.4): its parse bound MUST come from mos_internal_trusted_len
+       (seam contract O-4) — allocated, realized, and header-claimed are
+       three different authorities and only the first two are trusted.
+       would distinguish blank vs finalized discs in --verbose. A 4th vtable
+       entry + an enrichment branch in the core. See ARCHITECTURE.md §4.4. */
+
+    mos_error rc = mos_internal_query_state_core(&env, &h->result);
+    if (rc == MOS_OK) *out = &h->result;
+    return rc;
+}

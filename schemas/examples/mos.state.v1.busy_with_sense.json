@@ -1,0 +1,15 @@
+{
+  "schema": "mos.state.v1",
+  "state": "busy",
+  "bsd": "/dev/disk4",
+  "current_profile": "0x0000",
+  "vendor": "HL-DT-ST",
+  "product": "BD-RE BH16NS55",
+  "sense": {
+    "key": "0x06",
+    "asc": "0x29",
+    "ascq": "0x00"
+  },
+  "registry_id": 4295032831,
+  "index": 1
+}

@@ -1,0 +1,35 @@
+## CMake build trees
+build/
+build-universal/
+build-cmake/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.cmake
+CTestTestfile.cmake
+
+## Local overrides (not committed)
+.env.make
+
+## macOS
+.DS_Store
+._.DS_Store
+.Spotlight-V100
+.Trashes
+.fseventsd
+
+## Xcode / editor
+.idea/
+.vscode/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.swp
+*.swo
+
+## Signing / keys (never commit)
+*.mobileprovision
+*.p12
+*.cer
+credentials.json
+mt_tests
