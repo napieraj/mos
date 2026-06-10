@@ -132,22 +132,6 @@ int64_t mos_internal_parse_bsd_unit(const char *name);
    filtering. */
 bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit);
 
-/* ---- Identity-string re-homing (mos_pure.c) ---------------------- *
- *
- * Re-home the three handle-borrowed identity strings (vendor, product,
- * revision) of a result into caller-owned buffers, repointing each field at
- * its buffer — or NULL when the source is empty/absent. watch_probe fills a
- * result from a short-lived handle then closes it, so any identity pointer
- * still aimed into the handle would dangle; routing all three through one
- * helper is what stops a field silently riding the struct copy. Pure and
- * IOKit-free so the no-dangle invariant is ASan-gatable headlessly — no Mac,
- * no drive. Each (buf, cap) backs one field in source order; bsd_unit is an
- * integer value, not a borrowed pointer, so it has no re-home concern. */
-void mos_internal_rehome_identity_strings(mos_state_result *r,
-                                          char *vendor_buf,   size_t vendor_cap,
-                                          char *product_buf,  size_t product_cap,
-                                          char *revision_buf, size_t revision_cap);
-
 /* ---- GET CONFIGURATION feature walk (mos_config.c) --------------- *
  *
  * One decoded MMC feature descriptor. `data` borrows into the caller's

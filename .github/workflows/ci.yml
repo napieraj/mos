@@ -61,7 +61,7 @@ jobs:
              -I include tests/test_watch_lifetime.c \
              build/libmos.a build/libmos_pure.a \
              -framework IOKit -framework CoreFoundation \
-             -framework DiskArbitration -framework DiscRecording \
+             -framework DiscRecording \
              -o /tmp/test_watch_lifetime
           ASAN_OPTIONS=abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
              /tmp/test_watch_lifetime
@@ -236,7 +236,7 @@ jobs:
              tests/test_result.c \
              /tmp/amalgamated.o \
              -framework IOKit -framework CoreFoundation \
-             -framework DiskArbitration -framework DiscRecording \
+             -framework DiscRecording \
              -o /tmp/amalgamated_tests
           # test_render.c registers the hostile-input render fixtures
           # via register_render_tests(); test_main.c calls that

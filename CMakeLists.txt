@@ -189,14 +189,15 @@ set_target_properties(mos_core PROPERTIES
 
 find_library(IOKIT_FRAMEWORK          IOKit          REQUIRED)
 find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
-find_library(DISKARBITRATION_FRAMEWORK DiskArbitration REQUIRED)
 find_library(DISCRECORDING_FRAMEWORK  DiscRecording  REQUIRED)
 
+# DiskArbitration left the library link line in DR pivot Phase 2a (the
+# watch's DA wake retired; the notification probe still links DA via
+# its own target flags below).
 target_link_libraries(mos_core
     PUBLIC  mos_pure
             ${IOKIT_FRAMEWORK}
             ${COREFOUNDATION_FRAMEWORK}
-            ${DISKARBITRATION_FRAMEWORK}
             ${DISCRECORDING_FRAMEWORK}
     PRIVATE mos_warnings
 )

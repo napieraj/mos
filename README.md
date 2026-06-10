@@ -10,7 +10,7 @@ produce the same output. `mos` distinguishes them by
 talking to the drive over SCSI MMC.
 
 Pure C. No Swift. No runtime dependencies beyond Apple's own IOKit,
-CoreFoundation, DiskArbitration, and DiscRecording frameworks.
+CoreFoundation, and DiscRecording frameworks.
 
 ## What it does
 
@@ -183,8 +183,7 @@ distribution:
 ./scripts/amalgamate.sh
 # Outputs: dist/mos.h + dist/mos.c
 # Drop both into your source tree; link IOKit, CoreFoundation,
-# DiskArbitration, and DiscRecording; build with
-# -mmacosx-version-min=12.0.
+# and DiscRecording; build with -mmacosx-version-min=12.0.
 ```
 
 ## Requirements

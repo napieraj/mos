@@ -68,8 +68,10 @@ static void mos_internal_dr_copy_string(CFTypeRef value,
 }
 
 /* path → IORegistry entry → uint64 entry ID; 0 on any failure (the
-   documented "unavailable" sentinel, never a fabricated ID). */
-static uint64_t mos_internal_dr_id_for_path_cf(CFTypeRef path)
+   documented "unavailable" sentinel, never a fabricated ID). Exported
+   to the watch adapter: the DR doorbell's per-device filter resolves
+   the notifying device the same way (decl in mos_internal.h). */
+uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path)
 {
     io_string_t p;
     if (!path || CFGetTypeID(path) != CFStringGetTypeID()) return 0;
@@ -94,7 +96,7 @@ static uint64_t mos_internal_dr_id_for_path_cf(CFTypeRef path)
 static void mos_internal_dr_fill_from_info(CFDictionaryRef info,
                                            mos_internal_dr_snapshot *s)
 {
-    s->registry_id = mos_internal_dr_id_for_path_cf(
+    s->registry_id = mos_internal_dr_id_for_path_value(
         CFDictionaryGetValue(info, kDRDeviceIORegistryEntryPathKey));
     mos_internal_dr_copy_string(
         CFDictionaryGetValue(info, kDRDeviceVendorNameKey),
@@ -183,7 +185,7 @@ uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name)
     uint64_t id = 0;
     CFDictionaryRef info = DRDeviceCopyInfo(dev);
     if (info) {
-        id = mos_internal_dr_id_for_path_cf(
+        id = mos_internal_dr_id_for_path_value(
             CFDictionaryGetValue(info, kDRDeviceIORegistryEntryPathKey));
         CFRelease(info);
     }

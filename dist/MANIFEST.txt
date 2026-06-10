@@ -10,7 +10,6 @@ Build:
   Link:     cc mos.o your_main.o -o yourtool \
                -framework IOKit \
                -framework CoreFoundation \
-               -framework DiskArbitration \
                -framework DiscRecording \
                -mmacosx-version-min=12.0
 

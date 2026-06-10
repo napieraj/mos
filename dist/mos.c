@@ -10,17 +10,14 @@
  *     cc mos.o your_main.o -o yourtool \\
  *        -framework IOKit \\
  *        -framework CoreFoundation \\
- *        -framework DiskArbitration \\
  *        -framework DiscRecording \\
  *        -mmacosx-version-min=12.0
  *
  * Or add both files (mos.h and this one) to your existing build system
- * and make sure IOKit, CoreFoundation, DiskArbitration, and
- * DiscRecording are on your link line, with the deployment target
- * pinned to macOS 12.0 to match the CMake build's
- * CMAKE_OSX_DEPLOYMENT_TARGET. Skipping -framework DiskArbitration
- * fails to link at the DASessionCreate reference in mos_watch.c;
- * skipping -framework DiscRecording fails at the DRCopyDeviceArray
+ * and make sure IOKit, CoreFoundation, and DiscRecording are on your
+ * link line, with the deployment target pinned to macOS 12.0 to match
+ * the CMake build's CMAKE_OSX_DEPLOYMENT_TARGET. Skipping
+ * -framework DiscRecording fails to link at the DRCopyDeviceArray
  * reference in mos_dr.c.
  *
  * See mos.h for the API.
@@ -206,22 +203,6 @@ int64_t mos_internal_parse_bsd_unit(const char *name);
    Consumers: src/mos_watch.c and tools/mos_notification_probe.c DA
    filtering. */
 bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit);
-
-/* ---- Identity-string re-homing (mos_pure.c) ---------------------- *
- *
- * Re-home the three handle-borrowed identity strings (vendor, product,
- * revision) of a result into caller-owned buffers, repointing each field at
- * its buffer — or NULL when the source is empty/absent. watch_probe fills a
- * result from a short-lived handle then closes it, so any identity pointer
- * still aimed into the handle would dangle; routing all three through one
- * helper is what stops a field silently riding the struct copy. Pure and
- * IOKit-free so the no-dangle invariant is ASan-gatable headlessly — no Mac,
- * no drive. Each (buf, cap) backs one field in source order; bsd_unit is an
- * integer value, not a borrowed pointer, so it has no re-home concern. */
-void mos_internal_rehome_identity_strings(mos_state_result *r,
-                                          char *vendor_buf,   size_t vendor_cap,
-                                          char *product_buf,  size_t product_cap,
-                                          char *revision_buf, size_t revision_cap);
 
 /* ---- GET CONFIGURATION feature walk (mos_config.c) --------------- *
  *
@@ -709,6 +690,11 @@ size_t mos_internal_dr_copy_snapshot(mos_internal_dr_snapshot *slots,
    via DRDeviceCopyDeviceForBSDName; 0 when DR knows no such device. */
 uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name);
 
+/* Resolve a kDRDeviceIORegistryEntryPathKey value (CFString expected;
+   anything else yields 0) to the entry's uint64 registry ID. Shared by
+   the snapshot builder and the watch doorbell's per-device filter. */
+uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path);
+
 /* Device-static identity strings for an already-opened service, via
    DR's registry-path lookup. Best-effort: returns false (and empties
    the buffers) when DR cannot see the service — the same non-fatal
@@ -993,35 +979,6 @@ int64_t mos_internal_parse_bsd_unit(const char *name)
         if (v > UINT32_MAX) return -1;
     }
     return (int64_t)v;
-}
-
-/* See mos_pure.h. Copy the borrowed source into the caller's buffer with a
-   bounded byte loop, then repoint — or NULL it. Hand-rolled rather than
-   strlcpy: pure code must compile against any C11 libc, and strlcpy is a BSD
-   extension (glibc only gained it in 2.38). The Apple adapters may use it. */
-static void rehome_one(char *buf, size_t cap, const char **field)
-{
-    const char *src = *field;            /* borrowed at call time */
-    if (src && *src && cap > 0) {
-        size_t i = 0;
-        for (; i + 1 < cap && src[i]; i++) buf[i] = src[i];
-        buf[i] = 0;
-        *field = buf;                     /* repoint into caller buffer */
-    } else {
-        if (cap > 0) buf[0] = 0;
-        *field = NULL;
-    }
-}
-
-void mos_internal_rehome_identity_strings(mos_state_result *r,
-                                          char *vendor_buf,   size_t vendor_cap,
-                                          char *product_buf,  size_t product_cap,
-                                          char *revision_buf, size_t revision_cap)
-{
-    if (!r) return;
-    rehome_one(vendor_buf,   vendor_cap,   &r->vendor);
-    rehome_one(product_buf,  product_cap,  &r->product);
-    rehome_one(revision_buf, revision_cap, &r->revision);
 }
 
 /* SAM-5 §5.3: four status values that all mean "drive is contended."
@@ -2295,10 +2252,10 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
 
 
 #include <CoreFoundation/CoreFoundation.h>
-#include <DiskArbitration/DiskArbitration.h>
+#include <DiscRecording/DRCoreDevice.h>
+#include <DiscRecording/DRCoreNotifications.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/IOMessage.h>
-#include <IOKit/IOBSD.h>
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -2344,40 +2301,36 @@ struct mos_watch {
     CFRunLoopSourceRef    notify_source;
     CFRunLoopRef          run_loop;
 
-    /* Disk Arbitration session for media-change wake-up. DA fires
-       description-changed callbacks when media is inserted, ejected,
-       or its description otherwise changes — much faster than the
-       2-second stable poll cycle. The DA callback calls
+    /* DiscRecording doorbell for media/tray-change wake-up (Phase 2a of
+       the DR pivot: replaced the DiskArbitration session — DR's
+       StatusChanged is device-scoped, so it also wakes on tray-open /
+       no-media drives where DA's media-scoped, bsd_unit-filtered wake
+       matched nothing). The callback calls
        mos_internal_watch_notify_wake() to pull the next poll forward
-       and CFRunLoopStop() to break the pump's current sleep.
-       NULL on poll-only fallback (DASessionCreate or callback
-       DASessionCreate failed at open time —
-       DARegisterDiskDescriptionChangedCallback returns void, so
-       registration itself cannot fail detectably; fifth review F12d). */
-    DASessionRef          da_session;
+       and CFRunLoopStop() to break the pump's current sleep. Both
+       fields NULL on poll-only fallback (center or run-loop source
+       creation failed at open time) — polling is the correctness
+       floor, the doorbell is latency only. */
+    DRNotificationCenterRef dr_center;
+    CFRunLoopSourceRef      dr_source;
 
     /* Storage for the most recent event so mos_watch_next_event can
        return borrowed pointers that remain valid until the next call.
-       Lifetime sources differ by field, and the difference is exactly
-       what the pointer-lifetime audit rule (above watch_probe) governs:
-       session identity (registry_id, stream_open_wall_ms) and bsd_unit
-       are plain values with no pointer lifetime at all, while vendor /
-       product / revision are borrowed from a short-lived mos_handle on
-       each probe and must be re-homed into the buffers below before
-       the handle is closed. The pure core does NOT own those three. */
+       Session identity (registry_id, stream_open_wall_ms) and bsd_unit
+       are plain values with no pointer lifetime; vendor / product /
+       revision point into the watch-owned buffers below. */
     mos_watch_event last_event;
 
-    /* Backing storage for the handle-borrowed identity strings. These
-       are NOT owned by the pure core: they are copied out of a
-       short-lived mos_handle on every probe and re-homed here so the
-       event's pointers stay valid for the watch lifetime (until the
-       next probe overwrites them, or mos_watch_close frees the watch).
-       Per the pointer-lifetime audit rule above watch_probe, every
-       handle-borrowed pointer field must be re-homed into one of these
-       buffers (or set NULL) before the probe closes the handle.
-         vendor[9]    INQUIRY VENDOR_IDENTIFICATION   ( 8 + NUL)
-         product[17]  INQUIRY PRODUCT_IDENTIFICATION  (16 + NUL)
-         revision[5]  INQUIRY PRODUCT_REVISION_LEVEL  ( 4 + NUL, SPC-4 §6.4.2) */
+    /* Device-static identity, captured ONCE from the validated open
+       handle (whose strings come from the DR directory) and owned by
+       the watch for its whole life. Events point here; per-probe
+       handles never contribute identity (the per-probe re-home this
+       replaced — and the v0.3.2 use-after-free class it existed to
+       contain — retired with DR pivot Phase 2a). Widths are the SPC-4
+       INQUIRY field widths the directory data is parsed from:
+         vendor[9]    VENDOR_IDENTIFICATION   ( 8 + NUL)
+         product[17]  PRODUCT_IDENTIFICATION  (16 + NUL)
+         revision[5]  PRODUCT_REVISION_LEVEL  ( 4 + NUL, SPC-4 §6.4.2) */
     char vendor[9];
     char product[17];
     char revision[5];
@@ -2439,14 +2392,16 @@ static uint64_t stream_epoch_wall_ms(void)
    layer forwards `const char *` fields verbatim and is structurally blind
    to the fact that one is borrowed from a handle this adapter is about to
    close; the pure tests/fuzzers therefore cannot catch a violation):
-   before any mos_close(h), every borrowed pointer field of the escaping
-   struct must be re-homed into watch-lifetime storage (w->vendor /
-   w->product / w->revision) or set NULL. The footgun is `*out = *qr;` —
-   it copies every pointer verbatim, so "forgot one" is the default, not
-   the exception (the v0.3.2 revision use-after-free was exactly this: it
-   rode the struct copy un-rehomed). Any NEW borrowed pointer added to
-   mos_watch_event / mos_state_result needs a backing buffer in struct
-   mos_watch and a re-home below. (bsd_unit is a value, never re-homed.) */
+   before any mos_close(h), every handle-borrowed pointer field of the
+   escaping struct must be REPLACED — identity fields point at the
+   watch-static buffers captured at open (w->vendor / w->product /
+   w->revision; device-static data, so per-probe refresh carried no
+   information) — or set NULL. The footgun is `*out = *qr;` — it copies
+   every pointer verbatim, so "forgot one" is the default, not the
+   exception (the v0.3.2 revision use-after-free was exactly this: it
+   rode the struct copy un-replaced). Any NEW borrowed pointer added to
+   mos_watch_event / mos_state_result needs a watch-lifetime backing
+   store and a replacement below. (bsd_unit is a value, never replaced.) */
 static mos_error watch_probe(void *ctx, mos_state_result *out)
 {
     mos_watch_t *w = (mos_watch_t *)ctx;
@@ -2484,14 +2439,15 @@ static mos_error watch_probe(void *ctx, mos_state_result *out)
        F1 swap fingerprint) needs no manual tracking — it rides the
        *out = *qr copy and the core reads it from the result. */
     w->bsd_unit = out->bsd_unit;
-    /* Re-home the three borrowed identity strings into watch-owned buffers
-       and repoint out at them, so they survive the mos_close(h) below (the
-       lifetime invariant above). The helper is pure (mos_pure.c) so the
-       no-dangle property is ASan-gated headlessly. */
-    mos_internal_rehome_identity_strings(out,
-        w->vendor,   sizeof w->vendor,
-        w->product,  sizeof w->product,
-        w->revision, sizeof w->revision);
+    /* Replace the three handle-borrowed identity pointers with the
+       watch-static identity captured at open (the lifetime invariant
+       above): they must not survive the mos_close(h) below. Identity is
+       device-static directory data, so the per-probe handle's copy is
+       byte-identical to the open-time capture — repointing loses
+       nothing and removes the per-probe re-home entirely. */
+    out->vendor   = w->vendor[0]   ? w->vendor   : NULL;
+    out->product  = w->product[0]  ? w->product  : NULL;
+    out->revision = w->revision[0] ? w->revision : NULL;
 
     mos_close(h);
     return MOS_OK;
@@ -2581,49 +2537,54 @@ static void watch_interest_callback(void *refcon,
     }
 }
 
-/* ---- Wake source: Disk Arbitration -------------------------------- *
+/* ---- Wake source: DiscRecording doorbell --------------------------- *
  *
- * DA fires when a disk's description changes (media inserted/ejected, size,
- * mount state, ...), collapsing worst-case insert→event latency from
- * stable_poll_ms (default 2s) to however long DA takes — typically <100ms.
- * Polling is the correctness floor; DA is just the optimization, so if
- * DASessionCreate fails the watch falls back to poll-only
- * (w->da_session stays NULL; close treats NULL as a no-op).
+ * kDRDeviceStatusChangedNotification fires when a device's status dict
+ * changes (media in/out, tray, busy), collapsing worst-case
+ * insert→event latency from stable_poll_ms (default 2s) to however
+ * long DR takes. Polling is the correctness floor; the doorbell is
+ * latency only, so any setup failure falls back to poll-only
+ * (dr_center/dr_source stay NULL; close treats NULL as a no-op).
  *
- * Applies only to watches with a known unit: the callback filters by
- * mos_internal_bsd_unit_matches against w->bsd_unit, which is -1 for an
- * empty/open-tray drive — so such a watch matches nothing until media loads
- * and a unit appears, relying on poll + kIOGeneralInterest until then.
+ * Replaces the DA description-changed wake (DR pivot Phase 2a): DR's
+ * notification is DEVICE-scoped where DA's was media-scoped and
+ * bsd_unit-filtered, so this doorbell also rings for tray-open /
+ * no-media drives, which previously relied on poll + kIOGeneralInterest.
  *
- * Registration uses match=NULL / watch=NULL (all disks, all keys) to avoid
- * depending on specific DA key constants; the callback filters in-process by
- * unit. The pump re-probes from scratch on any wake, so the filter need not
- * be precise about which entry fired.
+ * The callback filters by registry ID — a parameter, not a structural
+ * assumption, so a future watch-all mode widens the filter rather than
+ * rewiring the pump (plan, Phase 2b). Filtering is fail-OPEN: if the
+ * event's device can't be resolved to an ID, wake anyway — a false
+ * wake is one cheap probe, a missed wake is stable_poll_ms of latency.
+ * DR data never decides state; the wake only schedules the MMC probe.
  */
 
-static void disk_description_changed_callback(DADiskRef disk,
-                                              CFArrayRef keys,
-                                              void *context)
+static void dr_status_changed_callback(DRNotificationCenterRef center,
+                                       void *observer, CFStringRef name,
+                                       DRTypeRef object,
+                                       CFDictionaryRef info)
 {
-    /* DA fires this on the run loop the session is scheduled on
-       (the caller's run loop, same as our IONotificationPort). */
-    (void)keys;
+    /* Fires on the run loop the DR source is scheduled on (the caller's
+       run loop, same as our IONotificationPort source). */
+    (void)center; (void)name; (void)info;
 
-    mos_watch_t *w = (mos_watch_t *)context;
-    if (!w || !disk) return;
+    mos_watch_t *w = (mos_watch_t *)observer;
+    if (!w) return;
 
-    /* Filter to events involving our drive. DADiskGetBSDName returns
-       NULL for DA's internal representations of unmounted media —
-       skip those. */
-    const char *bsd = DADiskGetBSDName(disk);
-    if (!bsd) return;
-
-    /* Match "disk4" or a partition child "disk4s1", rejecting "disk40"-style
-       prefix collisions. The tested helper, not inline strncmp — the strncmp
-       form has been miswritten as a prefix-only match before. Pinned by
-       tests/test_bsd_name.c. */
-    if (!mos_internal_bsd_unit_matches(bsd, w->bsd_unit)) {
-        return;
+    /* Per-device filter by registry ID (the watch's one identity
+       authority). object is the DRDeviceRef that changed; resolve its
+       registry path → entry ID and compare. Any resolution failure
+       wakes anyway (fail-open, see design block). */
+    if (object && w->registry_id != 0) {
+        uint64_t id = 0;
+        CFDictionaryRef dev_info = DRDeviceCopyInfo((DRDeviceRef)object);
+        if (dev_info) {
+            id = mos_internal_dr_id_for_path_value(
+                CFDictionaryGetValue(dev_info,
+                                     kDRDeviceIORegistryEntryPathKey));
+            CFRelease(dev_info);
+        }
+        if (id != 0 && id != w->registry_id) return; /* another drive */
     }
 
     mos_internal_watch_notify_wake(&w->core);
@@ -2710,53 +2671,55 @@ static void teardown_iokit_interest_wake(mos_watch_t *w)
     }
 }
 
-/* Set up a Disk Arbitration session and register the
-   description-changed callback. Independent of the IOKit interest
-   wake — either or both may fail soft to poll-only. Stores the
-   session in w->da_session on success; leaves it NULL on any
-   failure. */
-static void setup_disk_arbitration_wake(mos_watch_t *w)
+/* Set up the DR notification center and register the StatusChanged
+   observer. Independent of the IOKit interest wake — either or both
+   may fail soft to poll-only. Stores center + source on success;
+   leaves both NULL on any failure. */
+static void setup_dr_doorbell_wake(mos_watch_t *w)
 {
     if (!w || !w->run_loop) return;
 
-    DASessionRef session = DASessionCreate(kCFAllocatorDefault);
-    if (!session) return;
+    DRNotificationCenterRef center = DRNotificationCenterCreate();
+    if (!center) return;
 
-    /* Register for all-disk description changes. Filtering happens
-       in the callback by BSD-name comparison — see the design block
-       above for why this is cleaner than constructing a match
-       dictionary against a specific DA description key. */
-    DARegisterDiskDescriptionChangedCallback(
-        session,
-        /*match=*/NULL,    /* all disks */
-        /*watch=*/NULL,    /* all keys */
-        disk_description_changed_callback,
-        w);
+    CFRunLoopSourceRef source = DRNotificationCenterCreateRunLoopSource(center);
+    if (!source) {
+        CFRelease(center);
+        return;
+    }
+    CFRunLoopAddSource(w->run_loop, source, MOS_WATCH_RUN_LOOP_MODE);
 
-    /* Schedule LAST: once on the run loop, callbacks can fire, so every
-       prior step must already be safe to be live. */
-    DASessionScheduleWithRunLoop(session, w->run_loop,
-                                  MOS_WATCH_RUN_LOOP_MODE);
+    /* Register LAST: once observed, callbacks can fire, so every prior
+       step must already be safe to be live. object=NULL observes all
+       devices; the callback filters by registry ID (fail-open). */
+    DRNotificationCenterAddObserver(center, w, dr_status_changed_callback,
+                                    kDRDeviceStatusChangedNotification,
+                                    NULL);
 
-    w->da_session = session;
+    w->dr_center = center;
+    w->dr_source = source;
 }
 
-/* Tear down the DA session in reverse order: unschedule (no more
-   callbacks), unregister, release. Safe to call with NULL/poll-only
-   state. Called from mos_watch_close. */
-static void teardown_disk_arbitration_wake(mos_watch_t *w)
+/* Tear down the DR doorbell in reverse order: remove the observer (no
+   more callbacks), remove the source from the run loop, release both.
+   Safe to call with NULL/poll-only state. Called from mos_watch_close. */
+static void teardown_dr_doorbell_wake(mos_watch_t *w)
 {
-    if (!w || !w->da_session) return;
+    if (!w || !w->dr_center) return;
 
-    if (w->run_loop) {
-        DASessionUnscheduleFromRunLoop(w->da_session, w->run_loop,
-                                        MOS_WATCH_RUN_LOOP_MODE);
+    DRNotificationCenterRemoveObserver(w->dr_center, w,
+                                       kDRDeviceStatusChangedNotification,
+                                       NULL);
+    if (w->run_loop && w->dr_source) {
+        CFRunLoopRemoveSource(w->run_loop, w->dr_source,
+                              MOS_WATCH_RUN_LOOP_MODE);
     }
-    DAUnregisterCallback(w->da_session,
-                          (void *)disk_description_changed_callback,
-                          w);
-    CFRelease(w->da_session);
-    w->da_session = NULL;
+    if (w->dr_source) {
+        CFRelease(w->dr_source);
+        w->dr_source = NULL;
+    }
+    CFRelease(w->dr_center);
+    w->dr_center = NULL;
 }
 
 /* ---- Open / close ------------------------------------------------ */
@@ -2779,8 +2742,8 @@ static mos_watch_t *watch_open_from_validated_handle(
 
     /* An empty/open-tray drive has no unit (mos_handle_bsd_unit returns -1).
        Not a failure for the watch — identity is the registry_id captured
-       below. The DA filter returns false for unit < 0, so a nameless drive
-       relies on the kIOGeneralInterest wake plus polling until media loads. */
+       below, and the DR doorbell is device-scoped, so a nameless drive
+       gets the same wake coverage as a named one. */
     const int64_t bsd_unit = mos_handle_bsd_unit(h);   /* -1 if empty */
 
     mos_watch_t *w = (mos_watch_t *)calloc(1, sizeof(*w));
@@ -2821,6 +2784,16 @@ static mos_watch_t *watch_open_from_validated_handle(
     }
     w->registry_id = entry_id;
 
+    /* Capture the device-static identity strings ONCE, before the
+       validation handle closes — they came from the DR directory at
+       open. Events point at these watch-owned buffers for the watch's
+       whole life; per-probe handles never contribute identity (see the
+       buffer comment in struct mos_watch). strlcpy truncation cannot
+       trigger: source and destination carry the same SPC-4 widths. */
+    strlcpy(w->vendor,   h->vendor_str,   sizeof w->vendor);
+    strlcpy(w->product,  h->product_str,  sizeof w->product);
+    strlcpy(w->revision, h->revision_str, sizeof w->revision);
+
     mos_close(h);
 
     /* Initialize the pure state machine BEFORE registering any
@@ -2836,14 +2809,14 @@ static mos_watch_t *watch_open_from_validated_handle(
                             stable_poll_ms,
                             transition_poll_ms);
 
-    /* Capture the caller's run loop once so IOKit and DiskArbitration
+    /* Capture the caller's run loop once so the IOKit and DiscRecording
        wake sources can be scheduled independently. Both are best-effort;
        either can succeed without the other, and both can fail to
        poll-only without affecting correctness. */
     w->run_loop = CFRunLoopGetCurrent();
 
     setup_iokit_interest_wake(w);
-    setup_disk_arbitration_wake(w);
+    setup_dr_doorbell_wake(w);
 
     if (err_out) *err_out = MOS_OK;
     return w;
@@ -2895,13 +2868,13 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
 
 /* Safe to call on NULL; do not call twice (mos_close convention). Order is
    load-bearing — stop callbacks before releasing the memory they reference:
-   DA session, then IOKit interest wake, then the retained io_service_t.
+   DR doorbell, then IOKit interest wake, then the retained io_service_t.
    (Each teardown helper enforces its own internal stop-before-free order.) */
 void mos_watch_close(mos_watch_t *w)
 {
     if (!w) return;
 
-    teardown_disk_arbitration_wake(w);
+    teardown_dr_doorbell_wake(w);
     teardown_iokit_interest_wake(w);
 
     if (w->svc != IO_OBJECT_NULL) {
@@ -2965,7 +2938,7 @@ mos_error mos_watch_next_event(mos_watch_t *w, const mos_watch_event **out,
         double interval_sec = (double)(sleep_until_ms - now) / 1000.0;
 
         /* Only wait on the run loop if a source is actually scheduled
-           (notify_source or da_session) — an empty mode returns instantly
+           (notify_source or dr_source) — an empty mode returns instantly
            and tight-loops — AND we are on the thread that owns it. The
            documented contract is open/pump/close on one thread; if a
            caller violates it anyway, CFRunLoopRunInMode here would run
@@ -2974,7 +2947,7 @@ mos_error mos_watch_next_event(mos_watch_t *w, const mos_watch_event **out,
            misuse stays misuse (notification wakes can't reach a foreign
            thread's loop), but it degrades to honest nanosleep polling
            instead of a busy-spin. */
-        if (w->run_loop && (w->notify_source || w->da_session) &&
+        if (w->run_loop && (w->notify_source || w->dr_source) &&
             CFRunLoopGetCurrent() == w->run_loop) {
             /* Returns on timer, CFRunLoopStop (a notification callback), or
                a handled source — any is a wake; loop back to pump. Private
@@ -3331,8 +3304,10 @@ static void mos_internal_dr_copy_string(CFTypeRef value,
 }
 
 /* path → IORegistry entry → uint64 entry ID; 0 on any failure (the
-   documented "unavailable" sentinel, never a fabricated ID). */
-static uint64_t mos_internal_dr_id_for_path_cf(CFTypeRef path)
+   documented "unavailable" sentinel, never a fabricated ID). Exported
+   to the watch adapter: the DR doorbell's per-device filter resolves
+   the notifying device the same way (decl in mos_internal.h). */
+uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path)
 {
     io_string_t p;
     if (!path || CFGetTypeID(path) != CFStringGetTypeID()) return 0;
@@ -3357,7 +3332,7 @@ static uint64_t mos_internal_dr_id_for_path_cf(CFTypeRef path)
 static void mos_internal_dr_fill_from_info(CFDictionaryRef info,
                                            mos_internal_dr_snapshot *s)
 {
-    s->registry_id = mos_internal_dr_id_for_path_cf(
+    s->registry_id = mos_internal_dr_id_for_path_value(
         CFDictionaryGetValue(info, kDRDeviceIORegistryEntryPathKey));
     mos_internal_dr_copy_string(
         CFDictionaryGetValue(info, kDRDeviceVendorNameKey),
@@ -3446,7 +3421,7 @@ uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name)
     uint64_t id = 0;
     CFDictionaryRef info = DRDeviceCopyInfo(dev);
     if (info) {
-        id = mos_internal_dr_id_for_path_cf(
+        id = mos_internal_dr_id_for_path_value(
             CFDictionaryGetValue(info, kDRDeviceIORegistryEntryPathKey));
         CFRelease(info);
     }

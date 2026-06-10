@@ -189,9 +189,9 @@ two-tier split rationale). Non-`mos_` symbols fail the build.
    cross-platform project. IOKit types live in `src/mos_internal.h`
    only.
 5. **Do not add dependencies.** No libplist, no libusb, no Boost.
-   CoreFoundation + IOKit + DiskArbitration + DiscRecording only —
-   those are Apple system frameworks, available unconditionally on
-   any supported macOS deployment target.
+   CoreFoundation + IOKit + DiscRecording only — those are Apple
+   system frameworks, available unconditionally on any supported
+   macOS deployment target.
 6. **Do not introduce Swift or Objective-C.** This library is pure C
    on purpose — that is the thing that makes it embeddable in
    HandBrake, VLC, Kodi, and friends.
@@ -249,14 +249,12 @@ cc -c dist/mos.c -mmacosx-version-min=12.0 -o mos.o
 cc your_main.o mos.o -o your_tool \
    -framework IOKit \
    -framework CoreFoundation \
-   -framework DiskArbitration \
    -framework DiscRecording \
    -mmacosx-version-min=12.0
 ```
 
-Skipping `-framework DiskArbitration` will fail to link at the
-`DASessionCreate` reference in `mos_watch.c` (and DiscRecording at
-the `DRCopyDeviceArray` reference in `mos_dr.c`); skipping the
+Skipping `-framework DiscRecording` will fail to link at the
+`DRCopyDeviceArray` reference in `mos_dr.c`; skipping the
 deployment-target flag will let the build silently float to
 whatever default the host SDK provides, which may not match what
 the CMake build is tested against.

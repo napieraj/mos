@@ -349,7 +349,7 @@ void mos_close(mos_handle_t *h);
  * mos_watch_open_*, mos_watch_next_event, and mos_watch_close must all run
  * on the thread that called open — the watch captures that thread's run
  * loop (CFRunLoopGetCurrent) at open and schedules its IOKit and
- * DiskArbitration sources in a private run-loop mode, not
+ * DiscRecording sources in a private run-loop mode, not
  * kCFRunLoopDefaultMode. The pump runs that same private mode, so wake
  * callbacks dispatch only while mos_watch_next_event is waiting: host-app
  * default-mode work runs alongside undisturbed, and the watch's

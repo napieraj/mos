@@ -28,18 +28,20 @@
  * (exit 0) — so in headless CI it is a no-op guard; run it on a Mac
  * with a drive for the real coverage. Insert/eject a disc while it
  * runs to drive extra STATE_CHANGED events through the same path.
- * Headless coverage of the re-home invariant already exists: the
- * re-home was extracted into the pure helper
- * mos_internal_rehome_identity_strings (src/mos_pure.c), pinned under
- * ASan by rehome_breaks_borrow_from_freed_source in test_watch_core.c.
- * This test covers the integrated IOKit path that the pure test cannot.
+ * The lifetime contract this pins survived the DR pivot's Phase 2a
+ * mechanism change: identity is now captured ONCE at watch open into
+ * watch-owned buffers (device-static directory data) and per-probe
+ * results are repointed at them, so there is no per-probe re-home to
+ * get wrong — but the observable contract (event strings valid until
+ * the next call) is identical, and this test still pins it end to end
+ * under ASan on the integrated IOKit path.
  *
  * BUILD (macOS, against the built static lib):
  *   cc -std=c11 -O1 -fsanitize=address,undefined \
  *      -fno-omit-frame-pointer -fno-sanitize-recover=all \
  *      -I include tests/test_watch_lifetime.c \
  *      build/libmos.a build/libmos_pure.a \
- *      -framework IOKit -framework CoreFoundation -framework DiskArbitration \
+ *      -framework IOKit -framework CoreFoundation -framework DiscRecording \
  *      -o /tmp/test_watch_lifetime
  *   ASAN_OPTIONS=abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
  *      /tmp/test_watch_lifetime

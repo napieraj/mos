@@ -1180,41 +1180,6 @@ TEST(test_rfc3339_format_uses_wall_ms)
 
 /* ---- Suite registration ----------------------------------------------- */
 
-/* The watch re-home use-after-free gate (the v0.3.2 revision bug),
-   exercised headlessly: fill a "handle" block, re-home its identity
-   strings into stack buffers, then FREE the block. If any field rode
-   the struct copy instead of being re-homed it still points into the
-   freed block, and the strcmp below is a read-after-free that ASan
-   aborts on — no Mac and no drive required. */
-TEST(rehome_breaks_borrow_from_freed_source)
-{
-    char *scratch = malloc(64);                /* stand in for the mos_handle */
-    EXPECT(scratch != NULL);
-    strcpy(scratch +  0, "HL-DT-ST");          /* vendor   ( 8 + NUL) */
-    strcpy(scratch + 16, "BD-RE BH16NS55");    /* product  (<=16 + NUL) */
-    strcpy(scratch + 40, "1.00");              /* revision ( 4 + NUL) */
-
-    char vb[9], pb[17], rb[5];                 /* INQUIRY field widths */
-    mos_state_result r = {0};
-    r.vendor = scratch; r.product = scratch + 16; r.revision = scratch + 40;
-
-    mos_internal_rehome_identity_strings(&r,
-        vb, sizeof vb, pb, sizeof pb, rb, sizeof rb);
-    free(scratch);                             /* poison the borrowed block */
-
-    /* Read through each (possibly dangling) pointer BEFORE asserting its
-       identity, so a field left riding the freed source is exercised as a
-       heap-use-after-free here under ASan rather than hidden behind a
-       short-circuited pointer compare. The identity checks below are the
-       normal-build backstop (and also catch a wrong-but-still-live
-       repoint, which a content compare alone would miss). */
-    EXPECT(strcmp(r.vendor,   "HL-DT-ST")       == 0);   /* UAF read if not re-homed */
-    EXPECT(strcmp(r.product,  "BD-RE BH16NS55") == 0);   /* UAF read if not re-homed */
-    EXPECT(strcmp(r.revision, "1.00")           == 0);   /* the v0.3.2 field */
-    EXPECT(r.vendor == vb && r.product == pb && r.revision == rb);
-    return 0;
-}
-
 void register_watch_core_tests(void);
 void register_watch_core_tests(void)
 {
@@ -1251,5 +1216,4 @@ void register_watch_core_tests(void)
     RUN(test_latency_saturates_on_backward_clock);
     RUN(test_session_identity_stable_across_pumps_uses_wall_ms);
     RUN(test_rfc3339_format_uses_wall_ms);
-    RUN(rehome_breaks_borrow_from_freed_source);
 }

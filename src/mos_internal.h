@@ -87,6 +87,11 @@ size_t mos_internal_dr_copy_snapshot(mos_internal_dr_snapshot *slots,
    via DRDeviceCopyDeviceForBSDName; 0 when DR knows no such device. */
 uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name);
 
+/* Resolve a kDRDeviceIORegistryEntryPathKey value (CFString expected;
+   anything else yields 0) to the entry's uint64 registry ID. Shared by
+   the snapshot builder and the watch doorbell's per-device filter. */
+uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path);
+
 /* Device-static identity strings for an already-opened service, via
    DR's registry-path lookup. Best-effort: returns false (and empties
    the buffers) when DR cannot see the service — the same non-fatal
