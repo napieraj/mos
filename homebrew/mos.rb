@@ -15,7 +15,7 @@ class Mos < Formula
   # state.
   #
   # The blessed workflow (see CONTRIBUTING.md §Release):
-  #   1. Push the next stable tag (e.g. v0.3.1 once hardware validation
+  #   1. Push the next stable tag (e.g. v0.4.0 once hardware validation
   #      is complete).
   #   2. Fetch the generated GitHub tarball.
   #   3. `shasum -a 256` it.

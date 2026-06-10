@@ -30,12 +30,12 @@ itself.
 | `0x00` | TEST UNIT READY                 | Presence / ready probe (convenience, non-exclusive, one shot); sense disambiguates empty / loading / formatting / unreadable / fault / busy |
 | `0x46` | GET CONFIGURATION               | Current profile — identifies CD / DVD / BD media type             |
 
-A fourth command, `0x51` READ DISC INFORMATION, is not currently
-issued — planned for the v0.4 typed APIs (a `mos_disc_info` accessor)
-to surface Disc Status, session count, and track count for
-distinguishing blank-writable from finalized media. Not required for
-any state decision the default path makes. Until then, the underlying
-MMC operation is reachable today via `mos_raw_cdb()`.
+A fourth command, `0x51` READ DISC INFORMATION, is available on
+demand through the v0.4 typed API — `mos_query_disc_info()` and the
+`mos_disc_info_*` accessors surface Disc Status (blank / appendable /
+finalized), session count, and track count. It is never issued on the
+default state path (no state decision needs it), so a status query
+still costs at most the three commands above.
 
 ## Output
 

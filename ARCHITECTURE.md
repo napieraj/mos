@@ -285,7 +285,8 @@ occasionally return stale values from the previous disc; we always
 corroborate with GET EVENT STATUS NOTIFICATION or TEST UNIT READY
 before believing a profile value means anything about current state.
 
-### 4.4 READ DISC INFORMATION (MMC-6, opcode 0x51)
+### 4.4 READ DISC INFORMATION (MMC-6, opcode 0x51 — on-demand typed
+### API since v0.4: mos_query_disc_info)
 
 10-byte CDB, data-in 34 bytes. Not issued on the
 default state path; reserved for the v0.4 typed APIs (a planned
@@ -596,7 +597,7 @@ same drive.
 | TEST UNIT READY                 | kernel default | convenience wrapper |
 | GET EVENT STATUS NOTIFICATION   | 2000         | **mos** (`mos_raw_cdb`) |
 | GET CONFIGURATION               | kernel default | convenience wrapper |
-| READ DISC INFORMATION           | (not issued on the state path) | — |
+| READ DISC INFORMATION           | kernel default | convenience wrapper (on-demand typed API only — never the state path) |
 | INQUIRY                         | (retired — identity from the DR directory) | — |
 
 Only the raw GESN carries a timeout mos chooses; the convenience methods

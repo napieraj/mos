@@ -138,3 +138,40 @@ uint32_t mos_watch_event_latency_ms(const mos_watch_event *e)
 {
     return e ? e->latency_ms : 0;
 }
+
+/* ---- mos_disc_info -------------------------------------------------- */
+
+mos_disc_status mos_disc_info_status(const mos_disc_info *d)
+{
+    return d ? d->status : MOS_DISC_OTHER;
+}
+
+bool mos_disc_info_erasable(const mos_disc_info *d)
+{
+    return d ? d->erasable : false;
+}
+
+uint8_t mos_disc_info_first_track(const mos_disc_info *d)
+{
+    return d ? d->first_track_on_disc : 0;
+}
+
+uint16_t mos_disc_info_session_count(const mos_disc_info *d)
+{
+    return d ? d->number_of_sessions : 0;
+}
+
+uint16_t mos_disc_info_first_track_last_session(const mos_disc_info *d)
+{
+    return d ? d->first_track_last_session : 0;
+}
+
+uint16_t mos_disc_info_last_track_last_session(const mos_disc_info *d)
+{
+    return d ? d->last_track_last_session : 0;
+}
+
+uint8_t mos_disc_info_last_session_state(const mos_disc_info *d)
+{
+    return d ? d->last_session_state : 0;
+}

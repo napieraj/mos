@@ -234,14 +234,11 @@ bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
  * Blank one has nothing to rip. byte 2 carries the status, last-session, and
  * erasable bits; the session/track counts are split LSB/MSB across the fixed
  * header (bytes 4..11). */
-typedef enum {
-    MOS_DISC_BLANK      = 0,  /* byte 2 bits 1:0 = 00b — empty recordable    */
-    MOS_DISC_APPENDABLE = 1,  /*                  01b — incomplete, writable */
-    MOS_DISC_COMPLETE   = 2,  /*                  10b — finalized            */
-    MOS_DISC_OTHER      = 3,  /*                  11b — reserved/other       */
-} mos_disc_status;
-
-typedef struct {
+/* mos_disc_status (the enum) is public — defined in mos.h with the
+   other ABI-pinned enums; the v0.4 typed accessor surfaces it. The
+   struct layout below stays internal (mos.h sees only the opaque
+   typedef; accessors in mos_result.c are the supported read path). */
+struct mos_disc_info {
     mos_disc_status status;              /* byte 2, bits 1:0 */
     uint8_t  last_session_state;         /* byte 2, bits 3:2: 0 empty,
                                             1 incomplete, 2 damaged, 3 complete */
@@ -250,7 +247,7 @@ typedef struct {
     uint16_t number_of_sessions;         /* byte 9 (MSB) : byte 4 (LSB) */
     uint16_t first_track_last_session;   /* byte 10 : byte 5 */
     uint16_t last_track_last_session;    /* byte 11 : byte 6 */
-} mos_disc_info;
+};
 
 /* Decode a READ DISC INFORMATION (0x51, data type 000b) response. `buf`/`len`
  * are the response and the byte count you trust. Fills *out and returns true

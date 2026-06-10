@@ -8,6 +8,94 @@ human-readable narrative. Live test counts are in CI, not here.
 
 ---
 
+## 2026-06-10 — GitHub bring-up, the DiscRecording pivot (Phases 0–3), watch-all, mos_query_disc_info; version to 0.4.0-dev
+
+The audited tree moved to `github.com/napieraj/mos` and CI ran for the
+first time ever — four runs, four latent self-consistency bugs, all
+fixed the same hour: a CLI test fixture (`diskdoesnotexist`) that
+deterministically exercised the malformed-name path instead of the
+no-device path it claimed; `setup-python '3.x'` resolving to 3.14 where
+the hash-pinned rpds-py cannot build (interpreter now pinned); the
+dist/ contradiction — CONTRIBUTING + CI demand a committed amalgamation
+byte-identical to regeneration while .gitignore excluded it AND
+amalgamate.sh stamped a timestamp making byte-identity impossible
+(manifest now deterministic, dist committed); and the amalgamation
+job's source list missing cli/human.c + tests/test_human.c.
+
+A post-import review added the machine checks the repo's conventions
+implied but didn't enforce: schemas/validate.py drift pins for error
+codes, event kinds, and media classes against their C emit tables; a
+single reserved-subcommand array; a shared profile-sentinel predicate.
+Two of the review's own findings were falsified on implementation and
+recorded as such (the mos_query_state deref-order "bug" was misread —
+the guard exists; the -Wswitch claim was inverted — the CLI switches
+were the pinned ones).
+
+**The DiscRecording pivot** (research + plan in doc/research/
+2026-06-10-dr-pivot-*.md, headers vendored from the 15.5 SDK, kernel
+source vendored at IOSCSIArchitectureModelFamily-139.0.2 — the newest
+Apple ever published, Tiger-era). Doctrine: DR is the doorbell and the
+directory; MMC is the inspector. The kernel GetTrayState collapse
+(every GESN failure → closed + kIOReturnSuccess, undetectable from
+userspace) was re-derived from the vendored source mid-design and
+killed the idea of trusting DR for state: the TUR⊕GESN core is
+untouched and remains the sole state authority.
+
+- Phase 0: DR observation modes folded INTO mos_notification_probe
+  (--dr-dump plist capture + Appeared/Disappeared/StatusChanged event
+  legs) — two probes, not three; mos_probe re-scoped as the
+  library-path smoke.
+- Phase 1: enumeration in DR device-array order (drutil parity by
+  provenance; the registry-ID sort approximation retired), identity
+  from DRDeviceCopyInfo (open-time INQUIRY retired with its fixed-
+  width copier — replaced by width-pinned copies at the DR seam),
+  --bsd via DRDeviceCopyDeviceForBSDName behind the unchanged
+  parse_bsd_unit gate, public mos_open_device() for the one-snapshot
+  pattern. The CLI's O(n²) re-enumeration, single-drive double-probe,
+  and expensive resolve_index_of all died here. The IOMedia walk
+  SURVIVES at open: it is the only source of the media_id (F1)
+  fingerprint, which DR has no key for.
+- Phase 2a: kDRDeviceStatusChangedNotification (device-scoped,
+  registry-ID-filtered, fail-open) replaced the DA description-changed
+  wake; DiskArbitration left the library link line entirely (the
+  notification probe keeps DA legs as the falsification control arm).
+  Identity became watch-static — captured once at open — retiring the
+  per-probe re-home, its pure helper, and its ASan test; the lifetime
+  CONTRACT is unchanged and still pinned by test_watch_lifetime.
+- Phase 2b: watch-all. Pure multiplexer over up to 16 per-device
+  cores (ascending-registry_id interleave, stream-global seq,
+  per-slot non-terminal device_removed), five fixture tests, new
+  device_appeared event kind added to mos.event.v1 IN PLACE (pre-tag,
+  per the schema ADR — the ROADMAP line claiming v1 frozen was
+  corrected against the ADR it contradicted), `mos watch --all`,
+  Appeared/Disappeared observers load-bearing in all mode.
+- Phase 3: live docs aligned (ARCHITECTURE §4/§5/§6/§8/§9/§11, ROADMAP
+  status, AGENTS scope addendum — the pivot does not change the
+  command surface, still exactly one raw CDB — dr-field-mapping
+  outcome, INTEGRATION_HARNESS falsification rows) and three new
+  staleness deny markers pin the retired claims.
+
+A five-angle systematic review of the pivot (finders fed the vendored
+DR headers as ground truth) returned three angles clean (API
+conformance, multiplexer seam, CLI/schema); the rest produced four
+fixes (a comment that misdescribed the bounded-copy truncation
+behavior, one shared identity extractor, width-agreement pins, the
+all-mode removal-latency contract sentence + a positional/--all test)
+and four refutations, with three efficiency items deferred on recorded
+rationale.
+
+**v0.4 opens**: mos_query_disc_info() — the typed READ DISC
+INFORMATION accessor README promised, built to the committed fixture
+pair through the non-exclusive convenience method, never on the state
+path. mos_disc_status is public and ABI-pinned; accessors are
+NULL-tolerant; the out-of-band failure convention matches
+get_current_profile. Version is 0.4.0-dev everywhere
+(MOS_VERSION_STRING, CMake project VERSION); the first tag still
+gates on the hardware session (INTEGRATION_HARNESS DR falsification
+rows + the ROADMAP adapter smoke items).
+
+---
+
 ## 2026-06-10 — Two-review convergence: kernel-source verification, watch hardening, session-identity normalization
 
 Two independent adversarial reviews of the v0.3.1-dev tree converged on one

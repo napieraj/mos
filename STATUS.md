@@ -1,14 +1,17 @@
-# v0.3.1-dev — Application Status
+# v0.4.0-dev — Application Status
 
-**Tree state:** v0.3.1-dev. Pure test suite green under `-Wall
+**Tree state:** v0.4.0-dev. Pure test suite green under `-Wall
 -Wextra -Wpedantic -Werror` (exact count reported by `make test`).
 Watch
-mode landed. Schema family migration complete. Memory-safety and
+mode landed; the DiscRecording pivot (directory/doorbell substrate,
+watch-all, mos_query_disc_info) landed 2026-06-10 — see CHANGELOG.
+Schema family migration complete. Memory-safety and
 security reviews passed. CI runs unit tests, strict
 adapter compile, sanitizer build, and amalgamation tests on every
 push. Hardware validation against BH16NS55 / WH16NS60 / A1379 — the
 same matrix that was the v2 gate — has not yet happened against the
-v0.3.1-dev binary.
+v0.4.0-dev binary; the first tag gates on it (plus the DR
+falsification rows in INTEGRATION_HARNESS.md).
 
 The v0.3.1-dev cycle added: empirical notification probe
 (`tools/mos_notification_probe.c`), conservative wake-dispatch

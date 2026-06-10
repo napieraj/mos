@@ -574,6 +574,44 @@ mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profil
     return MOS_OK;
 }
 
+mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* 34 bytes = the MMC standard response's fixed numeric region plus
+       the lead-in/lead-out address fields — the exact shape of the
+       committed fixtures (tests/fixtures/readdiscinfo_*.bin), which the
+       pure decoder is built to. The convenience method reports no
+       realized count, so sizeof buf is the trusted length (dual-length
+       rule O-4); the reply's own Disc Information Length can only
+       shrink the decode, never extend it. Convenience = non-exclusive:
+       no lock interaction, safe at any state. */
+    uint8_t         buf[34] = {0};
+    SCSITaskStatus  st      = 0;
+    SCSI_Sense_Data sd      = {0};
+
+    IOReturn rc = (*h->mmc)->ReadDiscInformation(
+        h->mmc, buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        /* Same convention as get_current_profile above: transport
+           failures map their IOReturn; a command that reached the
+           drive but returned no usable data (no medium, units that
+           reject 0x51) is MOS_ERR_IO — out-of-band, so it can never
+           masquerade as a real all-zero disc-info answer. */
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_disc_info_parse(buf, sizeof(buf), &h->disc_info)) {
+        return MOS_ERR_IO;   /* truncated/short reply — refused whole */
+    }
+    *out = &h->disc_info;
+    return MOS_OK;
+}
+
 /*
  * mos_internal_mmc_get_features — STUB (v0.4, hardware-gated).
  *
