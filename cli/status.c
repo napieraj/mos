@@ -70,11 +70,15 @@ static void emit_human(const mos_state_result *r, int index1)
     const char *v  = mos_state_result_vendor(r);
     const char *p  = mos_state_result_product(r);
     const char *rv = mos_state_result_revision(r);
-    /* Identity strings are drive-controlled bytes; the human layout
-       engine prints verbatim (layout only, by contract), so escape
-       HERE — \xNN per mos_safe_ascii, the same rule the JSON path and
-       stderr diagnostics apply. Buffer math: worst case every byte
-       escapes 4x (vendor 8→32, product 16→64, revision 4→16, + NULs). */
+    /* Identity strings are drive-originated bytes via DR's closed
+       parse — an unverifiable intermediary that plausibly launders
+       most hostile content but provably cannot be RELIED on for ESC
+       (C0 controls survive every encoding in the chain). The human
+       layout engine prints verbatim (layout only, by contract), so
+       escape HERE — \xNN per mos_safe_ascii, the same rule the JSON
+       path applies to these same strings. Buffer math: worst case
+       every byte escapes 4x (vendor 8→32, product 16→64, revision
+       4→16, + NULs). */
     char v_esc[33], p_esc[65], rv_esc[17];
     (void)mos_safe_ascii(v,  v_esc,  sizeof v_esc);
     (void)mos_safe_ascii(p,  p_esc,  sizeof p_esc);

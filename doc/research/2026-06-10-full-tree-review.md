@@ -51,9 +51,26 @@ CLEAN (no findings after exhaustive pass):
    construction sites via the pure mos_safe_ascii (\xNN for
    everything outside printable ASCII), with human.h now stating the
    sanitization contract and list_row storing the escaped form in
-   widened buffers. Notably: a parallel cross-cutting agent had
-   asserted this path was already escaped — the contradiction was
-   settled by reading the file, not by majority (see Contradiction).
+   widened buffers.
+
+   Severity correction (owner, same day): post-pivot these strings
+   are NOT raw MMC bytes — they pass through DR's closed parse
+   (device → kernel → DRDeviceCopyInfo CFString → UTF-8), which
+   plausibly launders the 8-bit C1 vector (encoding reinterpretation)
+   and moved the parsing-level threats behind Apple's code; that is
+   exactly why the INQUIRY-side parsing defenses were retired. The
+   fix stands on three narrower legs: ESC (0x1B), the byte ANSI/OSC
+   injection actually needs, is encoding-stable through every
+   transform in the chain; the header promises only "extracted from
+   the device" — an unverifiable intermediary, and the GetTrayState
+   lesson is that unverifiable Apple convenience layers don't get
+   trusted with safety properties; and the JSON path escapes these
+   same strings, so the doctrine is all sinks or none. Disposition:
+   defense-in-depth per doctrine, not a demonstrated exploit.
+
+   Process note: a parallel cross-cutting agent had asserted this
+   path was already escaped — the contradiction was settled by
+   reading the file, not by majority (see Contradiction).
 2. **watch-all join demotion** (contract bug). The multiplexer
    cleared join_pending on a joining slot's FIRST event of any kind;
    a hot-plugged drive whose probe failed initially (ERROR first)
