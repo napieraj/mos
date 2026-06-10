@@ -1180,9 +1180,177 @@ TEST(test_rfc3339_format_uses_wall_ms)
 
 /* ---- Suite registration ----------------------------------------------- */
 
+
+/* ---- Watch-all multiplexer (DR pivot Phase 2b) --------------------- *
+ *
+ * The multiplexer is pure fan-in: these tests pin the four properties
+ * the adapter relies on — deterministic ascending-registry_id
+ * interleave, stream-global seq, mid-stream join relabeling
+ * (snapshot → device_appeared), and per-slot (non-terminal) removal.
+ * Each slot core gets its own fake ctx/clock; the multiplexer itself
+ * never touches a clock. */
+
+TEST(all_empty_stream_sleeps_unbounded)
+{
+    mos_watch_all_state a;
+    mos_internal_watch_all_init(&a);
+
+    mos_watch_decision d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_WATCH_DECIDE_SLEEP_UNTIL, d.kind);
+    EXPECT(d.next_poll_at_mono_ms == UINT64_MAX);
+    return 0;
+}
+
+TEST(all_interleaves_ascending_registry_id_with_global_seq)
+{
+    fake_watch_ctx c1, c2;
+    init_default(&c1, 1000);
+    init_default(&c2, 1000);
+    c1.probe_state[0] = MOS_STATE_READY; c1.probe_err[0] = MOS_OK; c1.probe_count = 1;
+    c2.probe_state[0] = MOS_STATE_EMPTY; c2.probe_err[0] = MOS_OK; c2.probe_count = 1;
+
+    mos_watch_all_state a;
+    mos_internal_watch_all_init(&a);
+    /* Add in DESCENDING id order: emission order must still ascend. */
+    EXPECT(mos_internal_watch_all_add(&a, &fake_ops, &c2, -1, 200,
+                                      1000, 1000, 2000, 200, false) >= 0);
+    EXPECT(mos_internal_watch_all_add(&a, &fake_ops, &c1, 4, 100,
+                                      1000, 1000, 2000, 200, false) >= 0);
+
+    mos_watch_decision d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT, d.kind);
+    EXPECT_EQ(MOS_EVENT_SNAPSHOT, d.event.kind);
+    EXPECT_EQ(100, (int)d.event.registry_id);
+    EXPECT_EQ(1,   (int)d.event.seq);
+
+    d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT, d.kind);
+    EXPECT_EQ(MOS_EVENT_SNAPSHOT, d.event.kind);
+    EXPECT_EQ(200, (int)d.event.registry_id);
+    EXPECT_EQ(2,   (int)d.event.seq);
+
+    /* Drained: both stable → sleep until the earlier core deadline. */
+    d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_WATCH_DECIDE_SLEEP_UNTIL, d.kind);
+    EXPECT(d.next_poll_at_mono_ms != UINT64_MAX);
+    return 0;
+}
+
+TEST(all_mid_stream_join_relabels_first_event_only)
+{
+    fake_watch_ctx c1, c2;
+    init_default(&c1, 1000);
+    c1.probe_state[0] = MOS_STATE_READY; c1.probe_err[0] = MOS_OK; c1.probe_count = 1;
+
+    mos_watch_all_state a;
+    mos_internal_watch_all_init(&a);
+    EXPECT(mos_internal_watch_all_add(&a, &fake_ops, &c1, 4, 100,
+                                      1000, 1000, 2000, 200, false) >= 0);
+
+    mos_watch_decision d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_EVENT_SNAPSHOT, d.event.kind);
+
+    /* Hot-plug at t=1500: the join's first event is device_appeared,
+       carrying the snapshot payload. */
+    init_default(&c2, 1500);
+    c2.probe_state[0] = MOS_STATE_OPEN;  c2.probe_err[0] = MOS_OK;
+    c2.probe_state[1] = MOS_STATE_EMPTY; c2.probe_err[1] = MOS_OK;
+    c2.probe_count = 2;
+    EXPECT(mos_internal_watch_all_add(&a, &fake_ops, &c2, -1, 200,
+                                      1500, 1500, 2000, 200, true) >= 0);
+
+    d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT, d.kind);
+    EXPECT_EQ(MOS_EVENT_DEVICE_APPEARED, d.event.kind);
+    EXPECT_EQ(200, (int)d.event.registry_id);
+    EXPECT_EQ(MOS_STATE_OPEN, d.event.state);
+    EXPECT_EQ(2, (int)d.event.seq);
+
+    /* Relabel is first-event-only: the join's next transition is a
+       normal state_changed. */
+    mos_internal_watch_notify_wake(&a.cores[
+        mos_internal_watch_all_find(&a, 200)]);
+    d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT, d.kind);
+    EXPECT_EQ(MOS_EVENT_STATE_CHANGED, d.event.kind);
+    EXPECT_EQ(200, (int)d.event.registry_id);
+    EXPECT_EQ(3, (int)d.event.seq);
+    return 0;
+}
+
+TEST(all_device_removed_is_per_slot_not_terminal)
+{
+    fake_watch_ctx c1, c2;
+    init_default(&c1, 1000);
+    init_default(&c2, 1000);
+    /* Core 100's first probe says the device is gone. */
+    c1.probe_err[0]   = MOS_ERR_NO_DEVICE;
+    c1.probe_state[0] = MOS_STATE_UNKNOWN;
+    c1.probe_count    = 1;
+    c2.probe_state[0] = MOS_STATE_READY; c2.probe_err[0] = MOS_OK;
+    c2.probe_count    = 1;
+
+    mos_watch_all_state a;
+    mos_internal_watch_all_init(&a);
+    EXPECT(mos_internal_watch_all_add(&a, &fake_ops, &c1, 4, 100,
+                                      1000, 1000, 2000, 200, false) >= 0);
+    EXPECT(mos_internal_watch_all_add(&a, &fake_ops, &c2, 5, 200,
+                                      1000, 1000, 2000, 200, false) >= 0);
+
+    mos_watch_decision d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT, d.kind);
+    EXPECT_EQ(MOS_EVENT_DEVICE_REMOVED, d.event.kind);
+    EXPECT_EQ(100, (int)d.event.registry_id);
+    EXPECT_EQ(1, (int)d.event.seq);
+
+    /* The slot is freed, the stream continues with the other drive —
+       never TERMINAL. */
+    EXPECT_EQ(-1, mos_internal_watch_all_find(&a, 100));
+    d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT, d.kind);
+    EXPECT_EQ(MOS_EVENT_SNAPSHOT, d.event.kind);
+    EXPECT_EQ(200, (int)d.event.registry_id);
+    EXPECT_EQ(2, (int)d.event.seq);
+    return 0;
+}
+
+TEST(all_add_dedupes_and_caps)
+{
+    fake_watch_ctx c;
+    init_default(&c, 1000);
+
+    mos_watch_all_state a;
+    mos_internal_watch_all_init(&a);
+
+    int first = mos_internal_watch_all_add(&a, &fake_ops, &c, -1, 100,
+                                           1000, 1000, 2000, 200, false);
+    EXPECT(first >= 0);
+    /* Same registry id (same plug session) dedupes to the same slot —
+       the Appeared notification can announce an open-time device. */
+    EXPECT_EQ(first, mos_internal_watch_all_add(&a, &fake_ops, &c, -1, 100,
+                                                1000, 1000, 2000, 200, true));
+
+    /* Fill the rest; the slot past CAP is refused. */
+    for (uint64_t id = 101; id < 100 + MOS_WATCH_ALL_CAP; ++id) {
+        EXPECT(mos_internal_watch_all_add(&a, &fake_ops, &c, -1, id,
+                                          1000, 1000, 2000, 200, false) >= 0);
+    }
+    EXPECT_EQ(-1, mos_internal_watch_all_add(&a, &fake_ops, &c, -1, 999,
+                                             1000, 1000, 2000, 200, false));
+    /* registry_id 0 is never addable (no attachment identity). */
+    EXPECT_EQ(-1, mos_internal_watch_all_add(&a, &fake_ops, &c, -1, 0,
+                                             1000, 1000, 2000, 200, false));
+    return 0;
+}
+
 void register_watch_core_tests(void);
 void register_watch_core_tests(void)
 {
+    RUN(all_empty_stream_sleeps_unbounded);
+    RUN(all_interleaves_ascending_registry_id_with_global_seq);
+    RUN(all_mid_stream_join_relabels_first_event_only);
+    RUN(all_device_removed_is_per_slot_not_terminal);
+    RUN(all_add_dedupes_and_caps);
     RUN(test_snapshot_emitted_on_first_pump);
     RUN(test_zero_registry_id_passes_through);
     RUN(test_empty_drive_yields_unit_minus_one_and_session_identity);

@@ -128,6 +128,31 @@ static int64_t mos_internal_dr_bsd_unit_from_status(CFDictionaryRef status)
     return mos_internal_parse_bsd_unit(name);
 }
 
+bool mos_internal_dr_device_snapshot(CFTypeRef device_ref,
+                                     mos_internal_dr_snapshot *s)
+{
+    if (!device_ref || !s) return false;
+    DRDeviceRef dev = (DRDeviceRef)device_ref;
+
+    memset(s, 0, sizeof *s);
+    s->bsd_unit = -1;
+
+    CFDictionaryRef info = DRDeviceCopyInfo(dev);
+    if (info) {
+        mos_internal_dr_fill_from_info(info, s);
+        CFRelease(info);
+    }
+    /* No reopenable identity ⇒ not usable (see header comment). */
+    if (s->registry_id == 0) return false;
+
+    CFDictionaryRef status = DRDeviceCopyStatus(dev);
+    if (status) {
+        s->bsd_unit = mos_internal_dr_bsd_unit_from_status(status);
+        CFRelease(status);
+    }
+    return true;
+}
+
 size_t mos_internal_dr_copy_snapshot(mos_internal_dr_snapshot *slots,
                                      size_t cap)
 {
@@ -139,30 +164,12 @@ size_t mos_internal_dr_copy_snapshot(mos_internal_dr_snapshot *slots,
     CFIndex n = CFArrayGetCount(arr);
     size_t out = 0;
     for (CFIndex i = 0; i < n && out < cap; ++i) {
-        DRDeviceRef dev = (DRDeviceRef)CFArrayGetValueAtIndex(arr, i);
-        if (!dev) continue;
-
-        mos_internal_dr_snapshot *s = &slots[out];
-        memset(s, 0, sizeof *s);
-        s->bsd_unit = -1;
-
-        CFDictionaryRef info = DRDeviceCopyInfo(dev);
-        if (info) {
-            mos_internal_dr_fill_from_info(info, s);
-            CFRelease(info);
-        }
-        /* No reopenable identity ⇒ skip (see header comment). The
-           index is the position among reopenable devices, which is
-           the DR array order whenever every device resolves — the
+        CFTypeRef dev = CFArrayGetValueAtIndex(arr, i);
+        /* Skip-not-fail per device: an unresolvable entry must not hide
+           its siblings. The index is the position among reopenable
+           devices — DR array order whenever every device resolves, the
            expected case. */
-        if (s->registry_id == 0) continue;
-
-        CFDictionaryRef status = DRDeviceCopyStatus(dev);
-        if (status) {
-            s->bsd_unit = mos_internal_dr_bsd_unit_from_status(status);
-            CFRelease(status);
-        }
-        out++;
+        if (mos_internal_dr_device_snapshot(dev, &slots[out])) out++;
     }
     CFRelease(arr);
     return out;

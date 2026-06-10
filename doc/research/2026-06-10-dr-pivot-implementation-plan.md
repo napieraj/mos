@@ -298,6 +298,28 @@ GESN-failing bridge if one enters the fixture set.
   as DRIVER_REJECTED opens and is fixed by path normalization inside
   mos_dr.c, never at call sites.
 
+## Execution notes (2026-06-10, Phases 2a–2b landing)
+
+- 2a landed as planned (DR doorbell, DA out of the library link
+  entirely, watch-static identity retiring the per-probe rehome and
+  its pure helper + ASan test; test_watch_lifetime's contract pin
+  unchanged).
+- 2b landed with the device_appeared vocabulary as an in-place
+  mos.event.v1 change (schema + example + negative fixture + emitter
+  + event_kind_string + drift pin, one commit, per the AGENTS ADR).
+  The pure multiplexer lives in mos_watch_core.c (no new TU — no
+  weave/CMake churn), pinned by five fixture tests: empty-stream
+  sleep, ascending-registry_id interleave with stream-global seq,
+  first-event-only join relabeling, per-slot non-terminal removal,
+  dedupe + cap. All-mode skips kIOGeneralInterest: removal rides DR
+  Disappeared (fast path) + per-probe NO_DEVICE (floor).
+- CLI: `--all` (watch-only, selector-exclusive, both pinned in
+  test_cli.sh); in all mode device_removed no longer ends the loop.
+- Open empirical questions for the hardware session, on top of the
+  Phase 0 list: whether Appeared/Disappeared/StatusChanged deliver
+  under NULL-object registration (the probe documents this as a
+  finding-target), and join/leave ordering under hot-plug.
+
 ## Sizing / order
 
 Phase 0 ≈ a 150-line tool + CMake/CI lines. Phase 1 ≈ 250–350 lines

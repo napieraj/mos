@@ -603,6 +603,62 @@ void mos_internal_watch_notify_removed(mos_watch_state *w);
    probe immediately rather than waiting for the scheduled poll. */
 void mos_internal_watch_notify_wake(mos_watch_state *w);
 
+/* ---- Watch-all multiplexer (DR pivot Phase 2b) --------------------- *
+ *
+ * Pure fan-in over up to MOS_WATCH_ALL_CAP per-device watch cores:
+ * join/leave lifecycle, stream-global seq, deterministic same-tick
+ * interleave (ascending registry_id). Each slot is a full
+ * mos_watch_state driven through its own ops/ctx — the multiplexer
+ * adds NO probing or classification of its own, it only schedules,
+ * relabels mid-stream joins (snapshot → device_appeared), and makes
+ * device_removed per-slot instead of stream-terminal. */
+
+#define MOS_WATCH_ALL_CAP 16
+
+typedef struct {
+    mos_watch_state cores[MOS_WATCH_ALL_CAP];
+    bool            active[MOS_WATCH_ALL_CAP];
+    /* Slot joined after the stream opened: its first event (the core's
+       snapshot) is relabeled MOS_EVENT_DEVICE_APPEARED, then cleared. */
+    bool            join_pending[MOS_WATCH_ALL_CAP];
+    uint64_t        seq;   /* stream-global; overrides per-core seq */
+} mos_watch_all_state;
+
+void mos_internal_watch_all_init(mos_watch_all_state *a);
+
+/* First free slot index, or -1 when full. Exposed so the adapter can
+   point a slot's ctx at per-slot storage BEFORE add() initializes the
+   core with it (add() uses the same first-free scan, single-threaded
+   by the watch contract). */
+int mos_internal_watch_all_free_slot(const mos_watch_all_state *a);
+
+/* Add a device. Same parameters as mos_internal_watch_init, plus
+   mid_stream (true ⇒ first event is device_appeared). Returns the slot
+   index used; the index of the EXISTING slot if registry_id is already
+   active (dedupe — DR can announce a device the open-time snapshot
+   already carried); -1 when full or registry_id == 0. */
+int mos_internal_watch_all_add(mos_watch_all_state *a,
+                               const mos_watch_ops_t *ops, void *ctx,
+                               int64_t bsd_unit, uint64_t registry_id,
+                               uint64_t start_mono_ms,
+                               uint64_t start_wall_ms,
+                               uint32_t stable_poll_ms,
+                               uint32_t transition_poll_ms,
+                               bool mid_stream);
+
+/* Active slot index for a registry id, or -1. The adapter's
+   Disappeared handler resolves the leaving device with this and calls
+   mos_internal_watch_notify_removed on cores[i]. */
+int mos_internal_watch_all_find(const mos_watch_all_state *a,
+                                uint64_t registry_id);
+
+/* One multiplexer iteration. EMIT_EVENT carries the next event with
+   stream-global seq (join relabeling and per-slot removal applied);
+   SLEEP_UNTIL carries the earliest deadline over active slots, or
+   UINT64_MAX when no slot is active (empty stream: sleep until an
+   external add/wake). NEVER returns TERMINAL — removal is per-slot. */
+mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a);
+
 
 /* ==== src/mos_internal.h ==== */
 /*
@@ -694,6 +750,14 @@ uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name);
    anything else yields 0) to the entry's uint64 registry ID. Shared by
    the snapshot builder and the watch doorbell's per-device filter. */
 uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path);
+
+/* Extract one device's snapshot (registry id, bsd unit, identity) from
+   a DRDeviceRef passed as CFTypeRef (mos_internal.h stays free of
+   DiscRecording types). False when the device's registry path doesn't
+   resolve — the same skip gate the array snapshot applies. Used by the
+   snapshot builder and the watch-all Appeared handler. */
+bool mos_internal_dr_device_snapshot(CFTypeRef device_ref,
+                                     mos_internal_dr_snapshot *s);
 
 /* Device-static identity strings for an already-opened service, via
    DR's registry-path lookup. Best-effort: returns false (and empties
@@ -2139,6 +2203,125 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
     return d;
 }
 
+/* ---- Watch-all multiplexer (DR pivot Phase 2b) --------------------- *
+ *
+ * See mos_pure.h for the contract. Iteration order is ascending
+ * registry_id over active slots on EVERY entry, so same-tick event
+ * interleave is deterministic and independent of slot assignment
+ * history — the property the fixture tests pin. */
+
+void mos_internal_watch_all_init(mos_watch_all_state *a)
+{
+    if (!a) return;
+    memset(a, 0, sizeof *a);
+}
+
+int mos_internal_watch_all_free_slot(const mos_watch_all_state *a)
+{
+    if (!a) return -1;
+    for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
+        if (!a->active[i]) return i;
+    }
+    return -1;
+}
+
+int mos_internal_watch_all_find(const mos_watch_all_state *a,
+                                uint64_t registry_id)
+{
+    if (!a || registry_id == 0) return -1;
+    for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
+        if (a->active[i] && a->cores[i].registry_id == registry_id) return i;
+    }
+    return -1;
+}
+
+int mos_internal_watch_all_add(mos_watch_all_state *a,
+                               const mos_watch_ops_t *ops, void *ctx,
+                               int64_t bsd_unit, uint64_t registry_id,
+                               uint64_t start_mono_ms,
+                               uint64_t start_wall_ms,
+                               uint32_t stable_poll_ms,
+                               uint32_t transition_poll_ms,
+                               bool mid_stream)
+{
+    if (!a || registry_id == 0) return -1;
+
+    /* Dedupe by attachment identity: the DR Appeared notification can
+       announce a device the open-time snapshot already carried (or
+       fire twice across a bus rescan). Same id ⇒ same plug session ⇒
+       same slot; a REPLUG has a fresh id by xnu construction and lands
+       in a new slot. */
+    int existing = mos_internal_watch_all_find(a, registry_id);
+    if (existing >= 0) return existing;
+
+    int i = mos_internal_watch_all_free_slot(a);
+    if (i < 0) return -1;
+
+    mos_internal_watch_init(&a->cores[i], ops, ctx, bsd_unit, registry_id,
+                            start_mono_ms, start_wall_ms,
+                            stable_poll_ms, transition_poll_ms);
+    a->active[i]       = true;
+    a->join_pending[i] = mid_stream;
+    return i;
+}
+
+mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
+{
+    mos_watch_decision out;
+    memset(&out, 0, sizeof out);
+    out.kind                 = MOS_WATCH_DECIDE_SLEEP_UNTIL;
+    out.next_poll_at_mono_ms = UINT64_MAX;
+    if (!a) return out;
+
+    /* Visit active slots in ascending registry_id (selection scan; CAP
+       is 16, an index sort would be ceremony). Returning on the first
+       EMIT keeps per-call work bounded; the next call re-enters at the
+       lowest id, so same-tick events drain in id order. */
+    uint64_t visited = 0; /* bitmask of slots already pumped this call */
+    for (;;) {
+        int best = -1;
+        for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
+            if (!a->active[i] || (visited & (1ull << i))) continue;
+            if (best < 0 ||
+                a->cores[i].registry_id < a->cores[best].registry_id) {
+                best = i;
+            }
+        }
+        if (best < 0) break;
+        visited |= (1ull << best);
+
+        mos_watch_decision d = mos_internal_watch_pump(&a->cores[best]);
+
+        if (d.kind == MOS_WATCH_DECIDE_EMIT_EVENT) {
+            d.event.seq = ++a->seq;            /* stream-global numbering */
+            if (a->join_pending[best]) {
+                if (d.event.kind == MOS_EVENT_SNAPSHOT) {
+                    d.event.kind = MOS_EVENT_DEVICE_APPEARED;
+                }
+                a->join_pending[best] = false; /* first event only */
+            }
+            if (d.event.kind == MOS_EVENT_DEVICE_REMOVED) {
+                /* Per-slot, not stream-terminal: free the slot AFTER
+                   taking the event. A replug arrives as a new id. */
+                a->active[best] = false;
+            }
+            return d;
+        }
+        if (d.kind == MOS_WATCH_DECIDE_TERMINAL) {
+            /* The core's device_removed was emitted on an earlier call
+               and the slot somehow pumped again (external notify after
+               emission). Nothing to emit — just free the slot. */
+            a->active[best] = false;
+            continue;
+        }
+        /* SLEEP_UNTIL: fold the earliest deadline. */
+        if (d.next_poll_at_mono_ms < out.next_poll_at_mono_ms) {
+            out.next_poll_at_mono_ms = d.next_poll_at_mono_ms;
+        }
+    }
+    return out;
+}
+
 /* ==== src/mos_state.c ==== */
 /*
  * mos_state.c — Apple-side adapter for the pure decision-tree core.
@@ -2334,6 +2517,24 @@ struct mos_watch {
     char vendor[9];
     char product[17];
     char revision[5];
+
+    /* ---- Watch-all mode (DR pivot Phase 2b) ------------------------ *
+     * all_mode selects the multiplexer path: `all` is the pure fan-in
+     * over per-slot cores, `slots` is the adapter-side per-device probe
+     * context (registry id + watch-static identity) each core's ctx
+     * points at. Single-target fields above (core, svc, notify_*,
+     * registry_id, identity buffers) are unused in all mode; bsd_unit
+     * stays -1. Poll rates are kept for mid-stream joins. */
+    bool                 all_mode;
+    mos_watch_all_state  all;
+    struct mos_watch_slot {
+        uint64_t registry_id;
+        char     vendor[9];
+        char     product[17];
+        char     revision[5];
+    }                    slots[MOS_WATCH_ALL_CAP];
+    uint32_t             stable_poll_ms;
+    uint32_t             transition_poll_ms;
 };
 
 /* ---- Time --------------------------------------------------------- */
@@ -2476,6 +2677,69 @@ static const mos_watch_ops_t apple_watch_ops = {
     .wall_ms = watch_wall_ms,
 };
 
+/* Per-slot probe for watch-all: identical contract to watch_probe, but
+   ctx is the slot (its own registry id + watch-static identity). The
+   same pointer-lifetime invariant applies: identity fields are
+   repointed at slot-lifetime storage before the handle closes. */
+static mos_error watch_slot_probe(void *ctx, mos_state_result *out)
+{
+    struct mos_watch_slot *s = (struct mos_watch_slot *)ctx;
+    if (!s || !out) return MOS_ERR_INVALID_ARG;
+
+    mos_error err = MOS_OK;
+    mos_handle_t *h = mos_internal_open_by_registry_id(s->registry_id, &err);
+    if (!h) return err != MOS_OK ? err : MOS_ERR_IO;
+
+    const mos_state_result *qr = NULL;
+    mos_error qerr = mos_query_state(h, &qr);
+    if (qerr != MOS_OK || !qr) {
+        mos_close(h);
+        return qerr != MOS_OK ? qerr : MOS_ERR_IO;
+    }
+
+    *out = *qr;
+    out->vendor   = s->vendor[0]   ? s->vendor   : NULL;
+    out->product  = s->product[0]  ? s->product  : NULL;
+    out->revision = s->revision[0] ? s->revision : NULL;
+
+    mos_close(h);
+    return MOS_OK;
+}
+
+static const mos_watch_ops_t apple_watch_slot_ops = {
+    .probe   = watch_slot_probe,
+    .mono_ms = watch_mono_ms,
+    .wall_ms = watch_wall_ms,
+};
+
+/* Add one device to an all-watch from a DR snapshot record. The slot's
+   ctx storage is claimed via the same first-free scan add() uses (the
+   single-thread contract makes the two scans agree); on dedupe the
+   pre-filled slot entry is simply unused. */
+static void watch_all_add_device(mos_watch_t *w,
+                                 const mos_internal_dr_snapshot *snap,
+                                 bool mid_stream)
+{
+    if (!w || !snap || snap->registry_id == 0) return;
+
+    int i = mos_internal_watch_all_free_slot(&w->all);
+    if (i < 0 && mos_internal_watch_all_find(&w->all, snap->registry_id) < 0) {
+        return; /* full and genuinely new — documented drop until a slot frees */
+    }
+    if (i >= 0) {
+        w->slots[i].registry_id = snap->registry_id;
+        strlcpy(w->slots[i].vendor,   snap->vendor,   sizeof w->slots[i].vendor);
+        strlcpy(w->slots[i].product,  snap->product,  sizeof w->slots[i].product);
+        strlcpy(w->slots[i].revision, snap->revision, sizeof w->slots[i].revision);
+    }
+    (void)mos_internal_watch_all_add(&w->all, &apple_watch_slot_ops,
+                                     i >= 0 ? &w->slots[i] : NULL,
+                                     snap->bsd_unit, snap->registry_id,
+                                     monotonic_ms(), stream_epoch_wall_ms(),
+                                     w->stable_poll_ms, w->transition_poll_ms,
+                                     mid_stream);
+}
+
 /* ---- Notification handler ---------------------------------------- *
  *
  * Fires on the run loop thread for kIOGeneralInterest messages on the
@@ -2574,9 +2838,11 @@ static void dr_status_changed_callback(DRNotificationCenterRef center,
     /* Per-device filter by registry ID (the watch's one identity
        authority). object is the DRDeviceRef that changed; resolve its
        registry path → entry ID and compare. Any resolution failure
-       wakes anyway (fail-open, see design block). */
-    if (object && w->registry_id != 0) {
-        uint64_t id = 0;
+       wakes anyway (fail-open, see design block). In all mode the
+       filter routes instead of rejects: wake the matching slot, or
+       every slot when unresolved. */
+    uint64_t id = 0;
+    if (object) {
         CFDictionaryRef dev_info = DRDeviceCopyInfo((DRDeviceRef)object);
         if (dev_info) {
             id = mos_internal_dr_id_for_path_value(
@@ -2584,7 +2850,28 @@ static void dr_status_changed_callback(DRNotificationCenterRef center,
                                      kDRDeviceIORegistryEntryPathKey));
             CFRelease(dev_info);
         }
-        if (id != 0 && id != w->registry_id) return; /* another drive */
+    }
+
+    if (w->all_mode) {
+        int slot = (id != 0) ? mos_internal_watch_all_find(&w->all, id) : -1;
+        if (slot >= 0) {
+            mos_internal_watch_notify_wake(&w->all.cores[slot]);
+        } else if (id == 0) {
+            for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
+                if (w->all.active[i]) {
+                    mos_internal_watch_notify_wake(&w->all.cores[i]);
+                }
+            }
+        }
+        /* id resolved but unknown: a device we are not watching (cap
+           overflow) or one Appeared hasn't delivered yet — the
+           Appeared handler owns joins; nothing to wake. */
+        if (w->run_loop) CFRunLoopStop(w->run_loop);
+        return;
+    }
+
+    if (id != 0 && w->registry_id != 0 && id != w->registry_id) {
+        return; /* another drive */
     }
 
     mos_internal_watch_notify_wake(&w->core);
@@ -2671,6 +2958,53 @@ static void teardown_iokit_interest_wake(mos_watch_t *w)
     }
 }
 
+/* All-mode lifecycle (Phase 2b): Appeared joins a device to the
+   stream (its first event is relabeled device_appeared by the pure
+   multiplexer), Disappeared marks the slot's core removed so its next
+   pump emits a per-device device_removed. Both are load-bearing in
+   all mode only — single-target watches keep kIOGeneralInterest as
+   their terminal-removal source and never register these. */
+static void dr_device_appeared_callback(DRNotificationCenterRef center,
+                                        void *observer, CFStringRef name,
+                                        DRTypeRef object,
+                                        CFDictionaryRef info)
+{
+    (void)center; (void)name; (void)info;
+    mos_watch_t *w = (mos_watch_t *)observer;
+    if (!w || !w->all_mode || !object) return;
+
+    mos_internal_dr_snapshot snap;
+    if (mos_internal_dr_device_snapshot((CFTypeRef)object, &snap)) {
+        watch_all_add_device(w, &snap, /*mid_stream=*/true);
+    }
+    if (w->run_loop) CFRunLoopStop(w->run_loop);
+}
+
+static void dr_device_disappeared_callback(DRNotificationCenterRef center,
+                                           void *observer, CFStringRef name,
+                                           DRTypeRef object,
+                                           CFDictionaryRef info)
+{
+    (void)center; (void)name; (void)info;
+    mos_watch_t *w = (mos_watch_t *)observer;
+    if (!w || !w->all_mode || !object) return;
+
+    uint64_t id = 0;
+    CFDictionaryRef dev_info = DRDeviceCopyInfo((DRDeviceRef)object);
+    if (dev_info) {
+        id = mos_internal_dr_id_for_path_value(
+            CFDictionaryGetValue(dev_info, kDRDeviceIORegistryEntryPathKey));
+        CFRelease(dev_info);
+    }
+    int slot = (id != 0) ? mos_internal_watch_all_find(&w->all, id) : -1;
+    if (slot >= 0) {
+        mos_internal_watch_notify_removed(&w->all.cores[slot]);
+    }
+    /* Unresolved id: the probe floor catches it — the slot's next
+       reopen returns NO_DEVICE, which the core treats as removal. */
+    if (w->run_loop) CFRunLoopStop(w->run_loop);
+}
+
 /* Set up the DR notification center and register the StatusChanged
    observer. Independent of the IOKit interest wake — either or both
    may fail soft to poll-only. Stores center + source on success;
@@ -2691,10 +3025,21 @@ static void setup_dr_doorbell_wake(mos_watch_t *w)
 
     /* Register LAST: once observed, callbacks can fire, so every prior
        step must already be safe to be live. object=NULL observes all
-       devices; the callback filters by registry ID (fail-open). */
+       devices; the callback filters by registry ID (fail-open). In all
+       mode the Appeared/Disappeared lifecycle observers join here —
+       they are what makes the bus stream live. */
     DRNotificationCenterAddObserver(center, w, dr_status_changed_callback,
                                     kDRDeviceStatusChangedNotification,
                                     NULL);
+    if (w->all_mode) {
+        DRNotificationCenterAddObserver(center, w,
+                                        dr_device_appeared_callback,
+                                        kDRDeviceAppearedNotification, NULL);
+        DRNotificationCenterAddObserver(center, w,
+                                        dr_device_disappeared_callback,
+                                        kDRDeviceDisappearedNotification,
+                                        NULL);
+    }
 
     w->dr_center = center;
     w->dr_source = source;
@@ -2710,6 +3055,14 @@ static void teardown_dr_doorbell_wake(mos_watch_t *w)
     DRNotificationCenterRemoveObserver(w->dr_center, w,
                                        kDRDeviceStatusChangedNotification,
                                        NULL);
+    if (w->all_mode) {
+        DRNotificationCenterRemoveObserver(w->dr_center, w,
+                                           kDRDeviceAppearedNotification,
+                                           NULL);
+        DRNotificationCenterRemoveObserver(w->dr_center, w,
+                                           kDRDeviceDisappearedNotification,
+                                           NULL);
+    }
     if (w->run_loop && w->dr_source) {
         CFRunLoopRemoveSource(w->run_loop, w->dr_source,
                               MOS_WATCH_RUN_LOOP_MODE);
@@ -2866,6 +3219,42 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
                                             transition_poll_ms, err_out);
 }
 
+mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
+                                uint32_t transition_poll_ms,
+                                mos_error *err_out)
+{
+    mos_watch_t *w = (mos_watch_t *)calloc(1, sizeof(*w));
+    if (!w) {
+        if (err_out) *err_out = MOS_ERR_OOM;
+        return NULL;
+    }
+    w->all_mode           = true;
+    w->bsd_unit           = -1;   /* no single unit; accessor contract */
+    w->stable_poll_ms     = stable_poll_ms;
+    w->transition_poll_ms = transition_poll_ms;
+    mos_internal_watch_all_init(&w->all);
+
+    /* Initial population from ONE directory snapshot — no per-device
+       opens (the first probe validates each device; a vanished one
+       yields its device_removed through the normal path). Zero devices
+       is a valid empty stream: the Appeared observer below is what
+       makes it live. */
+    mos_internal_dr_snapshot snap[MOS_WATCH_ALL_CAP];
+    size_t n = mos_internal_dr_copy_snapshot(snap, MOS_WATCH_ALL_CAP);
+    for (size_t i = 0; i < n; ++i) {
+        watch_all_add_device(w, &snap[i], /*mid_stream=*/false);
+    }
+
+    w->run_loop = CFRunLoopGetCurrent();
+    setup_dr_doorbell_wake(w);
+    /* No kIOGeneralInterest in all mode: removal rides DR Disappeared
+       (fast path) + per-probe NO_DEVICE (floor). Poll-only fallback if
+       DR setup failed, exactly like single mode. */
+
+    if (err_out) *err_out = MOS_OK;
+    return w;
+}
+
 /* Safe to call on NULL; do not call twice (mos_close convention). Order is
    load-bearing — stop callbacks before releasing the memory they reference:
    DR doorbell, then IOKit interest wake, then the retained io_service_t.
@@ -2885,6 +3274,8 @@ void mos_watch_close(mos_watch_t *w)
 
 int64_t mos_watch_bsd_unit(const mos_watch_t *w)
 {
+    /* -1 for NULL, for a media-less single-target watch, and always
+       for an all-watch (no single unit; demux per event instead). */
     if (!w) return -1;
     return w->bsd_unit;
 }
@@ -2908,7 +3299,9 @@ mos_error mos_watch_next_event(mos_watch_t *w, const mos_watch_event **out,
         : start + (uint64_t)timeout_ms;
 
     for (;;) {
-        mos_watch_decision d = mos_internal_watch_pump(&w->core);
+        mos_watch_decision d = w->all_mode
+            ? mos_internal_watch_all_pump(&w->all)
+            : mos_internal_watch_pump(&w->core);
 
         if (d.kind == MOS_WATCH_DECIDE_EMIT_EVENT) {
             w->last_event = d.event;
@@ -3364,6 +3757,31 @@ static int64_t mos_internal_dr_bsd_unit_from_status(CFDictionaryRef status)
     return mos_internal_parse_bsd_unit(name);
 }
 
+bool mos_internal_dr_device_snapshot(CFTypeRef device_ref,
+                                     mos_internal_dr_snapshot *s)
+{
+    if (!device_ref || !s) return false;
+    DRDeviceRef dev = (DRDeviceRef)device_ref;
+
+    memset(s, 0, sizeof *s);
+    s->bsd_unit = -1;
+
+    CFDictionaryRef info = DRDeviceCopyInfo(dev);
+    if (info) {
+        mos_internal_dr_fill_from_info(info, s);
+        CFRelease(info);
+    }
+    /* No reopenable identity ⇒ not usable (see header comment). */
+    if (s->registry_id == 0) return false;
+
+    CFDictionaryRef status = DRDeviceCopyStatus(dev);
+    if (status) {
+        s->bsd_unit = mos_internal_dr_bsd_unit_from_status(status);
+        CFRelease(status);
+    }
+    return true;
+}
+
 size_t mos_internal_dr_copy_snapshot(mos_internal_dr_snapshot *slots,
                                      size_t cap)
 {
@@ -3375,30 +3793,12 @@ size_t mos_internal_dr_copy_snapshot(mos_internal_dr_snapshot *slots,
     CFIndex n = CFArrayGetCount(arr);
     size_t out = 0;
     for (CFIndex i = 0; i < n && out < cap; ++i) {
-        DRDeviceRef dev = (DRDeviceRef)CFArrayGetValueAtIndex(arr, i);
-        if (!dev) continue;
-
-        mos_internal_dr_snapshot *s = &slots[out];
-        memset(s, 0, sizeof *s);
-        s->bsd_unit = -1;
-
-        CFDictionaryRef info = DRDeviceCopyInfo(dev);
-        if (info) {
-            mos_internal_dr_fill_from_info(info, s);
-            CFRelease(info);
-        }
-        /* No reopenable identity ⇒ skip (see header comment). The
-           index is the position among reopenable devices, which is
-           the DR array order whenever every device resolves — the
+        CFTypeRef dev = CFArrayGetValueAtIndex(arr, i);
+        /* Skip-not-fail per device: an unresolvable entry must not hide
+           its siblings. The index is the position among reopenable
+           devices — DR array order whenever every device resolves, the
            expected case. */
-        if (s->registry_id == 0) continue;
-
-        CFDictionaryRef status = DRDeviceCopyStatus(dev);
-        if (status) {
-            s->bsd_unit = mos_internal_dr_bsd_unit_from_status(status);
-            CFRelease(status);
-        }
-        out++;
+        if (mos_internal_dr_device_snapshot(dev, &slots[out])) out++;
     }
     CFRelease(arr);
     return out;

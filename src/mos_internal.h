@@ -92,6 +92,14 @@ uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name);
    the snapshot builder and the watch doorbell's per-device filter. */
 uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path);
 
+/* Extract one device's snapshot (registry id, bsd unit, identity) from
+   a DRDeviceRef passed as CFTypeRef (mos_internal.h stays free of
+   DiscRecording types). False when the device's registry path doesn't
+   resolve — the same skip gate the array snapshot applies. Used by the
+   snapshot builder and the watch-all Appeared handler. */
+bool mos_internal_dr_device_snapshot(CFTypeRef device_ref,
+                                     mos_internal_dr_snapshot *s);
+
 /* Device-static identity strings for an already-opened service, via
    DR's registry-path lookup. Best-effort: returns false (and empties
    the buffers) when DR cannot see the service — the same non-fatal

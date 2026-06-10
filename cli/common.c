@@ -14,6 +14,7 @@ const char *opt_bsd     = NULL;
 bool        flag_list   = false;
 bool        flag_json   = false;
 bool        flag_watch  = false;
+bool        flag_all    = false;  /* watch-all: --watch --all */
 
 const char *progname = "mos";
 

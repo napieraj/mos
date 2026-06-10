@@ -365,6 +365,12 @@ typedef enum {
     MOS_EVENT_MEDIA_CHANGED = 5, /* same-state media swap: drive stayed READY
                                     but the disc was replaced (whole-disk
                                     IOMedia identity changed) */
+    MOS_EVENT_DEVICE_APPEARED = 6, /* watch-all only: a drive joined the
+                                      stream mid-flight (hot-plug). Carries
+                                      the same full payload as a snapshot;
+                                      a drive present at open emits snapshot
+                                      instead. Single-target watches never
+                                      emit this. */
 } mos_event_kind;
 
 /* ABI-width pin — same FFI rationale as mos_state_enum / mos_xfer_dir
@@ -446,6 +452,29 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
                                      uint32_t stable_poll_ms,
                                      uint32_t transition_poll_ms,
                                      mos_error *err_out);
+
+/* Open a watch on EVERY optical drive — sit on the bus. The stream
+   multiplexes per-drive events, demuxed by registry_id (and bsd when
+   media is present); seq is stream-global. Contract differences from
+   the single-target handles, documented here because the handle type
+   is shared:
+     - Each drive present at open emits a snapshot. A drive arriving
+       later emits MOS_EVENT_DEVICE_APPEARED (same payload shape as a
+       snapshot).
+     - MOS_EVENT_DEVICE_REMOVED is PER-DRIVE and non-terminal: the
+       stream continues, and the same physical drive replugged joins
+       again (new registry_id) with device_appeared. The stream ends
+       only at mos_watch_close.
+     - Zero drives at open is a valid empty stream that waits for
+       arrivals; mos_watch_next_event returns MOS_ERR_TIMEOUT slices
+       until something appears.
+     - Up to 16 concurrently watched drives; arrivals beyond that are
+       ignored until a slot frees.
+   mos_watch_bsd_unit() returns -1 on an all-watch (no single unit).
+   Threading/run-loop contract is identical to the single-target opens. */
+mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
+                                uint32_t transition_poll_ms,
+                                mos_error *err_out);
 
 /* Block until the next event or until timeout_ms elapses with no
    transition. On event, returns MOS_OK and points *out at a watch-owned

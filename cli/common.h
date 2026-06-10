@@ -24,6 +24,7 @@ extern const char *opt_bsd;
 extern bool        flag_list;
 extern bool        flag_json;
 extern bool        flag_watch;
+extern bool        flag_all;
 extern const char *progname;
 
 /* stdout finalization (shared one-shot/watch write-outcome fold). */

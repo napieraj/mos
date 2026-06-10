@@ -58,6 +58,9 @@ void print_usage(FILE *f)
         "      --bsd NAME    BSD form; explicit form of the positional\n"
         "  -l, --list        List drives and exit\n"
         "  -w, --watch       Stream state events (NDJSON) until SIGINT\n"
+        "      --all         With watch: stream events for EVERY drive\n"
+        "                    (hot-plug joins as device_appeared; removal\n"
+        "                    is per-drive, the stream continues)\n"
         "  -j, --json        Emit JSON (mos.state.v1 / mos.error.v1 /\n"
         "                    mos.list.v1). watch is always NDJSON\n"
         "                    (mos.event.v1); --json is a no-op there.\n"
@@ -91,6 +94,7 @@ static void print_version(void)
 enum {
     OPT_BSD = 1000,
     OPT_VERSION,
+    OPT_ALL,
 };
 
 static const struct option long_options[] = {
@@ -98,6 +102,7 @@ static const struct option long_options[] = {
     { "bsd",     required_argument, 0, OPT_BSD },
     { "list",    no_argument,       0, 'l' },
     { "watch",   no_argument,       0, 'w' },
+    { "all",     no_argument,       0, OPT_ALL },
     /* optional_argument, not no_argument: lets --json=v2 reach the
        legacy-rejection diagnostic (no_argument would silently discard the
        =value). Bare --json works — optarg defaults to NULL. */
@@ -216,6 +221,7 @@ int main(int argc, char **argv)
                 break;
             case 'l': flag_list  = true;  break;
             case 'w': flag_watch = true;  break;
+            case OPT_ALL: flag_all = true; break;
             case 'j':
                 if (!reject_legacy_json_version(optarg)) return EX_USAGE;
                 flag_json = true;
@@ -284,6 +290,20 @@ int main(int argc, char **argv)
 
     if (flag_list && flag_watch) {
         fprintf(stderr, "%s: --list and --watch are mutually exclusive\n",
+                progname);
+        return EX_USAGE;
+    }
+
+    /* --all is watch-only (sit on the bus) and takes the whole bus —
+       a drive selector contradicts it. */
+    if (flag_all && !flag_watch) {
+        fprintf(stderr, "%s: --all requires --watch (or the watch "
+                        "subcommand)\n", progname);
+        return EX_USAGE;
+    }
+    if (flag_all && (opt_index || opt_bsd)) {
+        fprintf(stderr, "%s: --all watches every drive; a selector "
+                        "(--index/--bsd/positional) contradicts it\n",
                 progname);
         return EX_USAGE;
     }

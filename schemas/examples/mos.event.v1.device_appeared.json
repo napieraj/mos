@@ -1,0 +1,16 @@
+{
+  "schema": "mos.event.v1",
+  "event": "device_appeared",
+  "registry_id": 4295040123,
+  "stream_open_ms": 1749543000000,
+  "seq": 7,
+  "ts": "2026-06-10T11:30:18Z",
+  "bsd": null,
+  "state": "empty",
+  "prev_state": "unknown",
+  "current_profile": "0x0000",
+  "vendor": "HL-DT-ST",
+  "product": "BD-RE BH16NS55",
+  "revision": "1.00",
+  "latency_ms": 38
+}
