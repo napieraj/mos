@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/napieraj/mos/schemas/mos.state.v1.json",
+  "title": "mos.state.v1",
+  "description": "Success envelope for a single drive's classified state. Emitted by `mos --json` (and `mos status --json`) when the drive was reachable and a state classification was produced \u2014 including the `unknown` state, which is a valid observation (drive answered, answer was inconclusive). Hard failures emit mos.error.v1 instead.",
+  "type": "object",
+  "required": [
+    "schema",
+    "state",
+    "bsd",
+    "current_profile",
+    "registry_id",
+    "index"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "mos.state.v1",
+      "description": "Schema identifier. Per-document versioned \u2014 consumers dispatch on this field, not on a --json= flag value."
+    },
+    "state": {
+      "enum": [
+        "open",
+        "empty",
+        "loading",
+        "ready",
+        "busy",
+        "formatting",
+        "media_unreadable",
+        "device_fault",
+        "empty_or_open",
+        "unknown"
+      ],
+      "description": "Classified drive state from the v0.3 decision tree (see src/mos_state_core.c). This enum is an OPEN set within mos.state.v1: future versions may add values, which is forward-compatible, not a schema-name-breaking change. Consumers MUST treat any value they do not recognize as unclassifiable (handle like 'unknown'). The list is enumerated here so fixtures catch typos, not to assert closure."
+    },
+    "bsd": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^/dev/disk[0-9]+$",
+      "description": "Whole-disk BSD name (e.g. disk4), or null when the drive has no media (empty/open tray) and therefore no IOMedia child to name. The /^r?disk[0-9]+$/ shape is enforced by the library; the rdiskN form is normalized away before this is emitted. The pattern constrains the string form only; null is permitted per the empty-drive contract. CLI one-shot invocations open a fresh handle per run, so this is effectively query-time; library consumers holding a handle should know the value is captured at open and not refreshed per query in v0.3 (open-time semantics \u2014 see mos.h on mos_state_result_bsd_unit)."
+    },
+    "current_profile": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]{4}$",
+      "description": "MMC current-profile code, lowercase 4-hex-digit form with 0x prefix. Matches the convention used by Apple's MMC headers, T10 spec, cdrom_id, and drive firmware logs."
+    },
+    "current_profile_name": {
+      "type": "string",
+      "description": "Human-friendly profile name (e.g. bd_rom, dvd_plus_r_dl). Present only when mos_profile_name() recognized the code; consumers fall back to current_profile (hex) otherwise."
+    },
+    "media_class": {
+      "enum": [
+        "cd",
+        "dvd",
+        "bd",
+        "hd_dvd"
+      ],
+      "description": "Coarse media class derived from current_profile by mos_profile_class() \u2014 the closed set of optical families. Present only when the profile has a class: absent for 0x0000 (no media/profile) and for classless profiles (magneto-optical, legacy removable). This is the first identical-drives disambiguator; volume_name joins it in the v0.4 media object (doc/research/2026-06-10-media-info-design.md)."
+    },
+    "vendor": {
+      "type": "string",
+      "description": "INQUIRY-derived vendor string. Sanitized \u2014 control bytes and high bytes are escaped as \\u00XX before emission. Field present only when non-empty."
+    },
+    "product": {
+      "type": "string",
+      "description": "INQUIRY-derived product string. Same sanitization rules as vendor. Field present only when non-empty."
+    },
+    "revision": {
+      "type": "string",
+      "description": "INQUIRY PRODUCT_REVISION_LEVEL (firmware revision, up to 4 chars per SPC-4 \u00a76.4.2). Same sanitization rules as vendor. Field present only when non-empty."
+    },
+    "sense": {
+      "type": "object",
+      "description": "Most recent sense data. Field present only when at least one of key/asc/ascq is non-zero \u2014 clean drives suppress this entirely.",
+      "required": [
+        "key",
+        "asc",
+        "ascq"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{2}$"
+        },
+        "asc": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{2}$"
+        },
+        "ascq": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{2}$"
+        }
+      },
+      "not": {
+        "allOf": [
+          {
+            "properties": {
+              "key": {
+                "const": "0x00"
+              }
+            }
+          },
+          {
+            "properties": {
+              "asc": {
+                "const": "0x00"
+              }
+            }
+          },
+          {
+            "properties": {
+              "ascq": {
+                "const": "0x00"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "registry_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Drive service IORegistry entry ID \u2014 attachment identity, identical to mos.event.v1 registry_id (the state<->event join key). 0 = unavailable."
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1-based drive index at capture time (the Index column of mos list / the positional selector). Live addressing, not identity."
+    }
+  },
+  "allOf": [
+    {
+      "title": "current_profile is non-zero only when state is ready",
+      "description": "The runtime emits 0x0000 for every non-ready state to avoid stale-profile data leaking from a previous disc (some drives cache the profile of the last inserted disc for minutes after ejection). See ARCHITECTURE.md \u00a79.",
+      "if": {
+        "properties": {
+          "state": {
+            "not": {
+              "const": "ready"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "current_profile": {
+            "const": "0x0000"
+          }
+        }
+      }
+    },
+    {
+      "title": "current_profile_name and media_class are present only when current_profile is non-zero",
+      "description": "A human-friendly profile name (or class) has no meaning when current_profile is the 0x0000 sentinel (no media / no profile). Forbidding both at the schema level prevents downstream consumers from inferring presence-of-media from presence-of-name.",
+      "if": {
+        "properties": {
+          "current_profile": {
+            "const": "0x0000"
+          }
+        },
+        "required": [
+          "current_profile"
+        ]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "current_profile_name"
+              ]
+            },
+            {
+              "required": [
+                "media_class"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

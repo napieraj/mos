@@ -1,0 +1,432 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/napieraj/mos/schemas/mos.event.v1.json",
+  "title": "mos.event.v1",
+  "description": "Watch-mode event line. Emitted as NDJSON (one JSON object per line) by `mos --watch --json` (and `mos watch --json`). The first successful observation is emitted as a snapshot; a transient error during initial polling may appear before it, so the first line is not guaranteed to be the snapshot. Subsequent lines are state transitions, errors during polling, or the terminal device_removed event.\n\nThe field set varies by `event` kind, enforced as a oneOf union:\n  - snapshot, state_changed: state + prev_state + current_profile required; no error field permitted.\n  - media_changed: same field set as snapshot/state_changed, with state and prev_state both 'ready' \u2014 a same-state disc swap (the whole-disk media identity changed while the drive stayed ready).\n  - error: state + prev_state + error required; no media fields (current_profile, sense, vendor, product, revision) permitted.\n  - device_removed: only prev_state; no current-side fields, no error field. Terminal event; consumer should expect no more lines after this one.",
+  "type": "object",
+  "required": [
+    "schema",
+    "event",
+    "registry_id",
+    "stream_open_ms",
+    "seq",
+    "ts",
+    "bsd",
+    "prev_state"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "mos.event.v1"
+    },
+    "event": {
+      "enum": [
+        "snapshot",
+        "state_changed",
+        "media_changed",
+        "error",
+        "device_removed"
+      ]
+    },
+    "registry_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The watched drive's IORegistry entry ID \u2014 its attachment identity, constant for the stream's life and existing even when no media (and hence no bsd_name) does. xnu mints real IDs from a never-reused per-boot monotone counter starting above 2^32+255, so values are >= 4294967552 in practice (and a replug is a new ID by construction); 0 is a degenerate marker reachable only from direct pure-layer callers. Fits IEEE doubles for any realistic uptime."
+    },
+    "stream_open_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Wall-clock (Unix epoch) ms at watch_open, monotonicized per process so the (registry_id, stream_open_ms) pair is unique per session even for same-millisecond reopens of the same drive. Session identity IS this pair; consumers wanting a single correlation key concatenate the two. Wall-clock and not monotonic because streams need to be roughly orderable across separate runs and machines; see ARCHITECTURE.md \u00a76."
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonic sequence number within the stream, starting at 1. The snapshot is the first SUCCESSFUL observation; a transient error during initial polling can occupy an earlier seq, so seq=1 is not guaranteed to be the snapshot."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "description": "RFC 3339 UTC timestamp of the event. Pattern is conservative: integer seconds, trailing Z. Matches what src/mos_watch_core.c::format_rfc3339 emits. The explicit pattern is here because JSON Schema 2020-12's format-annotation vocabulary treats `format` as an annotation rather than a hard assertion by default, so a future malformed-timestamp fixture could pass the validator otherwise."
+    },
+    "bsd": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^/dev/disk[0-9]+$"
+    },
+    "state": {
+      "enum": [
+        "open",
+        "empty",
+        "loading",
+        "ready",
+        "busy",
+        "formatting",
+        "media_unreadable",
+        "device_fault",
+        "empty_or_open",
+        "unknown"
+      ],
+      "description": "Open set within mos.event.v1 \u2014 additive values are forward-compatible; consumers must treat an unrecognized value as unclassifiable (like 'unknown'). Kept in sync with mos.state.v1's state enum (enforced by schemas/validate.py)."
+    },
+    "prev_state": {
+      "enum": [
+        "open",
+        "empty",
+        "loading",
+        "ready",
+        "busy",
+        "formatting",
+        "media_unreadable",
+        "device_fault",
+        "empty_or_open",
+        "unknown"
+      ]
+    },
+    "current_profile": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]{4}$"
+    },
+    "current_profile_name": {
+      "type": "string"
+    },
+    "media_class": {
+      "enum": [
+        "cd",
+        "dvd",
+        "bd",
+        "hd_dvd"
+      ]
+    },
+    "vendor": {
+      "type": "string"
+    },
+    "product": {
+      "type": "string"
+    },
+    "revision": {
+      "type": "string"
+    },
+    "sense": {
+      "type": "object",
+      "required": [
+        "key",
+        "asc",
+        "ascq"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{2}$"
+        },
+        "asc": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{2}$"
+        },
+        "ascq": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{2}$"
+        }
+      },
+      "not": {
+        "allOf": [
+          {
+            "properties": {
+              "key": {
+                "const": "0x00"
+              }
+            }
+          },
+          {
+            "properties": {
+              "asc": {
+                "const": "0x00"
+              }
+            }
+          },
+          {
+            "properties": {
+              "ascq": {
+                "const": "0x00"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "recoverable"
+      ],
+      "additionalProperties": false,
+      "description": "Present only on event=error. Same shape as mos.error.v1's nested error object EXCEPT that 'ok' is excluded from code \u2014 an error event with code=ok is contradictory.",
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_arg",
+            "no_device",
+            "driver_rejected",
+            "exclusive_access",
+            "busy",
+            "timeout",
+            "io",
+            "unsupported",
+            "oom"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "recoverable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Wall time from poll trigger to classification, in milliseconds. Present only when > 0 (suppressed for synthetic snapshots taken at watch_open time)."
+    }
+  },
+  "oneOf": [
+    {
+      "title": "snapshot or state_changed: full media payload, no error",
+      "properties": {
+        "event": {
+          "enum": [
+            "snapshot",
+            "state_changed"
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "current_profile"
+      ],
+      "not": {
+        "required": [
+          "error"
+        ]
+      },
+      "allOf": [
+        {
+          "title": "current_profile is non-zero only when state is ready",
+          "if": {
+            "properties": {
+              "state": {
+                "not": {
+                  "const": "ready"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "current_profile": {
+                "const": "0x0000"
+              }
+            }
+          }
+        },
+        {
+          "title": "current_profile_name is present only when current_profile is non-zero",
+          "if": {
+            "properties": {
+              "current_profile": {
+                "const": "0x0000"
+              }
+            },
+            "required": [
+              "current_profile"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "current_profile_name"
+                  ]
+                },
+                {
+                  "required": [
+                    "media_class"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "title": "media_changed: same-state (ready) media swap, full media payload, no error",
+      "properties": {
+        "event": {
+          "const": "media_changed"
+        },
+        "state": {
+          "const": "ready"
+        },
+        "prev_state": {
+          "const": "ready"
+        }
+      },
+      "required": [
+        "state",
+        "prev_state",
+        "current_profile"
+      ],
+      "not": {
+        "required": [
+          "error"
+        ]
+      },
+      "allOf": [
+        {
+          "title": "current_profile_name is present only when current_profile is non-zero",
+          "if": {
+            "properties": {
+              "current_profile": {
+                "const": "0x0000"
+              }
+            },
+            "required": [
+              "current_profile"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "current_profile_name"
+                  ]
+                },
+                {
+                  "required": [
+                    "media_class"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "title": "error: state + error required, no media fields permitted",
+      "properties": {
+        "event": {
+          "const": "error"
+        }
+      },
+      "required": [
+        "state",
+        "error"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "current_profile"
+            ]
+          },
+          {
+            "required": [
+              "current_profile_name"
+            ]
+          },
+          {
+            "required": [
+              "media_class"
+            ]
+          },
+          {
+            "required": [
+              "sense"
+            ]
+          },
+          {
+            "required": [
+              "vendor"
+            ]
+          },
+          {
+            "required": [
+              "product"
+            ]
+          },
+          {
+            "required": [
+              "revision"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "title": "device_removed: terminal, no current-side fields permitted",
+      "properties": {
+        "event": {
+          "const": "device_removed"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "state"
+            ]
+          },
+          {
+            "required": [
+              "current_profile"
+            ]
+          },
+          {
+            "required": [
+              "current_profile_name"
+            ]
+          },
+          {
+            "required": [
+              "media_class"
+            ]
+          },
+          {
+            "required": [
+              "sense"
+            ]
+          },
+          {
+            "required": [
+              "error"
+            ]
+          },
+          {
+            "required": [
+              "vendor"
+            ]
+          },
+          {
+            "required": [
+              "product"
+            ]
+          },
+          {
+            "required": [
+              "revision"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

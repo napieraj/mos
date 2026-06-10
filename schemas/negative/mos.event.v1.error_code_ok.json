@@ -1,0 +1,17 @@
+{
+  "_comment": "An error event with code='ok' is contradictory. The shared mos.error.v1 nested error type allows 'ok' as a sentinel for the partial-success envelope, but in mos.event.v1 the 'error' branch is only entered for actual failures and the code enum excludes 'ok'.",
+  "schema": "mos.event.v1",
+  "event": "error",
+  "registry_id": 4295032831,
+  "stream_open_ms": 1,
+  "bsd": "/dev/disk4",
+  "seq": 2,
+  "ts": "2025-01-01T00:00:01Z",
+  "prev_state": "ready",
+  "state": "unknown",
+  "error": {
+    "code": "ok",
+    "message": "this is contradictory",
+    "recoverable": true
+  }
+}

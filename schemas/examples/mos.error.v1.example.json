@@ -1,0 +1,10 @@
+{
+  "schema": "mos.error.v1",
+  "exit_code": 66,
+  "error": {
+    "code": "no_device",
+    "message": "no matching optical drive",
+    "context": "could not open drive",
+    "recoverable": false
+  }
+}

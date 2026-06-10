@@ -1,0 +1,187 @@
+#!/bin/sh
+# amalgamate.sh — Produce a single-file, drop-in distribution of the C core.
+#
+# Output:
+#   dist/mos.h    — public header, unchanged from include/
+#   dist/mos.c    — concatenation of internal header + all src/*.c
+#
+# Consumers can drop those two files into their source tree. Compile
+# mos.c as a regular translation unit; on the link step, add IOKit,
+# CoreFoundation, and DiskArbitration to the link line. No CMake, no submodule.
+#
+# This is the stb / SQLite integration model. See CONTRIBUTING.md for
+# the non-amalgamated layout.
+
+set -eu
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+INC="$ROOT/include"
+SRC="$ROOT/src"
+OUT="$ROOT/dist"
+mkdir -p "$OUT"
+
+# -- Public header: verbatim copy --------------------------------------
+cp "$INC/mos.h" "$OUT/mos.h"
+
+# -- Amalgamated implementation ---------------------------------------
+H="$OUT/mos.c"
+cat > "$H" <<'HEADER'
+/*
+ * mos.c — amalgamated single-file implementation of mac-optical-state.
+ *
+ * Build instructions for a consuming project:
+ *
+ *   Compile the implementation to an object file:
+ *     cc -c mos.c -mmacosx-version-min=12.0
+ *
+ *   Link it into an executable (frameworks needed at link time only):
+ *     cc mos.o your_main.o -o yourtool \\
+ *        -framework IOKit \\
+ *        -framework CoreFoundation \\
+ *        -framework DiskArbitration \\
+ *        -mmacosx-version-min=12.0
+ *
+ * Or add both files (mos.h and this one) to your existing build system
+ * and make sure IOKit, CoreFoundation, and DiskArbitration are on your
+ * link line, with the deployment target pinned to macOS 12.0 to match
+ * the CMake build's CMAKE_OSX_DEPLOYMENT_TARGET. Skipping
+ * -framework DiskArbitration will fail to link at the DASessionCreate
+ * reference in mos_watch.c.
+ *
+ * See mos.h for the API.
+ * See https://github.com/napieraj/mos for source, tests,
+ * and the non-amalgamated layout.
+ */
+
+/* Feature-test macros for the whole amalgamated translation unit. The
+ * standalone TUs define these per-file ahead of their own includes;
+ * concatenation would otherwise place a later TU's defines AFTER system
+ * headers have already been processed — ineffective, and fragile against
+ * reordering of the weave. Hoisted here so the amalgamated build sees the
+ * same SDK surface as the standalone build. The per-file blocks below are
+ * #ifndef-guarded, so they become no-ops. */
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE 1
+#endif
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
+#include "mos.h"
+
+HEADER
+
+# The guard-stripper below collapses exactly ONE include-guard pair per
+# header: it consumes the FIRST #endif after a guard opens. An interior
+# preprocessor conditional inside a stripped header would have its #endif
+# eaten instead — silently corrupting the weave (the macOS CI compile
+# would catch it downstream, but the script itself would emit garbage
+# without complaint). Refuse loudly instead of corrupting; if a header
+# legitimately grows an interior conditional, upgrade strip_file to track
+# nesting depth first.
+for hdr in mos_scsi_status.h mos_pure.h mos_internal.h; do
+    conds=$(grep -c '^#[[:space:]]*if' "$SRC/$hdr" || true)
+    ends=$(grep -c '^#[[:space:]]*endif' "$SRC/$hdr" || true)
+    if [ "$conds" -ne 1 ] || [ "$ends" -ne 1 ]; then
+        echo "amalgamate: $SRC/$hdr has $conds #if*/#$ends #endif directives;" >&2
+        echo "the guard-stripper handles exactly the 1+1 include guard." >&2
+        echo "Upgrade strip_file to nesting-depth tracking before weaving it." >&2
+        exit 1
+    fi
+done
+
+# Helper: strip includes of mos.h / mos_internal.h / mos_pure.h /
+# mos_scsi_status.h and their include guards, so concatenation doesn't
+# produce duplicates.
+strip_file() {
+    awk '
+        BEGIN { in_guard = 0 }
+
+        # Drop library-local includes; weaving replaces them.
+        /^#[[:space:]]*include[[:space:]]*"mos\.h"/             { next }
+        /^#[[:space:]]*include[[:space:]]*"mos_internal\.h"/    { next }
+        /^#[[:space:]]*include[[:space:]]*"mos_pure\.h"/        { next }
+        /^#[[:space:]]*include[[:space:]]*"mos_scsi_status\.h"/ { next }
+
+        # Collapse internal header include guards.
+        /^#ifndef MOS_INTERNAL_H/    { in_guard = 1; next }
+        /^#define MOS_INTERNAL_H/    { next }
+        /^#ifndef MOS_PURE_H/        { in_guard = 1; next }
+        /^#define MOS_PURE_H/        { next }
+        /^#ifndef MOS_SCSI_STATUS_H/ { in_guard = 1; next }
+        /^#define MOS_SCSI_STATUS_H/ { next }
+        in_guard && /^#endif/ { in_guard = 0; next }
+
+        { print }
+    ' "$1"
+}
+
+{
+    echo "/* ==== src/mos_scsi_status.h ==== */"
+    strip_file "$SRC/mos_scsi_status.h"
+    echo
+    echo "/* ==== src/mos_pure.h ==== */"
+    strip_file "$SRC/mos_pure.h"
+    echo
+    echo "/* ==== src/mos_internal.h ==== */"
+    strip_file "$SRC/mos_internal.h"
+    echo
+    echo "/* ==== src/mos_sense.c ==== */"
+    strip_file "$SRC/mos_sense.c"
+    echo
+    echo "/* ==== src/mos_pure.c ==== */"
+    strip_file "$SRC/mos_pure.c"
+    echo
+    echo "/* ==== src/mos_config.c ==== */"
+    strip_file "$SRC/mos_config.c"
+    echo
+    echo "/* ==== src/mos_discinfo.c ==== */"
+    strip_file "$SRC/mos_discinfo.c"
+    echo
+    echo "/* ==== src/mos_result.c ==== */"
+    strip_file "$SRC/mos_result.c"
+    echo
+    echo "/* ==== src/mos_state_core.c ==== */"
+    strip_file "$SRC/mos_state_core.c"
+    echo
+    echo "/* ==== src/mos_watch_core.c ==== */"
+    strip_file "$SRC/mos_watch_core.c"
+    echo
+    echo "/* ==== src/mos_state.c ==== */"
+    strip_file "$SRC/mos_state.c"
+    echo
+    echo "/* ==== src/mos_watch.c ==== */"
+    strip_file "$SRC/mos_watch.c"
+    echo
+    echo "/* ==== src/mos_strings.c ==== */"
+    strip_file "$SRC/mos_strings.c"
+    echo
+    echo "/* ==== src/mos_scsi.c ==== */"
+    strip_file "$SRC/mos_scsi.c"
+} >> "$H"
+
+{
+    echo "mac-optical-state amalgamated distribution"
+    echo "Version:  $(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo dev)"
+    echo "Built:    $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    echo ""
+    echo "Files:"
+    echo "  mos.h — public API"
+    echo "  mos.c — implementation (concatenated from src/)"
+    echo ""
+    echo "Build:"
+    echo "  Compile:  cc -c mos.c -mmacosx-version-min=12.0"
+    echo "  Link:     cc mos.o your_main.o -o yourtool \\"
+    echo "               -framework IOKit \\"
+    echo "               -framework CoreFoundation \\"
+    echo "               -framework DiskArbitration \\"
+    echo "               -mmacosx-version-min=12.0"
+    echo ""
+    echo "License: 0BSD (see repository)"
+    echo "Source:  https://github.com/napieraj/mos"
+} > "$OUT/MANIFEST.txt"
+
+echo "Wrote:"
+echo "  $OUT/mos.h"
+echo "  $OUT/mos.c"
+echo "  $OUT/MANIFEST.txt"

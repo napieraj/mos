@@ -1,0 +1,483 @@
+name: CI
+
+on:
+  # workflow_dispatch lets us trigger the macOS runner manually from
+  # the GitHub UI — useful for verifying Apple-SDK-dependent changes
+  # (e.g. notification probe, mos_watch) without having to push a
+  # branch or open a PR. The Hamburg dev environment has no Mac, so
+  # CI is the primary macOS build path.
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Default token scope to read-only. Nothing in this workflow writes to
+# the repo (no pushes, no comments, no release artifacts at present).
+# Scoping down GITHUB_TOKEN is the cheap version of supply-chain
+# defense — if a transitive dependency in any action ever turns
+# malicious, it can't use the token to push to main.
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test (macos-latest)
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Toolchain versions
+        run: |
+          cmake --version
+          cc --version
+
+      - name: Configure
+        # MOS_BUILD_NOTIFICATION_PROBE=ON ensures the v0.3.1-dev
+        # diagnostic tool (tools/mos_notification_probe.c) is exercised
+        # by CI — otherwise an Apple-only callback-heavy TU that nothing
+        # else compiles would bitrot silently.
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DMOS_BUILD_PROBE=ON -DMOS_BUILD_NOTIFICATION_PROBE=ON
+
+      - name: Build (library, CLI, probe, notification probe, tests)
+        run: cmake --build build --parallel
+
+      - name: Run unit tests
+        working-directory: build
+        run: ctest --output-on-failure
+
+      - name: Watch-lifetime guard (link + headless run)
+        # tests/test_watch_lifetime.c pins the watch-event string-lifetime
+        # contract under ASan, but only a Mac with a drive gives real
+        # coverage — headless it SKIPs (exit 0). Linking and running it
+        # here keeps the guard from bitrotting (it is in no CMake target)
+        # and proves the whole compile/link chain on every push; the
+        # hardware run stays a manual step in the integration matrix.
+        run: |
+          set -e
+          cc -std=c11 -O1 -fsanitize=address,undefined \
+             -fno-omit-frame-pointer -fno-sanitize-recover=all \
+             -I include tests/test_watch_lifetime.c \
+             build/libmos.a build/libmos_pure.a \
+             -framework IOKit -framework CoreFoundation \
+             -framework DiskArbitration \
+             -o /tmp/test_watch_lifetime
+          ASAN_OPTIONS=abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+             /tmp/test_watch_lifetime
+
+      - name: Run CLI smoke check
+        run: |
+          set -e
+          build/bin/mos --version
+          build/bin/mos --help
+
+          # v0.3 plain-text contract on no-drive: empty stdout, diagnostic
+          # to stderr, exit 66 (EX_NOINPUT). The "unknown" string is now
+          # reserved for queried-but-unclassifiable results; hard failures
+          # produce no stdout output at all.
+          set +e
+          OUT=$(build/bin/mos --index 99 2>/dev/null)
+          EC=$?
+          set -e
+          if [ "$EC" != "66" ]; then
+            echo "Expected exit 66 (EX_NOINPUT), got $EC"
+            exit 1
+          fi
+          if [ -n "$OUT" ]; then
+            echo "Expected empty stdout on plain-text hard failure, got: $OUT"
+            exit 1
+          fi
+
+          # v0.3 JSON contract on no-drive: mos.error.v1 envelope on
+          # stdout, structured nested error object, exit 66. JSON-mode
+          # failures route to stdout so jq pipelines see them.
+          set +e
+          OUT=$(build/bin/mos --json --index 99 2>/dev/null)
+          EC=$?
+          set -e
+          if [ "$EC" != "66" ]; then
+            echo "Expected exit 66 on --json --index 99, got $EC"
+            exit 1
+          fi
+          echo "$OUT" | grep -q '"schema": *"mos.error.v1"' || {
+            echo "Expected mos.error.v1 schema in error envelope, got: $OUT"
+            exit 1
+          }
+          echo "$OUT" | grep -q '"exit_code": *66' || {
+            echo "Expected exit_code 66 in envelope, got: $OUT"
+            exit 1
+          }
+          echo "OK: v0.3 CLI contract smoke check passed"
+
+      - name: Verify public symbol hygiene
+        # Both static libraries must export only symbols prefixed `mos_`
+        # or `_mos_` (Mach-O underscored convention). Anything else means
+        # an internal helper wasn't marked static or prefixed properly.
+        # We check both libmos.a (mos_core, IOKit-linked) and
+        # libmos_pure.a (mos_pure, framework-free) separately because
+        # the v0.2 split made them sibling archives — internal-helper
+        # leakage in either is a hygiene failure.
+        run: |
+          set -e
+          for libname in libmos.a libmos_pure.a; do
+            LIB=$(find build -name "$libname" | head -1)
+            if [ -z "$LIB" ]; then
+              echo "Could not locate $libname — failing"
+              exit 1
+            fi
+            echo "Checking symbols in $LIB"
+            BAD=$(nm -g --defined-only "$LIB" 2>/dev/null \
+                  | awk '$2 == "T" || $2 == "D" || $2 == "S" { print $3 }' \
+                  | grep -Ev '^_?mos_' \
+                  | grep -Ev '^(ltmp|__)' || true)
+            if [ -n "$BAD" ]; then
+              echo "Non-mos_ public symbols found in $libname:"
+              echo "$BAD"
+              exit 1
+            fi
+          done
+          echo "OK: all exported symbols across both archives are mos_-prefixed"
+
+      - name: Verify no orphaned tests
+        # For each tests/test_*.c file that defines TEST() fixtures,
+        # every defined fixture name must also appear in a RUN(name)
+        # invocation within that same file. Catches the class of bug
+        # where a test fixture is defined, compiles, gets included in
+        # the test binary's source list, and silently does nothing
+        # because nothing calls RUN() on it. Surfaced empirically:
+        # tests/test_sense.c::sense_04_04_maps_to_loading shipped in
+        # this state and ran zero times for several iterations.
+        #
+        # The check is per-file, not project-wide: a fixture in
+        # test_sense.c registered from register_sense_tests() should
+        # not need cross-file lookup. Test_main.c is exempt from the
+        # TEST() side because it only calls register functions.
+        run: |
+          set -e
+          FAIL=0
+          for f in tests/test_*.c; do
+            # Skip test_main.c — it dispatches to register functions
+            # but defines no TEST() fixtures itself.
+            if [ "$(basename "$f")" = "test_main.c" ]; then
+              continue
+            fi
+            DEFINED=$(grep -E '^TEST\(' "$f" | sed -E 's/^TEST\(([^)]+)\).*/\1/')
+            if [ -z "$DEFINED" ]; then
+              continue
+            fi
+            for name in $DEFINED; do
+              # RUN() invocations live inside register_*_tests() in
+              # the same file. The match is on the exact RUN(name);
+              # pattern, indented under register_*_tests().
+              if ! grep -qE "[[:space:]]+RUN\($name\);" "$f"; then
+                echo "Orphaned test in $f: TEST($name) defined but not registered with RUN()"
+                FAIL=1
+              fi
+            done
+          done
+          if [ "$FAIL" -eq 1 ]; then
+            echo ""
+            echo "Each TEST() fixture must be invoked by a RUN() call in"
+            echo "the same file's register_*_tests() function. See"
+            echo "tests/test_sense.c::register_sense_tests for the pattern."
+            exit 1
+          fi
+          echo "OK: all TEST() fixtures are registered"
+
+      - name: Amalgamation script produces compilable output
+        run: |
+          ./scripts/amalgamate.sh
+
+          # Committed dist/ must be byte-identical to regeneration. dist/
+          # is the documented embedder artifact, so a stale committed copy
+          # ships wrong code even while CI compiles a fresh one. Untracked
+          # or gitignore-suppressed dist files fail too — the artifact
+          # contract requires them committed.
+          if [ -n "$(git status --porcelain --ignored=matching -- dist/)" ]; then
+            git status --ignored=matching -- dist/
+            git --no-pager diff -- dist/ | head -60
+            echo "ERROR: dist/ is stale or untracked relative to scripts/amalgamate.sh output."
+            echo "Run ./scripts/amalgamate.sh and commit the result."
+            exit 1
+          fi
+          echo "OK: committed dist/ matches regeneration"
+
+          # (a) Compile-only check: source parses and type-checks.
+          # -mmacosx-version-min=12.0 matches the documented direct-consumer
+          # path and what the strict-adapter job pins. Without it here, CI
+          # could silently exercise a different deployment target than what
+          # downstream users will see when following our integration docs.
+          cc -c dist/mos.c -Idist \
+             -mmacosx-version-min=12.0 \
+             -o /tmp/amalgamated.o
+          echo "OK: amalgamated build compiles clean"
+
+          # (b) Link + run the full test suite against the amalgamated
+          # .o, using dist/mos.h as the sole header the test harness
+          # sees. This catches awk-fragility issues (header-collapse
+          # accidents, dropped includes, double-include guards) that
+          # the compile-only check misses.
+          #
+          # Tests reach into src/ for internal prototypes, but the
+          # library contract for external embedders is: `dist/mos.c`
+          # and `dist/mos.h`, plus IOKit/CoreFoundation at link time.
+          # This job exercises that contract.
+          cc -std=c11 -Wall -Wextra -Werror \
+             -Idist -Isrc -Itests \
+             -mmacosx-version-min=12.0 \
+             tests/test_main.c tests/test_sense.c \
+             tests/test_bsd_name.c tests/test_scsi_status.c \
+             tests/test_ioreturn.c \
+             tests/test_state_core.c tests/test_watch_core.c \
+             tests/test_render.c \
+             tests/test_config.c tests/test_discinfo.c \
+             tests/test_result.c \
+             /tmp/amalgamated.o \
+             -framework IOKit -framework CoreFoundation \
+             -framework DiskArbitration \
+             -o /tmp/amalgamated_tests
+          # test_render.c registers the hostile-input render fixtures
+          # via register_render_tests(); test_main.c calls that
+          # registration function unconditionally. Omitting the .c
+          # file fails the link (undefined symbol). Keep this list
+          # in sync with the unit-test target in CMakeLists.txt.
+          /tmp/amalgamated_tests
+          echo "OK: amalgamated test suite passes"
+
+  sanitizers:
+    name: Sanitizer build (ASan + UBSan)
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Configure with sanitizers
+        # -O1 keeps inlining sane for stack traces while still exercising
+        # optimizer-affected paths. -fno-omit-frame-pointer is required
+        # for usable ASan reports. We enable on both compiler and linker
+        # because libasan/libubsan have to be in the link line.
+        run: |
+          cmake -B build-san \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build
+        run: cmake --build build-san --parallel
+
+      - name: Run tests under sanitizers
+        # ASAN_OPTIONS=detect_leaks=0 because Apple's libasan doesn't
+        # ship LSan; setting this avoids a misleading runtime warning
+        # without weakening the actual ASan checks (use-after-free,
+        # heap-buffer-overflow, stack-buffer-overflow, etc.).
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        working-directory: build-san
+        run: ctest --output-on-failure
+
+  lint-homebrew:
+    name: Homebrew formula audit
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: brew style
+        run: brew style homebrew/mos.rb || true
+        # `|| true` until the first tag is pushed and url/sha256 are filled.
+
+  schemas:
+    name: JSON Schema validation
+    # Schema validation is pure Python — no IOKit needed. Runs on
+    # Ubuntu in parallel with the macOS jobs so a schema/emitter
+    # drift fails CI fast without waiting for the build matrix.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: '3.x'
+
+      - name: Install jsonschema (hash-pinned)
+        # --require-hashes refuses to install any package whose downloaded
+        # bytes don't match one of the listed SHA-256 digests. The
+        # requirements file pins jsonschema and every transitive dep.
+        # See schemas/requirements-ci.txt for regeneration steps.
+        run: pip install --require-hashes -r schemas/requirements-ci.txt
+
+      - name: Validate examples and negative fixtures
+        # The script asserts:
+        #   - every schemas/examples/*.json validates against its schema
+        #   - every schemas/negative/*.json is rejected by its schema
+        # Both directions matter — a too-permissive schema would
+        # silently allow drift. See schemas/README.md.
+        run: python3 schemas/validate.py
+
+  nub-invariant:
+    # Exhaustive proof of the ARCHITECTURE §5.5 nub invariant: the real
+    # decision tree vs an independent kernel predicate transcribed from
+    # PollForMedia. MOS_NUB_STATUS_SET=1 restricts the status loop to
+    # the behaviorally-distinct SAM-5 set (the input PATH is identical;
+    # only the redundant status octets are skipped) so the job stays
+    # fast; the full 268M-input run is the documented one-liner in
+    # tests/audit/nub_invariant_check.c. Exit 1 = invariant violated;
+    # exit 2 = the checker's own transcription is stale (fix the
+    # checker, then re-judge).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build and run nub invariant checker
+        run: |
+          set -e
+          cc -std=c11 -O2 -I include -I src \
+             tests/audit/nub_invariant_check.c \
+             src/mos_pure.c src/mos_sense.c src/mos_strings.c \
+             src/mos_state_core.c src/mos_watch_core.c \
+             src/mos_config.c src/mos_discinfo.c src/mos_result.c \
+             -o /tmp/nub
+          MOS_NUB_STATUS_SET=1 /tmp/nub
+
+  strict-pure-build:
+    # The default CMake build uses -Wall -Wextra -Wpedantic at the
+    # warning level the project considers reasonable for ongoing
+    # development. This job runs the same pure-layer sources under
+    # release-grade optimization (-O2) with stricter -Werror flags
+    # that catch class-of-bug issues the development settings let
+    # through — most notably -Wformat-truncation, which under -O2's
+    # value-range analysis surfaces snprintf-into-fixed-buffer
+    # patterns that could theoretically overflow.
+    #
+    # A regression added in v0.3-dev was caught by this exact
+    # invocation, well after the change landed under the default
+    # warning level. Codifying it as a CI step prevents the same
+    # gap from reopening silently.
+    name: Strict pure build (-O2 -Werror, Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Build pure tests under -O2 -Werror
+        run: |
+          set -e
+          mkdir -p /tmp/strict
+          # -Wshadow -Wconversion -Wsign-conversion: the third review
+          # verified the pure layer clean under these (rare for C);
+          # the gate owns the property so it stays true. -fanalyzer is
+          # deliberately NOT here — version-dependent false positives
+          # make it a human tool, not a gate.
+          cc -std=c11 -O2 -Wall -Wextra -Wpedantic \
+             -Wshadow -Wconversion -Wsign-conversion -Werror \
+             -I include -I src -I tests \
+             src/mos_pure.c src/mos_sense.c src/mos_strings.c \
+             src/mos_state_core.c src/mos_watch_core.c \
+             src/mos_config.c src/mos_discinfo.c src/mos_result.c \
+             cli/human.c \
+             tests/test_main.c tests/test_sense.c tests/test_bsd_name.c \
+             tests/test_scsi_status.c tests/test_ioreturn.c \
+             tests/test_state_core.c tests/test_watch_core.c \
+             tests/test_render.c tests/test_human.c \
+             tests/test_config.c tests/test_discinfo.c tests/test_result.c \
+             -o /tmp/strict/mos_tests_strict
+          /tmp/strict/mos_tests_strict
+
+  strict-adapter-build:
+    # macOS adapter TUs compiled with stricter -Werror flags than the
+    # default CMake mos_warnings interface. As of v0.3.1-dev the list
+    # is: src/mos_scsi.c, src/mos_watch.c, src/mos_state.c, the cli/ sources,
+    # tools/mos_probe.c, tools/mos_notification_probe.c.
+    # The extra
+    # flags target classes of bug that Linux CI can never see because
+    # they involve Apple SDK signatures:
+    #
+    #   -Werror=incompatible-function-pointer-types
+    #     Apple changes a callback signature in a future SDK
+    #     release (e.g. an extra parameter on DA's
+    #     DARegisterDiskDescriptionChangedCallback). Our
+    #     registration call would compile with a warning under
+    #     default settings; this promotes it to an error.
+    #
+    #   -Werror=int-conversion
+    #     A newer header silently narrows a kIO* constant or a
+    #     mach_port_t variant. Default warnings catch most of
+    #     this but -Werror makes it loud.
+    #
+    #   -Werror=return-type
+    #     Defensive — function that drops a `return` under
+    #     conditional-compile of an updated header should fail
+    #     the build, not silently return whatever's in the
+    #     register.
+    #
+    # Pinned to -mmacosx-version-min=12.0 to match the CMake
+    # CMAKE_OSX_DEPLOYMENT_TARGET, so the compile sees exactly
+    # the SDK shape the release build uses.
+    name: Strict adapter build (-Werror SDK drift, macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Compile macOS adapter TUs with stricter -Werror
+        run: |
+          set -e
+          mkdir -p /tmp/strict-adapter
+          for src in src/mos_scsi.c src/mos_watch.c src/mos_state.c \
+                     cli/main.c cli/common.c cli/status.c cli/list.c \
+                     cli/watch.c cli/human.c cli/io.c \
+                     tools/mos_probe.c tools/mos_notification_probe.c \
+                     tests/test_watch_lifetime.c; do
+            obj="/tmp/strict-adapter/$(basename "$src" .c).o"
+            echo "--- $src ---"
+            cc -std=c11 -Wall -Wextra -Wpedantic \
+               -Werror=implicit-function-declaration \
+               -Werror=incompatible-function-pointer-types \
+               -Werror=int-conversion \
+               -Werror=return-type \
+               -mmacosx-version-min=12.0 \
+               -I include -I src \
+               -c "$src" -o "$obj"
+          done
+
+  doc-staleness:
+    # Tripwire for documentation drift. The 2026-06-10 audit found the
+    # machine-checked layer fully consistent while prose docs lagged the
+    # 2026-05-30 redesign in ~15 places; this job is the missing forcing
+    # function. Deny-list semantics documented in the script.
+    name: Doc staleness gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Grep live docs for known-stale markers
+        run: sh scripts/doc-staleness.sh
+
+  fuzz-pure:
+    # Run the pure-layer fuzz harness under ASan+UBSan on Linux. The
+    # harness links mos_pure only (no IOKit), so it builds and runs here.
+    # Iteration counts are kept to a CI smoke via the MOS_FUZZ_* env knobs;
+    # a finding aborts the process (-fno-sanitize-recover=all) and fails
+    # the job. A fixed seed keeps failures reproducible. Previously this
+    # harness existed only as a hand-run binary the build graph didn't
+    # know about; this job puts it under CI.
+    name: Fuzz pure layer (ASan+UBSan, Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Build and run fuzz_pure (smoke)
+        env:
+          MOS_FUZZ_SENSE: "300000"
+          MOS_FUZZ_ESC: "120000"
+          MOS_FUZZ_BSD: "300000"
+          MOS_FUZZ_CFG: "120000"
+          MOS_FUZZ_DISCINFO: "120000"
+          MOS_FUZZ_TRUST: "120000"
+          MOS_FUZZ_TOC: "120000"
+          ASAN_OPTIONS: "abort_on_error=1"
+          UBSAN_OPTIONS: "halt_on_error=1"
+        run: |
+          set -e
+          cmake -B build-fuzz -DMOS_BUILD_FUZZ=ON -DMOS_BUILD_TESTS=OFF \
+            -DCMAKE_C_FLAGS="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build-fuzz --target fuzz_pure
+          # Fixed seed for reproducibility; a finding aborts and fails CI.
+          ./build-fuzz/bin/fuzz_pure 1

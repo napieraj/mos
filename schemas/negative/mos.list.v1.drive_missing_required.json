@@ -1,0 +1,9 @@
+{
+  "schema": "mos.list.v1",
+  "drives": [
+    {
+      "vendor": "HL-DT-ST",
+      "product": "BD-RE BH16NS55"
+    }
+  ]
+}

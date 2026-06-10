@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/napieraj/mos/schemas/mos.list.v1.json",
+  "title": "mos.list.v1",
+  "description": "Enumeration envelope emitted by `mos --list --json` (and `mos list --json`). The drives array may be empty (CI runners, hosts with no optical drives); empty array is success, not failure.",
+  "type": "object",
+  "required": [
+    "schema",
+    "drives"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "mos.list.v1"
+    },
+    "drives": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "index",
+          "state",
+          "bsd",
+          "registry_id",
+          "vendor",
+          "product",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "state": {
+            "enum": [
+              "unknown",
+              "empty_or_open",
+              "empty",
+              "open",
+              "loading",
+              "ready",
+              "busy",
+              "formatting",
+              "media_unreadable",
+              "device_fault",
+              "error"
+            ]
+          },
+          "volume_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bsd": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^/dev/disk[0-9]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "registry_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "vendor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "product": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
