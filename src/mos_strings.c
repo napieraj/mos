@@ -24,6 +24,19 @@ const char *mos_state_description(mos_state_enum s)
     }
 }
 
+const char *mos_disc_status_description(mos_disc_status s)
+{
+    switch (s) {
+        case MOS_DISC_BLANK:          return "blank";
+        case MOS_DISC_APPENDABLE:     return "appendable";
+        case MOS_DISC_COMPLETE:       return "complete";
+        /* OTHER doubles as the out-of-enum fallback, same pinned-
+           coverage style as mos_state_description: -Wswitch still
+           fires when a new enumerator appears. */
+        case MOS_DISC_OTHER: default: return "other";
+    }
+}
+
 const char *mos_error_description(mos_error e)
 {
     switch (e) {

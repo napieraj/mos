@@ -106,7 +106,11 @@ SURVIVES at open — it is the only source of the media_id (F1) swap
 fingerprint, which DR has no key for. The text below is the pre-pivot
 plan, preserved as the decision record.*
 
-**Media info (drutil-parity + volume name).** Staged per
+**Media info (drutil-parity + volume name).** *(Progress 2026-06-10:
+the ReadDiscInformation half shipped as the typed C API —
+`mos_query_disc_info()` + accessors, built to the committed fixtures,
+on-demand only, never the state path. The metadata/drive JSON
+documents and volume-name work below remain open.)* Staged per
 `doc/research/2026-06-10-media-info-design.md`: stage 0 (media_class
 from the already-fetched profile + the ISO9660 PVD parser) is SHIPPED;
 stage 1 wires `ReadDiscInformation` (decoder already exists) + the DA

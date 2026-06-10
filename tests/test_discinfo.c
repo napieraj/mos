@@ -11,6 +11,8 @@
 #include "../src/mos_pure.h"
 #include "mos.h"
 
+#include <string.h>
+
 /* Fixture A — blank CD-R. byte 2 = 0x00; bytes 16..23 carry ATIP-derived
    MSF lead-in 97:24:01 / lead-out 79:59:74 (a blank recordable disc has
    valid addresses, unlike a finalized one). */
@@ -129,8 +131,55 @@ TEST(discinfo_null_args_are_safe)
     return 0;
 }
 
+/* v0.4 typed-accessor surface: the public read path over the decoded
+   struct, exercised on the same fixture pair the decoder is built to,
+   plus NULL tolerance (every result accessor's contract) and the
+   description tokens. */
+TEST(discinfo_accessors_read_fixture_fields)
+{
+    mos_disc_info di;
+    EXPECT(mos_internal_disc_info_parse(rdi_complete_cdrom,
+                                        sizeof rdi_complete_cdrom, &di));
+    EXPECT_EQ(MOS_DISC_COMPLETE, mos_disc_info_status(&di));
+    EXPECT_EQ(3,                 mos_disc_info_last_session_state(&di));
+    EXPECT_EQ(false,             mos_disc_info_erasable(&di));
+    EXPECT_EQ(1,                 mos_disc_info_first_track(&di));
+    EXPECT_EQ(1,                 mos_disc_info_session_count(&di));
+    EXPECT_EQ(1,                 mos_disc_info_first_track_last_session(&di));
+    EXPECT_EQ(1,                 mos_disc_info_last_track_last_session(&di));
+    return 0;
+}
+
+TEST(discinfo_accessors_null_tolerant)
+{
+    EXPECT_EQ(MOS_DISC_OTHER, mos_disc_info_status(NULL));
+    EXPECT_EQ(false,          mos_disc_info_erasable(NULL));
+    EXPECT_EQ(0,              mos_disc_info_first_track(NULL));
+    EXPECT_EQ(0,              mos_disc_info_session_count(NULL));
+    EXPECT_EQ(0,              mos_disc_info_first_track_last_session(NULL));
+    EXPECT_EQ(0,              mos_disc_info_last_track_last_session(NULL));
+    EXPECT_EQ(0,              mos_disc_info_last_session_state(NULL));
+    return 0;
+}
+
+TEST(discinfo_status_description_tokens)
+{
+    EXPECT(strcmp(mos_disc_status_description(MOS_DISC_BLANK),
+                  "blank") == 0);
+    EXPECT(strcmp(mos_disc_status_description(MOS_DISC_APPENDABLE),
+                  "appendable") == 0);
+    EXPECT(strcmp(mos_disc_status_description(MOS_DISC_COMPLETE),
+                  "complete") == 0);
+    EXPECT(strcmp(mos_disc_status_description(MOS_DISC_OTHER),
+                  "other") == 0);
+    return 0;
+}
+
 void register_discinfo_tests(void)
 {
+    RUN(discinfo_accessors_read_fixture_fields);
+    RUN(discinfo_accessors_null_tolerant);
+    RUN(discinfo_status_description_tokens);
     RUN(discinfo_blank_cdr_decodes_blank);
     RUN(discinfo_complete_cdrom_decodes_complete);
     RUN(discinfo_status_is_byte2_low_two_bits);

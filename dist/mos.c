@@ -306,14 +306,11 @@ bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
  * Blank one has nothing to rip. byte 2 carries the status, last-session, and
  * erasable bits; the session/track counts are split LSB/MSB across the fixed
  * header (bytes 4..11). */
-typedef enum {
-    MOS_DISC_BLANK      = 0,  /* byte 2 bits 1:0 = 00b — empty recordable    */
-    MOS_DISC_APPENDABLE = 1,  /*                  01b — incomplete, writable */
-    MOS_DISC_COMPLETE   = 2,  /*                  10b — finalized            */
-    MOS_DISC_OTHER      = 3,  /*                  11b — reserved/other       */
-} mos_disc_status;
-
-typedef struct {
+/* mos_disc_status (the enum) is public — defined in mos.h with the
+   other ABI-pinned enums; the v0.4 typed accessor surfaces it. The
+   struct layout below stays internal (mos.h sees only the opaque
+   typedef; accessors in mos_result.c are the supported read path). */
+struct mos_disc_info {
     mos_disc_status status;              /* byte 2, bits 1:0 */
     uint8_t  last_session_state;         /* byte 2, bits 3:2: 0 empty,
                                             1 incomplete, 2 damaged, 3 complete */
@@ -322,7 +319,7 @@ typedef struct {
     uint16_t number_of_sessions;         /* byte 9 (MSB) : byte 4 (LSB) */
     uint16_t first_track_last_session;   /* byte 10 : byte 5 */
     uint16_t last_track_last_session;    /* byte 11 : byte 6 */
-} mos_disc_info;
+};
 
 /* Decode a READ DISC INFORMATION (0x51, data type 000b) response. `buf`/`len`
  * are the response and the byte count you trust. Fills *out and returns true
@@ -707,6 +704,10 @@ struct mos_handle {
        mos_query_state. Overwritten each query; its string fields point
        into the *_str buffers above. */
     mos_state_result          result;
+
+    /* Handle-owned disc-information result (mos_query_disc_info).
+       Overwritten each query; plain values, no borrowed pointers. */
+    struct mos_disc_info      disc_info;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
@@ -1541,6 +1542,43 @@ mos_error mos_watch_event_error(const mos_watch_event *e)
 uint32_t mos_watch_event_latency_ms(const mos_watch_event *e)
 {
     return e ? e->latency_ms : 0;
+}
+
+/* ---- mos_disc_info -------------------------------------------------- */
+
+mos_disc_status mos_disc_info_status(const mos_disc_info *d)
+{
+    return d ? d->status : MOS_DISC_OTHER;
+}
+
+bool mos_disc_info_erasable(const mos_disc_info *d)
+{
+    return d ? d->erasable : false;
+}
+
+uint8_t mos_disc_info_first_track(const mos_disc_info *d)
+{
+    return d ? d->first_track_on_disc : 0;
+}
+
+uint16_t mos_disc_info_session_count(const mos_disc_info *d)
+{
+    return d ? d->number_of_sessions : 0;
+}
+
+uint16_t mos_disc_info_first_track_last_session(const mos_disc_info *d)
+{
+    return d ? d->first_track_last_session : 0;
+}
+
+uint16_t mos_disc_info_last_track_last_session(const mos_disc_info *d)
+{
+    return d ? d->last_track_last_session : 0;
+}
+
+uint8_t mos_disc_info_last_session_state(const mos_disc_info *d)
+{
+    return d ? d->last_session_state : 0;
 }
 
 /* ==== src/mos_state_core.c ==== */
@@ -3401,6 +3439,19 @@ const char *mos_state_description(mos_state_enum s)
     }
 }
 
+const char *mos_disc_status_description(mos_disc_status s)
+{
+    switch (s) {
+        case MOS_DISC_BLANK:          return "blank";
+        case MOS_DISC_APPENDABLE:     return "appendable";
+        case MOS_DISC_COMPLETE:       return "complete";
+        /* OTHER doubles as the out-of-enum fallback, same pinned-
+           coverage style as mos_state_description: -Wswitch still
+           fires when a new enumerator appears. */
+        case MOS_DISC_OTHER: default: return "other";
+    }
+}
+
 const char *mos_error_description(mos_error e)
 {
     switch (e) {
@@ -4467,6 +4518,44 @@ mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profil
         return MOS_ERR_IO;          /* truncated/short reply — enrichment skips it */
     }
     *profile = parsed;
+    return MOS_OK;
+}
+
+mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* 34 bytes = the MMC standard response's fixed numeric region plus
+       the lead-in/lead-out address fields — the exact shape of the
+       committed fixtures (tests/fixtures/readdiscinfo_*.bin), which the
+       pure decoder is built to. The convenience method reports no
+       realized count, so sizeof buf is the trusted length (dual-length
+       rule O-4); the reply's own Disc Information Length can only
+       shrink the decode, never extend it. Convenience = non-exclusive:
+       no lock interaction, safe at any state. */
+    uint8_t         buf[34] = {0};
+    SCSITaskStatus  st      = 0;
+    SCSI_Sense_Data sd      = {0};
+
+    IOReturn rc = (*h->mmc)->ReadDiscInformation(
+        h->mmc, buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        /* Same convention as get_current_profile above: transport
+           failures map their IOReturn; a command that reached the
+           drive but returned no usable data (no medium, units that
+           reject 0x51) is MOS_ERR_IO — out-of-band, so it can never
+           masquerade as a real all-zero disc-info answer. */
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_disc_info_parse(buf, sizeof(buf), &h->disc_info)) {
+        return MOS_ERR_IO;   /* truncated/short reply — refused whole */
+    }
+    *out = &h->disc_info;
     return MOS_OK;
 }
 

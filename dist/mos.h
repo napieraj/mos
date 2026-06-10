@@ -145,6 +145,25 @@ _Static_assert(sizeof(mos_xfer_dir) == sizeof(int32_t),
                "see mos_error width pin earlier in this file.");
 #endif
 
+/* READ DISC INFORMATION disc status (MMC-6 0x51 byte 2, bits 1:0) —
+   the disc-completion signal a blank-vs-finalized decision needs. */
+typedef enum {
+    MOS_DISC_BLANK      = 0,  /* empty recordable                  */
+    MOS_DISC_APPENDABLE = 1,  /* incomplete session, writable      */
+    MOS_DISC_COMPLETE   = 2,  /* finalized                         */
+    MOS_DISC_OTHER      = 3,  /* reserved/other (random-recordable) */
+} mos_disc_status;
+
+/* ABI-width pin — same FFI rationale as the enums above. */
+#if defined(__cplusplus)
+static_assert(sizeof(mos_disc_status) == sizeof(int32_t),
+              "mos_disc_status must be int32_t-wide for ABI stability");
+#else
+_Static_assert(sizeof(mos_disc_status) == sizeof(int32_t),
+               "mos_disc_status must be int32_t-wide for ABI stability — "
+               "see mos_error width pin earlier in this file.");
+#endif
+
 /* ---- Query result struct -------------------------------------------- */
 
 /*
@@ -298,6 +317,46 @@ int64_t mos_handle_bsd_unit(const mos_handle_t *h);
  * or mos_close(h). Copy out anything you need to keep.
  */
 mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out);
+
+/* ---- Disc information (v0.4 typed API) ------------------------------- */
+
+/* Result of a disc-information query. Opaque on the same terms as
+   mos_state_result: handle-owned, read through the accessors, valid
+   until the next mos_query_disc_info() call or mos_close(). */
+typedef struct mos_disc_info mos_disc_info;
+
+/*
+ * Query READ DISC INFORMATION (MMC 0x51) — the disc-completion signal:
+ * blank vs appendable vs finalized, plus session/track counts. Issued
+ * on demand through the non-exclusive convenience method; never part
+ * of the default state path (no state decision needs it), so calling
+ * this costs exactly one MMC command.
+ *
+ * Meaningful only with media present and the unit ready: with no disc
+ * (or a non-recordable unit that rejects 0x51) the drive fails the
+ * command and this returns MOS_ERR_IO — query state first if you need
+ * to distinguish "no disc" from "drive unreachable". On success
+ * returns MOS_OK and points *out at a handle-owned result; on failure
+ * returns a negative code and sets *out to NULL (when out is non-NULL).
+ */
+mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out);
+
+/* Accessors. NULL-tolerant like every result accessor: a NULL object
+   reads as MOS_DISC_OTHER / false / 0. */
+mos_disc_status mos_disc_info_status(const mos_disc_info *d);
+bool            mos_disc_info_erasable(const mos_disc_info *d);
+uint8_t         mos_disc_info_first_track(const mos_disc_info *d);
+uint16_t        mos_disc_info_session_count(const mos_disc_info *d);
+uint16_t        mos_disc_info_first_track_last_session(const mos_disc_info *d);
+uint16_t        mos_disc_info_last_track_last_session(const mos_disc_info *d);
+/* State of Last Session, raw (byte 2 bits 3:2): 0 empty, 1 incomplete,
+   2 damaged, 3 complete. Raw on purpose — four values, no semantics
+   mos adds; an enum here would be ceremony. */
+uint8_t         mos_disc_info_last_session_state(const mos_disc_info *d);
+
+/* "blank" / "appendable" / "complete" / "other". Stable lowercase
+   tokens, same contract as mos_state_description(). */
+const char     *mos_disc_status_description(mos_disc_status s);
 
 /*
  * Diagnostic: issue a raw CDB against the drive. Requires exclusive

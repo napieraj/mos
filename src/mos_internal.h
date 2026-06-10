@@ -48,6 +48,10 @@ struct mos_handle {
        mos_query_state. Overwritten each query; its string fields point
        into the *_str buffers above. */
     mos_state_result          result;
+
+    /* Handle-owned disc-information result (mos_query_disc_info).
+       Overwritten each query; plain values, no borrowed pointers. */
+    struct mos_disc_info      disc_info;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
