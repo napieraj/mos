@@ -20,6 +20,13 @@
  *     NULL cells render "-".
  *   - All strings are emitted verbatim — vocabulary, including enum
  *     values, is the caller's contract with the schemas.
+ *
+ * SANITIZATION CONTRACT: this is a LAYOUT engine — keys, values, and
+ * cells are printed verbatim (fputs). Any drive-controlled bytes
+ * (identity strings) must arrive pre-escaped; the sanitization sites
+ * are cli/status.c emit_human and cli/common.c query_row, both via
+ * mos_safe_ascii. Library-controlled vocabulary (state names, profile
+ * names, formatted units/ids) is printable ASCII by construction.
  */
 #ifndef MOS_CLI_HUMAN_H
 #define MOS_CLI_HUMAN_H

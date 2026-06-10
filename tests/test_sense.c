@@ -368,8 +368,41 @@ TEST(gesn_null_args_are_safe)
 
 /* ---- Entry point registered from test_main.c --------------------------- */
 
+
+TEST(deferred_fixed_format_0x71_uses_fixed_offsets)
+{
+    uint8_t s[18] = {0};
+    s[0]  = 0x71;           /* fixed format, DEFERRED variant */
+    s[2]  = 0x03;
+    s[12] = 0x11;
+    s[13] = 0x05;
+    uint8_t sk, asc, ascq;
+    mos_internal_parse_sense(s, &sk, &asc, &ascq);
+    EXPECT_EQ(sk,   0x03);
+    EXPECT_EQ(asc,  0x11);
+    EXPECT_EQ(ascq, 0x05);
+    return 0;
+}
+
+TEST(deferred_descriptor_format_0x73_uses_descriptor_offsets)
+{
+    uint8_t s[18] = {0};
+    s[0] = 0x73;            /* descriptor format, DEFERRED variant */
+    s[1] = 0x04;            /* sense key in byte 1 low nibble */
+    s[2] = 0x44;            /* ASC at byte 2 */
+    s[3] = 0x00;            /* ASCQ at byte 3 */
+    uint8_t sk, asc, ascq;
+    mos_internal_parse_sense(s, &sk, &asc, &ascq);
+    EXPECT_EQ(sk,   0x04);
+    EXPECT_EQ(asc,  0x44);
+    EXPECT_EQ(ascq, 0x00);
+    return 0;
+}
+
 void register_sense_tests(void)
 {
+    RUN(deferred_fixed_format_0x71_uses_fixed_offsets);
+    RUN(deferred_descriptor_format_0x73_uses_descriptor_offsets);
     RUN(fixed_format_key_asc_ascq_extraction);
     RUN(fixed_format_masks_valid_bit_in_response_code);
     RUN(fixed_format_masks_lower_nibble_of_sense_key);

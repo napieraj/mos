@@ -615,8 +615,11 @@ void mos_internal_watch_notify_wake(mos_watch_state *w);
 typedef struct {
     mos_watch_state cores[MOS_WATCH_ALL_CAP];
     bool            active[MOS_WATCH_ALL_CAP];
-    /* Slot joined after the stream opened: its first event (the core's
-       snapshot) is relabeled MOS_EVENT_DEVICE_APPEARED, then cleared. */
+    /* Slot joined after the stream opened: its first SNAPSHOT is
+       relabeled MOS_EVENT_DEVICE_APPEARED, then the flag clears.
+       Earlier ERROR events (probe failing right after hot-plug) do
+       NOT consume the join — the announcement waits for the first
+       successful probe. */
     bool            join_pending[MOS_WATCH_ALL_CAP];
     uint64_t        seq;   /* stream-global; overrides per-core seq */
 } mos_watch_all_state;
@@ -2332,11 +2335,17 @@ mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
 
         if (d.kind == MOS_WATCH_DECIDE_EMIT_EVENT) {
             d.event.seq = ++a->seq;            /* stream-global numbering */
-            if (a->join_pending[best]) {
-                if (d.event.kind == MOS_EVENT_SNAPSHOT) {
-                    d.event.kind = MOS_EVENT_DEVICE_APPEARED;
-                }
-                a->join_pending[best] = false; /* first event only */
+            /* Relabel the join's SNAPSHOT — and only the snapshot. A
+               mid-stream device whose first pumps yield ERROR events
+               (probe failing right after hot-plug) keeps its pending
+               join, so the eventual first successful probe still
+               announces it as device_appeared; clearing on any first
+               event would silently demote it to a mid-stream snapshot
+               (contract: every joining drive emits device_appeared). */
+            if (a->join_pending[best] &&
+                d.event.kind == MOS_EVENT_SNAPSHOT) {
+                d.event.kind = MOS_EVENT_DEVICE_APPEARED;
+                a->join_pending[best] = false;
             }
             if (d.event.kind == MOS_EVENT_DEVICE_REMOVED) {
                 /* Per-slot, not stream-terminal: free the slot AFTER
@@ -4176,6 +4185,11 @@ static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
         CFUUIDGetUUIDBytes(kIOMMCDeviceInterfaceID),
         (LPVOID *)&h->mmc);
     if (hr != S_OK || !h->mmc) {
+        /* COM contract says a failed QueryInterface leaves the out
+           pointer untouched (it's calloc-NULL here); NULL it anyway so
+           mos_close can never Release a garbage value if an Apple
+           plug-in ever violates that contract. */
+        h->mmc = NULL;
         if (err) *err = MOS_ERR_DRIVER_REJECTED;
         mos_close(h);
         return NULL;
@@ -4615,7 +4629,7 @@ mos_error mos_raw_cdb(mos_handle_t *h,
        kSCSICDBSize_* in SCSITask.h). Reject other lengths at the API
        boundary so callers get MOS_ERR_INVALID_ARG instead of an opaque
        execute-time failure. */
-    if (!h || !cdb || !scsi_task_status || !sense)
+    if (!h || !h->mmc || !cdb || !scsi_task_status || !sense)
         return MOS_ERR_INVALID_ARG;
     if (cdb_len != 6 && cdb_len != 10 && cdb_len != 12 && cdb_len != 16)
         return MOS_ERR_INVALID_ARG;
@@ -4658,8 +4672,11 @@ mos_error mos_raw_cdb(mos_handle_t *h,
 
     SCSITaskInterface **t = (*h->std)->CreateSCSITask(h->std);
     if (!t) {
-        /* Release the lock we just acquired — we can't make forward
-           progress with this task and holding it serves no purpose. */
+        /* Release the lock — by the function's invariant it was
+           acquired above (every exit path below clears have_exclusive,
+           so it is always false on entry; the conditional acquire
+           exists for that documented invariant, not for a held-lock
+           entry case). Holding it serves no purpose without a task. */
         (*h->std)->ReleaseExclusiveAccess(h->std);
         h->have_exclusive = false;
         return MOS_ERR_IO;

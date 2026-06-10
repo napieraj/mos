@@ -571,11 +571,17 @@ mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
 
         if (d.kind == MOS_WATCH_DECIDE_EMIT_EVENT) {
             d.event.seq = ++a->seq;            /* stream-global numbering */
-            if (a->join_pending[best]) {
-                if (d.event.kind == MOS_EVENT_SNAPSHOT) {
-                    d.event.kind = MOS_EVENT_DEVICE_APPEARED;
-                }
-                a->join_pending[best] = false; /* first event only */
+            /* Relabel the join's SNAPSHOT — and only the snapshot. A
+               mid-stream device whose first pumps yield ERROR events
+               (probe failing right after hot-plug) keeps its pending
+               join, so the eventual first successful probe still
+               announces it as device_appeared; clearing on any first
+               event would silently demote it to a mid-stream snapshot
+               (contract: every joining drive emits device_appeared). */
+            if (a->join_pending[best] &&
+                d.event.kind == MOS_EVENT_SNAPSHOT) {
+                d.event.kind = MOS_EVENT_DEVICE_APPEARED;
+                a->join_pending[best] = false;
             }
             if (d.event.kind == MOS_EVENT_DEVICE_REMOVED) {
                 /* Per-slot, not stream-terminal: free the slot AFTER

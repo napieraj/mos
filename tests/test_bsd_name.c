@@ -223,8 +223,24 @@ TEST(bsd_name_format_rejects_null_buffer)
     return 0;
 }
 
+
+TEST(leading_zero_units_parse_numerically)
+{
+    /* Pin, don't change: "disk04" parses as unit 4 (digits read
+       numerically), and the canonical render is "disk4" — the
+       round-trip normalizes, it does not preserve the spelling. */
+    EXPECT_EQ(4, (int)mos_internal_parse_bsd_unit("disk04"));
+    EXPECT_EQ(0, (int)mos_internal_parse_bsd_unit("disk000"));
+    char buf[16];
+    EXPECT(mos_bsd_name_format(mos_internal_parse_bsd_unit("disk04"),
+                               buf, sizeof buf));
+    EXPECT(strcmp(buf, "disk4") == 0);
+    return 0;
+}
+
 void register_bsd_name_tests(void)
 {
+    RUN(leading_zero_units_parse_numerically);
     RUN(plain_diskN_passes_through);
     RUN(rdiskN_strips_leading_r);
     RUN(dev_diskN_strips_dev_prefix);

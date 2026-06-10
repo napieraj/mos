@@ -466,8 +466,32 @@ TEST(config_profile_null_args_are_safe)
     return 0;
 }
 
+
+TEST(config_payload_ending_exactly_at_span_is_accepted)
+{
+    /* One descriptor whose Additional Length lands the cursor exactly
+       on the declared span — the inclusive boundary the walker's
+       bounds arithmetic must accept (one byte more is the existing
+       rejection tests' territory). Header Data Length counts bytes
+       AFTER itself: 16 total - 4 = 12; descriptor add-len = 4, so the
+       descriptor's span ends exactly at the trusted end. */
+    uint8_t buf[] = {
+        0,0,0,12,  0,0, 0,0,
+        0x00,0x1E, 0x01, 0x04,  0xDE,0xAD,0xBE,0xEF,
+    };
+    size_t cur = 8; mos_config_feature f;
+    EXPECT(mos_internal_config_next_feature(buf, sizeof buf, &cur, &f));
+    EXPECT(f.feature_code == 0x001E);
+    EXPECT(f.data_len == 4);
+    EXPECT(f.data != NULL && f.data[0] == 0xDE && f.data[3] == 0xEF);
+    /* Exactly consumed: the walk ends cleanly, no further feature. */
+    EXPECT(!mos_internal_config_next_feature(buf, sizeof buf, &cur, &f));
+    return 0;
+}
+
 void register_config_tests(void)
 {
+    RUN(config_payload_ending_exactly_at_span_is_accepted);
     RUN(config_walks_real_dvdrom_profile_list);
     RUN(config_walks_two_well_formed_features);
     RUN(config_feature_with_payload_exposes_bounded_slice);

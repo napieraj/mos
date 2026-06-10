@@ -1343,6 +1343,97 @@ TEST(all_add_dedupes_and_caps)
     return 0;
 }
 
+
+TEST(all_error_first_join_still_announces_device_appeared)
+{
+    /* A hot-plugged drive whose probe fails right after Appeared must
+       still announce itself: ERROR events do not consume the pending
+       join — the first successful probe's snapshot is relabeled. */
+    fake_watch_ctx c;
+    init_default(&c, 1000);
+    c.probe_err[0]   = MOS_ERR_IO;       /* first probe fails */
+    c.probe_state[0] = MOS_STATE_UNKNOWN;
+    c.probe_err[1]   = MOS_OK;           /* then the drive answers */
+    c.probe_state[1] = MOS_STATE_OPEN;
+    c.probe_count    = 2;
+
+    mos_watch_all_state a;
+    mos_internal_watch_all_init(&a);
+    EXPECT(mos_internal_watch_all_add(&a, &fake_ops, &c, -1, 300,
+                                      1000, 1000, 2000, 200, true) >= 0);
+
+    mos_watch_decision d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT, d.kind);
+    EXPECT_EQ(MOS_EVENT_ERROR, d.event.kind);
+    EXPECT_EQ(1, (int)d.event.seq);
+
+    mos_internal_watch_notify_wake(
+        &a.cores[mos_internal_watch_all_find(&a, 300)]);
+    d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT, d.kind);
+    EXPECT_EQ(MOS_EVENT_DEVICE_APPEARED, d.event.kind);
+    EXPECT_EQ(MOS_STATE_OPEN, d.event.state);
+    EXPECT_EQ(2, (int)d.event.seq);
+    return 0;
+}
+
+TEST(all_last_device_removed_stream_stays_open)
+{
+    /* Removing the only device must NOT terminate the stream: the slot
+       frees, the next pump sleeps unbounded (an empty bus waits for
+       arrivals), and the id is no longer findable. */
+    fake_watch_ctx c;
+    init_default(&c, 1000);
+    c.probe_err[0]   = MOS_ERR_NO_DEVICE;
+    c.probe_state[0] = MOS_STATE_UNKNOWN;
+    c.probe_count    = 1;
+
+    mos_watch_all_state a;
+    mos_internal_watch_all_init(&a);
+    EXPECT(mos_internal_watch_all_add(&a, &fake_ops, &c, 4, 100,
+                                      1000, 1000, 2000, 200, false) >= 0);
+
+    mos_watch_decision d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT, d.kind);
+    EXPECT_EQ(MOS_EVENT_DEVICE_REMOVED, d.event.kind);
+
+    EXPECT_EQ(-1, mos_internal_watch_all_find(&a, 100));
+    d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_WATCH_DECIDE_SLEEP_UNTIL, d.kind);
+    EXPECT(d.next_poll_at_mono_ms == UINT64_MAX);
+    return 0;
+}
+
+TEST(all_sleep_folds_earliest_deadline_across_rates)
+{
+    /* Two stable devices with DIFFERENT stable rates: the folded
+       deadline must be the earlier one (min), not the later. */
+    fake_watch_ctx c1, c2;
+    init_default(&c1, 1000);
+    init_default(&c2, 1000);
+    c1.probe_state[0] = MOS_STATE_READY; c1.probe_err[0] = MOS_OK; c1.probe_count = 1;
+    c2.probe_state[0] = MOS_STATE_READY; c2.probe_err[0] = MOS_OK; c2.probe_count = 1;
+
+    mos_watch_all_state a;
+    mos_internal_watch_all_init(&a);
+    EXPECT(mos_internal_watch_all_add(&a, &fake_ops, &c1, 4, 100,
+                                      1000, 1000, /*stable=*/2000, 200,
+                                      false) >= 0);
+    EXPECT(mos_internal_watch_all_add(&a, &fake_ops, &c2, 5, 200,
+                                      1000, 1000, /*stable=*/500, 200,
+                                      false) >= 0);
+
+    /* Drain both snapshots, then the fold: min(1000+500, 1000+2000). */
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT,
+              mos_internal_watch_all_pump(&a).kind);
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT,
+              mos_internal_watch_all_pump(&a).kind);
+    mos_watch_decision d = mos_internal_watch_all_pump(&a);
+    EXPECT_EQ(MOS_WATCH_DECIDE_SLEEP_UNTIL, d.kind);
+    EXPECT_EQ(1500, (int)d.next_poll_at_mono_ms);
+    return 0;
+}
+
 void register_watch_core_tests(void);
 void register_watch_core_tests(void)
 {
@@ -1351,6 +1442,9 @@ void register_watch_core_tests(void)
     RUN(all_mid_stream_join_relabels_first_event_only);
     RUN(all_device_removed_is_per_slot_not_terminal);
     RUN(all_add_dedupes_and_caps);
+    RUN(all_error_first_join_still_announces_device_appeared);
+    RUN(all_last_device_removed_stream_stays_open);
+    RUN(all_sleep_folds_earliest_deadline_across_rates);
     RUN(test_snapshot_emitted_on_first_pump);
     RUN(test_zero_registry_id_passes_through);
     RUN(test_empty_drive_yields_unit_minus_one_and_session_identity);

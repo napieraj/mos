@@ -112,8 +112,37 @@ TEST(watch_event_accessors_tolerate_null)
     return 0;
 }
 
+
+TEST(result_registry_id_accessor)
+{
+    struct mos_state_result r = { .registry_id = 4295032831ULL };
+    EXPECT(mos_state_result_registry_id(&r) == 4295032831ULL);
+    EXPECT(mos_state_result_registry_id(NULL) == 0);
+    return 0;
+}
+
+TEST(watch_event_sense_accessor)
+{
+    struct mos_watch_event e = {
+        .sense_key = 0x02, .asc = 0x3A, .ascq = 0x01,
+    };
+    uint8_t sk = 0xFF, asc = 0xFF, ascq = 0xFF;
+    mos_watch_event_sense(&e, &sk, &asc, &ascq);
+    EXPECT_EQ(0x02, sk);
+    EXPECT_EQ(0x3A, asc);
+    EXPECT_EQ(0x01, ascq);
+    /* NULL object zeroes; NULL out-params are each tolerated. */
+    sk = asc = ascq = 0xFF;
+    mos_watch_event_sense(NULL, &sk, &asc, &ascq);
+    EXPECT_EQ(0, sk); EXPECT_EQ(0, asc); EXPECT_EQ(0, ascq);
+    mos_watch_event_sense(&e, NULL, NULL, NULL);
+    return 0;
+}
+
 void register_result_tests(void)
 {
+    RUN(result_registry_id_accessor);
+    RUN(watch_event_sense_accessor);
     RUN(result_accessors_return_fields);
     RUN(result_accessors_tolerate_null);
     RUN(watch_event_accessors_return_fields);
