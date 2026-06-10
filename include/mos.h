@@ -154,7 +154,8 @@ _Static_assert(sizeof(mos_xfer_dir) == sizeof(int32_t),
  * valid until the next mos_query_state() call or mos_close(); copy out any
  * fields (strings included) you need to retain past that.
  *
- * vendor / product / revision may be NULL if INQUIRY failed or was not issued.
+ * vendor / product / revision may be NULL when the device directory has
+ * no identity for the drive.
  */
 typedef struct mos_state_result mos_state_result;
 

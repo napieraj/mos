@@ -3840,11 +3840,11 @@ mos_handle_t *mos_open_by_index(int one_based, mos_error *err_out)
     if (one_based < 1) return NULL;
 
     /* Two-stage but race-free: enumerate to collect registry IDs in
-       canonical sort order, then reopen the captured ID via
-       IORegistryEntryIDMatching. The kernel resolves that second match
-       atomically, so a hot-plug between passes either succeeds or returns
-       NO_DEVICE — never silently opens a different drive that inherited the
-       original BSD name. */
+       DR device-array order (the public index contract), then reopen the
+       captured ID via IORegistryEntryIDMatching. The kernel resolves that
+       second match atomically, so a hot-plug between passes either succeeds
+       or returns NO_DEVICE — never silently opens a different drive that
+       inherited the original BSD name. */
 
     mos_internal_id_collect c = { {0}, 0 };
     mos_enumerate_devices(mos_internal_collect_cb, &c);

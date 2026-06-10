@@ -17,9 +17,9 @@
  * mos_json_escape'd token, OR the bare literal `null` when s == NULL.
  * The surrounding quotes are part of the output — callers must NOT add
  * their own. This is the single canonical JSON-value emitter for the
- * CLI tools (e.g. a NULL vendor/product from a drive that didn't answer
- * INQUIRY renders as `null`, satisfying the nullable schema rather than
- * crashing or emitting ""). */
+ * CLI tools (e.g. a NULL vendor/product from a drive the device
+ * directory carries no identity for renders as `null`, satisfying the
+ * nullable schema rather than crashing or emitting ""). */
 void mos_cli_json_str(FILE *f, const char *s);
 
 /* Write the whole-disk unit to `f` as a complete JSON string value:
