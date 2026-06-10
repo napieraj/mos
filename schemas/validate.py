@@ -73,6 +73,87 @@ def check_state_enum_drift(here: Path) -> int:
     return failures
 
 
+def check_cli_enum_drift(here: Path) -> int:
+    """Same drift guard as check_state_enum_drift, for the three other
+    string sets the CLI emits into schema-constrained fields. The C side
+    is compile-time pinned (-Wswitch on the no-default switches), but
+    nothing ties the SCHEMA enums to those switches — this check does.
+      - error codes:   cli/common.c mos_error_to_code() (minus the
+                       MOS_OK row: "ok" is unreachable in an error
+                       envelope and excluded from the schema enums)
+                       vs mos.error.v1 + mos.event.v1 error.code
+      - event kinds:   cli/watch.c event_kind_string() case arms
+                       (the post-switch "unknown" fallback is not a
+                       schema value) vs mos.event.v1 event
+      - media classes: src/mos_strings.c mos_profile_class()
+                       vs mos.state.v1 + mos.event.v1 media_class
+    Returns a failure count."""
+    root = here.parent
+
+    def switch_returns(path: Path, func: str, case_prefix: str) -> set:
+        src = path.read_text()
+        m = re.search(re.escape(func) + r'\b.*?\{(.*?)\n\}', src, re.DOTALL)
+        if not m:
+            return set()
+        return set(re.findall(
+            r'case\s+' + case_prefix + r'\w*\s*:\s*(?:case\s+\w+\s*:\s*)*'
+            r'return\s+"([a-z_]+)"', m.group(1)))
+
+    def media_class_returns(path: Path) -> set:
+        src = path.read_text()
+        m = re.search(r'mos_profile_class\b.*?\{(.*?)\n\}', src, re.DOTALL)
+        if not m:
+            return set()
+        return set(re.findall(r'return\s+"([a-z_]+)"', m.group(1)))
+
+    def enum_at(path: Path, *keys: str) -> set:
+        node = json.loads(path.read_text())
+        for key in keys:
+            node = node["properties"][key]
+        return set(node["enum"])
+
+    checks = []
+
+    c_codes = switch_returns(root / "cli" / "common.c",
+                             "mos_error_to_code", "MOS_") - {"ok"}
+    checks.append(("error.code", c_codes, "cli/common.c mos_error_to_code()",
+                   (("mos.error.v1.error.code",
+                     enum_at(here / "mos.error.v1.json", "error", "code")),
+                    ("mos.event.v1.error.code",
+                     enum_at(here / "mos.event.v1.json", "error", "code")))))
+
+    c_events = switch_returns(root / "cli" / "watch.c",
+                              "event_kind_string", "MOS_EVENT_")
+    checks.append(("event", c_events, "cli/watch.c event_kind_string()",
+                   (("mos.event.v1.event",
+                     enum_at(here / "mos.event.v1.json", "event")),)))
+
+    c_classes = media_class_returns(root / "src" / "mos_strings.c")
+    checks.append(("media_class", c_classes,
+                   "src/mos_strings.c mos_profile_class()",
+                   (("mos.state.v1.media_class",
+                     enum_at(here / "mos.state.v1.json", "media_class")),
+                    ("mos.event.v1.media_class",
+                     enum_at(here / "mos.event.v1.json", "media_class")))))
+
+    print("\nCLI-enum drift (C emit tables vs schema enums):")
+    failures = 0
+    for field, c_set, c_src, schema_sets in checks:
+        if not c_set:
+            print(f"  FAIL drift-check: could not extract {field} strings from {c_src}")
+            failures += 1
+            continue
+        for label, s in schema_sets:
+            if s != c_set:
+                print(f"  FAIL {label} != {c_src}:")
+                print(f"    only in C table: {sorted(c_set - s)}")
+                print(f"    only in {label}: {sorted(s - c_set)}")
+                failures += 1
+            else:
+                print(f"  ok   {label} matches {c_src}")
+    return failures
+
+
 def main() -> int:
     here = Path(__file__).parent
     schemas: dict[str, Draft202012Validator] = {}
@@ -129,6 +210,7 @@ def main() -> int:
 
     print()
     failures += check_state_enum_drift(here)
+    failures += check_cli_enum_drift(here)
 
     print()
     if failures:

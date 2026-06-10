@@ -32,7 +32,7 @@ static void emit_human(const mos_state_result *r, int index1)
 
     uint16_t profile = mos_state_result_current_profile(r);
     char prof_buf[64];
-    if (profile != 0x0000) {
+    if (mos_cli_profile_present(profile)) {
         const char *pn = mos_profile_name(profile);
         const char *pc = mos_profile_class(profile);
         if (pn && pc)
@@ -115,7 +115,7 @@ static void emit_json(const mos_state_result *r, int index1)
        READY; for every other state it's 0x0000. Suppress the name in
        that case so open/empty/busy/unknown JSON doesn't carry a stale
        "no_current_profile" label, matching the example fixtures. */
-    if (profile != 0x0000 && profile_name) {
+    if (mos_cli_profile_present(profile) && profile_name) {
         fputs(",\n  \"current_profile_name\": ", stdout);
         mos_cli_json_str(stdout, profile_name);
     }
@@ -126,7 +126,7 @@ static void emit_json(const mos_state_result *r, int index1)
        media-info work (doc/research/2026-06-10-media-info-design.md). */
     {
         const char *media_class = mos_profile_class(profile);
-        if (profile != 0x0000 && media_class) {
+        if (mos_cli_profile_present(profile) && media_class) {
             fputs(",\n  \"media_class\": ", stdout);
             mos_cli_json_str(stdout, media_class);
         }

@@ -33,3 +33,6 @@ xcuserdata/
 *.cer
 credentials.json
 mt_tests
+
+## Python bytecode (schemas/validate.py local runs)
+__pycache__/

@@ -35,6 +35,17 @@ int  emit_unknown_and_fail(const char *context, mos_error err,
                            const char *dev_node);
 const char *mos_error_to_code(mos_error err);
 
+/* mos.state.v1 / mos.event.v1 suppression rule, in one place: 0x0000 is
+   the SCSI sentinel "no current profile", and profile-derived fields
+   (current_profile_name, media_class, the human Profile row) are
+   omitted for it — surfacing "no_current_profile" as a name implies a
+   profile is set when none is. Every emitter must use this predicate
+   rather than comparing against the sentinel itself. */
+static inline bool mos_cli_profile_present(uint16_t profile)
+{
+    return profile != 0x0000;
+}
+
 /* Enumeration collection + per-drive query rows (the list command and
    the multi-drive EX_USAGE mini-list share these). */
 #define MOS_CLI_LIST_CAP 64
@@ -43,7 +54,6 @@ typedef struct {
     char     state[24];
     char     bsd[24];        /* "" == none */
     char     vendor[9], product[17], revision[5];
-    bool     have_identity;
     uint64_t registry_id;
 } list_row;
 

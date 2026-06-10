@@ -107,14 +107,14 @@ static watch_emit_status emit_watch_ndjson(const mos_watch_event *e)
         /* Match emit_json's suppression: skip current_profile_name when
            current_profile is the SCSI sentinel 0x0000. See emit_json
            comment for rationale. */
-        if (profile != 0x0000 && pname) {
+        if (mos_cli_profile_present(profile) && pname) {
             fputs(",\"current_profile_name\":", stdout);
             mos_cli_json_str(stdout, pname);
         }
         /* Same derivation + suppression as emit_json's media_class. */
         {
             const char *mclass = mos_profile_class(profile);
-            if (profile != 0x0000 && mclass) {
+            if (mos_cli_profile_present(profile) && mclass) {
                 fputs(",\"media_class\":", stdout);
                 mos_cli_json_str(stdout, mclass);
             }

@@ -195,7 +195,6 @@ static void query_row(int index1, int64_t enum_unit, uint64_t enum_reg,
     if (v)  snprintf(row->vendor,   sizeof row->vendor,   "%s", v);
     if (p)  snprintf(row->product,  sizeof row->product,  "%s", p);
     if (rv) snprintf(row->revision, sizeof row->revision, "%s", rv);
-    row->have_identity = (v || p || rv);
     mos_close(h);
 }
 
