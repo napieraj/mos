@@ -135,17 +135,18 @@ int emit_unknown_and_fail(const char *context, mos_error err,
 
 /* ---- List-mode implementation ------------------------------------------ */
 
-/* ---- List: two-phase (enumerate, then per-drive query) ---------------- *
+/* ---- List: one snapshot, probe in-callback ---------------------------- *
  *
  * Enumeration yields bsd_unit + registry_id only; the State / Vendor /
  * Product / Rev columns of the list contract (CLI design 2026-06-10)
  * need one open + query per drive — the same proven probe `mos status`
- * runs. Per-entry containment: a drive whose open/query fails shows
- * state "error" with identity dashes; one sick drive never kills the
- * rig overview. Pre-pivot the per-index reopen carries the documented
- * selection-time TOCTOU (ROADMAP, dies with the DR pivot).            */
+ * runs, opened in-callback via mos_open_device (atomic registry-ID
+ * resolve; the pre-pivot per-index reopen and its selection-time
+ * TOCTOU died with the DR pivot). Per-entry containment: a drive
+ * whose open/query fails shows state "error" with identity dashes;
+ * one sick drive never kills the rig overview.                       */
 
-
+/* id/unit collector — used by resolve_index_of's index lookup. */
 typedef struct {
     int      count;                      /* total seen (may exceed cap) */
     int64_t  units[MOS_CLI_LIST_CAP];
@@ -164,15 +165,18 @@ static bool collect_cb(const mos_device_info_t *info, void *ctx)
 }
 
 
-static void query_row(int index1, int64_t enum_unit, uint64_t enum_reg,
-                      list_row *row)
+/* Probe one enumerated drive into a row. Runs INSIDE the enumeration
+   callback (mos_open_device's lifetime contract) — the one-snapshot
+   pattern: no per-row re-enumeration, no enumerate→open index race. */
+static void query_row(const mos_device_info_t *info, list_row *row)
 {
     memset(row, 0, sizeof *row);
-    row->registry_id = enum_reg;
-    (void)mos_bsd_dev_node(enum_unit, row->bsd, sizeof row->bsd);
+    row->registry_id = mos_device_info_registry_id(info);
+    (void)mos_bsd_dev_node(mos_device_info_bsd_unit(info),
+                           row->bsd, sizeof row->bsd);
 
     mos_error err = MOS_OK;
-    mos_handle_t *h = mos_open_by_index(index1, &err);
+    mos_handle_t *h = mos_open_device(info, &err);
     if (!h) { snprintf(row->state, sizeof row->state, "error"); return; }
 
     const mos_state_result *r = NULL;
@@ -184,7 +188,8 @@ static void query_row(int index1, int64_t enum_unit, uint64_t enum_reg,
     snprintf(row->state, sizeof row->state, "%s",
              mos_state_description(mos_state_result_state(r)));
     /* Prefer the queried unit/registry over the enumeration snapshot —
-       fresher across the (pre-pivot) enumerate->open window. */
+       the open re-validated identity, and media may have (un)loaded
+       between snapshot and probe. */
     (void)mos_bsd_dev_node(mos_state_result_bsd_unit(r),
                                  row->bsd, sizeof row->bsd);
     if (mos_state_result_registry_id(r))
@@ -260,15 +265,63 @@ void emit_list_json(const list_row *rows, int n)
     fputs(n ? "\n  ]\n}\n" : "  ]\n}\n", stdout);
 }
 
+typedef struct {
+    list_row *rows;
+    int       n;      /* rows filled (≤ cap) */
+    int       total;  /* drives seen (may exceed cap) */
+} caq_ctx;
+
+static bool caq_cb(const mos_device_info_t *info, void *ctx)
+{
+    caq_ctx *c = (caq_ctx *)ctx;
+    if (c->total < MOS_CLI_LIST_CAP) {
+        query_row(info, &c->rows[c->n]);
+        c->n++;
+    }
+    c->total++;
+    return true;
+}
+
 int collect_and_query(list_row *rows, int *out_n)
 {
-    collect_ctx c = { 0, {0}, {0} };
-    mos_enumerate_devices(collect_cb, &c);
-    int n = c.count > MOS_CLI_LIST_CAP ? MOS_CLI_LIST_CAP : c.count;
-    for (int r = 0; r < n; r++)
-        query_row(r + 1, c.units[r], c.regs[r], &rows[r]);
-    *out_n = n;
-    return c.count;
+    caq_ctx c = { rows, 0, 0 };
+    mos_enumerate_devices(caq_cb, &c);
+    *out_n = c.n;
+    return c.total;
+}
+
+/* status's no-selector path: exactly one drive present → an OPEN handle
+   from the same single enumeration that counted (no second probe, no
+   reopen). *total always carries the count; the handle is non-NULL only
+   when *total == 1 and the open succeeded (otherwise *err says why).
+   With several drives, any first-drive handle is closed again — the
+   caller renders the mini-list and exits EX_USAGE. */
+typedef struct {
+    mos_handle_t *h;
+    mos_error     err;
+    int           total;
+} sole_ctx;
+
+static bool sole_cb(const mos_device_info_t *info, void *ctx)
+{
+    sole_ctx *c = (sole_ctx *)ctx;
+    c->total++;
+    if (c->total == 1) {
+        c->h = mos_open_device(info, &c->err);
+    } else if (c->h) {
+        mos_close(c->h);
+        c->h = NULL;
+    }
+    return true; /* keep counting — the EX_USAGE message reports the total */
+}
+
+mos_handle_t *open_sole_drive(mos_error *err, int *total)
+{
+    sole_ctx c = { NULL, MOS_ERR_NO_DEVICE, 0 };
+    mos_enumerate_devices(sole_cb, &c);
+    if (err)   *err   = c.err;
+    if (total) *total = c.total;
+    return c.h;
 }
 
 /* Resolve the 1-based index of the drive the open handle refers to,

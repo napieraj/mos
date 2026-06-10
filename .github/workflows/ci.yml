@@ -61,7 +61,7 @@ jobs:
              -I include tests/test_watch_lifetime.c \
              build/libmos.a build/libmos_pure.a \
              -framework IOKit -framework CoreFoundation \
-             -framework DiskArbitration \
+             -framework DiskArbitration -framework DiscRecording \
              -o /tmp/test_watch_lifetime
           ASAN_OPTIONS=abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
              /tmp/test_watch_lifetime
@@ -236,7 +236,7 @@ jobs:
              tests/test_result.c \
              /tmp/amalgamated.o \
              -framework IOKit -framework CoreFoundation \
-             -framework DiskArbitration \
+             -framework DiskArbitration -framework DiscRecording \
              -o /tmp/amalgamated_tests
           # test_render.c registers the hostile-input render fixtures
           # via register_render_tests(); test_main.c calls that
@@ -427,6 +427,7 @@ jobs:
           set -e
           mkdir -p /tmp/strict-adapter
           for src in src/mos_scsi.c src/mos_watch.c src/mos_state.c \
+                     src/mos_dr.c \
                      cli/main.c cli/common.c cli/status.c cli/list.c \
                      cli/watch.c cli/human.c cli/io.c \
                      tools/mos_probe.c tools/mos_notification_probe.c \

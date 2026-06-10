@@ -177,13 +177,19 @@ int run_query(void)
     } else {
         /* No selector: fine with exactly one drive; with several this
            is EX_USAGE — no first-burner magic (CLI design 2026-06-10).
-           The failure carries the mini-list (one table implementation)
-           so the human still gets the overview they wanted, plus the
-           retry path. */
-        static list_row rows[MOS_CLI_LIST_CAP];
-        int n = 0;
-        int total = collect_and_query(rows, &n);
+           open_sole_drive opens the lone drive inside the same
+           enumeration that counts, so the happy path probes ONCE (the
+           pre-pivot collect-then-reopen double probe died with the DR
+           pivot). The multi-drive failure still carries the mini-list
+           (one table implementation) so the human gets the overview
+           they wanted, plus the retry path — the mini-list's probe
+           pass only runs on this error path. */
+        int total = 0;
+        h = open_sole_drive(&err, &total);
         if (total > 1) {
+            static list_row rows[MOS_CLI_LIST_CAP];
+            int n = 0;
+            (void)collect_and_query(rows, &n);
             fprintf(stderr,
                     "%s: %d drives present; select one, e.g. `%s status 2`:\n",
                     progname, total, progname);
@@ -191,7 +197,6 @@ int run_query(void)
             return EX_USAGE;
         }
         index1 = 1;
-        h = mos_open_by_index(1, &err);
     }
 
     if (!h) return emit_unknown_and_fail("could not open drive", err, NULL);

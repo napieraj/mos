@@ -192,8 +192,9 @@ uint64_t       mos_state_result_registry_id(const mos_state_result *r);
    mos_bsd_name_format), and for a cap too small for the rendering. */
 bool           mos_bsd_dev_node(int64_t unit, char *out, size_t out_cap);
 
-/* INQUIRY identity strings; NULL when INQUIRY failed or was not issued.
-   Borrowed, with the same lifetime as the result object. */
+/* Drive identity strings (the INQUIRY vendor/product/revision fields,
+   sourced from the system's device directory at open); NULL when
+   unavailable. Borrowed, with the same lifetime as the result object. */
 const char    *mos_state_result_vendor(const mos_state_result *r);
 const char    *mos_state_result_product(const mos_state_result *r);
 const char    *mos_state_result_revision(const mos_state_result *r);
@@ -218,10 +219,14 @@ void           mos_state_result_sense(const mos_state_result *r,
  */
 typedef bool (*mos_enumerate_cb)(const mos_device_info_t *info, void *ctx);
 
-/* Walk all optical drives in stable registry-id order, invoking cb once
- * per drive (return false to stop early). The mos_device_info_t is opaque
- * — read it through the accessors below; strings are valid only for the
- * callback's duration, copy if needed.
+/* Walk all optical drives, invoking cb once per drive (return false to
+ * stop early). Order: position in the system's device array — the same
+ * array drutil enumerates, so the 1-based index agrees with drutil's
+ * by provenance. The order is stable only within an enumerate→open
+ * window; cross-run stability is not promised. The mos_device_info_t
+ * is opaque — read it through the accessors below; it is valid only
+ * for the callback's duration (open it there via mos_open_device(),
+ * or copy what you need).
  *
  * Up to 64 drives per call; any beyond that are silently dropped. If you
  * exceed this, please get help from someone qualified. */
@@ -229,9 +234,9 @@ void mos_enumerate_devices(mos_enumerate_cb cb, void *ctx);
 
 /* Accessors for the opaque device-info handle passed to the callback.
    bsd_unit is -1 for an empty/open-tray drive (no media, hence no
-   IOMedia child to name); such drives still enumerate, identified by
-   their stable registry index for mos_open_by_index. Render to a string
-   with mos_bsd_name_format(). */
+   IOMedia child to name); such drives still enumerate and stay openable
+   by snapshot position (mos_open_by_index) or in-callback
+   (mos_open_device). Render to a string with mos_bsd_name_format(). */
 int64_t mos_device_info_bsd_unit(const mos_device_info_t *);
 
 /* The drive service's IORegistry entry ID for an enumeration entry —
@@ -256,6 +261,19 @@ bool mos_bsd_name_format(int64_t unit, char *buf, size_t cap);
  */
 mos_handle_t *mos_open_by_index(int one_based, mos_error *err_out);
 mos_handle_t *mos_open_by_bsd_name(const char *bsd_name, mos_error *err_out);
+
+/*
+ * Open the drive an enumeration callback is currently visiting. Call
+ * ONLY from inside the callback (the info object dies when the
+ * callback returns); the returned handle is independent of the info
+ * and outlives it. This is the one-snapshot pattern: enumerate once
+ * and open each drive of interest without re-enumerating per open —
+ * the open resolves atomically against the kernel registry, so a
+ * drive that vanished since the snapshot yields MOS_ERR_NO_DEVICE,
+ * never a different drive.
+ */
+mos_handle_t *mos_open_device(const mos_device_info_t *info,
+                              mos_error *err_out);
 
 /*
  * Return the whole-disk BSD unit a handle was opened against (the N in

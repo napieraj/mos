@@ -94,7 +94,8 @@ build: $(BUILD)/CMakeCache.txt
 	@if [ "$$(uname -s)" != "Darwin" ]; then \
 		echo ""; \
 		echo "ERROR: 'make build' is macOS-only — the mos CLI requires"; \
-		echo "IOKit, CoreFoundation, and DiskArbitration, which are"; \
+		echo "IOKit, CoreFoundation, DiskArbitration, and DiscRecording,"; \
+		echo "which are"; \
 		echo "Apple frameworks."; \
 		echo ""; \
 		echo "On Linux / non-Apple, the available targets are:"; \

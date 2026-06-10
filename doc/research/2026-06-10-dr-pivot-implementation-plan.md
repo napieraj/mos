@@ -249,6 +249,39 @@ GESN-failing bridge if one enters the fixture set.
    watch becomes the filtered special case of the general mechanism,
    not the other way around. See Phase 2b.
 
+## Execution notes (2026-06-10, Phases 0–1 landing)
+
+- **INQUIRY-adjacent defense inventory** (owner direction: the
+  defense-in-depth around INQUIRY largely retires with DR identity).
+  Retired with INQUIRY in Phase 1: `mos_internal_copy_scsi_string`
+  (fixed-width SPC-4 copy/trim) and its per-call-site `_Static_assert`
+  width pins, and `mos_internal_mmc_inquiry` itself. Stays, different
+  reason: the CLI output escapers (`mos_cli_json_str` /
+  `mos_cli_safe_ascii`) — output-layer hygiene against hostile bytes,
+  source-independent (input-space doctrine §4); and a bounded
+  truncating CFString copy at the DR seam (CFStringGetCString has no
+  partial-write contract, so the defense moved, it didn't die).
+  Moves to Phase 2a: the per-probe identity rehome
+  (`mos_internal_rehome_identity_strings` + call sites) retires when
+  identity becomes watch-static (device-static DR data captured once
+  at watch open); the string-lifetime CONTRACT and
+  test_watch_lifetime stay — the mechanism simplifies under them.
+- **`mos_open_device()` added to the public API**: open-inside-the-
+  enumeration-callback, the one-snapshot pattern. Chosen over a
+  public open-by-registry-id to honor the standing decision
+  (mos_internal.h) that registry IDs are correlation values, not a
+  public addressing surface.
+- **`resolve_index_of` retained**, contra the Phase 1 sketch: its
+  job (map a --bsd-opened handle to a display index) still exists;
+  what died is its cost — it now reads one DR snapshot instead of
+  walking the IORegistry. The plan over-promised its deletion.
+- Phase 1 carries the KNOWN UNKNOWN documented in mos_dr.c: whether
+  DR's registry path resolves to the same IO*BlockStorageDevice node
+  the kext-class matching produced. CI cannot answer it (zero
+  drives); the Phase 0 probe's Info dumps will. A mismatch surfaces
+  as DRIVER_REJECTED opens and is fixed by path normalization inside
+  mos_dr.c, never at call sites.
+
 ## Sizing / order
 
 Phase 0 ≈ a 150-line tool + CMake/CI lines. Phase 1 ≈ 250–350 lines

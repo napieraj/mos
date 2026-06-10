@@ -58,16 +58,54 @@ struct mos_device_info {
     uint64_t registry_id; /* for stable sort */
 };
 
+/* ---- DiscRecording-linked internal prototypes (mos_dr.c) ----------- *
+ *
+ * The directory half of the DR pivot: discovery, identity, addressing
+ * (doc/research/2026-06-10-dr-pivot-implementation-plan.md). Never
+ * state — that stays with the MMC seam below. */
+
+/* One enumerated device, extracted from DR's dictionaries into plain C
+   at the adapter seam (no CF types cross this line). Identity buffers
+   carry the SPC-4 INQUIRY field widths — DR pre-parses the same bytes. */
+typedef struct {
+    uint64_t registry_id;     /* path → entry → ID; never 0 in a snapshot */
+    int64_t  bsd_unit;        /* -1 = no whole-disk IOMedia node (media absent) */
+    char     vendor[9];       /* 8 chars + NUL */
+    char     product[17];     /* 16 chars + NUL */
+    char     revision[5];     /* 4 chars + NUL */
+} mos_internal_dr_snapshot;
+
+/* Fill up to `cap` slots in DR device-array order (the same array
+   drutil enumerates — the index provenance contract). Returns the
+   count. Devices whose registry path cannot be resolved to an entry
+   ID are skipped (an un-reopenable index entry would violate the
+   enumeration/index correspondence). */
+size_t mos_internal_dr_copy_snapshot(mos_internal_dr_snapshot *slots,
+                                     size_t cap);
+
+/* Resolve a canonical "diskN" name to the drive's registry entry ID
+   via DRDeviceCopyDeviceForBSDName; 0 when DR knows no such device. */
+uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name);
+
+/* Device-static identity strings for an already-opened service, via
+   DR's registry-path lookup. Best-effort: returns false (and empties
+   the buffers) when DR cannot see the service — the same non-fatal
+   contract the retired open-time INQUIRY had. */
+bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
+                                               char *vendor, size_t vcap,
+                                               char *product, size_t pcap,
+                                               char *revision, size_t rcap);
+
 /* ---- IOKit-linked internal prototypes ------------------------------ *
  *
- * MMC convenience wrappers, shared between mos_scsi.c (open-time
- * INQUIRY) and mos_state.c (query path). */
+ * MMC convenience wrappers for the query path (mos_state.c). The
+ * open-time INQUIRY wrapper retired with the DR pivot — identity is
+ * directory data now. */
 mos_error mos_internal_mmc_get_tray_state     (mos_handle_t *h, bool *tray_open);
 mos_error mos_internal_mmc_test_unit_ready    (mos_handle_t *h,
                                                uint32_t *status,
                                                uint8_t sense[18]);
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile);
-mos_error mos_internal_mmc_inquiry            (mos_handle_t *h);
 
 /* STUB (v0.4, hardware-gated): the IOKit half of GET CONFIGURATION's feature
  * surface. Returns MOS_ERR_UNSUPPORTED until the RT=0 issuance is written and

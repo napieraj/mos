@@ -10,24 +10,27 @@ produce the same output. `mos` distinguishes them by
 talking to the drive over SCSI MMC.
 
 Pure C. No Swift. No runtime dependencies beyond Apple's own IOKit,
-CoreFoundation, and DiskArbitration frameworks.
+CoreFoundation, DiskArbitration, and DiscRecording frameworks.
 
 ## What it does
 
-Issues up to four MMC commands — no entitlements, no root. Presence is read
+Issues up to three MMC commands — no entitlements, no root. Presence is read
 with the non-exclusive `MMCDeviceInterface` convenience methods; the tray bit
 is a raw `GET EVENT STATUS NOTIFICATION` CDB that takes *temporary* exclusive
 access, and only on the not-ready path (where no disc is mounted, so the lock
-is free). See §3 of ARCHITECTURE.md.
+is free). See §3 of ARCHITECTURE.md. Enumeration and the vendor /
+product / revision identity strings come from the DiscRecording
+directory (`DRCopyDeviceArray` / `DRDeviceCopyInfo` — the same INQUIRY
+bytes, pre-parsed by the framework), so mos no longer issues INQUIRY
+itself.
 
 | Opcode | Command                         | Purpose                                                           |
 |:-------|:--------------------------------|:------------------------------------------------------------------|
-| `0x12` | INQUIRY                         | Vendor / product / revision strings for identification             |
 | `0x4A` | GET EVENT STATUS NOTIFICATION   | Tray open vs closed — raw CDB via `mos_raw_cdb()` (NOT the `GetTrayState` convenience wrapper, which masks a GESN failure as "closed"); exclusive access, only when not ready |
 | `0x00` | TEST UNIT READY                 | Presence / ready probe (convenience, non-exclusive, one shot); sense disambiguates empty / loading / formatting / unreadable / fault / busy |
 | `0x46` | GET CONFIGURATION               | Current profile — identifies CD / DVD / BD media type             |
 
-A fifth command, `0x51` READ DISC INFORMATION, is not currently
+A fourth command, `0x51` READ DISC INFORMATION, is not currently
 issued — planned for the v0.4 typed APIs (a `mos_disc_info` accessor)
 to surface Disc Status, session count, and track count for
 distinguishing blank-writable from finalized media. Not required for
@@ -179,8 +182,9 @@ distribution:
 ```sh
 ./scripts/amalgamate.sh
 # Outputs: dist/mos.h + dist/mos.c
-# Drop both into your source tree; link IOKit, CoreFoundation, and
-# DiskArbitration; build with -mmacosx-version-min=12.0.
+# Drop both into your source tree; link IOKit, CoreFoundation,
+# DiskArbitration, and DiscRecording; build with
+# -mmacosx-version-min=12.0.
 ```
 
 ## Requirements

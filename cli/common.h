@@ -62,6 +62,11 @@ void emit_list_table(FILE *f, const list_row *rows, int n, bool with_volume);
 void emit_list_json(const list_row *rows, int n);
 int  resolve_index_of(uint64_t reg);
 
+/* status no-selector path: open the sole present drive in the same
+   enumeration that counts (single probe; *total reports the count,
+   handle is non-NULL only when *total == 1 and the open succeeded). */
+mos_handle_t *open_sole_drive(mos_error *err, int *total);
+
 /* Command entry points. */
 int run_query(void);   /* status (default) */
 int run_list(void);
