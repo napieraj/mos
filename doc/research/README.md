@@ -63,6 +63,15 @@ in `AGENTS.md`. The chain of files is the audit trail.
   not the fallback. Also records that public kernel source for the
   MMC kext froze at Tiger-era 139.0.2.
 
+- `2026-06-10-dr-pivot-implementation-plan.md` — Phased implementation
+  plan for the DR pivot under the "DR is the doorbell and the
+  directory; MMC is the inspector" doctrine: probe tool + fixtures,
+  enumeration/identity/addressing on the DR snapshot (drutil-parity
+  index, registry-path→ID identity), DR doorbells joining the
+  existing watch pump, retirements, coexistence falsification runs,
+  and the four sign-off decisions (INQUIRY retirement, DA retention,
+  index contract wording, multi-device watch out of scope).
+
 - `2026-06-10-gesn-single-poll-rebuttal.md` — Dated rebuttal of the
   2026-05-29 note per this README's append rule: the 2026-05-30
   state-detection redesign adopted raw GESN issuance for the tray
