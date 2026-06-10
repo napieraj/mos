@@ -50,6 +50,15 @@ in `AGENTS.md`. The chain of files is the audit trail.
   --index / --bsd / --registry-id selector decision with the
   identity/addressing/format role split.
 
+- `2026-06-10-dr-pivot-feasibility.md` — Web-verified feasibility and
+  advisability check on the DiscRecording substrate pivot against
+  current macOS (15.5 SDK headers vendored and diffed, deprecation
+  status, coverage parity, runloop/entitlement caveats, survival
+  risk). Verdict: feasible and advisable for enumeration/status/watch
+  with the MMC sense path retained, gated on one Tahoe hardware
+  validation pass. Records that public kernel source for the MMC kext
+  froze at Tiger-era 139.0.2.
+
 - `2026-06-10-gesn-single-poll-rebuttal.md` — Dated rebuttal of the
   2026-05-29 note per this README's append rule: the 2026-05-30
   state-detection redesign adopted raw GESN issuance for the tray
