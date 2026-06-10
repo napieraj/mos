@@ -251,6 +251,22 @@ GESN-failing bridge if one enters the fixture set.
 
 ## Execution notes (2026-06-10, Phases 0–1 landing)
 
+- **No third probe tool** (owner direction: retire/refactor the
+  existing probes, don't build alongside them). The briefly-separate
+  `tools/mos_dr_probe.c` was absorbed into
+  `tools/mos_notification_probe.c`, which already was the
+  multi-source NDJSON observation harness: DR's
+  Appeared/Disappeared/StatusChanged join its existing
+  kIOGeneralInterest/kIOBusyInterest/DA legs as a fourth source, and
+  `--dr-dump` is the one-shot Info/Status plist capture mode. The
+  tool inventory stays at two with a clean split: mos_probe = the
+  LIBRARY-path smoke (what a consumer sees), mos_notification_probe
+  = the substrate observer (what the OS emits, unfiltered). When
+  Phase 2a retires DA from the watch, the probe's DA legs stay — at
+  that point they exist to measure what mos chose NOT to listen to,
+  which is exactly the falsification comparison the doorbell runs
+  need.
+
 - **INQUIRY-adjacent defense inventory** (owner direction: the
   defense-in-depth around INQUIRY largely retires with DR identity).
   Retired with INQUIRY in Phase 1: `mos_internal_copy_scsi_string`

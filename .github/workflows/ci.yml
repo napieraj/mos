@@ -38,7 +38,7 @@ jobs:
         # diagnostic tool (tools/mos_notification_probe.c) is exercised
         # by CI — otherwise an Apple-only callback-heavy TU that nothing
         # else compiles would bitrot silently.
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DMOS_BUILD_PROBE=ON -DMOS_BUILD_NOTIFICATION_PROBE=ON -DMOS_BUILD_DR_PROBE=ON
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DMOS_BUILD_PROBE=ON -DMOS_BUILD_NOTIFICATION_PROBE=ON
 
       - name: Build (library, CLI, probe, notification probe, tests)
         run: cmake --build build --parallel

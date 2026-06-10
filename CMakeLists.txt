@@ -233,8 +233,10 @@ endif()
 # tools/mos_notification_probe.c is a standalone diagnostic that
 # subscribes to every plausible push-notification source for a given
 # drive (kIOGeneralInterest, kIOBusyInterest, DA disk-appeared,
-# DA disk-disappeared, DA description-changed) and logs every event
-# as NDJSON. Purpose: characterize empirically which IOKit / DA
+# DA disk-disappeared, DA description-changed, and the DiscRecording
+# Appeared/Disappeared/StatusChanged doorbells) and logs every event
+# as NDJSON; --dr-dump is the one-shot DR Info/Status plist capture
+# (DR-pivot Phase 0). Purpose: characterize empirically which
 # notifications actually fire for which events on which drive class,
 # at what latency. See ROADMAP §"Notification-source empirical probe".
 # Does NOT link against mos_core — uses raw IOKit/DA so observations
@@ -248,33 +250,10 @@ if(MOS_BUILD_NOTIFICATION_PROBE)
         "-framework CoreFoundation"
         "-framework IOKit"
         "-framework DiskArbitration"
+        "-framework DiscRecording"   # DR doorbell legs + --dr-dump (Phase 0)
         mos_pure        # for mos_internal_normalize_bsd_name and bsd_name_is_whole_shape
         mos_warnings)
     set_target_properties(mos_notification_probe PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-    )
-endif()
-
-# ---- Opt-in: DiscRecording observation probe ----------------------------
-#
-# tools/mos_dr_probe.c is the Phase 0 tool of the DR pivot
-# (doc/research/2026-06-10-dr-pivot-implementation-plan.md): dumps
-# DRCopyDeviceArray order, per-device Info/Status dictionaries as XML
-# plists, and a timestamped notification stream. Hardware capture runs
-# feed tests/fixtures/; the falsification questions it answers are
-# listed in the plan. Deliberately links DiscRecording/CoreFoundation
-# ONLY — not mos_core, not mos_pure — so its observations pass through
-# none of mos's abstractions.
-
-option(MOS_BUILD_DR_PROBE
-       "Build the mos_dr_probe DiscRecording diagnostic CLI" OFF)
-if(MOS_BUILD_DR_PROBE)
-    add_executable(mos_dr_probe tools/mos_dr_probe.c)
-    target_link_libraries(mos_dr_probe PRIVATE
-        "-framework CoreFoundation"
-        "-framework DiscRecording"
-        mos_warnings)
-    set_target_properties(mos_dr_probe PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
 endif()

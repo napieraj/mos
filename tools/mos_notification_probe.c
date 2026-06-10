@@ -13,14 +13,29 @@
  *     BusyStateChange, WasClosed, ...)
  *   - kIOBusyInterest on the io_service_t (BusyStateChange)
  *   - DARegisterDiskDescriptionChangedCallback on the BSD name
+ *   - DRNotificationCenter: kDRDeviceAppeared / kDRDeviceDisappeared /
+ *     kDRDeviceStatusChanged (device-global — the DR pivot's doorbell
+ *     candidates; events for OTHER drives are emitted too, tagged by
+ *     whatever identity the info dictionary carries)
  * Runs until SIGINT.
  *
- * Deliberately does NOT link mos_core — only IOKit/CoreFoundation/DA
- * directly — so it still builds if the library is broken and its
- * observations pass through none of mos's abstractions.
+ * Usage: mos_notification_probe --dr-dump
+ *   One-shot instead: DRCopyDeviceArray order plus each device's
+ *   DRDeviceCopyInfo / DRDeviceCopyStatus dictionary as an XML plist,
+ *   then exit. This is the Phase 0 fixture-capture mode of the DR
+ *   pivot (doc/research/2026-06-10-dr-pivot-implementation-plan.md);
+ *   it answers the registry-path-shape and identity-byte-shape
+ *   questions the plan lists. (Absorbed from the briefly-separate
+ *   mos_dr_probe — one observation tool, not a zoo.)
+ *
+ * Deliberately does NOT link mos_core — only IOKit/CoreFoundation/DA/
+ * DiscRecording directly — so it still builds if the library is broken
+ * and its observations pass through none of mos's abstractions.
  */
 
 #include <CoreFoundation/CoreFoundation.h>
+#include <DiscRecording/DRCoreDevice.h>
+#include <DiscRecording/DRCoreNotifications.h>
 #include <DiskArbitration/DiskArbitration.h>
 #include <IOKit/IOBSD.h>
 #include <IOKit/IOKitLib.h>
@@ -248,6 +263,117 @@ struct probe_ctx {
     int64_t bsd_unit;       /* parsed unit: the DA self/partition filter */
 };
 
+/* ---- DiscRecording source ----------------------------------------- */
+
+/* DR notification, NDJSON line. The info dictionary for StatusChanged
+   is the device's status dict; surface the doorbell-relevant fields
+   (tray-open, media state, media BSD name) when present, validated
+   and escaped like every other external string. Full dictionaries
+   belong to --dr-dump, not the event stream. */
+static void emit_dr_event(CFStringRef name, CFDictionaryRef info)
+{
+    char ts[64], buf[256];
+    format_rfc3339_utc(ts, sizeof(ts));
+    fputs("{", stdout);
+    fputs("\"schema\":\"mos.notification_probe.v0\"", stdout);
+    fputs(",\"event\":\"dr_notification\"", stdout);
+    fputs(",\"ts\":", stdout); mos_cli_json_str(stdout, ts);
+    printf(",\"mono_ms\":%" PRIu64, mono_ms_since_start());
+    fputs(",\"source\":\"dr\"", stdout);
+    fputs(",\"name\":", stdout);
+    if (cf_string_to_cstr_safe(name, buf, sizeof(buf))) {
+        mos_cli_json_str(stdout, buf);
+    } else {
+        fputs("\"(unrenderable)\"", stdout);
+    }
+    if (info) {
+        CFTypeRef tray = CFDictionaryGetValue(info, kDRDeviceIsTrayOpenKey);
+        if (tray && CFGetTypeID(tray) == CFBooleanGetTypeID()) {
+            fputs(",\"tray_open\":", stdout);
+            fputs(CFBooleanGetValue((CFBooleanRef)tray) ? "true" : "false",
+                  stdout);
+        }
+        if (cf_string_to_cstr_safe(
+                CFDictionaryGetValue(info, kDRDeviceMediaStateKey),
+                buf, sizeof(buf))) {
+            fputs(",\"media_state\":", stdout);
+            mos_cli_json_str(stdout, buf);
+        }
+        CFTypeRef mi = CFDictionaryGetValue(info, kDRDeviceMediaInfoKey);
+        if (mi && CFGetTypeID(mi) == CFDictionaryGetTypeID() &&
+            cf_string_to_cstr_safe(
+                CFDictionaryGetValue((CFDictionaryRef)mi,
+                                     kDRDeviceMediaBSDNameKey),
+                buf, sizeof(buf))) {
+            fputs(",\"media_bsd\":", stdout);
+            mos_cli_json_str(stdout, buf);
+        }
+    }
+    fputs("}\n", stdout);
+    fflush(stdout);
+}
+
+static void dr_notification_cb(DRNotificationCenterRef center,
+                               void *observer, CFStringRef name,
+                               DRTypeRef object, CFDictionaryRef info)
+{
+    (void)center; (void)observer; (void)object;
+    emit_dr_event(name, info);
+}
+
+/* ---- --dr-dump: one-shot DR dictionary capture --------------------- */
+
+/* XML-plist dump of any CF property-list object; the fixture format.
+   Not NDJSON on purpose — captures are whole-run redirections and XML
+   plists diff cleanly. */
+static void dr_dump_plist(CFTypeRef obj)
+{
+    if (!obj) {
+        puts("  (null)");
+        return;
+    }
+    CFDataRef data = CFPropertyListCreateData(kCFAllocatorDefault, obj,
+                                              kCFPropertyListXMLFormat_v1_0,
+                                              0, NULL);
+    if (data) {
+        fwrite(CFDataGetBytePtr(data), 1, (size_t)CFDataGetLength(data),
+               stdout);
+        CFRelease(data);
+        return;
+    }
+    puts("  (not serializable as a plist)");
+}
+
+static int run_dr_dump(void)
+{
+    char ts[64];
+    format_rfc3339_utc(ts, sizeof(ts));
+
+    CFArrayRef arr = DRCopyDeviceArray();
+    long n = arr ? (long)CFArrayGetCount(arr) : 0;
+    printf("mos_notification_probe --dr-dump %s\n", ts);
+    printf("DRCopyDeviceArray: %ld device(s)%s\n", n,
+           arr ? "" : " (NULL array)");
+    if (!arr) return EX_UNAVAILABLE;
+
+    for (long i = 0; i < n; ++i) {
+        DRDeviceRef dev =
+            (DRDeviceRef)CFArrayGetValueAtIndex(arr, (CFIndex)i);
+        if (!dev) continue;
+        printf("==== device %ld ====\n", i + 1);
+        CFDictionaryRef info = DRDeviceCopyInfo(dev);
+        printf("---- DRDeviceCopyInfo (device %ld) ----\n", i + 1);
+        dr_dump_plist(info);
+        if (info) CFRelease(info);
+        CFDictionaryRef status = DRDeviceCopyStatus(dev);
+        printf("---- DRDeviceCopyStatus (device %ld) ----\n", i + 1);
+        dr_dump_plist(status);
+        if (status) CFRelease(status);
+    }
+    CFRelease(arr);
+    return EX_OK;
+}
+
 static void general_interest_cb(void *refcon,
                                 io_service_t service,
                                 natural_t messageType,
@@ -353,9 +479,15 @@ static io_service_t resolve_io_service_by_bsd(const char *bsd_name) {
 /* ---- Main --------------------------------------------------------- */
 
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--dr-dump") == 0) {
+        init_timebase();
+        return run_dr_dump();
+    }
     if (argc != 2) {
-        fprintf(stderr, "usage: %s <bsd_name>\n", argv[0]);
+        fprintf(stderr, "usage: %s <bsd_name> | --dr-dump\n", argv[0]);
         fprintf(stderr, "  e.g. %s disk4\n", argv[0]);
+        fprintf(stderr, "  --dr-dump: one-shot DiscRecording Info/Status"
+                        " plist capture\n");
         return EX_USAGE;
     }
 
@@ -473,6 +605,39 @@ int main(int argc, char **argv) {
                                      kCFRunLoopDefaultMode);
     }
 
+    /* Set up the DiscRecording notification source (device-global —
+       DR's center has no per-device filter at registration; the
+       events themselves carry identity). NULL-object registration is
+       itself under test: if StatusChanged never fires here while
+       drutil sees changes, that's a finding about the registration
+       model, not a probe bug. */
+    DRNotificationCenterRef dr = DRNotificationCenterCreate();
+    CFRunLoopSourceRef dr_src = NULL;
+    if (!dr) {
+        fprintf(stderr, "warning: DRNotificationCenterCreate failed; "
+                        "DR events disabled\n");
+    } else {
+        dr_src = DRNotificationCenterCreateRunLoopSource(dr);
+        if (!dr_src) {
+            fprintf(stderr, "warning: DR run-loop source creation failed; "
+                            "DR events disabled\n");
+            CFRelease(dr);
+            dr = NULL;
+        } else {
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), dr_src,
+                               kCFRunLoopDefaultMode);
+            DRNotificationCenterAddObserver(dr, &ctx, dr_notification_cb,
+                                            kDRDeviceAppearedNotification,
+                                            NULL);
+            DRNotificationCenterAddObserver(dr, &ctx, dr_notification_cb,
+                                            kDRDeviceDisappearedNotification,
+                                            NULL);
+            DRNotificationCenterAddObserver(dr, &ctx, dr_notification_cb,
+                                            kDRDeviceStatusChangedNotification,
+                                            NULL);
+        }
+    }
+
     /* Run the loop until SIGINT. CFRunLoopRunInMode with a short
        interval lets us notice the SIGINT flag promptly. */
     while (!g_interrupted) {
@@ -494,6 +659,24 @@ int main(int argc, char **argv) {
         DAUnregisterCallback(da, (void *)da_disappeared_cb, &ctx);
         DAUnregisterCallback(da, (void *)da_description_changed_cb, &ctx);
         CFRelease(da);
+    }
+    if (dr) {
+        /* Same teardown symmetry rule as the DA block above: remove
+           every observer with its registration-time (observer, name)
+           pair, drop the source, then release. */
+        DRNotificationCenterRemoveObserver(dr, &ctx,
+                                           kDRDeviceAppearedNotification,
+                                           NULL);
+        DRNotificationCenterRemoveObserver(dr, &ctx,
+                                           kDRDeviceDisappearedNotification,
+                                           NULL);
+        DRNotificationCenterRemoveObserver(dr, &ctx,
+                                           kDRDeviceStatusChangedNotification,
+                                           NULL);
+        CFRunLoopRemoveSource(CFRunLoopGetCurrent(), dr_src,
+                              kCFRunLoopDefaultMode);
+        CFRelease(dr_src);
+        CFRelease(dr);
     }
     if (general_token != IO_OBJECT_NULL) IOObjectRelease(general_token);
     if (busy_token    != IO_OBJECT_NULL) IOObjectRelease(busy_token);

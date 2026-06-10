@@ -1,6 +1,11 @@
 /*
- * mos_probe.c — C smoke test for mos_core. Exits 0 if at least one
- * drive was enumerated and queried successfully.
+ * mos_probe.c — C smoke test for mos_core: end-to-end through the
+ * public API (post-pivot: DR directory enumeration + identity, MMC
+ * inspector query). Exits 0 if at least one drive was enumerated and
+ * queried successfully. The substrate-observation diagnostics live in
+ * mos_notification_probe (event streams, --dr-dump) — this tool is
+ * the LIBRARY-path smoke, the one probe that should see exactly what
+ * a consumer sees.
  */
 
 #include "mos.h"
@@ -31,9 +36,11 @@ int main(void)
     mos_enumerate_devices(list_cb, NULL);
     if (seen == 0) {
         printf("  (none)\n");
-        printf("\nNo optical drives matched IOBDBlockStorageDevice, "
-               "IODVDBlockStorageDevice, or IOCDBlockStorageDevice.\n"
-               "If you believe you have a drive attached, file an issue.\n");
+        printf("\nNo optical drives in the DiscRecording device array\n"
+               "(DRCopyDeviceArray — writers only, same coverage as the\n"
+               "SCSITaskUserClient attach gate). If you believe you have\n"
+               "a burner attached, run `mos_notification_probe --dr-dump`\n"
+               "and file an issue with its output.\n");
         return EX_UNAVAILABLE;
     }
 
