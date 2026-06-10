@@ -71,6 +71,32 @@ important test for validating the v0.2 architecture fix.
 Launch MakeMKV or another tool that holds the drive with exclusive
 access. Expected: `"state": "busy"`.
 
+## DR pivot falsification rows (2026-06-10)
+
+Hardware-session targets added by the DR pivot (plan §coexistence and
+execution notes). Hardware falsifies or feeds fixtures — never steers
+design (AGENTS hardware ADR):
+
+- **Registry-path shape**: does `kDRDeviceIORegistryEntryPathKey`
+  resolve to the IO*BlockStorageDevice node the MMC plug-in attaches
+  to? (`mos_notification_probe --dr-dump` shows the path; a mismatch
+  appears as DRIVER_REJECTED opens and is fixed inside mos_dr.c.)
+- **drutil parity**: `mos list` index order vs `drutil list` on a
+  multi-drive rig.
+- **Identity byte-shape**: DR's pre-parsed identity strings vs the
+  SPC-4-trimmed INQUIRY forms (capture both; diff).
+- **Doorbell delivery**: do Appeared/Disappeared/StatusChanged fire
+  under NULL-object registration at all, and at what latency vs the
+  poll floor? The probe's DA legs are the control arm (the watch no
+  longer listens to DA — compare what DR delivered against what DA
+  would have).
+- **Coexistence**: `mos_notification_probe -n` + `mos watch` through
+  tray cycles — does mos's temporary exclusive GESN window make DR's
+  own observers mis-observe (the §9.7 collapse on DR's side)?
+- **watch-all hot-plug**: join/leave ordering, device_appeared on
+  plug, per-drive device_removed on unplug, two-drive interleave
+  fixture.
+
 ## Anticipated quirks from prior art
 
 The closest peer in the FOSS world is systemd's `cdrom_id`

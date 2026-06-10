@@ -93,3 +93,28 @@ cannot see. Two DR dictionaries:
   rationale so this is now a clean either/or, but DR retiring discinfo+features+
   INQUIRY means that one IOKit step is the lone MMC/IOKit holdout in an
   otherwise-DR file — weakens the "cheap to keep" case.
+
+## Outcome (2026-06-10, post-pivot follow-up)
+
+The pivot landed (implementation plan, Phases 0–2b). Row disposition:
+
+- **Identity / device-static rows: ADOPTED.** vendor/product/revision
+  come from `DRDeviceCopyInfo` (INQUIRY retired); the CanWrite*/
+  interconnect rows remain available for v0.4 features work.
+- **Identity-for-open rows: ADOPTED with the predicted IOKit step.**
+  Index = DR array position; `kDRDeviceIORegistryEntryPathKey` →
+  entry → ID is the discovery path; `DRDeviceCopyDeviceForBSDName`
+  resolves `--bsd`. The F1 `media_id` keeps the IOMedia walk at open —
+  the "lone holdout" this table predicted, accepted as such.
+- **State rows: NOT ADOPTED, by design.** The feasibility note's
+  same-day revision (2026-06-10-dr-pivot-feasibility.md) showed the
+  kernel GetTrayState collapse makes DR-sourced tray/state
+  unverifiable from userspace; the TUR⊕GESN core remains the sole
+  state authority and `kDRDevice{IsTrayOpen,MediaState}Key` are used
+  for nothing. Sense rows: moot — the MMC path stayed.
+- **Media/disc-info rows (discinfo/blank/sessions): OPEN** — still the
+  v0.4 candidate this table sketched; unaffected by the pivot.
+- **The watch-path saving materialized differently than §2 guessed:**
+  not snapshot-dict reads per probe (probes stayed MMC), but the
+  doorbell (StatusChanged replacing DA, device-scoped) and the bus
+  lifecycle (Appeared/Disappeared powering `mos watch --all`).

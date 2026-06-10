@@ -77,19 +77,34 @@ substrate already exposes the coarse tray/media signals, so mos's value is the
 state machine that interprets them fully, not a GESN source. See
 `doc/research/2026-05-29-gesn-single-poll.md`.*
 
-**Named-input resolution → walk up.** *Superseded by the DiscRecording substrate
-below — `DRDeviceCopyDeviceForBSDName` dissolves this. Retained as the fallback
-plan only if the DR enumeration pivot is rejected.* Resolve `--bsd diskN` by
+**Named-input resolution → walk up.** *Resolved 2026-06-10: the DR
+pivot landed and `DRDeviceCopyDeviceForBSDName` dissolved this — the
+walk-up was never built and now never will be. Preserved below as the
+record of the pre-pivot reasoning.* Resolve `--bsd diskN` by
 `IOBSDNameMatching` → the `IOMedia` node → up to its BlockStorageDevice; this
 matches the canonical Mac tools and normalizes a `diskNsM` slice to its whole
-disk for free. *Current code does the opposite* — it enumerates the drive classes
-and walks down to match the unit; walk-up is the planned change, unvalidated.
-Discovery/enumeration stays (an empty drive has no media node, so no name);
-per-poll reopen stays on `IORegistryEntryIDMatching` (reassignment-safe).
+disk for free. *Pre-pivot code did the opposite* — it enumerated the drive
+classes and walked down to match the unit; walk-up was the planned change,
+never validated, then dissolved. Discovery/enumeration stays (an empty drive
+has no media node, so no name); per-poll reopen stays on
+`IORegistryEntryIDMatching` (reassignment-safe).
 
 ---
 
-## Architectural — the DiscRecording substrate (unblocked)
+## Architectural — the DiscRecording substrate (LANDED 2026-06-10,
+## Phases 0–2b; hardware falsification pending)
+
+*Status update: Phases 0–2b of
+`doc/research/2026-06-10-dr-pivot-implementation-plan.md` shipped —
+probe modes folded into mos_notification_probe (--dr-dump + DR event
+legs), enumeration/identity/addressing on the DR snapshot, the DR
+doorbell replacing DiskArbitration (which left the library link line
+entirely), watch-static identity retiring the per-probe rehome, and
+watch-all (`mos watch --all`, `device_appeared`, per-drive removal).
+One deviation from the dies-list below: the IOMedia child walk
+SURVIVES at open — it is the only source of the media_id (F1) swap
+fingerprint, which DR has no key for. The text below is the pre-pivot
+plan, preserved as the decision record.*
 
 **Media info (drutil-parity + volume name).** Staged per
 `doc/research/2026-06-10-media-info-design.md`: stage 0 (media_class

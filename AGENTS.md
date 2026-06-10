@@ -257,6 +257,21 @@ re-deriving:
    not more: no lock, no probe, `UNKNOWN`. MMC defines the command
    surface; nothing defines the input space.
 
+### Scope-doctrine addendum: the DR pivot does not change the command
+### surface (2026-06-10)
+
+The DiscRecording substrate (directory/doorbell — enumeration,
+identity, addressing, watch wake/lifecycle) landed without touching
+layer 1: mos still authors exactly one raw CDB (GESN), the TUR⊕GESN
+state core is untouched, and DR is not a command author — it is a
+framework above the same kext the MMC path uses. Two dependency-axis
+changes for the record: DiskArbitration left the library entirely
+(the watch's DA wake retired; the notification probe keeps DA legs as
+the falsification control arm), and DiscRecording joined the link
+line. Layer 3 (privilege footprint) is unchanged — DR's
+device-status reads take no entitlements, no TCC, no exclusive
+access.
+
 ## Naming standard: the BSD vocabulary (Apple-canonical, 2026-06-10)
 
 Three concepts, three names, no synonyms:

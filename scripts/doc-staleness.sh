@@ -45,6 +45,15 @@ deny() {
 deny '\b(59/59|89/89|92/92|96/96|103/103|116/116|174/174|177/177)\b' \
      "hardcoded pure-test count; cite CI instead"
 
+# Retired by the DR pivot (2026-06-10): mos no longer issues INQUIRY,
+# enumerates by class walk, plans a walk-up, or links DiskArbitration.
+deny 'Issues up to four MMC commands' \
+     "command count is three since the DR pivot retired INQUIRY"
+deny 'walk-up is the planned change' \
+     "walk-up dissolved by DRDeviceCopyDeviceForBSDName"
+deny 'DARegisterDiskDescriptionChangedCallback' \
+     "the watch's DA wake retired in DR pivot Phase 2a"
+
 # CLI flags that never shipped / were removed.
 deny '\-\-raw\b'     "no --raw CLI flag exists; mos_raw_cdb is C API only"
 deny '\-\-verbose\b' "no --verbose CLI flag exists"
