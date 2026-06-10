@@ -339,6 +339,15 @@ static void watch_all_add_device(mos_watch_t *w,
         return; /* full and genuinely new — documented drop until a slot frees */
     }
     if (i >= 0) {
+        /* Width-agreement pins: source and destination both carry the
+           SPC-4 identity widths, so these copies can never truncate.
+           Successor of the retired INQUIRY path's per-site asserts. */
+        _Static_assert(sizeof w->slots[i].vendor   == sizeof snap->vendor,
+                       "slot vendor width must match the DR snapshot's");
+        _Static_assert(sizeof w->slots[i].product  == sizeof snap->product,
+                       "slot product width must match the DR snapshot's");
+        _Static_assert(sizeof w->slots[i].revision == sizeof snap->revision,
+                       "slot revision width must match the DR snapshot's");
         w->slots[i].registry_id = snap->registry_id;
         strlcpy(w->slots[i].vendor,   snap->vendor,   sizeof w->slots[i].vendor);
         strlcpy(w->slots[i].product,  snap->product,  sizeof w->slots[i].product);
@@ -754,7 +763,13 @@ static mos_watch_t *watch_open_from_validated_handle(
        open. Events point at these watch-owned buffers for the watch's
        whole life; per-probe handles never contribute identity (see the
        buffer comment in struct mos_watch). strlcpy truncation cannot
-       trigger: source and destination carry the same SPC-4 widths. */
+       trigger — pinned at build time: */
+    _Static_assert(sizeof w->vendor   == sizeof h->vendor_str,
+                   "watch vendor width must match the handle's");
+    _Static_assert(sizeof w->product  == sizeof h->product_str,
+                   "watch product width must match the handle's");
+    _Static_assert(sizeof w->revision == sizeof h->revision_str,
+                   "watch revision width must match the handle's");
     strlcpy(w->vendor,   h->vendor_str,   sizeof w->vendor);
     strlcpy(w->product,  h->product_str,  sizeof w->product);
     strlcpy(w->revision, h->revision_str, sizeof w->revision);

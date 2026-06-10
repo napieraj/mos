@@ -47,11 +47,14 @@
 #include <string.h>
 
 /* Bounded CFString-ish → C-buffer copy. CFStringGetCString FAILS
-   outright (no partial write contract we may rely on) when the buffer
-   is too small, so conversion goes through a generous temp and
-   truncates with strlcpy — dst is always NUL-terminated, oversize
-   input truncates instead of vanishing. Non-string values (a hostile
-   or surprising dictionary) yield "". */
+   outright (no partial-write contract we may rely on) when the buffer
+   is too small, so conversion goes through a generous temp: values up
+   to 255 bytes convert and then strlcpy-truncate to the SPC-4 field
+   width; anything larger fails the conversion and yields "" — for
+   identity fields whose real domain is ≤16 bytes, an absurdly long
+   value is hostile data and empty is the right answer. dst is always
+   NUL-terminated. Non-string values (a hostile or surprising
+   dictionary) also yield "". */
 static void mos_internal_dr_copy_string(CFTypeRef value,
                                         char *dst, size_t cap)
 {
@@ -89,24 +92,35 @@ uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path)
     return id;
 }
 
-/* Fill identity + registry id from one device's Info dictionary.
-   Identity buffers keep the SPC-4 field widths (the data is the same
-   INQUIRY bytes, pre-parsed by DR); oversize values truncate per
-   mos_internal_dr_copy_string. */
+/* The ONE extraction of the three identity strings from an Info
+   dictionary — every reader (snapshot builder, open-time identity for
+   a service) funnels through here so a future gate on the extraction
+   (encoding validation, width policy) has a single home. Buffers keep
+   the SPC-4 field widths; bounding per mos_internal_dr_copy_string. */
+static void mos_internal_dr_copy_identity_from_info(CFDictionaryRef info,
+                                                    char *vendor, size_t vcap,
+                                                    char *product, size_t pcap,
+                                                    char *revision, size_t rcap)
+{
+    mos_internal_dr_copy_string(
+        CFDictionaryGetValue(info, kDRDeviceVendorNameKey), vendor, vcap);
+    mos_internal_dr_copy_string(
+        CFDictionaryGetValue(info, kDRDeviceProductNameKey), product, pcap);
+    mos_internal_dr_copy_string(
+        CFDictionaryGetValue(info, kDRDeviceFirmwareRevisionKey),
+        revision, rcap);
+}
+
+/* Fill identity + registry id from one device's Info dictionary. */
 static void mos_internal_dr_fill_from_info(CFDictionaryRef info,
                                            mos_internal_dr_snapshot *s)
 {
     s->registry_id = mos_internal_dr_id_for_path_value(
         CFDictionaryGetValue(info, kDRDeviceIORegistryEntryPathKey));
-    mos_internal_dr_copy_string(
-        CFDictionaryGetValue(info, kDRDeviceVendorNameKey),
-        s->vendor, sizeof s->vendor);
-    mos_internal_dr_copy_string(
-        CFDictionaryGetValue(info, kDRDeviceProductNameKey),
-        s->product, sizeof s->product);
-    mos_internal_dr_copy_string(
-        CFDictionaryGetValue(info, kDRDeviceFirmwareRevisionKey),
-        s->revision, sizeof s->revision);
+    mos_internal_dr_copy_identity_from_info(info,
+                                            s->vendor,   sizeof s->vendor,
+                                            s->product,  sizeof s->product,
+                                            s->revision, sizeof s->revision);
 }
 
 /* The media BSD name lives in the Status dictionary's media-info
@@ -226,15 +240,9 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
     bool ok = false;
     CFDictionaryRef info = DRDeviceCopyInfo(dev);
     if (info) {
-        mos_internal_dr_copy_string(
-            CFDictionaryGetValue(info, kDRDeviceVendorNameKey),
-            vendor, vcap);
-        mos_internal_dr_copy_string(
-            CFDictionaryGetValue(info, kDRDeviceProductNameKey),
-            product, pcap);
-        mos_internal_dr_copy_string(
-            CFDictionaryGetValue(info, kDRDeviceFirmwareRevisionKey),
-            revision, rcap);
+        mos_internal_dr_copy_identity_from_info(info, vendor, vcap,
+                                                product, pcap,
+                                                revision, rcap);
         CFRelease(info);
         ok = true;
     }

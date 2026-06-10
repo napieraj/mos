@@ -464,7 +464,11 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
      - MOS_EVENT_DEVICE_REMOVED is PER-DRIVE and non-terminal: the
        stream continues, and the same physical drive replugged joins
        again (new registry_id) with device_appeared. The stream ends
-       only at mos_watch_close.
+       only at mos_watch_close. Removal detection rides the system's
+       device-disappeared notification with the poll as the floor, so
+       worst-case removal latency is stable_poll_ms (single-target
+       watches additionally hold a kernel interest notification and
+       typically see removal faster).
      - Zero drives at open is a valid empty stream that waits for
        arrivals; mos_watch_next_event returns MOS_ERR_TIMEOUT slices
        until something appears.

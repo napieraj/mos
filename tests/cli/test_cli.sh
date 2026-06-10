@@ -327,6 +327,8 @@ run_mos --watch --all --index 2
 assert_ec "--all + selector exits 64" "64" "$EC"
 run_mos status --all
 assert_ec "status --all exits 64" "64" "$EC"
+run_mos watch 2 --all
+assert_ec "--all + positional selector exits 64" "64" "$EC"
 
 # Test 20: watch is NDJSON end to end — the error envelope is emitted
 # on stdout in compact single-line form even WITHOUT --json.
