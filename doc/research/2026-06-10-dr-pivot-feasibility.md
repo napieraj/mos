@@ -176,9 +176,16 @@ Consequences:
    the kernel collapse.
 3. **Therefore the hybrid is the design, not the fallback**: DR for
    enumeration/identity/index/watch notifications (where the headers
-   prove it better), mos's raw GESN retained for the tray bit — the
-   §9.7 rationale is untouched by the pivot. The hardware session's
-   role reverts to what the hardware ADR already prescribes:
+   prove it better), with the **TUR⊕GESN state core retained as a
+   unit** — not "raw GESN for the tray bit" alone. The convenience
+   TUR is the raw GESN's precondition, not an optional companion:
+   the §5.5 nub gate that decides whether the exclusive lock may be
+   taken is computed from the TUR sense bytes
+   (`mos_state_core.c` step 1→2), which DR's status dictionary does
+   not expose; the TUR sense is also GESN's failure fork (3A/01,
+   3A/02, 3A/00→EMPTY_OR_OPEN) and the sole sense source. The §9.7
+   rationale is untouched by the pivot. The hardware session's role
+   reverts to what the hardware ADR already prescribes:
    falsification and fixture capture (on a GESN-failing bridge/drive
    if one enters the fixture set), never blessing.
 
