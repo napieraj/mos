@@ -141,6 +141,47 @@ reporting proves as unreliable as `GetTrayState` was, the fallback
 is the hybrid already sketched: DR for enumeration/identity/index
 (where it is provably better) + retained GESN tray probe.
 
+## Revision (2026-06-10, same day): the tray gate was wrong-shaped
+
+The Recommendation above frames the hardware session as a gate that
+could *validate* DR's tray reporting. The vendored kernel source shows
+that framing is epistemically broken, so this revision supersedes it
+(kept in place per the same-day revision pattern in AGENTS.md ADRs;
+the original stands above as the audit trail).
+
+`IOSCSIMultimediaCommandsDevice::GetTrayState`
+(`IOSCSIMultimediaCommandsDevice.cpp:782`, vendored 139.0.2) collapses
+**every** GESN failure — transport error, timeout, CHECK CONDITION —
+to `*trayState = 0` (closed) **and rewrites the error to
+`kIOReturnSuccess`** ("// Assume the tray is shut."; the banner hedges
+"(if possible)", and the failure-arm comment mis-attributes all
+failures to "doesn't support"). The chain
+`MMCDeviceInterface::GetTrayState` → user-client method #14
+(`SCSITaskUserClient.cpp:1570`) → the kernel method means every
+convenience-path consumer inherits the collapse, and **no userspace
+caller can detect it** — success status either way.
+
+Consequences:
+
+1. **A passing hardware run proves nothing about this property.** It
+   exercises only the GESN-succeeds branch; the masking fires only on
+   the failure branch and is then indistinguishable from a true
+   closed. "drutil tray reporting works on my drive" cannot falsify a
+   kernel-level failure mode. Only a GESN-*failing* device can — by
+   diffing mos's raw GESN (real sense visible) against the
+   convenience/DR report on the same drive at the same instant.
+2. **Whether `kDRDeviceIsTrayOpenKey` rides this path is unverifiable**
+   (DR is closed-source), and per (1) no positive observation can
+   distinguish a DR that issues its own GESN from one that inherits
+   the kernel collapse.
+3. **Therefore the hybrid is the design, not the fallback**: DR for
+   enumeration/identity/index/watch notifications (where the headers
+   prove it better), mos's raw GESN retained for the tray bit — the
+   §9.7 rationale is untouched by the pivot. The hardware session's
+   role reverts to what the hardware ADR already prescribes:
+   falsification and fixture capture (on a GESN-failing bridge/drive
+   if one enters the fixture set), never blessing.
+
 ## Artifacts (dev-tree only, `docs/apple/` — preflight-stripped)
 
 - `docs/apple/DiscRecording/` — DiscRecording.h, DRCoreDevice.h,

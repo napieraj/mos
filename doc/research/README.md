@@ -55,9 +55,13 @@ in `AGENTS.md`. The chain of files is the audit trail.
   current macOS (15.5 SDK headers vendored and diffed, deprecation
   status, coverage parity, runloop/entitlement caveats, survival
   risk). Verdict: feasible and advisable for enumeration/status/watch
-  with the MMC sense path retained, gated on one Tahoe hardware
-  validation pass. Records that public kernel source for the MMC kext
-  froze at Tiger-era 139.0.2.
+  with the MMC sense path retained. Same-day revision in the file:
+  the original tray-validation gate was wrong-shaped — the vendored
+  kernel source proves GetTrayState's failure collapse is
+  kernel-level and undetectable from userspace, so positive hardware
+  runs cannot bless DR's tray bit; the GESN hybrid is the design,
+  not the fallback. Also records that public kernel source for the
+  MMC kext froze at Tiger-era 139.0.2.
 
 - `2026-06-10-gesn-single-poll-rebuttal.md` — Dated rebuttal of the
   2026-05-29 note per this README's append rule: the 2026-05-30
