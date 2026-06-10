@@ -206,7 +206,10 @@ assert_contains "list JSON has drives array"   "$OUT" '"drives":'
 
 # Test 10: --bsd with a non-resolving name exits 66 with mos.error.v1
 # envelope. Distinct from --index path because the open logic differs.
-run_mos --bsd diskdoesnotexist --json
+# The name must be WELL-FORMED (disk<N>): mos_open_by_bsd_name rejects
+# malformed names with invalid_arg/64 before the no_device/66 lookup
+# (mos_internal_parse_bsd_unit returns -1, see src/mos_scsi.c).
+run_mos --bsd disk99 --json
 assert_ec       "bad --bsd JSON exit 66"          "66"   "$EC"
 assert_contains "bad --bsd JSON has mos.error.v1" "$OUT" '"schema": "mos.error.v1"'
 
@@ -216,7 +219,7 @@ assert_contains "bad --bsd JSON has mos.error.v1" "$OUT" '"schema": "mos.error.v
 # emit_unknown_and_fail). This is the only --watch path testable
 # without IOKit; the full event-stream behavior is exercised by the
 # pure watch_core unit tests and the hardware integration matrix.
-run_mos --watch --bsd diskdoesnotexist --json
+run_mos --watch --bsd disk99 --json
 assert_ec          "bad --bsd --watch exit 66"           "66"   "$EC"
 # Watch-mode JSON is NDJSON: the error envelope is COMPACT (no spaces
 # after colons) and single-line, unlike the pretty one-shot envelope.
@@ -246,7 +249,7 @@ assert_contains "list subcommand has mos.list.v1" "$OUT" '"schema": "mos.list.v1
 
 # Test 15: subcommand 'watch' is an alias for --watch; same
 # watch-open-failure surface as Test 11.
-run_mos watch --bsd diskdoesnotexist --json
+run_mos watch --bsd disk99 --json
 assert_ec          "watch subcommand bad --bsd exit 66"           "66" "$EC"
 assert_contains    "watch subcommand bad --bsd has mos.error.v1"  "$OUT" '"schema":"mos.error.v1"'
 assert_single_line "watch subcommand envelope is one NDJSON line" "$OUT"
@@ -313,7 +316,7 @@ assert_ec "two positionals exit 64" "64" "$EC"
 
 # Test 19: non-digit positional routes as a bsd form; a non-resolving
 # name exits 66 through the open path (same as --bsd).
-run_mos status diskdoesnotexist --json
+run_mos status disk99 --json
 assert_ec       "positional bsd: exit 66"          "66"   "$EC"
 assert_contains "positional bsd: mos.error.v1"     "$OUT" '"schema": "mos.error.v1"'
 

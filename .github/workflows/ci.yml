@@ -297,7 +297,12 @@ jobs:
 
       - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
         with:
-          python-version: '3.x'
+          # Pinned, not '3.x': requirements-ci.txt hash-pins rpds-py
+          # 0.20.0, whose newest prebuilt wheels stop at cp312/cp313 —
+          # a newer interpreter forces an sdist build that fails (its
+          # PyO3 doesn't know the new ABI). Bump together with the
+          # requirements file.
+          python-version: '3.12'
 
       - name: Install jsonschema (hash-pinned)
         # --require-hashes refuses to install any package whose downloaded
