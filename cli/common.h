@@ -54,7 +54,11 @@ static inline bool mos_cli_profile_present(uint16_t profile)
 typedef struct {
     char     state[24];
     char     bsd[24];        /* "" == none */
-    char     vendor[9], product[17], revision[5];
+    /* Identity strings stored PRE-ESCAPED (mos_safe_ascii, \xNN for
+       every byte outside printable ASCII) — the human table prints
+       verbatim, so sanitization happens at row construction. Widths
+       are the SPC-4 field widths at the 4x worst-case escape. */
+    char     vendor[33], product[65], revision[17];
     uint64_t registry_id;
 } list_row;
 

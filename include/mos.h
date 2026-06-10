@@ -307,10 +307,11 @@ int64_t mos_handle_bsd_unit(const mos_handle_t *h);
 
 /*
  * Query drive state. Uses MMC convenience methods by default (no exclusive
- * access required). On success returns MOS_OK and points *out at a
- * handle-owned result; on failure returns a negative code and sets *out to
- * NULL (when out is non-NULL). Read it through the mos_state_result_*
- * accessors.
+ * access required). `out` is REQUIRED — NULL returns MOS_ERR_INVALID_ARG
+ * (unlike the optional err_out parameters elsewhere). On success returns
+ * MOS_OK and points *out at a handle-owned result; on failure returns a
+ * negative code with *out set to NULL. Read it through the
+ * mos_state_result_* accessors.
  *
  * The result is handle-owned: do not free it, and do not retain it across
  * calls — it is valid only until the next mos_query_state() on this handle
@@ -335,9 +336,10 @@ typedef struct mos_disc_info mos_disc_info;
  * Meaningful only with media present and the unit ready: with no disc
  * (or a non-recordable unit that rejects 0x51) the drive fails the
  * command and this returns MOS_ERR_IO — query state first if you need
- * to distinguish "no disc" from "drive unreachable". On success
- * returns MOS_OK and points *out at a handle-owned result; on failure
- * returns a negative code and sets *out to NULL (when out is non-NULL).
+ * to distinguish "no disc" from "drive unreachable". `out` is REQUIRED
+ * (NULL returns MOS_ERR_INVALID_ARG). On success returns MOS_OK and
+ * points *out at a handle-owned result; on failure returns a negative
+ * code with *out set to NULL.
  */
 mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out);
 
@@ -540,10 +542,10 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
                                 mos_error *err_out);
 
 /* Block until the next event or until timeout_ms elapses with no
-   transition. On event, returns MOS_OK and points *out at a watch-owned
-   event; otherwise a non-OK code (MOS_ERR_TIMEOUT if none in time) and sets
-   *out to NULL (when out is non-NULL). A negative timeout_ms blocks
-   indefinitely. On MOS_EVENT_DEVICE_REMOVED, close the watch — subsequent
+   transition. `out` is REQUIRED (NULL returns MOS_ERR_INVALID_ARG). On
+   event, returns MOS_OK and points *out at a watch-owned event;
+   otherwise a non-OK code (MOS_ERR_TIMEOUT if none in time) with *out
+   set to NULL. A negative timeout_ms blocks indefinitely. On MOS_EVENT_DEVICE_REMOVED, close the watch — subsequent
    calls return MOS_ERR_NO_DEVICE.
 
    The event is watch-owned: do not free it or retain it (or any string

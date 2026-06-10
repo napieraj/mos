@@ -166,7 +166,7 @@
         "recoverable"
       ],
       "additionalProperties": false,
-      "description": "Present only on event=error. Same shape as mos.error.v1's nested error object EXCEPT that 'ok' is excluded from code \u2014 an error event with code=ok is contradictory.",
+      "description": "Present only on event=error. Same shape as mos.error.v1's nested error object EXCEPT that 'ok' is excluded from code (an error event with code=ok is contradictory) AND there is no 'context' field \u2014 the stream itself is the context; mos.error.v1's context names what a one-shot invocation was attempting.",
       "properties": {
         "code": {
           "enum": [

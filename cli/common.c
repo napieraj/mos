@@ -198,9 +198,17 @@ static void query_row(const mos_device_info_t *info, list_row *row)
     const char *v = mos_state_result_vendor(r);
     const char *p = mos_state_result_product(r);
     const char *rv = mos_state_result_revision(r);
-    if (v)  snprintf(row->vendor,   sizeof row->vendor,   "%s", v);
-    if (p)  snprintf(row->product,  sizeof row->product,  "%s", p);
-    if (rv) snprintf(row->revision, sizeof row->revision, "%s", rv);
+    /* Escape drive-controlled identity bytes at row construction —
+       the human table prints cells verbatim (layout-only contract).
+       The JSON list emitter re-escapes the stored form: for normal
+       printable identity this is the identity transform; for hostile
+       bytes the backslash of \xNN re-escapes to \\xNN — still valid,
+       unambiguous, injection-safe JSON (it renders the same text a
+       human-mode reader sees, which is the point of storing one
+       sanitized form). */
+    if (v)  (void)mos_safe_ascii(v,  row->vendor,   sizeof row->vendor);
+    if (p)  (void)mos_safe_ascii(p,  row->product,  sizeof row->product);
+    if (rv) (void)mos_safe_ascii(rv, row->revision, sizeof row->revision);
     mos_close(h);
 }
 

@@ -50,11 +50,15 @@ mac-optical-state/
 │   ├── mos_state.c              # adapter: fills env from handle, calls core
 │   ├── mos_watch.c              # IOKit watch adapter (kIOGeneralInterest + DA)
 │   └── mos_scsi.c               # IOKit lifecycle, MMC wrappers, raw CDB
+├── cli/
+│   ├── main.c                   # argument parsing + dispatch
+│   ├── common.c / .h            # shared CLI state, list rows, envelopes
+│   ├── status.c / list.c / watch.c  # one file per command
+│   ├── io.c / .h                # output/escaping helpers
+│   └── human.c / .h             # human-readable layout engine
 ├── tools/
-│   ├── mos.c                    # CLI binary (getopt_long + manual JSON)
-│   ├── mos_cli_io.c / .h        # CLI output/escaping helpers
-│   ├── mos_probe.c              # C-only hardware smoke test
-│   └── mos_notification_probe.c # push-notification characterization tool
+│   ├── mos_probe.c              # C-only library-path smoke test
+│   └── mos_notification_probe.c # substrate observer (IOKit/DA/DR + --dr-dump)
 ├── tests/
 │   ├── test_harness.h           # tiny TEST/RUN/EXPECT macros
 │   ├── test_main.c              # aggregator
@@ -159,10 +163,11 @@ two-tier split rationale). Non-`mos_` symbols fail the build.
   `CoreFoundation.framework`. Pure helpers were extracted to
   `mos_pure.c` during the v0.2 library split.
 
-- **`tools/mos.c`** — CLI front-end. Argument parsing
-  with `getopt_long`, JSON emission hand-rolled, output contract
-  consumed by downstream applications. Links `mos_core`; does not include
-  private headers.
+- **`cli/`** — the CLI front-end, one file per command over a shared
+  layer (`main.c` parses with `getopt_long` and dispatches;
+  `status.c`/`list.c`/`watch.c` implement the verbs; JSON emission is
+  hand-rolled; the output contract is consumed by downstream
+  automation). Links `mos_core`; does not include private headers.
 
 - **`tools/mos_probe.c`** — minimal hardware smoke test. Run this
   first on a new machine to validate the IOKit path works before
@@ -196,9 +201,10 @@ two-tier split rationale). Non-`mos_` symbols fail the build.
    on purpose — that is the thing that makes it embeddable in
    HandBrake, VLC, Kodi, and friends.
 7. **Do not free a `mos_handle_t` before you've consumed its
-   `mos_state_result`.** The `bsd_name`, `vendor`, and `product` fields
-   in the result are borrowed pointers into the handle's internal
-   buffers — they go stale the moment `mos_close()` is called or
+   `mos_state_result`.** The strings the `mos_state_result_vendor` /
+   `_product` / `_revision` accessors return are borrowed pointers
+   into the handle's internal buffers — they go stale the moment
+   `mos_close()` is called or
    `mos_query_state()` is invoked again. Emit / copy first, close
    after. This was a P1 bug in early v0.2 code; the tools/CLI shows
    the correct ordering.

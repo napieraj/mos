@@ -70,11 +70,24 @@ static void emit_human(const mos_state_result *r, int index1)
     const char *v  = mos_state_result_vendor(r);
     const char *p  = mos_state_result_product(r);
     const char *rv = mos_state_result_revision(r);
-    char drive_buf[40];
+    /* Identity strings are drive-originated bytes via DR's closed
+       parse — an unverifiable intermediary that plausibly launders
+       most hostile content but provably cannot be RELIED on for ESC
+       (C0 controls survive every encoding in the chain). The human
+       layout engine prints verbatim (layout only, by contract), so
+       escape HERE — \xNN per mos_safe_ascii, the same rule the JSON
+       path applies to these same strings. Buffer math: worst case
+       every byte escapes 4x (vendor 8→32, product 16→64, revision
+       4→16, + NULs). */
+    char v_esc[33], p_esc[65], rv_esc[17];
+    (void)mos_safe_ascii(v,  v_esc,  sizeof v_esc);
+    (void)mos_safe_ascii(p,  p_esc,  sizeof p_esc);
+    (void)mos_safe_ascii(rv, rv_esc, sizeof rv_esc);
+    char drive_buf[120];
     if (v || p || rv) {
         snprintf(drive_buf, sizeof drive_buf, "%s%s%s%s%s",
-                 v ? v : "", v && (p || rv) ? " " : "",
-                 p ? p : "", p && rv ? " " : "", rv ? rv : "");
+                 v_esc, v && (p || rv) ? " " : "",
+                 p_esc, p && rv ? " " : "", rv_esc);
         pairs[n++] = (mos_cli_human_pair){ "Drive", drive_buf };
     } else {
         pairs[n++] = (mos_cli_human_pair){ "Drive", NULL };

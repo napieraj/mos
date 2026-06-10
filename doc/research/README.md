@@ -77,6 +77,14 @@ in `AGENTS.md`. The chain of files is the audit trail.
   2b (snapshot-as-join needs no schema motion; the DR notification
   center is the bus the watch was always meant to sit on).
 
+- `2026-06-10-full-tree-review.md` — 21-angle line-by-line review of
+  the whole tree at 0.4.0-dev: per-area verdicts (nine areas clean,
+  incl. the nub gate re-verified against vendored kernel source and a
+  complete CF/IOKit lifecycle ledger), three real bugs found and
+  fixed (human-path terminal injection, watch-all join demotion,
+  schema-invalid index sentinel), the refuted-candidates record, and
+  the agent-contradiction process note. Fixes in commit 46be3d7.
+
 - `2026-06-10-gesn-single-poll-rebuttal.md` — Dated rebuttal of the
   2026-05-29 note per this README's append rule: the 2026-05-30
   state-detection redesign adopted raw GESN issuance for the tray

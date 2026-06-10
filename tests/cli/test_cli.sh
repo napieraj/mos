@@ -300,27 +300,27 @@ assert_ec "list subcommand + --index rejected with EX_USAGE" "64" "$EC"
 run_mos list --bsd disk4
 assert_ec "list subcommand + --bsd rejected with EX_USAGE"   "64" "$EC"
 
-# Test 16: positional drive subject (CLI design 2026-06-10). All-digits
+# Test 20: positional drive subject (CLI design 2026-06-10). All-digits
 # parses as an index: `mos status 99` matches the --index 99 contract.
 run_mos status 99
 assert_ec     "positional index: exit 66"     "66" "$EC"
 assert_equals "positional index: stdout empty" ""  "$OUT"
 
-# Test 17: positional + explicit selector is a contradiction (64).
+# Test 21: positional + explicit selector is a contradiction (64).
 run_mos status 2 --index 1
 assert_ec "positional+--index conflict exits 64" "64" "$EC"
 
-# Test 18: two positional drive arguments are rejected (64).
+# Test 22: two positional drive arguments are rejected (64).
 run_mos status 1 2
 assert_ec "two positionals exit 64" "64" "$EC"
 
-# Test 19: non-digit positional routes as a bsd form; a non-resolving
+# Test 23: non-digit positional routes as a bsd form; a non-resolving
 # name exits 66 through the open path (same as --bsd).
 run_mos status disk99 --json
 assert_ec       "positional bsd: exit 66"          "66"   "$EC"
 assert_contains "positional bsd: mos.error.v1"     "$OUT" '"schema": "mos.error.v1"'
 
-# Test 19b: --all is watch-only and selector-exclusive (DR pivot 2b).
+# Test 24: --all is watch-only and selector-exclusive (DR pivot 2b).
 run_mos --all
 assert_ec "--all without watch exits 64" "64" "$EC"
 run_mos --watch --all --index 2
@@ -330,7 +330,7 @@ assert_ec "status --all exits 64" "64" "$EC"
 run_mos watch 2 --all
 assert_ec "--all + positional selector exits 64" "64" "$EC"
 
-# Test 20: watch is NDJSON end to end — the error envelope is emitted
+# Test 25: watch is NDJSON end to end — the error envelope is emitted
 # on stdout in compact single-line form even WITHOUT --json.
 run_mos watch 99
 assert_ec          "watch sans --json: exit 66"          "66"   "$EC"

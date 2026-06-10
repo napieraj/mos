@@ -127,8 +127,8 @@
     },
     "index": {
       "type": "integer",
-      "minimum": 1,
-      "description": "1-based drive index at capture time (the Index column of mos list / the positional selector). Live addressing, not identity."
+      "minimum": 0,
+      "description": "1-based drive index at capture time (the Index column of mos list / the positional selector), or 0 when unresolvable \u2014 the drive left the device array between open and emit. Live addressing, not identity."
     }
   },
   "allOf": [

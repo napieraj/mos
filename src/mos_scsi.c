@@ -229,6 +229,11 @@ static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
         CFUUIDGetUUIDBytes(kIOMMCDeviceInterfaceID),
         (LPVOID *)&h->mmc);
     if (hr != S_OK || !h->mmc) {
+        /* COM contract says a failed QueryInterface leaves the out
+           pointer untouched (it's calloc-NULL here); NULL it anyway so
+           mos_close can never Release a garbage value if an Apple
+           plug-in ever violates that contract. */
+        h->mmc = NULL;
         if (err) *err = MOS_ERR_DRIVER_REJECTED;
         mos_close(h);
         return NULL;
@@ -668,7 +673,7 @@ mos_error mos_raw_cdb(mos_handle_t *h,
        kSCSICDBSize_* in SCSITask.h). Reject other lengths at the API
        boundary so callers get MOS_ERR_INVALID_ARG instead of an opaque
        execute-time failure. */
-    if (!h || !cdb || !scsi_task_status || !sense)
+    if (!h || !h->mmc || !cdb || !scsi_task_status || !sense)
         return MOS_ERR_INVALID_ARG;
     if (cdb_len != 6 && cdb_len != 10 && cdb_len != 12 && cdb_len != 16)
         return MOS_ERR_INVALID_ARG;
@@ -711,8 +716,11 @@ mos_error mos_raw_cdb(mos_handle_t *h,
 
     SCSITaskInterface **t = (*h->std)->CreateSCSITask(h->std);
     if (!t) {
-        /* Release the lock we just acquired — we can't make forward
-           progress with this task and holding it serves no purpose. */
+        /* Release the lock — by the function's invariant it was
+           acquired above (every exit path below clears have_exclusive,
+           so it is always false on entry; the conditional acquire
+           exists for that documented invariant, not for a held-lock
+           entry case). Holding it serves no purpose without a task. */
         (*h->std)->ReleaseExclusiveAccess(h->std);
         h->have_exclusive = false;
         return MOS_ERR_IO;

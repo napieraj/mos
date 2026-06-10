@@ -85,8 +85,14 @@ static void init_timebase(void) {
 static uint64_t mono_ms_since_start(void) {
     uint64_t abs_now = mach_absolute_time();
     uint64_t abs_delta = abs_now - g_start_mono_ns;
-    /* Convert mach_absolute_time units to nanoseconds, then to ms. */
-    uint64_t ns = abs_delta * g_timebase.numer / g_timebase.denom;
+    /* Convert mach_absolute_time units to nanoseconds, then to ms.
+       Divide-first to keep the multiply in range: a plain
+       delta*numer/denom overflows uint64 on Intel timebases
+       (numer>1) at large uptimes; quotient/remainder split loses
+       nothing (remainder*numer < denom*numer fits trivially). */
+    uint64_t q  = abs_delta / g_timebase.denom;
+    uint64_t r  = abs_delta % g_timebase.denom;
+    uint64_t ns = q * g_timebase.numer + r * g_timebase.numer / g_timebase.denom;
     return ns / 1000000ULL;
 }
 
@@ -336,8 +342,13 @@ static void dr_dump_plist(CFTypeRef obj)
                                               kCFPropertyListXMLFormat_v1_0,
                                               0, NULL);
     if (data) {
-        fwrite(CFDataGetBytePtr(data), 1, (size_t)CFDataGetLength(data),
-               stdout);
+        size_t len = (size_t)CFDataGetLength(data);
+        if (fwrite(CFDataGetBytePtr(data), 1, len, stdout) != len) {
+            /* A truncated fixture is worse than no fixture: say so on
+               stderr (stdout may be the broken stream itself). */
+            fputs("warning: short write dumping plist — fixture "
+                  "output is incomplete\n", stderr);
+        }
         CFRelease(data);
         return;
     }
@@ -515,7 +526,7 @@ int main(int argc, char **argv) {
     if (!mos_bsd_name_format(bsd_unit, bsd_name, sizeof bsd_name)) {
         fprintf(stderr, "error: bsd unit %lld is not a valid whole-disk unit\n",
                 (long long)bsd_unit);
-        return 2;
+        return EX_USAGE;
     }
 
     /* Resolve the drive's io_service_t. Fail fast if not found. */

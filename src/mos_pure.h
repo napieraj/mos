@@ -543,8 +543,11 @@ void mos_internal_watch_notify_wake(mos_watch_state *w);
 typedef struct {
     mos_watch_state cores[MOS_WATCH_ALL_CAP];
     bool            active[MOS_WATCH_ALL_CAP];
-    /* Slot joined after the stream opened: its first event (the core's
-       snapshot) is relabeled MOS_EVENT_DEVICE_APPEARED, then cleared. */
+    /* Slot joined after the stream opened: its first SNAPSHOT is
+       relabeled MOS_EVENT_DEVICE_APPEARED, then the flag clears.
+       Earlier ERROR events (probe failing right after hot-plug) do
+       NOT consume the join — the announcement waits for the first
+       successful probe. */
     bool            join_pending[MOS_WATCH_ALL_CAP];
     uint64_t        seq;   /* stream-global; overrides per-core seq */
 } mos_watch_all_state;
