@@ -645,7 +645,7 @@ size_t mos_safe_ascii(const char *in, char *out, size_t out_cap);
 
 /* ---- Library version ------------------------------------------------- */
 
-#define MOS_VERSION_STRING "0.3.1-dev"
+#define MOS_VERSION_STRING "0.4.0-dev"
 
 const char *mos_version_string(void);
 

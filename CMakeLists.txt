@@ -13,7 +13,7 @@
 
 cmake_minimum_required(VERSION 3.20)
 project(mac_optical_state
-    VERSION     0.3.1
+    VERSION     0.4.0
     LANGUAGES   C
     DESCRIPTION "macOS optical drive state via MMC over IOKit")
 

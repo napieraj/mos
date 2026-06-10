@@ -389,7 +389,7 @@ jobs:
 
   strict-adapter-build:
     # macOS adapter TUs compiled with stricter -Werror flags than the
-    # default CMake mos_warnings interface. As of v0.3.1-dev the list
+    # default CMake mos_warnings interface. As of v0.4.0-dev the list
     # is: src/mos_scsi.c, src/mos_watch.c, src/mos_state.c, the cli/ sources,
     # tools/mos_probe.c, tools/mos_notification_probe.c.
     # The extra
