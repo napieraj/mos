@@ -252,6 +252,30 @@ if(MOS_BUILD_NOTIFICATION_PROBE)
     )
 endif()
 
+# ---- Opt-in: DiscRecording observation probe ----------------------------
+#
+# tools/mos_dr_probe.c is the Phase 0 tool of the DR pivot
+# (doc/research/2026-06-10-dr-pivot-implementation-plan.md): dumps
+# DRCopyDeviceArray order, per-device Info/Status dictionaries as XML
+# plists, and a timestamped notification stream. Hardware capture runs
+# feed tests/fixtures/; the falsification questions it answers are
+# listed in the plan. Deliberately links DiscRecording/CoreFoundation
+# ONLY — not mos_core, not mos_pure — so its observations pass through
+# none of mos's abstractions.
+
+option(MOS_BUILD_DR_PROBE
+       "Build the mos_dr_probe DiscRecording diagnostic CLI" OFF)
+if(MOS_BUILD_DR_PROBE)
+    add_executable(mos_dr_probe tools/mos_dr_probe.c)
+    target_link_libraries(mos_dr_probe PRIVATE
+        "-framework CoreFoundation"
+        "-framework DiscRecording"
+        mos_warnings)
+    set_target_properties(mos_dr_probe PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+endif()
+
 endif() # APPLE
 
 # ---- Opt-in: unit tests + CLI contract test ---------------------------
