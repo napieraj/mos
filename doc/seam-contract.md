@@ -152,6 +152,25 @@ v0.4 parser that derives a bound any other way violates this contract.
 and fuzz phase 6's standing property check (I1–I4: bounded by each
 authority; monotone in the claim). Detection: pinned + fuzz.)*
 
+**O-4 exception (recorded 2026-06-11): the GESN tray probe.**
+`mos_internal_mmc_get_tray_state` passes `bytes_transferred = NULL` to
+`mos_raw_cdb` and bounds the decoder by `allocated ∧ claimed` only —
+the `transferred` leg is deliberately omitted because some USB bridges
+under-report the realized byte count, and trusting it would fail
+honest replies (rationale at the call site, `mos_scsi.c`). Consequence
+is bounded: worst case, a device claiming a full Media event
+descriptor over a genuinely short transfer has byte 5 read from the
+zero-initialized buffer as "door closed", on the not-ready path only —
+and the state core treats a false decoder return as "no authoritative
+bit", so nothing downstream compounds it. This is the ONLY waiver;
+every other variable-size transfer follows O-4 as written, and any new
+parser still must. Revisit when the rig can A/B `realizedByteCount`
+against bridge behavior — evidence either retires the waiver or pins
+it with a captured fixture. Two independent review passes (2026-06-11
+intake) filed this as an O-4 violation before finding the call-site
+comment; this entry exists so the next one doesn't, and so nobody
+"fixes" it into breaking the bridges it accommodates.
+
 ---
 
 ## 4. Value domains

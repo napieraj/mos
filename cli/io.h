@@ -23,7 +23,14 @@ void mos_cli_bsd_dev_node(FILE *f, int64_t unit);
 
 /* Write `s` to `f` with every non-printable byte rendered as \xNN via
  * mos_safe_ascii (defends a tty against control-sequence injection from
- * device-controlled strings). No surrounding quotes. NULL is a no-op. */
+ * device-controlled strings). No surrounding quotes. NULL is a no-op.
+ * Renders through a fixed 4 KiB buffer and silently drops anything
+ * beyond it (worst case ~1 KiB of input if every byte escapes) —
+ * unlike mos_cli_json_str's measure-then-allocate two-pass. Fine for
+ * every current call site (argv, env values, SPC identity strings,
+ * all far below the floor); not for unbounded payloads. \xNN
+ * truncation cannot split into something dangerous the way JSON
+ * mid-escape truncation can. */
 void mos_cli_safe_ascii(FILE *f, const char *s);
 
 /* Outcome of finalizing stdout after a tool has written its output:

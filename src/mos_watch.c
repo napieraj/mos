@@ -856,6 +856,9 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
     }
     w->all_mode           = true;
     w->bsd_unit           = -1;   /* no single unit; accessor contract */
+    /* Raw caller values (possibly 0); each per-core watch_init
+       substitutes the documented defaults, so these fields are NOT
+       effective rates. */
     w->stable_poll_ms     = stable_poll_ms;
     w->transition_poll_ms = transition_poll_ms;
     mos_internal_watch_all_init(&w->all);
