@@ -52,14 +52,28 @@ static inline bool mos_cli_profile_present(uint16_t profile)
    the multi-drive EX_USAGE mini-list share these). */
 #define MOS_CLI_LIST_CAP 64
 
+/* SPC-4 INQUIRY identity field widths + NUL (vendor 8, product 16,
+   revision 4) — mirrors the library's handle/snapshot buffer widths.
+   MOS_CLI_ESC_CAP is the mos_safe_ascii worst case over a raw buffer
+   of that width: every byte escapes to \xNN (4x) + NUL. One home for
+   the math so the status and list emitters can't drift apart. */
+#define MOS_CLI_VENDOR_CAP    9
+#define MOS_CLI_PRODUCT_CAP  17
+#define MOS_CLI_REVISION_CAP  5
+#define MOS_CLI_ESC_CAP(raw_cap) (4 * ((raw_cap) - 1) + 1)
+
 typedef struct {
     char     state[24];
     char     bsd[24];        /* "" == none */
-    /* Identity strings stored PRE-ESCAPED (mos_safe_ascii, \xNN for
-       every byte outside printable ASCII) — the human table prints
-       verbatim, so sanitization happens at row construction. Widths
-       are the SPC-4 field widths at the 4x worst-case escape. */
-    char     vendor[33], product[65], revision[17];
+    /* Identity strings stored RAW (bytes as delivered by the platform
+       directory, trailing-stripped at the extraction funnel) — the
+       JSON emitter is byte-faithful through mos_cli_json_str, and the
+       human table escapes at emit time, so all surfaces render the
+       same stored bytes (E1 resolution,
+       doc/research/2026-06-11-review-triage.md). */
+    char     vendor[MOS_CLI_VENDOR_CAP];
+    char     product[MOS_CLI_PRODUCT_CAP];
+    char     revision[MOS_CLI_REVISION_CAP];
     uint64_t registry_id;
 } list_row;
 

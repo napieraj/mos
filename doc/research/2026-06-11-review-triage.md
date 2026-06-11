@@ -132,21 +132,22 @@ discussion record; supersedes the (a)/(b) fork above. Decision:
    per-field validity = every byte in 0x20–0x7E. No other mutation:
    leading/interior spaces are in-charset data, and byte-exactness
    is what makes pre/post-flash equality checks trustworthy.
-3. **Explicit out-of-band signal, attribution-free.** New OPTIONAL
-   field `identity_nonprintable` (array, closed enum
-   ["vendor","product","revision"]) on mos.state.v1, mos.event.v1,
-   and mos.list.v1 rows, emitted only when non-empty. Semantics are
-   scoped to OUR input boundary: "the delivered value contains
-   bytes outside printable ASCII." NOT a drive-conformance verdict —
-   we never see wire INQUIRY, only the kext→registry→DR→CFString
-   pipeline's output, so cause (hostile drive, corrupted firmware,
-   lossy bridge, platform transformation) is deliberately
-   unattributed. SPC's role is to justify the PREDICATE (the
-   legitimate end-to-end domain is ASCII-graphic, the one subdomain
-   the platform pipeline verifiably carries faithfully), not to be
-   the thing we claim to enforce. One-way evidence, documented:
-   flagged ⇒ some link deviated; unflagged ⇒ delivered-clean only —
-   closed layers could launder garbage before we see it.
+3. **~~Explicit out-of-band signal~~ — DROPPED at implementation
+   (maintainer, same day).** An `identity_nonprintable` schema field
+   was designed (array of field names, attribution-free semantics
+   scoped to our input boundary) and struck before landing: the
+   byte-faithful JSON already surfaces non-conforming bytes IN the
+   value (visible escapes; pre/post-flash equality fails), the
+   incidence of the flag ever firing is near zero, and detection
+   tooling beyond "the value is visibly not what you expected"
+   belongs to flashing/diagnostic tools, not mos. Dropping it also
+   avoided shipping an orphan predicate (the A6/PVD-parser shape).
+   The attribution analysis stands as doctrine for any future
+   signal: we never see wire INQUIRY, only the
+   kext→registry→DR→CFString pipeline's output, so any such marker
+   must describe the delivered value, never claim a drive-
+   conformance verdict; SPC justifies predicates, it is not what we
+   enforce.
 4. **Field semantics documented at the directory boundary:**
    identity is "as delivered by the platform device directory
    (DiscRecording)," explicitly not wire INQUIRY. Wire-truth
@@ -188,22 +189,27 @@ discussion record; supersedes the (a)/(b) fork above. Decision:
    joined. README's parity sentence sharpens to the actual rule:
    enum strings shared verbatim; identity is the same three fields
    on every surface (byte-faithful in JSON, escaped for
-   terminals).
+   terminals). Second maintainer refinement: the Profile line's
+   token order inverts to coarse → precise — `bd  bd_rom  (0x0040)`
+   — minimum-viable reading first, raw hex last in parens.
+   Naming note from the same round: the funnel helper is
+   `strip_trailing_spaces`, not `unpad` — "unpad" asserts the
+   provenance (that the bytes WERE padding), which the closed DR
+   layer makes unknowable; name the operation, not the provenance.
 
-Implementation checklist (one commit, per the schema ADR's
-pre-tag in-place rule): trailing-unpad in the mos_dr.c identity
-funnel; nonprintable predicate as a pure helper (validity is a
-pure function of the delivered string, so emitters recompute at
-the edge rather than plumbing a bitmask through every struct);
-list_row goes raw with escaping moved to the table emitter; the
-three JSON emitters gain `identity_nonprintable`; status human
-gains the three identity rows; schema updates + positive AND
-negative fixtures; README contract section + example refresh;
-CLI contract-test pins updated. C-API conformance accessor
-deferred to the v0.4 typed work (library consumers already
-receive raw bytes). NOTE: the CLI and adapter TUs do not compile
-in the Linux dev container — the pure tests and schema suite gate
-what they can; macOS CI is the compile gate for the rest.
+Implementation (as landed; the flag and its predicate were dropped
+per the revised item 3): trailing strip in the mos_dr.c identity
+funnel; list_row goes raw (SPC widths) with escaping moved to the
+table emitter; status human splits Drive into Vendor/Product/Rev
+and inverts the Profile token order; schema descriptions reworded
+to the directory boundary (no shape change, so no new fixtures);
+README parity sentence + examples + flash-freshness note. JSON
+emitter code is untouched — byte-faithful behavior falls out of
+raw storage. C-API conformance accessor deferred to the v0.4
+typed work (library consumers already receive raw bytes). NOTE:
+the CLI and adapter TUs do not compile in the Linux dev container
+— the pure tests and schema suite gate what they can; macOS CI is
+the compile gate for the rest.
 
 ### E2. "Profile-class change" fallback compares raw profile codes
 

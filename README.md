@@ -30,20 +30,33 @@ stderr — no first-drive guessing.
 
 Human views and JSON share every enum string verbatim
 (`empty_or_open`, `bd_rom`) — a terminal report and a jq query can
-never disagree. The `bsd` field carries the full device node
-(`/dev/disk4`) in both surfaces: pasteable, pipeable, and always a
-valid drive argument when non-null (an empty drive has none).
+never disagree. Identity is the same three fields on every surface
+(`vendor` / `product` / `revision`, never joined into one line):
+JSON carries the bytes as delivered by the platform device directory
+(string-escaped only, no content sanitization; trailing spaces
+stripped), terminal views render the same bytes with non-printable
+content escaped as `\xNN`. Note the delivery boundary: identity comes
+from DiscRecording's directory — INQUIRY-shaped, but not wire
+INQUIRY — and the kernel captures it once at device attach, so a
+firmware flash refreshes it only through re-enumeration. Verifying a
+flash? Confirm `registry_id` changed too: an unchanged id means
+you're reading the pre-flash cache. The `bsd` field carries the full
+device node (`/dev/disk4`) in both surfaces: pasteable, pipeable,
+and always a valid drive argument when non-null (an empty drive has
+none).
 
 ### Status (default)
 
 ```
 $ mos status 1
    State:  ready
- Profile:  0x0040  bd_rom  (bd)
+ Profile:  bd  bd_rom  (0x0040)
    Index:  1
      BSD:  /dev/disk4
 Registry:  4295032831
-   Drive:  HL-DT-ST BD-RE WH16NS60 1.00
+  Vendor:  HL-DT-ST
+ Product:  BD-RE WH16NS60
+     Rev:  1.00
 ```
 
 ```
@@ -73,7 +86,9 @@ $ mos status 1
    Index:  1
      BSD:  -
 Registry:  4295032831
-   Drive:  HL-DT-ST BD-RE WH16NS60 1.00
+  Vendor:  HL-DT-ST
+ Product:  BD-RE WH16NS60
+     Rev:  1.00
 ```
 
 ### List

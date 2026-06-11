@@ -65,7 +65,7 @@
     },
     "product": {
       "type": "string",
-      "description": "INQUIRY-derived product string. Same sanitization rules as vendor. Field present only when non-empty."
+      "description": "Product identity, same delivery boundary and byte-faithful emission rules as vendor. Field present only when non-empty."
     },
     "revision": {
       "type": "string",

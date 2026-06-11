@@ -10,7 +10,7 @@ static void emit_human(const mos_state_result *r, int index1)
        evidence, media, addressing, identity. Suppression mirrors the
        JSON contract (pairs the schema suppresses are not in the array);
        structural addressing/identity rows show "-" via NULL instead. */
-    mos_cli_human_pair pairs[8];
+    mos_cli_human_pair pairs[10];
     size_t n = 0;
 
     const char *state = mos_state_description(mos_state_result_state(r));
@@ -35,11 +35,16 @@ static void emit_human(const mos_state_result *r, int index1)
     if (mos_cli_profile_present(profile)) {
         const char *pn = mos_profile_name(profile);
         const char *pc = mos_profile_class(profile);
+        /* Token order is coarse → precise (class, name, raw hex) so the
+           minimum-viable reading comes first and the verbose code lands
+           last in parens. Joining is safe here because every token is
+           space-free — the rule that forbids joining identity fields
+           (see the Vendor/Product/Rev rows below). */
         if (pn && pc)
-            snprintf(prof_buf, sizeof prof_buf, "0x%04x  %s  (%s)",
-                     profile, pn, pc);
+            snprintf(prof_buf, sizeof prof_buf, "%s  %s  (0x%04x)",
+                     pc, pn, profile);
         else if (pn)
-            snprintf(prof_buf, sizeof prof_buf, "0x%04x  %s", profile, pn);
+            snprintf(prof_buf, sizeof prof_buf, "%s  (0x%04x)", pn, profile);
         else
             snprintf(prof_buf, sizeof prof_buf, "0x%04x", profile);
         pairs[n++] = (mos_cli_human_pair){ "Profile", prof_buf };
@@ -76,22 +81,24 @@ static void emit_human(const mos_state_result *r, int index1)
        (C0 controls survive every encoding in the chain). The human
        layout engine prints verbatim (layout only, by contract), so
        escape HERE — \xNN per mos_safe_ascii, the same rule the JSON
-       path applies to these same strings. Buffer math: worst case
-       every byte escapes 4x (vendor 8→32, product 16→64, revision
-       4→16, + NULs). */
-    char v_esc[33], p_esc[65], rv_esc[17];
+       path applies to these same strings (capacity math shared with
+       the list table emitter via MOS_CLI_ESC_CAP).
+
+       Three rows, never one joined line: product may contain interior
+       spaces, so a space-joined "Drive" line has unrecoverable field
+       boundaries and impersonates a verbatim drive string that exists
+       nowhere (E1 companion decision,
+       doc/research/2026-06-11-review-triage.md). Labels match the
+       list table's columns. */
+    char v_esc[MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];
+    char p_esc[MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
+    char rv_esc[MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];
     (void)mos_safe_ascii(v,  v_esc,  sizeof v_esc);
     (void)mos_safe_ascii(p,  p_esc,  sizeof p_esc);
     (void)mos_safe_ascii(rv, rv_esc, sizeof rv_esc);
-    char drive_buf[120];
-    if (v || p || rv) {
-        snprintf(drive_buf, sizeof drive_buf, "%s%s%s%s%s",
-                 v_esc, v && (p || rv) ? " " : "",
-                 p_esc, p && rv ? " " : "", rv_esc);
-        pairs[n++] = (mos_cli_human_pair){ "Drive", drive_buf };
-    } else {
-        pairs[n++] = (mos_cli_human_pair){ "Drive", NULL };
-    }
+    pairs[n++] = (mos_cli_human_pair){ "Vendor",  v  ? v_esc  : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Product", p  ? p_esc  : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Rev",     rv ? rv_esc : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }

@@ -197,17 +197,16 @@ static void query_row(const mos_device_info_t *info, list_row *row)
     const char *v = mos_state_result_vendor(r);
     const char *p = mos_state_result_product(r);
     const char *rv = mos_state_result_revision(r);
-    /* Escape drive-controlled identity bytes at row construction —
-       the human table prints cells verbatim (layout-only contract).
-       The JSON list emitter re-escapes the stored form: for normal
-       printable identity this is the identity transform; for hostile
-       bytes the backslash of \xNN re-escapes to \\xNN — still valid,
-       unambiguous, injection-safe JSON (it renders the same text a
-       human-mode reader sees, which is the point of storing one
-       sanitized form). */
-    if (v)  (void)mos_safe_ascii(v,  row->vendor,   sizeof row->vendor);
-    if (p)  (void)mos_safe_ascii(p,  row->product,  sizeof row->product);
-    if (rv) (void)mos_safe_ascii(rv, row->revision, sizeof row->revision);
+    /* Store RAW bytes — escaping is per-surface display armor, applied
+       at emit time (mos_safe_ascii in the table emitter,
+       mos_cli_json_str's byte escapes in the JSON emitter). One stored
+       form, byte-identical across list/status/watch JSON; the prior
+       store-sanitized scheme made list --json carry display-escaped
+       text where status/watch carried bytes (E1,
+       doc/research/2026-06-11-review-triage.md). */
+    if (v)  snprintf(row->vendor,   sizeof row->vendor,   "%s", v);
+    if (p)  snprintf(row->product,  sizeof row->product,  "%s", p);
+    if (rv) snprintf(row->revision, sizeof row->revision, "%s", rv);
     mos_close(h);
 }
 
@@ -228,18 +227,27 @@ void emit_list_table(FILE *f, const list_row *rows, int n,
     size_t ncols = with_volume ? MAXC : MAXC - 1;
     /* index strings need storage */
     char idx[MOS_CLI_LIST_CAP][12];
+    /* Rows store RAW identity; the terminal is where escaping is
+       owed, so render \xNN forms here (capacity math shared with the
+       status human emitter via MOS_CLI_ESC_CAP). */
+    char v_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];
+    char p_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
+    char r_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];
     const char *cells[MOS_CLI_LIST_CAP * MAXC];
     for (int r = 0; r < n; r++) {
         snprintf(idx[r], sizeof idx[r], "%d", r + 1);
+        (void)mos_safe_ascii(rows[r].vendor,   v_esc[r], sizeof v_esc[r]);
+        (void)mos_safe_ascii(rows[r].product,  p_esc[r], sizeof p_esc[r]);
+        (void)mos_safe_ascii(rows[r].revision, r_esc[r], sizeof r_esc[r]);
         size_t c = 0;
         cells[r * ncols + c++] = idx[r];
         cells[r * ncols + c++] = rows[r].state;
         if (with_volume)
             cells[r * ncols + c++] = NULL;   /* volume_name: stage 1 */
         cells[r * ncols + c++] = rows[r].bsd[0] ? rows[r].bsd : NULL;
-        cells[r * ncols + c++] = rows[r].vendor[0]   ? rows[r].vendor   : NULL;
-        cells[r * ncols + c++] = rows[r].product[0]  ? rows[r].product  : NULL;
-        cells[r * ncols + c++] = rows[r].revision[0] ? rows[r].revision : NULL;
+        cells[r * ncols + c++] = rows[r].vendor[0]   ? v_esc[r] : NULL;
+        cells[r * ncols + c++] = rows[r].product[0]  ? p_esc[r] : NULL;
+        cells[r * ncols + c++] = rows[r].revision[0] ? r_esc[r] : NULL;
     }
     (void)mos_cli_human_table(f, with_volume ? headers_v : headers_nv,
                           cells, (size_t)n, ncols,
