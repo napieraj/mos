@@ -174,16 +174,36 @@ discussion record; supersedes the (a)/(b) fork above. Decision:
    path) and mos's own REPLUG axiom; the hardware leg can falsify
    with a real flash if it ever matters.
 
+8. **Companion decision — the status human `Drive:` line splits
+   into `Vendor:` / `Product:` / `Rev:` rows** (maintainer-agreed,
+   same day). The concatenated line joins three fields with a
+   separator the fields themselves may contain (interior spaces in
+   product), so the boundaries are unrecoverable and the line
+   impersonates a verbatim drive-reported string that exists
+   nowhere. It was also the only surface merging the three
+   concepts: the list table and all JSON forms already separate
+   them. Rule adopted for human rows: **join only tokens that
+   cannot contain the separator** — `Profile: 0x0040 bd_rom (bd)`
+   stays (hex/enum tokens are space-free); identity cannot be
+   joined. README's parity sentence sharpens to the actual rule:
+   enum strings shared verbatim; identity is the same three fields
+   on every surface (byte-faithful in JSON, escaped for
+   terminals).
+
 Implementation checklist (one commit, per the schema ADR's
-pre-tag in-place rule): gate + validity bitmask in mos_dr.c →
-plumbing through result/event/list_row → three emitters →
-schema updates (field + pattern notes) → positive AND negative
-fixtures → README contract section → validate.py if it gains an
-enum check. C-API conformance accessor deferred to the v0.4 typed
-work (library consumers already receive raw bytes). NOTE: the CLI
-and adapter TUs do not compile in the Linux dev container — the
-pure tests and schema suite gate what they can; macOS CI is the
-compile gate for the rest.
+pre-tag in-place rule): trailing-unpad in the mos_dr.c identity
+funnel; nonprintable predicate as a pure helper (validity is a
+pure function of the delivered string, so emitters recompute at
+the edge rather than plumbing a bitmask through every struct);
+list_row goes raw with escaping moved to the table emitter; the
+three JSON emitters gain `identity_nonprintable`; status human
+gains the three identity rows; schema updates + positive AND
+negative fixtures; README contract section + example refresh;
+CLI contract-test pins updated. C-API conformance accessor
+deferred to the v0.4 typed work (library consumers already
+receive raw bytes). NOTE: the CLI and adapter TUs do not compile
+in the Linux dev container — the pure tests and schema suite gate
+what they can; macOS CI is the compile gate for the rest.
 
 ### E2. "Profile-class change" fallback compares raw profile codes
 
