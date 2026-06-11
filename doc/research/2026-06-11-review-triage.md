@@ -79,10 +79,27 @@ assumption the scope doctrine's adversarial-input clause refuses.
 The `mos_safe_ascii` defense for terminal output stays load-bearing,
 the E1 divergence is reachable with hostile firmware, and the
 decision between (a) and (b) cannot be resolved by appeal to
-platform sanitization. (Side correction for the record: a session
-note claimed IOSCSIArchitectureModelFamily is absent from
-apple-oss-distributions — it is present, as ARCHITECTURE §11
-already cites, and was fetched live for this audit.)
+platform sanitization.
+
+**Version bound on link 1 (correction, same day).** The kernel-side
+evidence is from the LAST PUBLISHED source of the family:
+apple-oss-distributions/IOSCSIArchitectureModelFamily's newest tag
+is 139.0.2 (February 2005, OS X 10.3.x era; `main` tracks it —
+including the IOSCSIMultimediaCommands / PeripheralDeviceType05
+optical driver). Apple has shipped the kext closed for the ~21
+years since, so current-macOS parse behavior is unverifiable from
+source. This does not weaken the audit's operational conclusion —
+it is the conclusion: at no link of the chain does a VERIFIABLE
+sanitization guarantee exist on a current macOS (2005 kernel source
+shows none; 2026 kext is closed; the 15.5 DR header promises
+nothing), and an unverifiable guarantee is exactly what the scope
+doctrine forbids leaning on. Any future claim that the modern kext
+sanitizes needs a disassembly citation or an Apple doc, recorded
+here, before any defense is relaxed. (The repo IS in
+apple-oss-distributions, as ARCHITECTURE §11 cites — but §11
+readers should know its line citations are against 2005 source,
+the same vintage bound §11 already records for the 10.2.8
+SCSITaskLib.h signature-identity note.)
 
 ### E2. "Profile-class change" fallback compares raw profile codes
 
