@@ -121,6 +121,8 @@ void mos_fake_reset(void)
 
 void mos_fake_set_no_drive(void) { g.present = false; }
 
+void mos_fake_set_drive_present(bool present) { g.present = present; }
+
 void mos_fake_set_bsd_unit(int64_t unit) { g.bsd_unit = unit; }
 
 void mos_fake_set_drive_id(uint64_t id) { g.drive_id = id; }
@@ -534,6 +536,17 @@ static void dict_set_str(CFMutableDictionaryRef d, CFStringRef key,
     if (s) { CFDictionarySetValue(d, key, s); CFRelease(s); }
 }
 
+/* PHASE-2 LIMIT (N4, 2026-06-11): the directory stays single-drive.
+   Watch-all's adapter-layer additions — Appeared→snapshot→slot wiring,
+   Disappeared→id-resolve→per-slot removal, the doorbell-or-fail open
+   gate, stream_open_ms constancy across joins — are all exercised with
+   one drive appearing, leaving, and rejoining under a re-minted ID
+   (test_adapter_phase2.c). The ascending-registry-id same-tick
+   interleave across MULTIPLE drives lives in the pure multiplexer and
+   is pinned by test_watch_core.c; modelling a second drive here would
+   restructure every singleton table in this fake to re-test it. If a
+   multi-drive adapter scenario ever earns its keep, this array is the
+   starting point. */
 CFArrayRef DRCopyDeviceArray(void)
 {
     const void *vals[1];

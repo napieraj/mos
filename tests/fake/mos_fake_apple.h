@@ -32,6 +32,12 @@ void mos_fake_reset(void);
 /* Make the fake present zero drives (empty DR device array). */
 void mos_fake_set_no_drive(void);
 
+/* Presence as a settable axis (set_no_drive == set_drive_present(false)):
+   re-presenting mid-scenario models hot-plug arrival for the watch-all
+   join path. Identity/reply scripts are unaffected — pair with
+   mos_fake_set_drive_id for a replug's re-minted registry ID. */
+void mos_fake_set_drive_present(bool present);
+
 /* Override the drive's BSD unit / identity (defaults: 4, HL-DT-ST,
    DVDROM, A100). A unit < 0 models media-absent (no whole-disk IOMedia
    child node). */

@@ -161,6 +161,33 @@ static void act_plugin_fail(void *ctx)
     mos_fake_set_plugin_fail(true);
 }
 
+static void act_present_fire_appeared(void *ctx)
+{
+    (void)ctx;
+    mos_fake_set_drive_present(true);
+    mos_fake_fire_dr_appeared();
+}
+
+static void act_fire_dr_disappeared(void *ctx)
+{
+    (void)ctx;
+    mos_fake_fire_dr_disappeared();
+}
+
+static void act_absent_fire_dr_disappeared(void *ctx)
+{
+    (void)ctx;
+    mos_fake_set_no_drive();
+    mos_fake_fire_dr_disappeared();
+}
+
+static void act_remint_fire_appeared(void *ctx)
+{
+    (void)ctx;
+    mos_fake_set_drive_id(0x100000BBBull);
+    mos_fake_fire_dr_appeared();
+}
+
 /* Open a watch on the default drive and consume the snapshot event,
    asserting its full shape; returns via *so the stream_open_ms the rest
    of the stream must keep. */
@@ -484,6 +511,125 @@ TEST(watch_error_backoff_escalates_deterministically)
     return 0;
 }
 
+TEST(all_open_fails_without_doorbell)
+{
+    /* All-mode's doorbell is NOT latency-only: arrivals are discovered
+       ONLY by the DR Appeared observer, so a center-creation failure
+       fails the open honestly instead of degrading silently. */
+    scenario_ready_at_t0();
+    mos_fake_set_dr_center_fail(true);
+
+    mos_error err = MOS_OK;
+    mos_watch_t *w = mos_watch_open_all(STABLE_MS, TRANSITION_MS, &err);
+    EXPECT(w == NULL);
+    EXPECT_EQ(MOS_ERR_IO, err);
+    EXPECT_EQ(0, mos_fake_outstanding_notify_objects());
+    return 0;
+}
+
+TEST(all_empty_stream_hotplug_join_leave_rejoin)
+{
+    /* The all-watch lifecycle with one drive: a valid EMPTY stream,
+       hot-plug join (first event relabeled device_appeared), a
+       doorbell-routed state change, per-slot non-terminal removal,
+       and rejoin under a re-minted registry ID — every event carrying
+       the ONE stream_open_ms minted at open. */
+    scenario_ready_at_t0();
+    mos_fake_set_no_drive();
+
+    mos_error err = MOS_ERR_IO;
+    mos_watch_t *w = mos_watch_open_all(STABLE_MS, TRANSITION_MS, &err);
+    EXPECT(w != NULL);
+    EXPECT_EQ(MOS_OK, err);
+
+    mos_fake_step(1000, act_present_fire_appeared, NULL);
+    mos_fake_step(1500, act_empty_fire_dr, NULL);
+    mos_fake_step(2200, act_fire_dr_disappeared, NULL);
+    mos_fake_step(3000, act_remint_fire_appeared, NULL);
+
+    /* Empty stream: no event before the join, and the timeout slice is
+       exact in fake time. */
+    const mos_watch_event *e = NULL;
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_watch_next_event(w, &e, 500));
+    EXPECT_EQ(500, mos_fake_clock_now());
+
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 2000));
+    EXPECT_EQ(MOS_EVENT_DEVICE_APPEARED, mos_watch_event_kind(e));
+    EXPECT_EQ(1, mos_watch_event_seq(e));
+    EXPECT_EQ(MOS_STATE_READY, mos_watch_event_state(e));
+    EXPECT_EQ(FAKE_DRIVE_ID, mos_watch_event_registry_id(e));
+    EXPECT_EQ(1000, mos_fake_clock_now());
+    uint64_t so = mos_watch_event_stream_open_ms(e);
+
+    /* Doorbell routes the wake to the joined slot. */
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 2000));
+    EXPECT_EQ(MOS_EVENT_STATE_CHANGED, mos_watch_event_kind(e));
+    EXPECT_EQ(2, mos_watch_event_seq(e));
+    EXPECT_EQ(MOS_STATE_EMPTY, mos_watch_event_state(e));
+    EXPECT_EQ(1500, mos_fake_clock_now());
+    EXPECT_EQ(so, mos_watch_event_stream_open_ms(e));
+
+    /* Disappeared with the drive still resolvable: the fast path marks
+       the slot; removal is per-slot, NOT stream-terminal. */
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 2000));
+    EXPECT_EQ(MOS_EVENT_DEVICE_REMOVED, mos_watch_event_kind(e));
+    EXPECT_EQ(3, mos_watch_event_seq(e));
+    EXPECT_EQ(2200, mos_fake_clock_now());
+    EXPECT_EQ(so, mos_watch_event_stream_open_ms(e));
+
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_watch_next_event(w, &e, 300));
+    EXPECT_EQ(2500, mos_fake_clock_now());
+
+    /* Rejoin under the re-minted ID, same stream_open_ms. */
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 2000));
+    EXPECT_EQ(MOS_EVENT_DEVICE_APPEARED, mos_watch_event_kind(e));
+    EXPECT_EQ(4, mos_watch_event_seq(e));
+    EXPECT_EQ(0x100000BBBull, mos_watch_event_registry_id(e));
+    EXPECT_EQ(3000, mos_fake_clock_now());
+    EXPECT_EQ(so, mos_watch_event_stream_open_ms(e));
+
+    mos_watch_close(w);
+    EXPECT_EQ(0, mos_fake_outstanding_notify_objects());
+    return 0;
+}
+
+TEST(all_disappeared_unresolved_falls_to_poll_floor)
+{
+    /* Disappeared arriving AFTER the registry entry is gone: the
+       callback can't resolve the device to an ID (resolves 0), marks
+       nothing — and removal still arrives via the slot's next reopen
+       returning NO_DEVICE at the poll floor (mos_watch.c's documented
+       fallback). */
+    scenario_ready_at_t0();
+
+    mos_error err = MOS_ERR_IO;
+    mos_watch_t *w = mos_watch_open_all(STABLE_MS, TRANSITION_MS, &err);
+    EXPECT(w != NULL);
+    EXPECT_EQ(MOS_OK, err);
+
+    const mos_watch_event *e = NULL;
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 1000));
+    EXPECT_EQ(MOS_EVENT_SNAPSHOT, mos_watch_event_kind(e));  /* present at
+        open: a plain snapshot, not relabeled */
+    EXPECT_EQ(0, mos_fake_clock_now());
+    uint64_t so = mos_watch_event_stream_open_ms(e);
+
+    mos_fake_step(800, act_absent_fire_dr_disappeared, NULL);
+
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 3000));
+    EXPECT_EQ(MOS_EVENT_DEVICE_REMOVED, mos_watch_event_kind(e));
+    EXPECT_EQ(2000, mos_fake_clock_now());   /* the poll floor, not the
+        unresolvable doorbell */
+    EXPECT_EQ(so, mos_watch_event_stream_open_ms(e));
+
+    /* Stream stays open with zero drives. */
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_watch_next_event(w, &e, 200));
+
+    mos_watch_close(w);
+    EXPECT_EQ(0, mos_fake_outstanding_notify_objects());
+    return 0;
+}
+
 int main(void)
 {
     printf("adapter phase-2 (watch lifecycle, fake clock):\n");
@@ -496,6 +642,9 @@ int main(void)
     RUN(watch_media_swap_profile_fallback);
     RUN(watch_replug_reminted_drive_id);
     RUN(watch_error_backoff_escalates_deterministically);
+    RUN(all_open_fails_without_doorbell);
+    RUN(all_empty_stream_hotplug_join_leave_rejoin);
+    RUN(all_disappeared_unresolved_falls_to_poll_floor);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);
     return mos_tests_failed ? 1 : 0;
