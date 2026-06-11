@@ -1,6 +1,13 @@
 # Headless adapter emulation — design record and build brief
 
 **Date:** 2026-06-11. **Status:** approved for build; not yet implemented.
+**Status update (2026-06-11, same day):** phase 1 LANDED —
+`tests/fake/mos_fake_apple.{c,h}`, `tests/test_adapter_phase1.c`, the
+`adapter-fake` CI job (ASan/UBSan, macos-latest), eight scenarios green;
+seam-contract O-1/O-3 moved to CI (INTEGRATION_HARNESS item 0). Phase 2
+(watch lifecycle) remains open. Known phase-1 fake limits are recorded
+at their sites: by-name lookups ignore the name (N1), no IOReturn
+injection on convenience methods (N2) — both phase-2 controls.
 **Audience:** this is written to be a self-contained brief for a fresh
 session told "build what this describes." It records the goal, the
 chosen mechanism, the phased plan, the validation discipline, and —

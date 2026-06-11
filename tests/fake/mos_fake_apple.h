@@ -52,7 +52,22 @@ void mos_fake_set_readdiscinfo_reply(uint32_t task_status,
    outcome: reply bytes copied into the task's data buffer, the task
    status, the sense (NULL = all-zero), and the realized byte count.
    The fake records the CDB it received (mos_fake_last_cdb) so a test
-   can pin the adapter's authored bytes. */
+   can pin the adapter's authored bytes.
+
+   DELIBERATE DECOUPLING (sixth review, N3): delivery copies
+   min(len, buffer) bytes, while `realized` is REPORTED independently
+   and unchecked against either — so a scenario can model a transport
+   that lies in both directions (under-reports a full transfer, or
+   claims more than it delivered). That is exactly the shape the
+   seam-contract O-4 realizedByteCount A/B needs; do not "fix" the
+   fake to clamp realized to delivery.
+
+   PHASE-1 LIMIT (N2): the convenience methods (TestUnitReady,
+   GetConfiguration, ReadDiscInformation) always return
+   kIOReturnSuccess — failures are expressible only via task_status.
+   The adapter's transport-failure arms (the IOReturn mapper paths)
+   are therefore unreachable through this fake; per-method IOReturn
+   injection is a phase-2 control. */
 void mos_fake_set_raw_reply(uint32_t task_status,
                             const uint8_t *bytes, size_t len,
                             uint64_t realized,
