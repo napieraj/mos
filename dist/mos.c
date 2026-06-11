@@ -232,6 +232,10 @@ typedef struct {
  * ReadTableOfContents convenience method. FAIL-CLOSED: an out-of-range,
  * duplicate, or non-ascending track rejects the whole TOC — identity
  * from a half-parsed hostile TOC would be a falsely-stable fingerprint.
+ * The header's declared range is held to the same standard: first/last
+ * must be coherent (1..99, not inverted) and the descriptor list must
+ * cover exactly first..last — a claimed span that truncates the table
+ * mid-range is the half-parsed case again, not padding.
  * A TOC without a lead-out parses (have_leadout=false); identity
  * consumers must require it. Byte layout at the decoder (mos_pure.c). */
 #define MOS_TOC_MAX_TRACKS 99
@@ -1070,6 +1074,20 @@ bool mos_internal_toc_parse(const uint8_t *buf, size_t len, mos_toc *out)
     /* A trailing partial descriptor inside the claimed span is a
        malformed TOC, not padding. */
     if (cursor != span) return false;
+
+    /* The header's range bytes are hostile input too. The walk above
+       proves the descriptors well-formed; identity additionally needs
+       them to BE the table the header declares — ascending + unique +
+       count == last-first+1 + matching endpoints forces exactly
+       first..last (pigeonhole). A TOC that omits declared tracks, or
+       declares an inverted or out-of-range header, is rejected whole:
+       a fingerprint hashed over it would be falsely stable across
+       genuinely different discs. */
+    if (out->first_track < 1 || out->first_track > 99) return false;
+    if (out->last_track < out->first_track || out->last_track > 99) return false;
+    if (out->track_count != out->last_track - out->first_track + 1) return false;
+    if (out->tracks[0].track != out->first_track ||
+        out->tracks[out->track_count - 1].track != out->last_track) return false;
     return true;
 }
 
@@ -2442,7 +2460,9 @@ struct mos_watch {
        and CFRunLoopStop() to break the pump's current sleep. Both
        fields NULL on poll-only fallback (center or run-loop source
        creation failed at open time) — polling is the correctness
-       floor, the doorbell is latency only. */
+       floor, the doorbell is latency only. SINGLE-TARGET ONLY: in all
+       mode arrival discovery rides the doorbell with no poll floor,
+       so mos_watch_open_all fails instead of falling back. */
     DRNotificationCenterRef dr_center;
     CFRunLoopSourceRef      dr_source;
 
@@ -2484,6 +2504,14 @@ struct mos_watch {
     }                    slots[MOS_WATCH_ALL_CAP];
     uint32_t             stable_poll_ms;
     uint32_t             transition_poll_ms;
+    /* The all-watch's ONE stream-open timestamp, minted once at
+       mos_watch_open_all and given to every slot — drives present at
+       open and later joiners alike — so stream_open_ms is constant
+       across the stream as documented (mos.h, mos.event.v1). Per-event
+       join/change time rides ts; (registry_id, stream_open_ms) stays
+       unique because a replug re-mints the registry_id. 0 in
+       single-target mode (those cores mint per-open as before). */
+    uint64_t             all_stream_open_wall_ms;
 };
 
 /* ---- Time --------------------------------------------------------- */
@@ -2693,7 +2721,8 @@ static void watch_all_add_device(mos_watch_t *w,
     (void)mos_internal_watch_all_add(&w->all, &apple_watch_slot_ops,
                                      i >= 0 ? &w->slots[i] : NULL,
                                      snap->bsd_unit, snap->registry_id,
-                                     monotonic_ms(), stream_epoch_wall_ms(),
+                                     monotonic_ms(),
+                                     w->all_stream_open_wall_ms,
                                      w->stable_poll_ms, w->transition_poll_ms,
                                      mid_stream);
 }
@@ -3193,8 +3222,15 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
     }
     w->all_mode           = true;
     w->bsd_unit           = -1;   /* no single unit; accessor contract */
+    /* Raw caller values (possibly 0); each per-core watch_init
+       substitutes the documented defaults, so these fields are NOT
+       effective rates. */
     w->stable_poll_ms     = stable_poll_ms;
     w->transition_poll_ms = transition_poll_ms;
+    /* One stream, one open time: minted before any slot exists so
+       every event — open-time snapshot or hot-plug join — carries the
+       same stream_open_ms (struct field comment has the contract). */
+    w->all_stream_open_wall_ms = stream_epoch_wall_ms();
     mos_internal_watch_all_init(&w->all);
 
     /* Initial population from ONE directory snapshot — no per-device
@@ -3211,8 +3247,25 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
     w->run_loop = CFRunLoopGetCurrent();
     setup_dr_doorbell_wake(w);
     /* No kIOGeneralInterest in all mode: removal rides DR Disappeared
-       (fast path) + per-probe NO_DEVICE (floor). Poll-only fallback if
-       DR setup failed, exactly like single mode. */
+       (fast path) + per-probe NO_DEVICE (floor). */
+
+    /* UNLIKE single mode, the doorbell is NOT latency-only here, so
+       its failure cannot soft-fail to polling: arrivals are discovered
+       ONLY by the DR Appeared observer — the pump probes known slots
+       and never re-scans the directory, so all-mode's poll floor
+       covers state changes and removals but discovery has no floor at
+       all. A doorbell-less all-watch would "succeed" while unable to
+       honor the hot-plug-joins / empty-stream-waits contract (the
+       headline of this function's doc block), and the caller has no
+       way to detect the degradation. Fail honestly instead. A slow
+       directory-rescan fallback that would restore soft-fail is a
+       v0.next decision contingent on this failure being observed in
+       practice (ROADMAP). */
+    if (!w->dr_center) {
+        mos_watch_close(w);
+        if (err_out) *err_out = MOS_ERR_IO;
+        return NULL;
+    }
 
     if (err_out) *err_out = MOS_OK;
     return w;
@@ -3924,7 +3977,6 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out)
     char whole_name[MOS_BSD_NAME_CAP] = {0};
     char fallback_name[MOS_BSD_NAME_CAP] = {0};
     uint64_t whole_id = 0;
-    uint64_t fallback_id = 0;
 
     for (;;) {
         io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
@@ -3971,9 +4023,18 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out)
         } else if (!is_whole && fallback_name[0] == 0 &&
                    mos_internal_bsd_name_is_whole_shape(this_name)) {
             strlcpy(fallback_name, this_name, sizeof(fallback_name));
-            if (IORegistryEntryGetRegistryEntryID(child, &fallback_id) != KERN_SUCCESS) {
-                fallback_id = 0;
-            }
+            /* Deliberately NO id capture on this branch. media_id's
+               contract is "whole-disk IOMedia registry entry ID"
+               (mos_pure.h) — re-minted on a physical swap. A
+               non-IOMedia bridge node's ID identifies the BRIDGE, not
+               the medium, and plausibly survives a swap; a stale
+               non-zero fingerprint disarms BOTH swap detectors at
+               once (id_changed needs both ids non-zero-and-different;
+               the profile-class fallback needs both zero —
+               mos_watch_core.c). Zero is the documented "unavailable,
+               don't infer a swap" sentinel and keeps the no-id
+               fallback armed. Whether real bridges take this branch
+               at all is a rig question (hardware checklist). */
         }
 
         if (whole_name[0] != 0) break; /* Whole found, done */
@@ -3983,7 +4044,7 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out)
                        : fallback_name[0] ? fallback_name
                        : NULL;
     if (!chosen) return -1;
-    if (media_id_out) *media_id_out = whole_name[0] ? whole_id : fallback_id;
+    if (media_id_out) *media_id_out = whole_name[0] ? whole_id : 0;
     /* parse_bsd_unit normalizes any rdisk/ /dev/ prefix (some USB bridges
        expose only a raw entry), rejects partition/non-whole shapes, and
        returns the unit or -1. Identity is an integer from here; the

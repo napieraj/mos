@@ -10,7 +10,7 @@
 # a deny list of strings that are only ever stale when they appear in
 # LIVE documentation.
 #
-# Scope: live docs only. CHANGELOG.md and doc/research/ are dated
+# Scope: live docs only. doc/history/ and doc/research/ are dated
 # archives whose old text is preserved BY RULE (append-only), so they
 # are exempt. AGENTS.md's ADR chain preserves superseded entries the
 # same way, so AGENTS is exempt from patterns that legitimately appear
@@ -27,7 +27,7 @@ FAIL=0
 
 # Live documentation set (archives deliberately excluded).
 LIVE_DOCS="README.md ARCHITECTURE.md CONTRIBUTING.md INTEGRATION_HARNESS.md \
-ROADMAP.md STATUS.md schemas/README.md \
+ROADMAP.md schemas/README.md \
 tests/fixtures/README.md doc/dr-field-mapping.md"
 
 deny() {
@@ -86,7 +86,7 @@ deny 'v0\.3 typed API|v0\.3 introduces' \
 deny 'mos_notification_probe|tools/mos_probe|MOS_BUILD_(NOTIFICATION_)?PROBE|\-\-dr-dump' \
      "probes consolidated into 'mos probe' (cli/probe.c, MOS_CLI_PROBE), 2026-06-11" \
      "README.md ARCHITECTURE.md CONTRIBUTING.md INTEGRATION_HARNESS.md \
-STATUS.md schemas/README.md tests/fixtures/README.md \
+schemas/README.md tests/fixtures/README.md \
 doc/dr-field-mapping.md"
 
 if [ "$FAIL" -eq 1 ]; then

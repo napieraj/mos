@@ -105,7 +105,9 @@ struct mos_watch {
        and CFRunLoopStop() to break the pump's current sleep. Both
        fields NULL on poll-only fallback (center or run-loop source
        creation failed at open time) — polling is the correctness
-       floor, the doorbell is latency only. */
+       floor, the doorbell is latency only. SINGLE-TARGET ONLY: in all
+       mode arrival discovery rides the doorbell with no poll floor,
+       so mos_watch_open_all fails instead of falling back. */
     DRNotificationCenterRef dr_center;
     CFRunLoopSourceRef      dr_source;
 
@@ -147,6 +149,14 @@ struct mos_watch {
     }                    slots[MOS_WATCH_ALL_CAP];
     uint32_t             stable_poll_ms;
     uint32_t             transition_poll_ms;
+    /* The all-watch's ONE stream-open timestamp, minted once at
+       mos_watch_open_all and given to every slot — drives present at
+       open and later joiners alike — so stream_open_ms is constant
+       across the stream as documented (mos.h, mos.event.v1). Per-event
+       join/change time rides ts; (registry_id, stream_open_ms) stays
+       unique because a replug re-mints the registry_id. 0 in
+       single-target mode (those cores mint per-open as before). */
+    uint64_t             all_stream_open_wall_ms;
 };
 
 /* ---- Time --------------------------------------------------------- */
@@ -356,7 +366,8 @@ static void watch_all_add_device(mos_watch_t *w,
     (void)mos_internal_watch_all_add(&w->all, &apple_watch_slot_ops,
                                      i >= 0 ? &w->slots[i] : NULL,
                                      snap->bsd_unit, snap->registry_id,
-                                     monotonic_ms(), stream_epoch_wall_ms(),
+                                     monotonic_ms(),
+                                     w->all_stream_open_wall_ms,
                                      w->stable_poll_ms, w->transition_poll_ms,
                                      mid_stream);
 }
@@ -856,8 +867,15 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
     }
     w->all_mode           = true;
     w->bsd_unit           = -1;   /* no single unit; accessor contract */
+    /* Raw caller values (possibly 0); each per-core watch_init
+       substitutes the documented defaults, so these fields are NOT
+       effective rates. */
     w->stable_poll_ms     = stable_poll_ms;
     w->transition_poll_ms = transition_poll_ms;
+    /* One stream, one open time: minted before any slot exists so
+       every event — open-time snapshot or hot-plug join — carries the
+       same stream_open_ms (struct field comment has the contract). */
+    w->all_stream_open_wall_ms = stream_epoch_wall_ms();
     mos_internal_watch_all_init(&w->all);
 
     /* Initial population from ONE directory snapshot — no per-device
@@ -874,8 +892,25 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
     w->run_loop = CFRunLoopGetCurrent();
     setup_dr_doorbell_wake(w);
     /* No kIOGeneralInterest in all mode: removal rides DR Disappeared
-       (fast path) + per-probe NO_DEVICE (floor). Poll-only fallback if
-       DR setup failed, exactly like single mode. */
+       (fast path) + per-probe NO_DEVICE (floor). */
+
+    /* UNLIKE single mode, the doorbell is NOT latency-only here, so
+       its failure cannot soft-fail to polling: arrivals are discovered
+       ONLY by the DR Appeared observer — the pump probes known slots
+       and never re-scans the directory, so all-mode's poll floor
+       covers state changes and removals but discovery has no floor at
+       all. A doorbell-less all-watch would "succeed" while unable to
+       honor the hot-plug-joins / empty-stream-waits contract (the
+       headline of this function's doc block), and the caller has no
+       way to detect the degradation. Fail honestly instead. A slow
+       directory-rescan fallback that would restore soft-fail is a
+       v0.next decision contingent on this failure being observed in
+       practice (ROADMAP). */
+    if (!w->dr_center) {
+        mos_watch_close(w);
+        if (err_out) *err_out = MOS_ERR_IO;
+        return NULL;
+    }
 
     if (err_out) *err_out = MOS_OK;
     return w;

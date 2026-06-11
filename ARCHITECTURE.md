@@ -509,8 +509,8 @@ mos's TUR are separate commands up to one poll period apart. The only
 dangerous interleaving is a backward flip — GOOD to the kernel (nub
 created), then non-GOOD to mos within the same window — plus the
 UNIT ATTENTION variant the single-TUR doctrine (§4.1) bets the kernel
-consumes. One insert-under-watch hardware run retires both (STATUS,
-hardware gate).
+consumes. One insert-under-watch hardware run retires both
+(INTEGRATION_HARNESS.md, hardware validation gate).
 
 ## 6. Discovery, addressing, and BSD-name resolution (DR directory)
 
@@ -551,7 +551,8 @@ Two name operations remain, with one registry walk between them:
   `DRDeviceCopyDeviceForBSDName` behind the unchanged
   `parse_bsd_unit` gate (malformed → `invalid_arg`, well-formed-but-
   absent → `no_device`). This dissolved the never-implemented v0.3
-  walk-up plan (ROADMAP, "Architectural").
+  walk-up plan
+  (doc/history/2026-06-10-dr-pivot-decision-record.md).
 
 Per-poll reopen never re-resolves by name — it uses `IORegistryEntryIDMatching`
 on the registry ID captured at open, which is what protects a watch from

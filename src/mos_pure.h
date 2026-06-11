@@ -160,6 +160,10 @@ typedef struct {
  * ReadTableOfContents convenience method. FAIL-CLOSED: an out-of-range,
  * duplicate, or non-ascending track rejects the whole TOC — identity
  * from a half-parsed hostile TOC would be a falsely-stable fingerprint.
+ * The header's declared range is held to the same standard: first/last
+ * must be coherent (1..99, not inverted) and the descriptor list must
+ * cover exactly first..last — a claimed span that truncates the table
+ * mid-range is the half-parsed case again, not padding.
  * A TOC without a lead-out parses (have_leadout=false); identity
  * consumers must require it. Byte layout at the decoder (mos_pure.c). */
 #define MOS_TOC_MAX_TRACKS 99

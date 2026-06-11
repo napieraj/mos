@@ -150,13 +150,15 @@ mos_state_enum mos_state_result_state(const mos_state_result *r);
    (empty/open tray) and hence no resolvable name. Render to "diskN" with
    mos_bsd_name_format().
 
-   OPEN-TIME SEMANTICS (v0.3): for a held handle this is captured once at
-   mos_open* and NOT refreshed per query — a handle opened on an empty
-   drive keeps reporting -1 even after a query returns READY for newly
-   inserted media. Re-open the handle for fresh naming, or use the watch
-   API, whose events carry event-time units. (The v0.4 DiscRecording
-   pivot makes the field query-time for held handles too — the substrate
-   tracks it as kDRDeviceMediaBSDNameKey; see ROADMAP "Architectural".) */
+   OPEN-TIME SEMANTICS (v0.3, still current): for a held handle this is
+   captured once at mos_open* and NOT refreshed per query — a handle
+   opened on an empty drive keeps reporting -1 even after a query
+   returns READY for newly inserted media. Re-open the handle for fresh
+   naming, or use the watch API, whose events carry event-time units.
+   (The PLANNED v0.4 held-handle refresh — not yet implemented; the
+   DiscRecording substrate it builds on landed 2026-06-10 — will make
+   the field query-time via kDRDeviceMediaBSDNameKey; see ROADMAP
+   "Standing context".) */
 int64_t        mos_state_result_bsd_unit(const mos_state_result *r);
 
 /* The drive service's IORegistry entry ID — the attachment identity,
@@ -485,6 +487,16 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
      - Zero drives at open is a valid empty stream that waits for
        arrivals; mos_watch_next_event returns MOS_ERR_TIMEOUT slices
        until something appears.
+     - Arrival discovery REQUIRES the system notification source, so
+       this open FAILS (NULL, MOS_ERR_IO) if that setup fails —
+       unlike the single-target opens, where notifications are
+       latency-only over the poll floor, an all-watch without them
+       could never see a drive plugged in after open and would wait
+       forever on an initially-empty stream.
+     - stream_open_ms is the ALL-WATCH's open time, shared by every
+       drive's events including later joiners (the event's ts carries
+       join time); (registry_id, stream_open_ms) stays per-session
+       unique because a replug re-mints the registry_id.
      - Up to 16 concurrently watched drives; arrivals beyond that are
        ignored until a slot frees.
    mos_watch_bsd_unit() returns -1 on an all-watch (no single unit).
@@ -497,8 +509,12 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
    transition. `out` is REQUIRED (NULL returns MOS_ERR_INVALID_ARG). On
    event, returns MOS_OK and points *out at a watch-owned event;
    otherwise a non-OK code (MOS_ERR_TIMEOUT if none in time) with *out
-   set to NULL. A negative timeout_ms blocks indefinitely. On MOS_EVENT_DEVICE_REMOVED, close the watch — subsequent
-   calls return MOS_ERR_NO_DEVICE.
+   set to NULL. A negative timeout_ms blocks indefinitely.
+
+   MOS_EVENT_DEVICE_REMOVED is terminal only for SINGLE-TARGET watches:
+   close the watch; subsequent calls return MOS_ERR_NO_DEVICE. For
+   mos_watch_open_all() it is per-drive and non-terminal — keep reading
+   the stream (contract block above).
 
    The event is watch-owned: do not free it or retain it (or any string
    reachable through it) across calls; valid only until the next

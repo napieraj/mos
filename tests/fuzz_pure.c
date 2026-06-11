@@ -394,11 +394,18 @@ static void fuzz_toc(uint64_t iters)
             size_t body = len - 4;
             buf[0] = (uint8_t)((body + 2) >> 8);
             buf[1] = (uint8_t)((body + 2) & 0xFF);
-            /* sometimes ascend the track bytes so the walk survives */
+            /* sometimes ascend the track bytes so the walk survives,
+               and sometimes also write the matching header range so
+               the accept path stays exercised under the
+               header-consistency gate */
             if (rng() & 1) {
                 uint8_t trk = 1;
                 for (size_t off = 4; off + 8 <= len; off += 8)
                     buf[off + 2] = trk++;
+                if (rng() & 1) {
+                    buf[2] = 1;
+                    buf[3] = (uint8_t)(trk - 1);
+                }
             }
         }
         mos_toc toc;
@@ -417,6 +424,15 @@ static void fuzz_toc(uint64_t iters)
                     abort();
                 }
                 prev = trk;
+            }
+            /* Header consistency: an accepted TOC's descriptors are
+               exactly first..last (ascending+unique+count+endpoints). */
+            if (toc.track_count == 0 ||
+                toc.track_count != toc.last_track - toc.first_track + 1 ||
+                toc.tracks[0].track != toc.first_track ||
+                toc.tracks[toc.track_count - 1].track != toc.last_track) {
+                fprintf(stderr, "FUZZ FAIL: toc header/descriptor drift\n");
+                abort();
             }
         }
         free(buf);

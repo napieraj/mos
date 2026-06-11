@@ -11,7 +11,6 @@
  * SIGINT during a watch loop should terminate cleanly: stop pumping,
  * close the watch handle, exit 0. A volatile sig_atomic_t flag is the
  * portable way to communicate from a signal handler. */
-#include <signal.h>
 #include <unistd.h>  /* isatty(), STDOUT_FILENO */
 static volatile sig_atomic_t watch_interrupted = 0;
 static void watch_sigint_handler(int signum)
@@ -19,8 +18,6 @@ static void watch_sigint_handler(int signum)
     (void)signum;
     watch_interrupted = 1;
 }
-
-#include <sysexits.h>
 
 static const char *event_kind_string(mos_event_kind k)
 {
@@ -169,9 +166,11 @@ static uint32_t getenv_uint(const char *name, uint32_t default_value)
            modes; stdout stays envelope/NDJSON-clean) and fall back
            rather than failing — cadence tuning should never be able to
            break a watch. */
-        fprintf(stderr,
-                "mos: ignoring %s=\"%s\" (want integer ms, 0..3600000); "
-                "using default\n", name, v);
+        /* Env values are the same trust class as argv: render through
+           the safe-ASCII choke point, never verbatim to a tty. */
+        fprintf(stderr, "%s: ignoring %s=\"", progname, name);
+        mos_cli_safe_ascii(stderr, v);
+        fputs("\" (want integer ms, 0..3600000); using default\n", stderr);
         return default_value;
     }
     return (uint32_t)n;
@@ -209,9 +208,29 @@ int run_watch(void)
     } else if (opt_bsd) {
         /* Same as run_query: the library parse normalizes; don't duplicate. */
         w = mos_watch_open_by_bsd_name(opt_bsd, stable_ms, transition_ms, &err);
+    } else if (opt_index) {
+        w = mos_watch_open_by_index(opt_index, stable_ms, transition_ms, &err);
     } else {
-        w = mos_watch_open_by_index(opt_index ? opt_index : 1,
-                                    stable_ms, transition_ms, &err);
+        /* No selector: same contract as status (usage text; CLI design
+           2026-06-10, "Multi-drive default") — implied only when
+           exactly one drive is attached, EX_USAGE with the mini-list
+           when several are. The count pass is a bare enumeration (no
+           probe, no open); the mini-list's probe pass runs only on
+           the error path, mirroring run_query's economy. Zero drives
+           falls through to the open, which fails into the normal
+           NDJSON error envelope. */
+        int total = mos_cli_count_drives();
+        if (total > 1) {
+            static list_row rows[MOS_CLI_LIST_CAP];
+            int n = 0;
+            (void)collect_and_query(rows, &n);
+            fprintf(stderr,
+                    "%s: %d drives present; select one, e.g. `%s watch 2`:\n",
+                    progname, total, progname);
+            emit_list_table(stderr, rows, n, false);
+            return EX_USAGE;
+        }
+        w = mos_watch_open_by_index(1, stable_ms, transition_ms, &err);
     }
 
     if (!w) return emit_unknown_and_fail("could not open drive for watch",

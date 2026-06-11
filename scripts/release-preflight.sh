@@ -12,7 +12,7 @@
 #
 # This exists because a real release shipped a full build/ tree with a
 # CMakeCache.txt pinned to the build machine's absolute paths, which made
-# `make test` fail from a fresh extraction. See CHANGELOG 2026-05-30.
+# `make test` fail from a fresh extraction. See doc/history/CHANGELOG.md, 2026-05-30.
 
 set -eu
 

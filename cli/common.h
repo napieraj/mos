@@ -73,6 +73,10 @@ int  resolve_index_of(uint64_t reg);
    handle is non-NULL only when *total == 1 and the open succeeded). */
 mos_handle_t *open_sole_drive(mos_error *err, int *total);
 
+/* Count attached drives: one bare enumeration pass, no probe, no
+   open. The watch no-selector path's sole-drive check. */
+int mos_cli_count_drives(void);
+
 /* Resolve a 1-based index to its enumeration snapshot's bsd_unit, one
    enumeration pass, no drive opens. Returns false when no drive holds
    that index; on true, *unit may still be -1 = no whole-disk IOMedia

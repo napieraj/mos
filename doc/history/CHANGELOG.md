@@ -1,3 +1,10 @@
+<!-- RETIRED 2026-06-11: historical artifact, frozen. This was the
+review-pass session log from the brief/ZIP exchange era; the project
+already classified it as a dated archive (doc-staleness scope,
+CONTRIBUTING). No releases existed while it was live; a
+Keep-a-Changelog regenerated from git tags is the v1.0 plan
+(ROADMAP). Do not update. -->
+
 # CHANGELOG
 
 Historical record for mos, relocated out of ROADMAP.md (which is now

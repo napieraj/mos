@@ -9,10 +9,8 @@ executables that link the library in `tools/`, unit tests in `tests/`.
 mac-optical-state/
 ├── README.md
 ├── ARCHITECTURE.md              # single source of truth for design
-├── STATUS.md                    # live project status + hardware gate
 ├── ROADMAP.md                   # version arcs and deferred work
-├── CHANGELOG.md                 # raw dated archive (counts historical)
-├── INTEGRATION_HARNESS.md       # hardware contribution template
+├── INTEGRATION_HARNESS.md       # hardware matrix + validation gate
 ├── CONTRIBUTING.md              # this file
 ├── AGENTS.md                    # LLM-agnostic project context + ADRs
 ├── CLAUDE.md                    # Claude-specific failure modes
@@ -131,7 +129,7 @@ is `doc/research/2026-06-11-comment-refactor-plan.md`):
 
 2. **Each fact has exactly one home.** Caller contract → header.
    Implementation why → `.c`, at the relevant lines. Decisions, dates,
-   review/audit provenance → `ARCHITECTURE.md` / `CHANGELOG.md` /
+   review/audit provenance → `ARCHITECTURE.md` / `doc/history/` /
    `doc/research/`, with a `§` pointer from code. Spec byte layouts →
    the `.c` that does the parsing. File headers: at most three lines
    (what the file is, plus the one constraint that governs it).

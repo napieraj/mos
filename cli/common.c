@@ -332,6 +332,20 @@ mos_handle_t *open_sole_drive(mos_error *err, int *total)
     return c.h;
 }
 
+static bool count_cb(const mos_device_info_t *info, void *ctx)
+{
+    (void)info;
+    (*(int *)ctx)++;
+    return true;
+}
+
+int mos_cli_count_drives(void)
+{
+    int total = 0;
+    mos_enumerate_devices(count_cb, &total);
+    return total;
+}
+
 /* Resolve a 1-based index to the bsd_unit of that enumeration slot —
    the probe's index selector (see common.h). Indexes beyond
    MOS_CLI_LIST_CAP are treated as out of range, consistent with the

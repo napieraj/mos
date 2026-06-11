@@ -1,3 +1,10 @@
+<!-- RETIRED 2026-06-11: historical artifact, frozen. Session-status
+narrative from the brief/ZIP exchange era. The two live sections it
+carried — the hardware validation gate and the falsification-run
+checklist — moved to INTEGRATION_HARNESS.md, which is their
+maintained home. Do not update; version claims and paths below are
+of their time. -->
+
 # v0.4.0-dev — Application Status
 
 **Tree state:** v0.4.0-dev. Pure test suite green under `-Wall
@@ -237,7 +244,10 @@ they were written; see CHANGELOG for the restructure.)
 
 ## Hardware validation gate
 
-The v0.3.1-dev contract is stable for the gate. Validation should:
+This gates the FIRST TAG (none exists yet; the tree is v0.4.0-dev —
+v0.3 was never tagged and won't be, its line continued into v0.4
+development). The contract surface being validated is stable.
+Validation should:
 
 1. Full CMake build + `ctest` on an Apple-toolchain host.
 2. Manual smoke per matrix drive in each state:
@@ -262,8 +272,8 @@ The v0.3.1-dev contract is stable for the gate. Validation should:
    `mos status --json > fixtures/<drive>/<state>.json` (plus
    `mos probe --dump` for the DR dictionaries).
 
-Once 1-4 pass, v0.3 is shippable. Step 5 informs v0.4 typed-API
-design.
+Once 1-4 pass, the first tag is cuttable. Step 5 informs the
+typed-API design (ROADMAP v0.4).
 
 ### Falsification runs (post-2026-06-10 scope reduction)
 
@@ -306,6 +316,25 @@ the §5.5 nub invariant, TUR exclusivity, IOReturn pins, the GESN CDB
 3. **Index-order comparison**: `drutil list -xml` vs `mos list`,
    repeated across hotplug (doc/research/2026-06-10-drutil-contract.md
    tiering; retires the Inferred tier).
+
+4. **Multi-drive `mos watch` guard** (2026-06-11 fix, not headless-
+   testable): with two drives attached and no selector, `mos watch`
+   must print the mini-list to stderr and exit 64 — same contract as
+   `mos status`. One drive: implied, as before.
+
+5. **`bsd_unit` fallback branch on real bridges** (2026-06-11 fix):
+   does any owned bridge actually expose its BSD name on a non-IOMedia
+   node (taking `mos_internal_bsd_unit`'s fallback), and does that
+   node's registry ID survive a disc swap? One `mos probe --dump`
+   before/after a swap answers both. The branch now mints media_id 0
+   (don't-infer-a-swap sentinel); a captured fixture either pins that
+   or retires the question.
+
+6. **DR doorbell setup failure in practice**: `mos_watch_open_all` now
+   fails the open if `DRNotificationCenterCreate` / run-loop source
+   creation fails. If a real Mac ever shows this failing, that
+   observation funds the rescan-fallback decision parked in ROADMAP
+   (2026-06-11 intake remainders).
 
 A surprise observed on hardware lands as a committed `.bin` fixture and
 the pure layer is built to the fixture — defenses generic, never
