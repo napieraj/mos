@@ -76,10 +76,26 @@ static struct {
     uint32_t tur_status;        uint8_t tur_sense[18];
     uint32_t cfg_status;        uint8_t cfg[64];  size_t cfg_len;
     uint32_t rdi_status;        uint8_t rdi[64];  size_t rdi_len;
+
+    /* Raw-CDB script (the GESN tray probe path). */
+    bool     exclusive_denied;
+    uint32_t raw_status;        uint8_t raw[64];  size_t raw_len;
+    uint64_t raw_realized;      uint8_t raw_sense[18];
 } g;
 
 static int      g_lock_balance;
+static int      g_lock_acquires;
 static unsigned g_iter_remaining;
+
+/* Per-task capture: the CDB and scatter-gather the adapter set, so
+   ExecuteTaskSync can deliver into the caller's buffer and a test can
+   pin the authored CDB bytes. One task at a time (phase-1 adapter
+   creates, executes, releases — never concurrent). */
+static struct {
+    uint8_t  cdb[16];  size_t cdb_len;
+    void    *buf;      size_t buf_len;
+    uint32_t timeout_ms;
+} g_task;
 
 /* ---- Control surface ---------------------------------------------- */
 
@@ -96,7 +112,9 @@ void mos_fake_reset(void)
     strcpy(g.path,     "IOService:/fake/MMCDevice");
     g.tur_status = 0; /* kSCSITaskStatus_GOOD */
     g_lock_balance   = 0;
+    g_lock_acquires  = 0;
     g_iter_remaining = 0;
+    memset(&g_task, 0, sizeof g_task);
 }
 
 void mos_fake_set_no_drive(void) { g.present = false; }
@@ -134,7 +152,29 @@ void mos_fake_set_readdiscinfo_reply(uint32_t task_status,
     if (bytes && g.rdi_len) memcpy(g.rdi, bytes, g.rdi_len);
 }
 
-int mos_fake_lock_balance(void) { return g_lock_balance; }
+void mos_fake_set_raw_reply(uint32_t task_status,
+                            const uint8_t *bytes, size_t len,
+                            uint64_t realized,
+                            const uint8_t sense[18])
+{
+    g.raw_status = task_status;
+    g.raw_len = (len > sizeof g.raw) ? sizeof g.raw : len;
+    if (bytes && g.raw_len) memcpy(g.raw, bytes, g.raw_len);
+    g.raw_realized = realized;
+    if (sense) memcpy(g.raw_sense, sense, 18);
+    else       memset(g.raw_sense, 0, 18);
+}
+
+void mos_fake_set_exclusive_denied(bool denied) { g.exclusive_denied = denied; }
+
+size_t mos_fake_last_cdb(uint8_t out[16])
+{
+    if (out) memcpy(out, g_task.cdb, 16);
+    return g_task.cdb_len;
+}
+
+int mos_fake_lock_balance(void)  { return g_lock_balance;  }
+int mos_fake_lock_acquires(void) { return g_lock_acquires; }
 
 /* ---- IOKit registry ------------------------------------------------ */
 
@@ -259,10 +299,31 @@ static IOReturn mmc_ReadDiscInformation(void *self, void *buffer,
                                         SCSI_Sense_Data *senseDataBuffer);
 static SCSITaskDeviceInterface **mmc_GetSCSITaskDeviceInterface(void *self);
 
-static IOCFPlugInInterface g_plugin_vtbl;
-static MMCDeviceInterface  g_mmc_vtbl;
-static IOCFPlugInInterface *g_plugin_ptr = &g_plugin_vtbl;
-static MMCDeviceInterface  *g_mmc_ptr    = &g_mmc_vtbl;
+static IOReturn std_ObtainExclusiveAccess(void *self);
+static IOReturn std_ReleaseExclusiveAccess(void *self);
+static SCSITaskInterface **std_CreateSCSITask(void *self);
+
+static IOReturn task_SetCommandDescriptorBlock(void *task, UInt8 *inCDB,
+                                               UInt8 inSize);
+static IOReturn task_SetScatterGatherEntries(void *task,
+                                             SCSITaskSGElement *list,
+                                             UInt8 entries,
+                                             UInt64 transferCount,
+                                             UInt8 transferDirection);
+static IOReturn task_SetTimeoutDuration(void *task, UInt32 ms);
+static IOReturn task_ExecuteTaskSync(void *task,
+                                     SCSI_Sense_Data *senseDataBuffer,
+                                     SCSITaskStatus *outStatus,
+                                     UInt64 *realizedTransferCount);
+
+static IOCFPlugInInterface      g_plugin_vtbl;
+static MMCDeviceInterface       g_mmc_vtbl;
+static SCSITaskDeviceInterface  g_std_vtbl;
+static SCSITaskInterface        g_task_vtbl;
+static IOCFPlugInInterface      *g_plugin_ptr = &g_plugin_vtbl;
+static MMCDeviceInterface       *g_mmc_ptr    = &g_mmc_vtbl;
+static SCSITaskDeviceInterface  *g_std_ptr    = &g_std_vtbl;
+static SCSITaskInterface        *g_task_ptr   = &g_task_vtbl;
 static bool g_vtbls_ready;
 
 static void ensure_vtbls(void)
@@ -279,6 +340,19 @@ static void ensure_vtbls(void)
     g_mmc_vtbl.GetConfiguration          = mmc_GetConfiguration;
     g_mmc_vtbl.ReadDiscInformation       = mmc_ReadDiscInformation;
     g_mmc_vtbl.GetSCSITaskDeviceInterface = mmc_GetSCSITaskDeviceInterface;
+
+    g_std_vtbl.AddRef                 = com_AddRef;
+    g_std_vtbl.Release                = com_Release;
+    g_std_vtbl.ObtainExclusiveAccess  = std_ObtainExclusiveAccess;
+    g_std_vtbl.ReleaseExclusiveAccess = std_ReleaseExclusiveAccess;
+    g_std_vtbl.CreateSCSITask         = std_CreateSCSITask;
+
+    g_task_vtbl.AddRef                     = com_AddRef;
+    g_task_vtbl.Release                    = com_Release;
+    g_task_vtbl.SetCommandDescriptorBlock  = task_SetCommandDescriptorBlock;
+    g_task_vtbl.SetScatterGatherEntries    = task_SetScatterGatherEntries;
+    g_task_vtbl.SetTimeoutDuration         = task_SetTimeoutDuration;
+    g_task_vtbl.ExecuteTaskSync            = task_ExecuteTaskSync;
     g_vtbls_ready = true;
 }
 
@@ -354,11 +428,92 @@ static IOReturn mmc_ReadDiscInformation(void *self, void *buffer,
 static SCSITaskDeviceInterface **mmc_GetSCSITaskDeviceInterface(void *self)
 {
     (void)self;
-    /* Phase 1: the raw-CDB / GESN path is unused on the READY route
-       (GESN is reached only on the not-ready path). Returning NULL makes
-       mos_raw_cdb report DRIVER_REJECTED if ever reached — phase 2 adds
-       a real SCSITaskDeviceInterface fake for the not-ready scenarios. */
-    return NULL;
+    ensure_vtbls();
+    return &g_std_ptr;
+}
+
+/* ---- SCSITaskDeviceInterface: the exclusive lock -------------------- */
+
+static IOReturn std_ObtainExclusiveAccess(void *self)
+{
+    (void)self;
+    if (g.exclusive_denied) return kIOReturnExclusiveAccess;
+    /* The kernel refuses a second exclusive open; model it so a
+       double-acquire in the adapter is a test failure, not a silent
+       balance bump. */
+    if (g_lock_balance > 0) return kIOReturnExclusiveAccess;
+    g_lock_balance++;
+    g_lock_acquires++;
+    return kIOReturnSuccess;
+}
+
+static IOReturn std_ReleaseExclusiveAccess(void *self)
+{
+    (void)self;
+    /* Over-release drives the balance negative; the test's balance==0
+       assertion catches it. */
+    g_lock_balance--;
+    return kIOReturnSuccess;
+}
+
+static SCSITaskInterface **std_CreateSCSITask(void *self)
+{
+    (void)self;
+    ensure_vtbls();
+    memset(&g_task, 0, sizeof g_task);
+    return &g_task_ptr;
+}
+
+/* ---- SCSITaskInterface: capture, then deliver the scripted reply ---- */
+
+static IOReturn task_SetCommandDescriptorBlock(void *task, UInt8 *inCDB,
+                                               UInt8 inSize)
+{
+    (void)task;
+    if (!inCDB || inSize > 16) return kIOReturnBadArgument;
+    memcpy(g_task.cdb, inCDB, inSize);
+    g_task.cdb_len = inSize;
+    return kIOReturnSuccess;
+}
+
+static IOReturn task_SetScatterGatherEntries(void *task,
+                                             SCSITaskSGElement *list,
+                                             UInt8 entries,
+                                             UInt64 transferCount,
+                                             UInt8 transferDirection)
+{
+    (void)task; (void)transferDirection;
+    g_task.buf = NULL;
+    g_task.buf_len = 0;
+    if (list && entries >= 1) {
+        g_task.buf     = (void *)(uintptr_t)list[0].address;
+        g_task.buf_len = (size_t)transferCount;
+    }
+    return kIOReturnSuccess;
+}
+
+static IOReturn task_SetTimeoutDuration(void *task, UInt32 ms)
+{
+    (void)task;
+    g_task.timeout_ms = ms;
+    return kIOReturnSuccess;
+}
+
+static IOReturn task_ExecuteTaskSync(void *task,
+                                     SCSI_Sense_Data *senseDataBuffer,
+                                     SCSITaskStatus *outStatus,
+                                     UInt64 *realizedTransferCount)
+{
+    (void)task;
+    if (g_task.buf && g_task.buf_len) {
+        size_t n = (g.raw_len < g_task.buf_len) ? g.raw_len : g_task.buf_len;
+        memset(g_task.buf, 0, g_task.buf_len);
+        if (n) memcpy(g_task.buf, g.raw, n);
+    }
+    if (senseDataBuffer)        memcpy(senseDataBuffer, g.raw_sense, 18);
+    if (outStatus)              *outStatus = (SCSITaskStatus)g.raw_status;
+    if (realizedTransferCount)  *realizedTransferCount = g.raw_realized;
+    return kIOReturnSuccess;
 }
 
 /* ---- DiscRecording directory --------------------------------------- */

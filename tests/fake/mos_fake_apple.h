@@ -48,9 +48,31 @@ void mos_fake_set_getconfig_reply(uint32_t task_status,
 void mos_fake_set_readdiscinfo_reply(uint32_t task_status,
                                      const uint8_t *bytes, size_t len);
 
-/* §5.5 invariant probe: net ObtainExclusiveAccess minus
-   ReleaseExclusiveAccess. MUST read 0 after any completed call
-   sequence — a non-zero value is a leaked exclusive lock. */
+/* Raw-CDB path (the GESN tray probe). Script the ExecuteTaskSync
+   outcome: reply bytes copied into the task's data buffer, the task
+   status, the sense (NULL = all-zero), and the realized byte count.
+   The fake records the CDB it received (mos_fake_last_cdb) so a test
+   can pin the adapter's authored bytes. */
+void mos_fake_set_raw_reply(uint32_t task_status,
+                            const uint8_t *bytes, size_t len,
+                            uint64_t realized,
+                            const uint8_t sense[18]);
+
+/* Make ObtainExclusiveAccess fail with kIOReturnExclusiveAccess
+   (another client holds the drive). Cleared by mos_fake_reset(). */
+void mos_fake_set_exclusive_denied(bool denied);
+
+/* Copy the most recent CDB into out (>= 16 bytes); returns its length,
+   0 if no raw task has executed since reset. */
+size_t mos_fake_last_cdb(uint8_t out[16]);
+
+/* §5.5 invariant probes. lock_balance is net ObtainExclusiveAccess
+   minus ReleaseExclusiveAccess — MUST read 0 after any completed call
+   sequence (a non-zero value is a leaked or over-released lock).
+   lock_acquires counts successful Obtains since reset, so a test can
+   also assert the locked path actually RAN (balance 0 alone can't
+   distinguish "acquired and released" from "never acquired"). */
 int mos_fake_lock_balance(void);
+int mos_fake_lock_acquires(void);
 
 #endif /* MOS_FAKE_APPLE_H */
