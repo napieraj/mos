@@ -97,15 +97,15 @@ from that arc:
   A link-seam fake of the IOKit + DiscRecording C symbols (real
   CoreFoundation linked) runs the Apple adapter TUs headless against
   committed MMC fixtures. Phase 1 (`tests/fake/mos_fake_apple.c`,
-  `tests/test_adapter_phase1.c`): the one-shot paths —
+  `tests/test_adapter_oneshot.c`): the one-shot paths —
   open/enumerate/query through the REAL `mos_scsi.c`/`mos_state.c`/
   `mos_dr.c` — across READY/EMPTY/OPEN/LOADING/EMPTY_OR_OPEN and the
   disc-info fixtures, with the §5.5 lock balance asserted both
   directions, the GESN CDB pinned byte-for-byte, and seam-contract
   O-1/O-3 moved from hardware-gated to CI. Phase 2
-  (`tests/fake/mos_fake_watch.c`, `tests/test_adapter_phase2.c`): the
+  (`tests/fake/mos_fake_watch.c`, `tests/test_adapter_watch.c`): the
   REAL `mos_watch.c` on an interposed fake clock (mechanism settled by
-  the probe-0 canary, research doc §13) — snapshot/state-change/
+  the seam-probe canary, research doc §13) — snapshot/state-change/
   removal lifecycles with doorbell-vs-poll-floor timing asserted in
   exact fake milliseconds, the F1 media-swap and replug registry-ID
   re-mints, error-backoff cadence to the millisecond, watch-all

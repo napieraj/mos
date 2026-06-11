@@ -10,15 +10,20 @@ at their sites: by-name lookups ignore the name (N1), no IOReturn
 injection on convenience methods (N2) — both phase-2 controls.
 **Status update (2026-06-11, later the same day):** phase 2 LANDED —
 `tests/fake/mos_fake_watch.{c,h}` (the eight notification symbols +
-the interposed time seam), `tests/test_adapter_probe0.c` (the §13
-mechanism probe), `tests/test_adapter_phase2.c` (single-target
+the interposed time seam), `tests/test_adapter_seam_probe.c` (the §13
+mechanism probe), `tests/test_adapter_watch.c` (single-target
 lifecycle, F1/replug re-mint, exact error-backoff cadence, watch-all
 join/leave/rejoin, N1/N2 closed), all in the same `adapter-fake` CI
 job. The two §12 design problems resolved on their PRIMARY designs —
 no fallback needed (§13). N1 and N2 are closed (the fake matches the
 scenario's BSD name; per-method IOReturn injection reaches the mapper
 arms); the recorded phase-2 limit is N4 (single-drive watch-all, at
-`DRCopyDeviceArray`'s site).
+`DRCopyDeviceArray`'s site). *(Naming pass, same day: the test TUs
+shed their phase/stage numbers — `test_adapter_phase1.c` →
+`test_adapter_oneshot.c`, `test_adapter_phase2.c` →
+`test_adapter_watch.c`, `test_adapter_probe0.c` + `probe0_caller.*` →
+`test_adapter_seam_probe.c` + `seam_probe_caller.*`. Older references
+in this archive keep the original names.)*
 **Audience:** this is written to be a self-contained brief for a fresh
 session told "build what this describes." It records the goal, the
 chosen mechanism, the phased plan, the validation discipline, and —
@@ -513,7 +518,7 @@ FIRST, they are the actual phase-2 work:**
 ## 13. Phase-2 mechanism verdicts (appended 2026-06-11, stage 0)
 
 The two §12 design problems were settled empirically before any
-scenario was written — `tests/test_adapter_probe0.c`, run first in the
+scenario was written — `tests/test_adapter_seam_probe.c`, run first in the
 `adapter-fake` job (AppleClang 17, macos-latest, ASan/UBSan), all six
 probes PASS (CI run 48, 2026-06-11):
 

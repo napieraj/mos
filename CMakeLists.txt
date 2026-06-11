@@ -358,35 +358,35 @@ endif()
 # TUs.
 option(MOS_BUILD_ADAPTER_FAKE "Build the headless adapter test (link-seam fake of IOKit+DiscRecording)" OFF)
 if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
-    add_executable(mos_adapter_fake_tests
-        tests/test_adapter_phase1.c
+    add_executable(mos_adapter_oneshot_tests
+        tests/test_adapter_oneshot.c
         tests/fake/mos_fake_apple.c
         src/mos_scsi.c
         src/mos_state.c
         src/mos_dr.c
     )
-    target_include_directories(mos_adapter_fake_tests PRIVATE
+    target_include_directories(mos_adapter_oneshot_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/tests
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/fake
     )
-    target_compile_definitions(mos_adapter_fake_tests PRIVATE
+    target_compile_definitions(mos_adapter_oneshot_tests PRIVATE
         MOS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
     )
     find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
-    target_link_libraries(mos_adapter_fake_tests PRIVATE
+    target_link_libraries(mos_adapter_oneshot_tests PRIVATE
         mos_pure ${COREFOUNDATION_FRAMEWORK})
-    set_target_properties(mos_adapter_fake_tests PROPERTIES
+    set_target_properties(mos_adapter_oneshot_tests PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
-    add_test(NAME adapter_fake COMMAND mos_adapter_fake_tests)
+    add_test(NAME adapter_oneshot COMMAND mos_adapter_oneshot_tests)
 
     # Phase 2: the watch lifecycle through the REAL mos_watch.c, on the
     # fake clock. Separate executable — its fake TU interposes libc/CF
     # symbols, and it has its own main.
-    add_executable(mos_adapter_phase2_tests
-        tests/test_adapter_phase2.c
+    add_executable(mos_adapter_watch_tests
+        tests/test_adapter_watch.c
         tests/fake/mos_fake_apple.c
         tests/fake/mos_fake_watch.c
         src/mos_scsi.c
@@ -394,40 +394,40 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         src/mos_dr.c
         src/mos_watch.c
     )
-    target_include_directories(mos_adapter_phase2_tests PRIVATE
+    target_include_directories(mos_adapter_watch_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/tests
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/fake
     )
-    target_compile_definitions(mos_adapter_phase2_tests PRIVATE
+    target_compile_definitions(mos_adapter_watch_tests PRIVATE
         MOS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
     )
-    target_link_libraries(mos_adapter_phase2_tests PRIVATE
+    target_link_libraries(mos_adapter_watch_tests PRIVATE
         mos_pure ${COREFOUNDATION_FRAMEWORK})
-    set_target_properties(mos_adapter_phase2_tests PROPERTIES
+    set_target_properties(mos_adapter_watch_tests PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
-    add_test(NAME adapter_phase2 COMMAND mos_adapter_phase2_tests)
+    add_test(NAME adapter_watch COMMAND mos_adapter_watch_tests)
 
     # Phase-2 mechanism probe: settles the time-seam and run-loop
     # interpose questions (design record §12) on real CI hardware,
     # before scenarios are built on them; stays as a canary after.
     # No fake, no mos sources — just the two-TU resolution experiment
     # against real CoreFoundation.
-    add_executable(mos_adapter_probe0
-        tests/test_adapter_probe0.c
-        tests/probe0_caller.c
+    add_executable(mos_adapter_seam_probe
+        tests/test_adapter_seam_probe.c
+        tests/seam_probe_caller.c
     )
-    target_include_directories(mos_adapter_probe0 PRIVATE
+    target_include_directories(mos_adapter_seam_probe PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/tests
     )
-    target_link_libraries(mos_adapter_probe0 PRIVATE
+    target_link_libraries(mos_adapter_seam_probe PRIVATE
         ${COREFOUNDATION_FRAMEWORK})
-    set_target_properties(mos_adapter_probe0 PROPERTIES
+    set_target_properties(mos_adapter_seam_probe PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
-    add_test(NAME adapter_probe0 COMMAND mos_adapter_probe0)
+    add_test(NAME adapter_seam_probe COMMAND mos_adapter_seam_probe)
 endif()
 
 # ---- Install ------------------------------------------------------------

@@ -1,5 +1,5 @@
 /*
- * test_adapter_probe0.c — phase-2 mechanism probe (design record §12,
+ * test_adapter_seam_probe.c — phase-2 mechanism probe (design record §12,
  * doc/research/2026-06-11-headless-adapter-emulation.md).
  *
  * Settles, on real CI hardware and under the adapter-fake job's
@@ -33,11 +33,11 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 
-#include "probe0_caller.h"
+#include "seam_probe_caller.h"
 
-/* ---- interposing definitions (referenced from probe0_caller.c) ---- */
+/* ---- interposing definitions (referenced from seam_probe_caller.c) ---- */
 
-#define PROBE0_RUN_LOOP_SENTINEL 0x7E57
+#define SEAM_PROBE_RUN_LOOP_SENTINEL 0x7E57
 
 static int g_nanosleep_calls;
 static int g_run_loop_calls;
@@ -61,7 +61,7 @@ SInt32 CFRunLoopRunInMode(CFStringRef mode, CFTimeInterval seconds,
 {
     (void)mode; (void)seconds; (void)return_after_source_handled;
     g_run_loop_calls++;
-    return PROBE0_RUN_LOOP_SENTINEL;
+    return SEAM_PROBE_RUN_LOOP_SENTINEL;
 }
 
 /* ---- harness ------------------------------------------------------ */
@@ -81,7 +81,7 @@ typedef SInt32 (*run_in_mode_fn)(CFStringRef, CFTimeInterval, Boolean);
 static bool g_perform_ran;
 static bool g_perform_stops_loop;
 
-static void probe0_perform(void *info)
+static void seam_probe_perform(void *info)
 {
     (void)info;
     g_perform_ran = true;
@@ -90,10 +90,10 @@ static void probe0_perform(void *info)
 
 static void run_b_probes(run_in_mode_fn real_run_in_mode)
 {
-    CFStringRef mode = CFSTR("mos.probe0.private");
+    CFStringRef mode = CFSTR("mos.seam_probe.private");
     CFRunLoopSourceContext ctx;
     memset(&ctx, 0, sizeof ctx);
-    ctx.perform = probe0_perform;
+    ctx.perform = seam_probe_perform;
 
     CFRunLoopSourceRef src = CFRunLoopSourceCreate(NULL, 0, &ctx);
     if (!src || !real_run_in_mode) {
@@ -134,17 +134,17 @@ int main(void)
 {
     /* A1: cross-TU clock_gettime resolves to our definition. */
     struct timespec ts = {0, 0};
-    int rc = probe0_call_clock_gettime(&ts);
+    int rc = seam_probe_call_clock_gettime(&ts);
     report("A1", rc == 0 && ts.tv_sec == 42);
 
     /* A2: cross-TU nanosleep resolves to ours (a miss would both
        leave the counter at 0 and stall this binary for 1 s). */
-    rc = probe0_call_nanosleep();
+    rc = seam_probe_call_nanosleep();
     report("A2", rc == 0 && g_nanosleep_calls == 1);
 
     /* C1: cross-TU CFRunLoopRunInMode resolves to ours. */
-    int32_t r = probe0_call_run_loop(CFSTR("mos.probe0.unused"));
-    report("C1", r == PROBE0_RUN_LOOP_SENTINEL && g_run_loop_calls == 1);
+    int32_t r = seam_probe_call_run_loop(CFSTR("mos.seam_probe.unused"));
+    report("C1", r == SEAM_PROBE_RUN_LOOP_SENTINEL && g_run_loop_calls == 1);
 
     /* C2: dlsym(RTLD_NEXT, ...) reaches the REAL definitions, distinct
        from ours — the pass-through path the fake needs. */
@@ -157,6 +157,6 @@ int main(void)
     /* B1/B2: delivery through the real run loop. */
     run_b_probes((run_in_mode_fn)real_rim);
 
-    printf("probe0: %d failure(s)\n", g_failures);
+    printf("seam probe: %d failure(s)\n", g_failures);
     return g_failures ? 1 : 0;
 }

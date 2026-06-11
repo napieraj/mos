@@ -11,7 +11,7 @@
  * doc/research/2026-06-11-headless-adapter-emulation.md. This TU is
  * phase 1 (open / query / enumerate); the watch lifecycle's
  * notification and time symbols are phase 2, in mos_fake_watch.c
- * (linked only into the phase-2 test binary).
+ * (linked only into the watch test binary, mos_adapter_watch_tests).
  *
  * Model: ONE optical drive. IOKit object handles are small integers
  * (io_object_t is a mach_port_t), resolved through a fixed table; the
@@ -561,7 +561,7 @@ static void dict_set_str(CFMutableDictionaryRef d, CFStringRef key,
    Disappeared→id-resolve→per-slot removal, the doorbell-or-fail open
    gate, stream_open_ms constancy across joins — are all exercised with
    one drive appearing, leaving, and rejoining under a re-minted ID
-   (test_adapter_phase2.c). The ascending-registry-id same-tick
+   (test_adapter_watch.c). The ascending-registry-id same-tick
    interleave across MULTIPLE drives lives in the pure multiplexer and
    is pinned by test_watch_core.c; modelling a second drive here would
    restructure every singleton table in this fake to re-test it. If a

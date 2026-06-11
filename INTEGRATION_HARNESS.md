@@ -149,13 +149,13 @@ the §5.5 nub invariant, TUR exclusivity, IOReturn pins, the GESN CDB
    the three obligations the pure suite structurally cannot see, all
    adapter-shaped). *Status 2026-06-11: the adapter-fake CI job (phase 1
    of doc/research/2026-06-11-headless-adapter-emulation.md,
-   tests/test_adapter_phase1.c) moved O-1 and O-3 out of this list —
+   tests/test_adapter_oneshot.c) moved O-1 and O-3 out of this list —
    both now run headless on every push: O-1 as the profile==0
    assertion on every non-READY scenario, O-3 as ASan-checked
    vendor/product reads on a live result through the REAL adapter. The
    same job pins the §5.5 lock balance (acquired-exactly-once AND
    returned-to-zero) and the GESN CDB bytes.*
-   *Status 2026-06-11, phase 2 (tests/test_adapter_phase2.c): the
+   *Status 2026-06-11, phase 2 (tests/test_adapter_watch.c): the
    watch lifecycle and identity semantics joined the same job — the
    REAL mos_watch.c on a fake clock replays snapshot/state-change/
    removal (notification AND poll-floor paths), the F1 and replug

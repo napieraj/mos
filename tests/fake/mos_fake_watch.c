@@ -3,7 +3,7 @@
  * and time symbols mos_watch.c imports, so the REAL watch adapter runs
  * headless with deterministic time. Control surface: mos_fake_watch.h.
  * Design record: doc/research/2026-06-11-headless-adapter-emulation.md
- * §12; mechanism probes: tests/test_adapter_probe0.c (all six PASS on
+ * §12; mechanism probes: tests/test_adapter_seam_probe.c (all six PASS on
  * CI 2026-06-11 — AppleClang 17, macos-latest, ASan/UBSan).
  *
  * Two halves:

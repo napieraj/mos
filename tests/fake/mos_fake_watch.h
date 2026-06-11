@@ -7,8 +7,9 @@
  * symbols mos_watch.c imports, PLUS the interposed time/run-loop seam
  * (clock_gettime / nanosleep / CFRunLoopRunInMode definitions that win
  * cross-TU resolution over libSystem/CF — mechanism validated by
- * tests/test_adapter_probe0.c on CI). Linked ONLY into the phase-2
- * test binary; the phase-1 binary stays interpose-free. Design record:
+ * tests/test_adapter_seam_probe.c on CI). Linked ONLY into the watch
+ * test binary (mos_adapter_watch_tests); the one-shot binary stays
+ * interpose-free. Design record:
  * doc/research/2026-06-11-headless-adapter-emulation.md §12.
  */
 

@@ -1,5 +1,5 @@
 /*
- * test_adapter_phase2.c — runs the REAL watch adapter (mos_watch.c,
+ * test_adapter_watch.c — runs the REAL watch adapter (mos_watch.c,
  * with mos_scsi.c / mos_state.c / mos_dr.c beneath it) headless against
  * the link-seam fake, under deterministic fake time. Phase 2 of
  * doc/research/2026-06-11-headless-adapter-emulation.md: the watch
@@ -64,7 +64,7 @@ static void make_sense(uint8_t out[18], uint8_t sk, uint8_t asc, uint8_t ascq)
     out[13] = ascq;
 }
 
-/* 8-byte GESN media-event reply, door closed/open (test_adapter_phase1
+/* 8-byte GESN media-event reply, door closed/open (test_adapter_oneshot
    has the field map). */
 static void make_gesn(uint8_t out[8], bool door_open)
 {
@@ -758,7 +758,7 @@ TEST(gesn_transport_failure_falls_back_to_sense)
 
 int main(void)
 {
-    printf("adapter phase-2 (watch lifecycle, fake clock):\n");
+    printf("adapter watch lifecycle (headless, fake clock):\n");
     RUN(watch_snapshot_then_doorbell_state_change);
     RUN(watch_property_change_wake);
     RUN(watch_removed_via_interest_termination);
