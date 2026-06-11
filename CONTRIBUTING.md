@@ -48,17 +48,15 @@ mac-optical-state/
 │   ├── mos_state_core.c         # pure decision tree (testable without IOKit)
 │   ├── mos_watch_core.c         # pure watch state machine (testable without IOKit)
 │   ├── mos_state.c              # adapter: fills env from handle, calls core
-│   ├── mos_watch.c              # IOKit watch adapter (kIOGeneralInterest + DA)
+│   ├── mos_watch.c              # IOKit watch adapter (poll pump + DR doorbell)
 │   └── mos_scsi.c               # IOKit lifecycle, MMC wrappers, raw CDB
 ├── cli/
 │   ├── main.c                   # argument parsing + dispatch
 │   ├── common.c / .h            # shared CLI state, list rows, envelopes
 │   ├── status.c / list.c / watch.c  # one file per command
+│   ├── probe.c                  # diagnostic substrate observer ('mos probe', MOS_CLI_PROBE)
 │   ├── io.c / .h                # output/escaping helpers
 │   └── human.c / .h             # human-readable layout engine
-├── tools/
-│   ├── mos_probe.c              # C-only library-path smoke test
-│   └── mos_notification_probe.c # substrate observer (IOKit/DA/DR + --dr-dump)
 ├── tests/
 │   ├── test_harness.h           # tiny TEST/RUN/EXPECT macros
 │   ├── test_main.c              # aggregator
@@ -165,13 +163,17 @@ two-tier split rationale). Non-`mos_` symbols fail the build.
 
 - **`cli/`** — the CLI front-end, one file per command over a shared
   layer (`main.c` parses with `getopt_long` and dispatches;
-  `status.c`/`list.c`/`watch.c` implement the verbs; JSON emission is
-  hand-rolled; the output contract is consumed by downstream
-  automation). Links `mos_core`; does not include private headers.
+  `status.c`/`list.c`/`watch.c`/`probe.c` implement the verbs; JSON
+  emission is hand-rolled; the output contract is consumed by
+  downstream automation). Links `mos_core`; does not include private
+  headers (exception: `cli/probe.c`, a diagnostic compiled in under
+  `MOS_CLI_PROBE`, includes `src/mos_pure.h` for the BSD-unit parse).
 
-- **`tools/mos_probe.c`** — minimal hardware smoke test. Run this
-  first on a new machine to validate the IOKit path works before
-  debugging higher-level issues.
+  On a new machine, `mos list` then `mos status --json` exercise the
+  full library path; `mos probe --dump` captures the raw DiscRecording
+  dictionaries when enumeration disagrees with expectation. (The
+  standalone `tools/` probes were consolidated into `mos probe` on
+  2026-06-11 — see the ROADMAP append.)
 
 ## What NOT to do
 

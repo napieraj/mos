@@ -201,10 +201,12 @@ distribution:
 ```sh
 make build      # release build of library + CLI
 make test       # pure-data unit tests (no hardware needed)
-make probe      # builds the hardware smoke-test binary (mos_probe)
-./build/bin/mos_probe   # runs against a real drive
 make clean
 ```
+
+On a machine with a real drive, `mos list` and `mos status` are the
+library-path smoke test; `mos probe --dump` captures the raw
+DiscRecording dictionaries when enumeration disagrees with expectation.
 
 Unit tests exercise the pure-data layer directly — sense parsing,
 state-machine decision tree, watch core, BSD-name normalization, SAM-5

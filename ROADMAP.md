@@ -106,6 +106,39 @@ SURVIVES at open — it is the only source of the media_id (F1) swap
 fingerprint, which DR has no key for. The text below is the pre-pivot
 plan, preserved as the decision record.*
 
+### Probe consolidation (2026-06-11) — supersedes Phase 0's "tool inventory stays at two"
+
+The Phase-0 disposition (implementation plan §retirements: "tool
+inventory stays at two with a clean split: mos_probe = LIBRARY-path
+smoke, mos_notification_probe = substrate observer") is superseded.
+What changed: standalone opt-in binaries with their own arg parsing
+and zero contract-test coverage were the project's one remaining
+drift surface — CI compiled them but nothing ran them, and their
+interfaces sat outside the CLI's validation matrix. Both tools are
+now the `mos probe` subcommand (`cli/probe.c`, compiled in under
+`MOS_CLI_PROBE`, default ON; retiring it is one default flip and the
+OFF build is kept green by a dedicated CI leg): `mos probe <drive>`
+is the notification event stream (NDJSON, `mos.probe.v0` — renamed
+from `mos.notification_probe.v0`), `mos probe --dump` the one-shot DR
+dictionary capture (renamed from `--dr-dump`). The smoke tool is
+retired outright, not relocated — post-pivot, `mos list` + `mos
+status` exercise the identical public-API path, so the duplication
+was itself drift surface.
+
+Two trades, recorded: (1) the observer no longer builds when the
+library is broken — it lives inside the binary that links `mos_core`;
+the observation *code path* stays raw (events come straight from
+IOKit/DiscRecording callbacks, no mos abstraction). (2) The probe's
+DiskArbitration legs are retired with it, and DA leaves the project
+entirely — the legs survived the pivot only as the falsification
+control arm, but no design decision depends on doorbell completeness
+(doorbells are latency-only over the poll floor; the kernel itself
+polls media at 1000 ms), so the control arm had no consumer. The
+AGENTS.md scope addendum's "keeps DA legs" clause is rebutted by a
+dated append there. `mos_internal_bsd_unit_matches` consequently has
+no in-tree consumers (kept, with tests, as the pinned matching rule —
+candidate for removal if no DA-shaped filtering returns).
+
 **Media info (drutil-parity + volume name).** *(Progress 2026-06-10:
 the ReadDiscInformation half shipped as the typed C API —
 `mos_query_disc_info()` + accessors, built to the committed fixtures,
