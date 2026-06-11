@@ -67,7 +67,6 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out)
     char whole_name[MOS_BSD_NAME_CAP] = {0};
     char fallback_name[MOS_BSD_NAME_CAP] = {0};
     uint64_t whole_id = 0;
-    uint64_t fallback_id = 0;
 
     for (;;) {
         io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
@@ -114,9 +113,18 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out)
         } else if (!is_whole && fallback_name[0] == 0 &&
                    mos_internal_bsd_name_is_whole_shape(this_name)) {
             strlcpy(fallback_name, this_name, sizeof(fallback_name));
-            if (IORegistryEntryGetRegistryEntryID(child, &fallback_id) != KERN_SUCCESS) {
-                fallback_id = 0;
-            }
+            /* Deliberately NO id capture on this branch. media_id's
+               contract is "whole-disk IOMedia registry entry ID"
+               (mos_pure.h) — re-minted on a physical swap. A
+               non-IOMedia bridge node's ID identifies the BRIDGE, not
+               the medium, and plausibly survives a swap; a stale
+               non-zero fingerprint disarms BOTH swap detectors at
+               once (id_changed needs both ids non-zero-and-different;
+               the profile-class fallback needs both zero —
+               mos_watch_core.c). Zero is the documented "unavailable,
+               don't infer a swap" sentinel and keeps the no-id
+               fallback armed. Whether real bridges take this branch
+               at all is a rig question (hardware checklist). */
         }
 
         if (whole_name[0] != 0) break; /* Whole found, done */
@@ -126,7 +134,7 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out)
                        : fallback_name[0] ? fallback_name
                        : NULL;
     if (!chosen) return -1;
-    if (media_id_out) *media_id_out = whole_name[0] ? whole_id : fallback_id;
+    if (media_id_out) *media_id_out = whole_name[0] ? whole_id : 0;
     /* parse_bsd_unit normalizes any rdisk/ /dev/ prefix (some USB bridges
        expose only a raw entry), rejects partition/non-whole shapes, and
        returns the unit or -1. Identity is an integer from here; the

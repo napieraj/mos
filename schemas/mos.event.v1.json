@@ -37,7 +37,7 @@
     "stream_open_ms": {
       "type": "integer",
       "minimum": 0,
-      "description": "Wall-clock (Unix epoch) ms at watch_open, monotonicized per process so the (registry_id, stream_open_ms) pair is unique per session even for same-millisecond reopens of the same drive. Session identity IS this pair; consumers wanting a single correlation key concatenate the two. Wall-clock and not monotonic because streams need to be roughly orderable across separate runs and machines; see ARCHITECTURE.md \u00a76."
+      "description": "Wall-clock (Unix epoch) ms at watch_open, monotonicized per process so the (registry_id, stream_open_ms) pair is unique per session even for same-millisecond reopens of the same drive. For an --all watch this is the ALL-WATCH's open time, shared by every drive's events including hot-plug joiners (ts carries join time; pair uniqueness survives because a replug re-mints registry_id). Session identity IS this pair; consumers wanting a single correlation key concatenate the two. Wall-clock and not monotonic because streams need to be roughly orderable across separate runs and machines; see ARCHITECTURE.md \u00a76."
     },
     "seq": {
       "type": "integer",

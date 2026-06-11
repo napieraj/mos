@@ -487,6 +487,16 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
      - Zero drives at open is a valid empty stream that waits for
        arrivals; mos_watch_next_event returns MOS_ERR_TIMEOUT slices
        until something appears.
+     - Arrival discovery REQUIRES the system notification source, so
+       this open FAILS (NULL, MOS_ERR_IO) if that setup fails —
+       unlike the single-target opens, where notifications are
+       latency-only over the poll floor, an all-watch without them
+       could never see a drive plugged in after open and would wait
+       forever on an initially-empty stream.
+     - stream_open_ms is the ALL-WATCH's open time, shared by every
+       drive's events including later joiners (the event's ts carries
+       join time); (registry_id, stream_open_ms) stays per-session
+       unique because a replug re-mints the registry_id.
      - Up to 16 concurrently watched drives; arrivals beyond that are
        ignored until a slot frees.
    mos_watch_bsd_unit() returns -1 on an all-watch (no single unit).
