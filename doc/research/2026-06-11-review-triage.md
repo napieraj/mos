@@ -44,6 +44,46 @@ status/watch).
   the in-tree comment defends double-escaping's safety but never
   addresses cross-command consistency, which is the actual finding.
 
+**Provenance audit (2026-06-11, settles the "is it pre-sanitized"
+question).** Hypothesis checked: post-DR-pivot the identity strings
+are the same data drutil shows, so perhaps the platform already
+sanitizes them to printable ASCII and the divergence is unreachable.
+**Refuted at the canonical source.** The full chain:
+
+1. Drive → kernel: `IOSCSIPeripheralDeviceNub::InterrogateDevice`
+   (apple-oss-distributions/IOSCSIArchitectureModelFamily,
+   IOSCSIArchitectureModel/IOSCSIPeripheralDeviceNub.cpp) `bcopy`s
+   the raw INQUIRY vendor/product/revision fields at SPC field
+   width, NUL-terminates, and calls `StripWhiteSpace`
+   (SCSILibraryRoutines.cpp) — which, verified verbatim, removes
+   **trailing 0x20 bytes only**. No printable-range check, no
+   control-byte filtering, anywhere on the path to
+   `kIOPropertySCSIVendorIdentification` /
+   `…ProductIdentification` / `…ProductRevisionLevel`. The only
+   other byte-level effect is truncation at an embedded NUL
+   (`OSString::withCString`).
+2. Kernel → DR: closed source. The SDK header (DRCoreDevice.h,
+   §11's public mirror) promises only a CFString "extracted from
+   the device" for `kDRDeviceVendorNameKey` /
+   `kDRDeviceProductNameKey` / `kDRDeviceFirmwareRevisionKey` —
+   no encoding, charset, or sanitization contract.
+3. DR → mos: `mos_internal_dr_copy_string` (src/mos_dr.c:58-71)
+   converts via `CFStringGetCString(kCFStringEncodingUTF8)`, which
+   preserves control bytes (0x01–0x1F are valid UTF-8).
+
+Consequence: ESC (0x1b) and friends survive drive firmware → mos
+buffers end-to-end; drutil's output looks clean because conforming
+firmware puts printable ASCII in INQUIRY fields (an SPC SHOULD),
+not because anything enforces it — exactly the conforming-drive
+assumption the scope doctrine's adversarial-input clause refuses.
+The `mos_safe_ascii` defense for terminal output stays load-bearing,
+the E1 divergence is reachable with hostile firmware, and the
+decision between (a) and (b) cannot be resolved by appeal to
+platform sanitization. (Side correction for the record: a session
+note claimed IOSCSIArchitectureModelFamily is absent from
+apple-oss-distributions — it is present, as ARCHITECTURE §11
+already cites, and was fetched live for this audit.)
+
 ### E2. "Profile-class change" fallback compares raw profile codes
 
 **Verified.** `profile_class_changed_without_id`
