@@ -187,6 +187,19 @@ static void act_absent_fire_dr_disappeared(void *ctx)
     mos_fake_fire_dr_disappeared();
 }
 
+static void act_present_fire_dr_status(void *ctx)
+{
+    (void)ctx;
+    mos_fake_set_drive_present(true);
+    mos_fake_fire_dr_status_changed();
+}
+
+static void act_fire_dr_appeared(void *ctx)
+{
+    (void)ctx;
+    mos_fake_fire_dr_appeared();
+}
+
 static void act_remint_fire_appeared(void *ctx)
 {
     (void)ctx;
@@ -612,6 +625,50 @@ TEST(all_empty_stream_hotplug_join_leave_rejoin)
     return 0;
 }
 
+TEST(all_status_for_unjoined_device_joins_nothing)
+{
+    /* The quiet arm of the watch-all doorbell filter (mos_watch.c,
+       dr_status_changed_callback): a StatusChanged whose device
+       RESOLVES to a registry ID that matches no slot — a drive whose
+       Appeared hasn't been delivered yet (this staging), or one beyond
+       the slot cap. The Appeared handler owns joins, so the status
+       handler must neither join nor emit; a regression that "fixes" it
+       to join on unrecognized IDs surfaces here as an event where a
+       timeout is asserted. Delivery itself is proven by the fake's
+       undelivered-signal tripwire (a lost signal aborts the run), so a
+       passing test means the callback ran and chose to do nothing. */
+    scenario_ready_at_t0();
+    mos_fake_set_no_drive();
+
+    mos_error err = MOS_ERR_IO;
+    mos_watch_t *w = mos_watch_open_all(STABLE_MS, TRANSITION_MS, &err);
+    EXPECT(w != NULL);
+    EXPECT_EQ(MOS_OK, err);
+
+    /* t=400: the drive exists in the registry (its ID resolves) but
+       only its StatusChanged arrives — no Appeared. */
+    mos_fake_step(400, act_present_fire_dr_status, NULL);
+
+    const mos_watch_event *e = NULL;
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_watch_next_event(w, &e, 1000));
+    EXPECT_EQ(1000, mos_fake_clock_now());
+
+    /* The stream is not poisoned: the join still happens when the
+       Appeared finally lands, carrying the same resolved identity. */
+    mos_fake_step(1500, act_fire_dr_appeared, NULL);
+
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 2000));
+    EXPECT_EQ(MOS_EVENT_DEVICE_APPEARED, mos_watch_event_kind(e));
+    EXPECT_EQ(1, mos_watch_event_seq(e));
+    EXPECT_EQ(FAKE_DRIVE_ID, mos_watch_event_registry_id(e));
+    EXPECT_EQ(MOS_STATE_READY, mos_watch_event_state(e));
+    EXPECT_EQ(1500, mos_fake_clock_now());
+
+    mos_watch_close(w);
+    EXPECT_EQ(0, mos_fake_outstanding_notify_objects());
+    return 0;
+}
+
 TEST(all_disappeared_unresolved_falls_to_poll_floor)
 {
     /* Disappeared arriving AFTER the registry entry is gone: the
@@ -770,6 +827,7 @@ int main(void)
     RUN(watch_error_backoff_escalates_deterministically);
     RUN(all_open_fails_without_doorbell);
     RUN(all_empty_stream_hotplug_join_leave_rejoin);
+    RUN(all_status_for_unjoined_device_joins_nothing);
     RUN(all_disappeared_unresolved_falls_to_poll_floor);
     RUN(by_name_resolves_only_actual_name);
     RUN(tur_transport_timeout_emits_error_event);
