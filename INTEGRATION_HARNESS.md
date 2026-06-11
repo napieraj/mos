@@ -147,20 +147,21 @@ the §5.5 nub invariant, TUR exclusivity, IOReturn pins, the GESN CDB
 
 0. **Seam contract UNGUARDED clauses** (doc/seam-contract.md appendix —
    the three obligations the pure suite structurally cannot see, all
-   adapter-shaped):
-   - **O-1**: confirm the adapter zero-initializes `mos_state_result`
-     before filling (read `mos_scsi.c:193` on the build host; assert a
-     fresh query on an empty drive reports `current_profile: 0` not
-     garbage).
-   - **O-3**: identity-string lifetime — hold a result past a
-     `mos_close`, read `vendor/product/revision` under ASan (the rehome
-     helper makes this pass; the clause needs one on-Mac ASan run to be
-     source-verified rather than fixture-asserted).
+   adapter-shaped). *Status 2026-06-11: the adapter-fake CI job (phase 1
+   of doc/research/2026-06-11-headless-adapter-emulation.md,
+   tests/test_adapter_phase1.c) moved O-1 and O-3 out of this list —
+   both now run headless on every push: O-1 as the profile==0
+   assertion on every non-READY scenario, O-3 as ASan-checked
+   vendor/product reads on a live result through the REAL adapter. The
+   same job pins the §5.5 lock balance (acquired-exactly-once AND
+   returned-to-zero) and the GESN CDB bytes. What hardware still owes
+   this item is only V-1:*
    - **V-1**: eject and re-insert while running one-shot queries;
      confirm `bsd_unit` flips to -1 and back driven by NODE absence
      (e.g. state `loading` with unit still -1 mid-spin-up is correct),
-     not by the state enum — the fake derives unit FROM state, so this
-     shape is untestable headlessly.
+     not by the state enum — every fake (the pure suite's AND the
+     adapter fake's registry model) scripts unit and state together,
+     so the real-kext coupling is untestable headlessly.
 
 1. **Insert-under-watch** (pass/fail): `mos --watch` at default rates
    during a real insert; compare mount latency to a no-watch baseline,
