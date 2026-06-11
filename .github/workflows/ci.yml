@@ -67,6 +67,25 @@ jobs:
           ASAN_OPTIONS=abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
              /tmp/test_watch_lifetime
 
+      - name: DR doorbell guard (driveless registration)
+        # mos_watch_open_all registers the DiscRecording notification
+        # doorbell and fails the open if registration is rejected; zero
+        # drives is a valid empty stream, so this run on a driveless
+        # runner proves the DRNotificationCenter registration calls are
+        # accepted by the macOS API on every push. Callback DELIVERY
+        # still needs a device appearing — that stays on the rig.
+        run: |
+          set -e
+          cc -std=c11 -O1 -fsanitize=address,undefined \
+             -fno-omit-frame-pointer -fno-sanitize-recover=all \
+             -I include tests/test_dr_doorbell.c \
+             build/libmos.a build/libmos_pure.a \
+             -framework IOKit -framework CoreFoundation \
+             -framework DiscRecording \
+             -o /tmp/test_dr_doorbell
+          ASAN_OPTIONS=abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+             /tmp/test_dr_doorbell
+
       - name: Run CLI smoke check
         run: |
           set -e
