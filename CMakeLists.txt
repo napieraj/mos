@@ -335,6 +335,51 @@ if(MOS_BUILD_FUZZ)
     )
 endif()
 
+# ---- Opt-in: headless adapter test (link-seam fake) --------------------
+#
+# Runs the REAL one-shot adapter TUs (mos_scsi.c / mos_state.c /
+# mos_dr.c) against a fake of the IOKit + DiscRecording C symbols
+# (tests/fake/mos_fake_apple.c), fed committed MMC fixtures — the
+# adapter behaviour that is otherwise unverified until a drive is
+# attached. Design + phasing:
+# doc/research/2026-06-11-headless-adapter-emulation.md.
+#
+# Apple-only: the fake populates REAL SCSITaskLib / IOCFPlugIn vtable
+# structs, whose types exist only in the macOS SDK (a Linux build would
+# need surrogate headers — deferred, since that would test a
+# transcription instead of the real types). The seam is: link mos_pure
+# + REAL CoreFoundation, and NOT IOKit / DiscRecording — the fake
+# supplies those ~26 symbols (phase 1 needs no watch/notification
+# symbols, so mos_watch.c is excluded). No mos_warnings/-Werror here:
+# this is a behaviour test, and the strict-adapter CI leg already lints
+# these same TUs.
+option(MOS_BUILD_ADAPTER_FAKE "Build the headless adapter test (link-seam fake of IOKit+DiscRecording)" OFF)
+if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
+    add_executable(mos_adapter_fake_tests
+        tests/test_adapter_phase1.c
+        tests/fake/mos_fake_apple.c
+        src/mos_scsi.c
+        src/mos_state.c
+        src/mos_dr.c
+    )
+    target_include_directories(mos_adapter_fake_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fake
+    )
+    target_compile_definitions(mos_adapter_fake_tests PRIVATE
+        MOS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+    )
+    find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+    target_link_libraries(mos_adapter_fake_tests PRIVATE
+        mos_pure ${COREFOUNDATION_FRAMEWORK})
+    set_target_properties(mos_adapter_fake_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+    add_test(NAME adapter_fake COMMAND mos_adapter_fake_tests)
+endif()
+
 # ---- Install ------------------------------------------------------------
 
 include(GNUInstallDirs)
