@@ -81,25 +81,32 @@ the E1 divergence is reachable with hostile firmware, and the
 decision between (a) and (b) cannot be resolved by appeal to
 platform sanitization.
 
-**Version bound on link 1 (correction, same day).** The kernel-side
-evidence is from the LAST PUBLISHED source of the family:
-apple-oss-distributions/IOSCSIArchitectureModelFamily's newest tag
-is 139.0.2 (February 2005, OS X 10.3.x era; `main` tracks it —
-including the IOSCSIMultimediaCommands / PeripheralDeviceType05
-optical driver). Apple has shipped the kext closed for the ~21
-years since, so current-macOS parse behavior is unverifiable from
-source. This does not weaken the audit's operational conclusion —
-it is the conclusion: at no link of the chain does a VERIFIABLE
-sanitization guarantee exist on a current macOS (2005 kernel source
-shows none; 2026 kext is closed; the 15.5 DR header promises
-nothing), and an unverifiable guarantee is exactly what the scope
-doctrine forbids leaning on. Any future claim that the modern kext
-sanitizes needs a disassembly citation or an Apple doc, recorded
-here, before any defense is relaxed. (The repo IS in
-apple-oss-distributions, as ARCHITECTURE §11 cites — but §11
-readers should know its line citations are against 2005 source,
-the same vintage bound §11 already records for the 10.2.8
-SCSITaskLib.h signature-identity note.)
+**Version bound on link 1 (corrected twice, same day).** The
+kernel-side evidence is from the LAST PUBLISHED source of the
+family: apple-oss-distributions/IOSCSIArchitectureModelFamily's
+newest tag is 139.0.2 (February 2005; `main` tracks it — including
+the IOSCSIMultimediaCommands / PeripheralDeviceType05 optical
+driver). A first version of this note framed that as "21 years
+unverifiable" — uncalibrated, and the tree already held the
+calibration (doc/research/2026-06-11-headless-adapter-emulation.md,
+"drift calibration": the current 26.4 SDK still ships SCSITaskLib.h
+with Copyright 2001-2009 and availability markers stopping at 10.6
+— the userspace SAM surface byte-frozen since ~2009, a strong prior
+of implementation quiescence; a prior, not a proof. Companion
+evidence: DRCoreDevice.h byte-stable 10.13→15.5,
+2026-06-10-dr-pivot-feasibility.md §2). The calibrated reading
+STRENGTHENS the audit's conclusion rather than hedging it: the
+last-published source sanitizes nothing, and the quiescence prior
+says the shipping kext still behaves like that source — so
+"no platform sanitization, then and now" is the best-evidence
+conclusion, with residual drift (~2005-2009 window, plus the
+binaries-change-behind-frozen-headers caveat) owned by the hardware
+falsification leg like every other kernel-predicate claim. The bar
+for relaxing any identity-byte defense is unchanged: positive
+evidence (disassembly or Apple doc), dated, recorded here. The
+§5.5-citations-are-Tiger-vintage observation is already on record
+in the same artifact as a candidate doctrinal annotation; nothing
+new to add from this audit.
 
 ### E2. "Profile-class change" fallback compares raw profile codes
 
