@@ -307,6 +307,25 @@ the §5.5 nub invariant, TUR exclusivity, IOReturn pins, the GESN CDB
    repeated across hotplug (doc/research/2026-06-10-drutil-contract.md
    tiering; retires the Inferred tier).
 
+4. **Multi-drive `mos watch` guard** (2026-06-11 fix, not headless-
+   testable): with two drives attached and no selector, `mos watch`
+   must print the mini-list to stderr and exit 64 — same contract as
+   `mos status`. One drive: implied, as before.
+
+5. **`bsd_unit` fallback branch on real bridges** (2026-06-11 fix):
+   does any owned bridge actually expose its BSD name on a non-IOMedia
+   node (taking `mos_internal_bsd_unit`'s fallback), and does that
+   node's registry ID survive a disc swap? One `mos probe --dump`
+   before/after a swap answers both. The branch now mints media_id 0
+   (don't-infer-a-swap sentinel); a captured fixture either pins that
+   or retires the question.
+
+6. **DR doorbell setup failure in practice**: `mos_watch_open_all` now
+   fails the open if `DRNotificationCenterCreate` / run-loop source
+   creation fails. If a real Mac ever shows this failing, that
+   observation funds the rescan-fallback decision parked in ROADMAP
+   (2026-06-11 intake remainders).
+
 A surprise observed on hardware lands as a committed `.bin` fixture and
 the pure layer is built to the fixture — defenses generic, never
 device-special-cased.

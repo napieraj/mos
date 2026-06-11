@@ -328,6 +328,22 @@ does the prevent bit survive `SCSITaskUserClient` close; does brief exclusive
 access contend with another application holding the drive; does GET EVENT STATUS
 NOTIFICATION report tray/media events reliably across drive families.
 
+**Deferred from the 2026-06-11 review intake** (three external passes;
+fixes landed the same day, these are the parked remainders):
+
+- **EPIPE-path CLI tests.** `mos_cli_stdout_finalize`'s errno-freshness
+  argument (cli/io.c) is reasoned, not tested: force EPIPE and
+  non-EPIPE stdout failures on the one-shot and watch paths and pin
+  the EX_IOERR vs pipe-closed exit split. Test-harness work, no
+  behavior change implied.
+- **All-watch directory-rescan fallback.** `mos_watch_open_all` now
+  fails honestly when the DR doorbell can't be set up (arrival
+  discovery has no poll floor — see the open's comment). If hardware
+  sessions ever observe `DRNotificationCenterCreate` or its run-loop
+  source actually failing in practice, a slow-cadence
+  `mos_internal_dr_copy_snapshot` reconciliation pass in the all-pump
+  would restore soft-fail; build it on that evidence, not before.
+
 ---
 
 ## Later — v1.0 — production-ready, embeddable
