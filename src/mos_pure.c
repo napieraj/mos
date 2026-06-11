@@ -181,6 +181,20 @@ bool mos_internal_toc_parse(const uint8_t *buf, size_t len, mos_toc *out)
     /* A trailing partial descriptor inside the claimed span is a
        malformed TOC, not padding. */
     if (cursor != span) return false;
+
+    /* The header's range bytes are hostile input too. The walk above
+       proves the descriptors well-formed; identity additionally needs
+       them to BE the table the header declares — ascending + unique +
+       count == last-first+1 + matching endpoints forces exactly
+       first..last (pigeonhole). A TOC that omits declared tracks, or
+       declares an inverted or out-of-range header, is rejected whole:
+       a fingerprint hashed over it would be falsely stable across
+       genuinely different discs. */
+    if (out->first_track < 1 || out->first_track > 99) return false;
+    if (out->last_track < out->first_track || out->last_track > 99) return false;
+    if (out->track_count != out->last_track - out->first_track + 1) return false;
+    if (out->tracks[0].track != out->first_track ||
+        out->tracks[out->track_count - 1].track != out->last_track) return false;
     return true;
 }
 

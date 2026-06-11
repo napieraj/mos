@@ -227,6 +227,19 @@ TEST(toc_fail_closed_on_hostile_shapes)
     t[4 + 2] = 2; t[12 + 2] = 1;
     EXPECT_EQ(false, mos_internal_toc_parse(t, sizeof t, &toc));
 
+    /* Non-ascending and duplicate INTERIOR tracks under headers whose
+       range/endpoints are otherwise coherent — fixtures that reach the
+       ordering gate without the header-consistency checks masking it. */
+    {
+        uint8_t u[4 + 32] = {0};
+        mos_toc toc2;
+        u[1] = 34; u[2] = 1; u[3] = 4;
+        u[4 + 2] = 1; u[12 + 2] = 3; u[20 + 2] = 2; u[28 + 2] = 4;
+        EXPECT_EQ(false, mos_internal_toc_parse(u, sizeof u, &toc2));
+        u[12 + 2] = 2; u[20 + 2] = 2;          /* {1, 2, 2, 4} */
+        EXPECT_EQ(false, mos_internal_toc_parse(u, sizeof u, &toc2));
+    }
+
     /* Reserved track number 100. */
     t[4 + 2] = 1; t[12 + 2] = 100;
     EXPECT_EQ(false, mos_internal_toc_parse(t, sizeof t, &toc));
@@ -241,13 +254,72 @@ TEST(toc_fail_closed_on_hostile_shapes)
     t[1] = 200;
     EXPECT_EQ(false, mos_internal_toc_parse(t, 4 + 20, &toc));
 
-    /* Honest short claim that truncates cleanly: header + one
-       descriptor (Data Length = 2 + 8 = 10) inside a larger buffer —
-       parses exactly one track, ignores the rest of the buffer. */
+    /* Honest short claim that truncates cleanly used to parse as a
+       partial table; under the header-consistency rule it is the
+       half-parsed-identity case and fails: the header still declares
+       tracks 1..2 but the claimed span (2 + 8 = 10) covers only one
+       descriptor. */
+    t[4 + 2] = 1; t[12 + 2] = 2; t[20 + 2] = 0xAA;
     t[1] = 10;
+    EXPECT_EQ(false, mos_internal_toc_parse(t, sizeof t, &toc));
+
+    /* The same short claim with a COHERENT header (1..1) parses: the
+       clamp itself is fine when the table it leaves is whole. */
+    t[3] = 1;
     EXPECT_EQ(true, mos_internal_toc_parse(t, sizeof t, &toc));
     EXPECT_EQ(1, toc.track_count);
     EXPECT_EQ(false, toc.have_leadout);
+    return 0;
+}
+
+TEST(toc_fail_closed_on_header_descriptor_mismatch)
+{
+    /* Descriptors can be individually well-formed while the header
+       declares a different table. All hostile; all rejected whole. */
+    uint8_t t[4 + 16] = {0};
+    mos_toc toc;
+
+    /* Header range 5..6, descriptor list {1, lead-out}. */
+    t[1] = 18; t[2] = 5; t[3] = 6;
+    t[4 + 1] = 0x10; t[4 + 2] = 1;
+    t[12 + 1] = 0x10; t[12 + 2] = 0xAA;
+    EXPECT_EQ(false, mos_internal_toc_parse(t, sizeof t, &toc));
+
+    /* first_track = 0 (reserved) and > 99; inverted range. */
+    t[2] = 0; t[3] = 1; t[4 + 2] = 1; t[12 + 2] = 0xAA;
+    EXPECT_EQ(false, mos_internal_toc_parse(t, sizeof t, &toc));
+    t[2] = 200; t[3] = 201;
+    EXPECT_EQ(false, mos_internal_toc_parse(t, sizeof t, &toc));
+    t[2] = 3; t[3] = 1;
+    EXPECT_EQ(false, mos_internal_toc_parse(t, sizeof t, &toc));
+
+    /* Count matches the range but the endpoints don't: header 1..2,
+       descriptors {1, 3} — the pigeonhole edge. */
+    t[2] = 1; t[3] = 2;
+    t[4 + 2] = 1; t[12 + 2] = 3;
+    EXPECT_EQ(false, mos_internal_toc_parse(t, sizeof t, &toc));
+
+    /* Endpoints match but a declared track is missing: header 1..3,
+       descriptors {1, 3} — only the count check catches this. */
+    t[3] = 3;
+    EXPECT_EQ(false, mos_internal_toc_parse(t, sizeof t, &toc));
+
+    /* Header-only TOC (claimed length covers no descriptors): a
+       declared range with zero descriptors is incomplete, not empty. */
+    t[1] = 2; t[2] = 1; t[3] = 1;
+    EXPECT_EQ(false, mos_internal_toc_parse(t, 4, &toc));
+
+    /* Coherent table not starting at 1 parses: header 2..4,
+       descriptors {2, 3, 4} exactly, no lead-out. */
+    uint8_t ok[4 + 24] = {0};
+    ok[1] = 26; ok[2] = 2; ok[3] = 4;
+    ok[4 + 1] = 0x10; ok[4 + 2] = 2;
+    ok[12 + 1] = 0x10; ok[12 + 2] = 3;
+    ok[20 + 1] = 0x10; ok[20 + 2] = 4;
+    EXPECT_EQ(true, mos_internal_toc_parse(ok, sizeof ok, &toc));
+    EXPECT_EQ(3, toc.track_count);
+    EXPECT_EQ(2, toc.first_track);
+    EXPECT_EQ(4, toc.last_track);
     return 0;
 }
 
@@ -500,6 +572,7 @@ void register_config_tests(void)
     RUN(config_additional_length_past_buffer_is_rejected);
     RUN(toc_parses_realistic_audio_cd);
     RUN(toc_fail_closed_on_hostile_shapes);
+    RUN(toc_fail_closed_on_header_descriptor_mismatch);
     RUN(profile_class_total_over_name_table);
     RUN(trusted_len_each_authority_binds);
     RUN(trusted_len_hostile_and_degenerate_inputs);
