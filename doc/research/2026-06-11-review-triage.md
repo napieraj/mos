@@ -94,7 +94,15 @@ with Copyright 2001-2009 and availability markers stopping at 10.6
 — the userspace SAM surface byte-frozen since ~2009, a strong prior
 of implementation quiescence; a prior, not a proof. Companion
 evidence: DRCoreDevice.h byte-stable 10.13→15.5,
-2026-06-10-dr-pivot-feasibility.md §2). The calibrated reading
+2026-06-10-dr-pivot-feasibility.md §2; and the earliest + strongest
+leg, 2026-04-22-driverkit-investigation.md from the 26.5 beta
+25F5042g extraction — SCSITaskLib.h copyright "2001–2009 unchanged
+through the Tahoe cycle", no deprecation markers on any depended-on
+symbol, and `kmutil showloaded` proving the SAME kext family
+(IOSCSIArchitectureModelFamily 545.100.10, with
+IOSCSIMultimediaCommandsDevice and SCSITaskUserClient at matching
+versions) is what actually loads on 26.5, version-frozen since
+Sequoia 15.x). The calibrated reading
 STRENGTHENS the audit's conclusion rather than hedging it: the
 last-published source sanitizes nothing, and the quiescence prior
 says the shipping kext still behaves like that source — so
