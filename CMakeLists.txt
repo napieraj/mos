@@ -17,6 +17,13 @@ project(mac_optical_state
     LANGUAGES   C
     DESCRIPTION "macOS optical drive state via MMC over IOKit")
 
+# Declared before first use (the if(NOT APPLE) block below) so it shows
+# up in cmake -L / GUIs instead of working only as an undeclared cache
+# write.
+option(MOS_NON_APPLE_STUB
+    "On non-Apple platforms: INTERFACE-library stubs and early return instead of building the pure layer + tests"
+    OFF)
+
 if(NOT APPLE)
     # The library's full surface is macOS-only — mos_core uses IOKit's
     # SCSITaskLib and MMCDeviceInterface, which have no equivalent on
@@ -119,7 +126,7 @@ target_compile_options(mos_warnings INTERFACE
 #   mos_core  — IOKit shell (mos_scsi.c, mos_state.c, mos_watch.c) on
 #               top of mos_pure. This is what downstream embedders
 #               (HandBrake, VLC, ARM) link against. Pulls in IOKit,
-#               CoreFoundation, and DiskArbitration as transitive
+#               CoreFoundation, and DiscRecording as transitive
 #               dependencies via PUBLIC linkage.
 #
 # The split makes the pure-vs-IOKit boundary load-bearing in the build
@@ -332,18 +339,24 @@ endif()
 
 include(GNUInstallDirs)
 
-install(TARGETS mos_pure
-        EXPORT  mos_core-targets
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-
+# Install is Apple-only: include/mos.h declares the full public API,
+# and an installed tree of (mos.h + libmos_pure.a) on Linux would look
+# public while unable to satisfy mos_open_*/mos_query_*/mos_watch_* at
+# link time. The pure layer on non-Apple is a developer workflow
+# surface (build + tests), not a distributable artifact. No
+# install(EXPORT)/package-config yet — downstream CMake consumption is
+# add_subdirectory (header comment); a real mosConfig.cmake is a
+# packaging decision for when a consumer exists.
 if(APPLE)
+    install(TARGETS mos_pure
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
     install(TARGETS mos_core
-            EXPORT  mos_core-targets
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
     install(TARGETS mos
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-endif()
 
-install(FILES include/mos.h
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(FILES include/mos.h
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
