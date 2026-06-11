@@ -79,6 +79,7 @@ static struct {
     uint32_t rdi_status;        uint8_t rdi[64];  size_t rdi_len;
 
     /* Raw-CDB script (the GESN tray probe path). */
+    bool     plugin_fail;
     bool     exclusive_denied;
     uint32_t raw_status;        uint8_t raw[64];  size_t raw_len;
     uint64_t raw_realized;      uint8_t raw_sense[18];
@@ -170,6 +171,8 @@ void mos_fake_set_raw_reply(uint32_t task_status,
 }
 
 void mos_fake_set_exclusive_denied(bool denied) { g.exclusive_denied = denied; }
+
+void mos_fake_set_plugin_fail(bool fail) { g.plugin_fail = fail; }
 
 size_t mos_fake_last_cdb(uint8_t out[16])
 {
@@ -368,6 +371,7 @@ kern_return_t IOCreatePlugInInterfaceForService(io_service_t service,
 {
     (void)pluginType; (void)interfaceType;
     if (service != FAKE_SVC || !theInterface) return KERN_FAILURE;
+    if (g.plugin_fail) return KERN_FAILURE;  /* kext declines to attach */
     ensure_vtbls();
     *theInterface = &g_plugin_ptr;
     if (theScore) *theScore = 0;

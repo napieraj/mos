@@ -85,6 +85,13 @@ void mos_fake_set_raw_reply(uint32_t task_status,
    (another client holds the drive). Cleared by mos_fake_reset(). */
 void mos_fake_set_exclusive_denied(bool denied);
 
+/* Make IOCreatePlugInInterfaceForService fail (Apple's kext declines
+   to attach SCSITaskUserClient) — every open maps to
+   MOS_ERR_DRIVER_REJECTED while set, which through a watch probe
+   yields a deterministic identical-error streak for the backoff
+   contract. Cleared by mos_fake_reset(). */
+void mos_fake_set_plugin_fail(bool fail);
+
 /* Copy the most recent CDB into out (>= 16 bytes); returns its length,
    0 if no raw task has executed since reset. */
 size_t mos_fake_last_cdb(uint8_t out[16]);

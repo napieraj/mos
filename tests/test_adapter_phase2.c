@@ -94,6 +94,17 @@ static void script_empty(void)
     mos_fake_set_raw_reply(0x00, gesn, 8, 8, NULL);
 }
 
+/* 8-byte GET CONFIGURATION feature header, header-only reply: Data
+   Length 4 (the reserved + current-profile bytes that follow it),
+   current profile in [6..7]. */
+static void make_config_header(uint8_t out[8], uint16_t profile)
+{
+    memset(out, 0, 8);
+    out[3] = 0x04;
+    out[6] = (uint8_t)(profile >> 8);
+    out[7] = (uint8_t)(profile & 0xFF);
+}
+
 /* ---- Timeline step actions ----------------------------------------- */
 
 static void act_empty_fire_dr(void *ctx)
@@ -126,6 +137,28 @@ static void act_set_no_drive(void *ctx)
 {
     (void)ctx;
     mos_fake_set_no_drive();
+}
+
+static void act_swap_media_fire_dr(void *ctx)
+{
+    (void)ctx;
+    mos_fake_set_media_id(0x100000789ull);
+    mos_fake_fire_dr_status_changed();
+}
+
+static void act_profile_to_dvd_fire_dr(void *ctx)
+{
+    (void)ctx;
+    uint8_t hdr[8];
+    make_config_header(hdr, 0x0010);
+    mos_fake_set_getconfig_reply(0x00, hdr, 8);
+    mos_fake_fire_dr_status_changed();
+}
+
+static void act_plugin_fail(void *ctx)
+{
+    (void)ctx;
+    mos_fake_set_plugin_fail(true);
 }
 
 /* Open a watch on the default drive and consume the snapshot event,
@@ -305,6 +338,152 @@ TEST(watch_poll_only_degraded)
     return 0;
 }
 
+TEST(watch_media_swap_emits_media_changed)
+{
+    /* F1: same-state swap. The whole-disk IOMedia registry ID re-mints
+       (0x100000456 → 0x100000789) while the drive stays READY across
+       two probes; the id flows through the real chain —
+       IORegistryEntryGetRegistryEntryID → handle media_id → probe
+       result → core fingerprint — and emits media_changed. */
+    scenario_ready_at_t0();
+
+    mos_watch_t *w = NULL;
+    uint64_t so = 0;
+    int rc = open_and_take_snapshot(&w, &so);
+    if (rc) return rc;
+
+    mos_fake_step(500, act_swap_media_fire_dr, NULL);
+
+    const mos_watch_event *e = NULL;
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 1500));
+    EXPECT_EQ(MOS_EVENT_MEDIA_CHANGED, mos_watch_event_kind(e));
+    EXPECT_EQ(MOS_STATE_READY, mos_watch_event_state(e));
+    EXPECT_EQ(MOS_STATE_READY, mos_watch_event_prev_state(e));
+    EXPECT_EQ(500, mos_fake_clock_now());
+    EXPECT_EQ(so, mos_watch_event_stream_open_ms(e));
+    /* Identity strings on a live event: the watch-static buffers, read
+       under ASan (the watch-lifetime analogue of seam-contract O-3). */
+    EXPECT_STREQ("HL-DT-ST", mos_watch_event_vendor(e));
+    EXPECT_STREQ("DVDROM",   mos_watch_event_product(e));
+
+    mos_watch_close(w);
+    EXPECT_EQ(0, mos_fake_outstanding_notify_objects());
+    return 0;
+}
+
+TEST(watch_media_swap_profile_fallback)
+{
+    /* The bridge-without-identity arm: media_id is 0 on both sides, so
+       the only swap evidence is the current profile's class changing
+       (CD-ROM 0x08 → DVD-ROM 0x10) — the core's documented fallback
+       fingerprint. */
+    mos_fake_reset();
+    mos_fake_watch_reset();
+    uint8_t hdr[8];
+    make_config_header(hdr, 0x0008);
+    mos_fake_set_getconfig_reply(0x00, hdr, 8);
+    mos_fake_set_tur(0x00, NULL);
+    mos_fake_set_media_id(0);            /* identity never available */
+    mos_fake_clock_enable(0, WALL_BASE_MS);
+
+    mos_error err = MOS_ERR_IO;
+    mos_watch_t *w = mos_watch_open_by_index(1, STABLE_MS, TRANSITION_MS,
+                                             &err);
+    EXPECT(w != NULL);
+    EXPECT_EQ(MOS_OK, err);
+
+    const mos_watch_event *e = NULL;
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 1000));
+    EXPECT_EQ(MOS_EVENT_SNAPSHOT, mos_watch_event_kind(e));
+    EXPECT_EQ(MOS_STATE_READY, mos_watch_event_state(e));
+    EXPECT_EQ(0x0008, mos_watch_event_current_profile(e));
+    uint64_t so = mos_watch_event_stream_open_ms(e);
+
+    mos_fake_step(500, act_profile_to_dvd_fire_dr, NULL);
+
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 1500));
+    EXPECT_EQ(MOS_EVENT_MEDIA_CHANGED, mos_watch_event_kind(e));
+    EXPECT_EQ(0x0010, mos_watch_event_current_profile(e));
+    EXPECT_EQ(500, mos_fake_clock_now());
+    EXPECT_EQ(so, mos_watch_event_stream_open_ms(e));
+
+    mos_watch_close(w);
+    EXPECT_EQ(0, mos_fake_outstanding_notify_objects());
+    return 0;
+}
+
+TEST(watch_replug_reminted_drive_id)
+{
+    /* Replug: terminal removal of stream 1, then the "same" drive back
+       under a re-minted registry ID (xnu's never-reused counter). The
+       new stream carries the NEW id and a DIFFERENT stream_open_ms —
+       (registry_id, stream_open_ms) stays a unique session key. */
+    scenario_ready_at_t0();
+
+    mos_watch_t *w1 = NULL;
+    uint64_t so1 = 0;
+    int rc = open_and_take_snapshot(&w1, &so1);
+    if (rc) return rc;
+
+    mos_fake_step(400, act_fire_io_termination, NULL);
+
+    const mos_watch_event *e = NULL;
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w1, &e, 1500));
+    EXPECT_EQ(MOS_EVENT_DEVICE_REMOVED, mos_watch_event_kind(e));
+    EXPECT_EQ(MOS_ERR_NO_DEVICE, mos_watch_next_event(w1, &e, 100));
+    mos_watch_close(w1);
+    EXPECT_EQ(0, mos_fake_outstanding_notify_objects());
+
+    mos_fake_set_drive_id(0x100000AAAull);
+
+    mos_error err = MOS_ERR_IO;
+    mos_watch_t *w2 = mos_watch_open_by_index(1, STABLE_MS, TRANSITION_MS,
+                                              &err);
+    EXPECT(w2 != NULL);
+    EXPECT_EQ(MOS_OK, err);
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w2, &e, 1000));
+    EXPECT_EQ(MOS_EVENT_SNAPSHOT, mos_watch_event_kind(e));
+    EXPECT_EQ(0x100000AAAull, mos_watch_event_registry_id(e));
+    EXPECT(mos_watch_event_stream_open_ms(e) != so1);
+
+    mos_watch_close(w2);
+    EXPECT_EQ(0, mos_fake_outstanding_notify_objects());
+    return 0;
+}
+
+TEST(watch_error_backoff_escalates_deterministically)
+{
+    /* Consecutive identical probe errors escalate the retry interval
+       200 → 400 → 800 → 1600 → 2000 (capped) — pinned at the pure
+       layer by test_watch_core.c, asserted HERE as exact fake-clock
+       positions through the real adapter: the per-probe reopen fails
+       with MOS_ERR_DRIVER_REJECTED (plugin factory declines) from the
+       t=2000 poll onward. */
+    scenario_ready_at_t0();
+
+    mos_watch_t *w = NULL;
+    uint64_t so = 0;
+    int rc = open_and_take_snapshot(&w, &so);
+    if (rc) return rc;
+
+    mos_fake_step(100, act_plugin_fail, NULL);
+
+    static const uint64_t at_ms[6] = {2000, 2200, 2600, 3400, 5000, 7000};
+    for (int i = 0; i < 6; ++i) {
+        const mos_watch_event *e = NULL;
+        EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 3000));
+        EXPECT_EQ(MOS_EVENT_ERROR, mos_watch_event_kind(e));
+        EXPECT_EQ(MOS_ERR_DRIVER_REJECTED, mos_watch_event_error(e));
+        EXPECT_EQ((long long)at_ms[i], (long long)mos_fake_clock_now());
+        EXPECT_EQ(2 + i, mos_watch_event_seq(e));
+        EXPECT_EQ(so, mos_watch_event_stream_open_ms(e));
+    }
+
+    mos_watch_close(w);
+    EXPECT_EQ(0, mos_fake_outstanding_notify_objects());
+    return 0;
+}
+
 int main(void)
 {
     printf("adapter phase-2 (watch lifecycle, fake clock):\n");
@@ -313,6 +492,10 @@ int main(void)
     RUN(watch_removed_via_interest_termination);
     RUN(watch_removed_via_reopen_failure);
     RUN(watch_poll_only_degraded);
+    RUN(watch_media_swap_emits_media_changed);
+    RUN(watch_media_swap_profile_fallback);
+    RUN(watch_replug_reminted_drive_id);
+    RUN(watch_error_backoff_escalates_deterministically);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);
     return mos_tests_failed ? 1 : 0;
