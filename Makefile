@@ -50,7 +50,7 @@ define require_cmake
 	fi
 endef
 
-.PHONY: help configure build build-universal test probe mos_probe \
+.PHONY: help configure build build-universal test \
         sign sign-universal notarize staple dist release \
         install install-signed uninstall clean
 
@@ -59,7 +59,6 @@ help:
 	@echo "  build            Native release build (CMake)"
 	@echo "  build-universal  Universal (arm64 + x86_64) release build"
 	@echo "  test             Build + run pure-data unit tests"
-	@echo "  probe            Build + run hardware smoke test (mos_probe)"
 	@echo "  install          Install locally (ad-hoc signed by linker)"
 	@echo "  clean            Remove build artifacts"
 	@echo ""
@@ -119,13 +118,6 @@ build-universal:
 test: $(BUILD)/CMakeCache.txt
 	cmake --build $(BUILD) --target mos_tests
 	$(BUILD)/bin/mos_tests
-
-probe mos_probe:
-	$(call require_cmake)
-	cmake -B $(BUILD) -DCMAKE_BUILD_TYPE=Release -DMOS_BUILD_PROBE=ON
-	cmake --build $(BUILD) --target mos_probe
-	@echo
-	@echo "Run: $(BUILD)/bin/mos_probe"
 
 # ---- Signing -----------------------------------------------------------
 #

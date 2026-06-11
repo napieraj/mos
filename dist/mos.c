@@ -200,8 +200,11 @@ int64_t mos_internal_parse_bsd_unit(const char *name);
    simply 4 != 40 — and the suffix is validated as `(s<digits>)*`. Returns
    false for NULL reported, whole_unit < 0, a non-"disk" prefix, or a
    malformed suffix. Pure, no IOKit. Pinned by tests/test_bsd_name.c.
-   Consumers: src/mos_watch.c and tools/mos_notification_probe.c DA
-   filtering. */
+   No in-tree consumers since the DA retirement (2026-06-11): its call
+   sites were the DiskArbitration event filters (the watch's, retired
+   in DR pivot Phase 2a, then the probe's, retired with the probe
+   consolidation). Kept as the pinned partition-child matching rule
+   for any future BSD-name event filtering. */
 bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit);
 
 /* ---- GET CONFIGURATION feature walk (mos_config.c) --------------- *
@@ -998,9 +1001,9 @@ bool mos_internal_bsd_name_is_whole_shape(const char *bsd_name)
    the unit numerically so prefix collisions can't match (disk40 vs unit 4 is
    40 != 4, no "is the next char a digit" reasoning). The suffix must be
    `(s<digits>)*` — "disk4s1", APFS "disk4s1s2"; "disk4s", "disk4sx",
-   "disk4s1x" are rejected. Pinned by tests/test_bsd_name.c; the DA event
-   filters in mos_watch.c and mos_notification_probe.c depend on the exact
-   rule. */
+   "disk4s1x" are rejected. Pinned by tests/test_bsd_name.c. No in-tree
+   consumers since the DA retirement (2026-06-11; see mos_pure.h) —
+   kept as the pinned partition-child matching rule. */
 bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit)
 {
     if (!reported || whole_unit < 0) return false;

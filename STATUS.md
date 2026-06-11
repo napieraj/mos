@@ -13,8 +13,8 @@ same matrix that was the v2 gate — has not yet happened against the
 v0.4.0-dev binary; the first tag gates on it (plus the DR
 falsification rows in INTEGRATION_HARNESS.md).
 
-The v0.3.1-dev cycle added: empirical notification probe
-(`tools/mos_notification_probe.c`), conservative wake-dispatch
+The v0.3.1-dev cycle added: the empirical notification probe (since
+consolidated into `mos probe`, 2026-06-11), conservative wake-dispatch
 extension in `src/mos_watch.c` (PropertyChange + IsTerminated only;
 self-trigger family deferred to v0.4 pending probe results), the
 `mos_internal_bsd_unit_matches` pure helper
@@ -102,7 +102,8 @@ NULL-handle-with-MOS_OK contract-violation case.
 
 **Security review passed.** Threat model covered: hostile
 drive (BadBRIDGE-class), hostile env, hostile CLI args, hostile
-NDJSON consumer. Critical finding fixed: `tools/mos_probe.c` was
+NDJSON consumer. Critical finding fixed: the standalone smoke probe
+(`mos_probe`, retired 2026-06-11) was
 printing drive-controlled `vendor` / `product` strings raw to
 stdout — terminal-injection vector via ANSI / OSC sequences.
 Local `print_safe()` helper added; vendor/product now escape
@@ -179,8 +180,9 @@ they were written; see CHANGELOG for the restructure.)
   helper now delegates to `mos_safe_ascii` from the public API so
   CLI and probe share one tested rendering rule.
 - **Strict adapter CI compile** (`strict-adapter-build` job):
-  `src/mos_scsi.c`, `src/mos_watch.c`, `src/mos_state.c`,
-  `tools/mos.c`, `tools/mos_probe.c`, `tools/mos_notification_probe.c`
+  `src/mos_scsi.c`, `src/mos_watch.c`, `src/mos_state.c`, and the
+  CLI/probe TUs of the day (`tools/mos.c` and the standalone probes,
+  since restructured into `cli/`: CLI 2026-06-10, probes 2026-06-11)
   all compiled with `-Werror=implicit-function-declaration
   -Werror=incompatible-function-pointer-types -Werror=int-conversion
   -Werror=return-type` against the macOS 12.0 deployment target.
@@ -199,7 +201,7 @@ they were written; see CHANGELOG for the restructure.)
 - **Notification-source extensions**: dispatch on
   `kIOMessageServiceWasClosed`, `IsAttemptingOpen`, `BusyStateChange`
   remains deferred pending empirical characterization by
-  `tools/mos_notification_probe.c` — see ROADMAP.md v0.3.1-dev for
+  `mos probe` — see ROADMAP.md v0.3.1-dev for
   the self-trigger analysis that drove the deferral.
 - **Explicit SCSI command timeouts** via `mos_raw_cdb`'s
   `timeout_ms` for convenience methods. Mitigates hostile-drive
@@ -257,7 +259,8 @@ The v0.3.1-dev contract is stable for the gate. Validation should:
 4. `mos --json=v2` (or any `=value`): confirm `EX_USAGE` (64)
    with diagnostic naming `mos.state.v1`.
 5. Capture per-drive fixtures via
-   `mos_probe > fixtures/<drive>/<state>.txt`.
+   `mos status --json > fixtures/<drive>/<state>.json` (plus
+   `mos probe --dump` for the DR dictionaries).
 
 Once 1-4 pass, v0.3 is shippable. Step 5 informs v0.4 typed-API
 design.

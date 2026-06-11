@@ -272,6 +272,26 @@ line. Layer 3 (privilege footprint) is unchanged — DR's
 device-status reads take no entitlements, no TCC, no exclusive
 access.
 
+### Addendum: DA retired entirely; probes consolidated into `mos probe`
+### (2026-06-11, rebuts the "keeps DA legs" clause above)
+
+The 2026-06-10 entry's parenthetical — "the notification probe keeps
+DA legs as the falsification control arm" — no longer holds. What
+changed: the standalone probes were consolidated into the `mos probe`
+subcommand (cli/probe.c, `MOS_CLI_PROBE` default ON; ROADMAP append
+has the full argument) so they stop drifting outside the CLI's
+contract tests, and the DA legs were retired with the move rather
+than carried. Why the control arm goes: it existed to let a hardware
+session compare DR doorbell delivery against DA's, but no design
+decision consumes that comparison — doorbells are latency-only over
+the poll floor (the kernel itself polls media at 1000 ms), so
+doorbell completeness has nothing to falsify; the probe's own
+monotonic timestamps against the poll cadence are the latency
+reference. DiskArbitration therefore leaves the project's dependency
+story completely: no target links it. Command surface, privilege
+footprint, and the one-raw-CDB rule are all unchanged by the
+consolidation.
+
 ## Naming standard: the BSD vocabulary (Apple-canonical, 2026-06-10)
 
 Three concepts, three names, no synonyms:

@@ -15,6 +15,8 @@ bool        flag_list   = false;
 bool        flag_json   = false;
 bool        flag_watch  = false;
 bool        flag_all    = false;  /* watch-all: --watch --all */
+bool        flag_probe  = false;  /* probe subcommand (MOS_CLI_PROBE builds) */
+bool        flag_dump   = false;  /* probe --dump one-shot DR capture */
 
 const char *progname = "mos";
 
@@ -331,6 +333,20 @@ mos_handle_t *open_sole_drive(mos_error *err, int *total)
     if (err)   *err   = c.err;
     if (total) *total = c.total;
     return c.h;
+}
+
+/* Resolve a 1-based index to the bsd_unit of that enumeration slot —
+   the probe's index selector (see common.h). Indexes beyond
+   MOS_CLI_LIST_CAP are treated as out of range, consistent with the
+   list rendering they'd be read off of. */
+bool mos_cli_unit_for_index(int index, int64_t *unit)
+{
+    collect_ctx c = { 0, {0}, {0} };
+    mos_enumerate_devices(collect_cb, &c);
+    int n = c.count > MOS_CLI_LIST_CAP ? MOS_CLI_LIST_CAP : c.count;
+    if (index < 1 || index > n) return false;
+    *unit = c.units[index - 1];
+    return true;
 }
 
 /* Resolve the 1-based index of the drive the open handle refers to,

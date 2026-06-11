@@ -88,9 +88,11 @@ metadata, transfer length, task status, parsed sense, and a SHA-256.
 
 If you have an optical drive and want to add realism:
 
-1. Build `mos_probe` (`cmake -B build -DMOS_BUILD_PROBE=ON`).
-2. Run it in each tray/media state and submit the human-readable output with
-   the integration-harness PR.
+1. Build `mos` (default configure; the diagnostic `probe` subcommand
+   rides it under `MOS_CLI_PROBE`, default ON).
+2. Run `mos status --json` in each tray/media state (plus one
+   `mos probe --dump` per drive for the DiscRecording dictionaries)
+   and submit the output with the integration-harness PR.
 3. For raw byte capture, write a small C program that calls
    `mos_open_by_bsd_name()` then `mos_raw_cdb()` with the CDB of interest
    (e.g. 0x46 GET CONFIGURATION, 0x51 READ DISC INFO) and dump the buffer.

@@ -8,6 +8,48 @@ human-readable narrative. Live test counts are in CI, not here.
 
 ---
 
+## 2026-06-11 — probe consolidation: the standalone tools become `mos probe`; DiskArbitration retired entirely
+
+The two `tools/` binaries — `mos_probe` (library-path smoke) and
+`mos_notification_probe` (substrate observer) — were the project's
+last drift surface: opt-in builds with their own arg parsing, their
+own output conventions, and zero contract-test coverage (CI compiled
+them; nothing ran them). Both are gone:
+
+- `mos probe <drive>` is the notification event stream (NDJSON,
+  envelope renamed `mos.notification_probe.v0` → `mos.probe.v0` —
+  diagnostic, not in schemas/, pre-tag); `mos probe --dump` is the
+  one-shot DR Info/Status plist capture (flag renamed from
+  `--dr-dump`). Relocated to cli/probe.c behind CMake option
+  `MOS_CLI_PROBE` (default ON; retiring the verb is one default flip,
+  and a new CI leg builds `-DMOS_CLI_PROBE=OFF` and pins the OFF
+  binary's 64 + "not built into this binary" contract). Selector
+  grammar now matches the rest of the CLI (`--index`/`--bsd`/
+  positional, via the new `mos_cli_unit_for_index`); the validation
+  matrix rejects every probe/--dump contradiction; contract tests 26–30
+  cover the surface, including `probe --dump` running drive-less in CI.
+- `mos_probe` retired outright — post-pivot it was `mos list` +
+  `mos status` with fewer guarantees. `make probe`, both
+  `MOS_BUILD_*PROBE` options, and `tools/` itself are deleted.
+- The probe's DiskArbitration legs retired with the move, and DA left
+  the project entirely (no target links it). The "falsification
+  control arm" rationale had no consumer: doorbells are latency-only
+  over the poll floor (kernel media poll is 1000 ms), so doorbell
+  completeness has nothing to falsify. Recorded as dated appends in
+  ROADMAP.md (supersedes Phase 0's "tool inventory stays at two") and
+  AGENTS.md (rebuts the "keeps DA legs" clause). Consequence:
+  `mos_internal_bsd_unit_matches` has no in-tree consumers (kept,
+  pinned by tests, as the partition-child matching rule).
+- Ported, not copied: inside `mos`, SIGPIPE is ignored process-wide,
+  so the event loop gained an explicit `ferror(stdout)` exit with the
+  watch's pipe-closed/write-error fold (the standalone tool relied on
+  default SIGPIPE delivery; without the port `mos probe | head` would
+  spin forever). `--dump` finalizes stdout like every one-shot
+  command. INTEGRATION_HARNESS invocations rewritten (including the
+  coexistence row's `-n` flag, which never existed in the tool).
+
+---
+
 ## 2026-06-10 — GitHub bring-up, the DiscRecording pivot (Phases 0–3), watch-all, mos_query_disc_info; version to 0.4.0-dev
 
 The audited tree moved to `github.com/napieraj/mos` and CI ran for the

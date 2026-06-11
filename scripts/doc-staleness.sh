@@ -79,6 +79,16 @@ deny 'tagging v0\.2\.0' "v0.2.0 is long tagged; say 'before any release tag'"
 deny 'v0\.3 typed API|v0\.3 introduces' \
      "typed APIs and tray verbs moved to v0.4"
 
+# Probes consolidated into 'mos probe' (cli/probe.c, MOS_CLI_PROBE),
+# 2026-06-11. ROADMAP.md is excluded: its preserved Phase-0 status text
+# and the dated consolidation append legitimately name the dead tools
+# to rebut them (same append-with-argument rule as AGENTS).
+deny 'mos_notification_probe|tools/mos_probe|MOS_BUILD_(NOTIFICATION_)?PROBE|\-\-dr-dump' \
+     "probes consolidated into 'mos probe' (cli/probe.c, MOS_CLI_PROBE), 2026-06-11" \
+     "README.md ARCHITECTURE.md CONTRIBUTING.md INTEGRATION_HARNESS.md \
+STATUS.md examples/README.md schemas/README.md tests/fixtures/README.md \
+doc/dr-field-mapping.md"
+
 if [ "$FAIL" -eq 1 ]; then
     echo ""
     echo "Documentation contains markers known to be stale against the tree."

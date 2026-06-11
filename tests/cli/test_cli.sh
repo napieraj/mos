@@ -337,6 +337,59 @@ assert_ec          "watch sans --json: exit 66"          "66"   "$EC"
 assert_contains    "watch sans --json: envelope present" "$OUT" '"schema":"mos.error.v1"'
 assert_single_line "watch sans --json: one NDJSON line"  "$OUT"
 
+# Test 26: probe subcommand (MOS_CLI_PROBE consolidation, 2026-06-11).
+# Bare `mos probe` exits 64 in BOTH build states: usage error ("probe
+# requires a drive ... or --dump") when compiled in, the not-built
+# diagnostic when compiled out. The rest of the block exercises the
+# compiled-in surface only, so an OFF binary (its own contract is
+# pinned by CI's build-noprobe leg) skips it by feature detection.
+run_mos probe
+assert_ec "probe with no selector exits 64" "64" "$EC"
+case "$ERR" in
+*"not built into this binary"*)
+    printf '  ok    probe block skipped (MOS_CLI_PROBE=OFF binary)\n'
+    ;;
+*)
+    # Test 27: --dump validation matrix — every contradiction is 64.
+    run_mos probe --dump extra
+    assert_ec "probe --dump + positional exits 64" "64" "$EC"
+    run_mos probe --dump --bsd disk4
+    assert_ec "probe --dump + --bsd exits 64" "64" "$EC"
+    run_mos probe --dump --json
+    assert_ec "probe --dump + --json exits 64" "64" "$EC"
+    run_mos --dump
+    assert_ec "--dump without probe exits 64" "64" "$EC"
+
+    # Test 28: probe contradicts the other dispatches (64 each).
+    run_mos probe --list
+    assert_ec "probe + --list exits 64" "64" "$EC"
+    run_mos probe --watch
+    assert_ec "probe + --watch exits 64" "64" "$EC"
+    run_mos probe --all
+    assert_ec "probe + --all exits 64" "64" "$EC"
+
+    # Test 29: stream-mode selector errors. A malformed BSD form is a
+    # usage error (64, pure parse); a well-formed but absent drive
+    # exits 66 through service resolution / index lookup.
+    run_mos probe notadisk
+    assert_ec "probe malformed bsd exits 64" "64" "$EC"
+    run_mos probe disk99
+    assert_ec "probe absent bsd exits 66" "66" "$EC"
+    run_mos probe 99
+    assert_ec "probe absent index exits 66" "66" "$EC"
+
+    # Test 30: probe --dump is runnable without hardware: the runner
+    # has no burner, so the DR device array is empty — banner, count
+    # line, exit 0. (If a runner's DRCopyDeviceArray ever returns NULL
+    # instead of an empty array, the observed contract is 69 with a
+    # "(NULL array)" marker — re-pin on that evidence, not in advance.)
+    run_mos probe --dump
+    assert_ec       "probe --dump exits 0"        "0"    "$EC"
+    assert_contains "probe --dump banner"         "$OUT" "mos probe --dump"
+    assert_contains "probe --dump empty directory" "$OUT" "0 device(s)"
+    ;;
+esac
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 rm -f /tmp/mos_cli_stderr
 [ "$fail" -eq 0 ] || exit 1

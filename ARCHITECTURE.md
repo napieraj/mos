@@ -805,15 +805,19 @@ What this means for this project:
   targets when we cut a v1.0 release timed to macOS 27 compatibility.
   `make build` (native) remains the primary workflow either way.
 
-### 9.6 Inquiry string trimming
+### 9.6 Identity string handling (formerly: Inquiry string trimming)
 
-SPC-4 requires INQUIRY vendor / product fields to be space-padded, but
-some drives return junk bytes or fail to null-terminate. The
-`mos_internal_mmc_inquiry` implementation must trim trailing spaces
-and defensively null-terminate the 8-byte vendor and 16-byte product
-slots on the handle. Anything that reads those slots later (CLI JSON
-emission, mos_probe) copies them as ordinary C strings, so the
-terminator is load-bearing.
+(Rewritten 2026-06-11; the original section described the INQUIRY
+path, retired in the DR pivot.) Identity strings now arrive through
+DiscRecording's closed parse (`DRDeviceCopyInfo` → CFString → UTF-8),
+so the SPC-4 trimming/termination defenses retired with the raw
+INQUIRY bytes. What remains load-bearing:
+`mos_internal_dr_copy_string` (src/mos_dr.c) bounds every copy into
+the handle's fixed slots (oversize → empty, never truncated-mid-byte),
+and every sink — CLI JSON emission, the human table rows — escapes
+the stored form (`mos_json_escape` / `mos_safe_ascii`), because DR's
+parse is an unverifiable intermediary and ESC is encoding-stable
+through the whole chain (full-tree review, 2026-06-10).
 
 ### 9.7 `GetTrayState` masking trap (why we issue GESN directly)
 

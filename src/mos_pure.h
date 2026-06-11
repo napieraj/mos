@@ -128,8 +128,11 @@ int64_t mos_internal_parse_bsd_unit(const char *name);
    simply 4 != 40 — and the suffix is validated as `(s<digits>)*`. Returns
    false for NULL reported, whole_unit < 0, a non-"disk" prefix, or a
    malformed suffix. Pure, no IOKit. Pinned by tests/test_bsd_name.c.
-   Consumers: src/mos_watch.c and tools/mos_notification_probe.c DA
-   filtering. */
+   No in-tree consumers since the DA retirement (2026-06-11): its call
+   sites were the DiskArbitration event filters (the watch's, retired
+   in DR pivot Phase 2a, then the probe's, retired with the probe
+   consolidation). Kept as the pinned partition-child matching rule
+   for any future BSD-name event filtering. */
 bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit);
 
 /* ---- GET CONFIGURATION feature walk (mos_config.c) --------------- *

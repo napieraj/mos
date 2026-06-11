@@ -79,18 +79,21 @@ design (AGENTS hardware ADR):
 
 - **Registry-path shape**: does `kDRDeviceIORegistryEntryPathKey`
   resolve to the IO*BlockStorageDevice node the MMC plug-in attaches
-  to? (`mos_notification_probe --dr-dump` shows the path; a mismatch
-  appears as DRIVER_REJECTED opens and is fixed inside mos_dr.c.)
+  to? (`mos probe --dump` shows the path; a mismatch appears as
+  DRIVER_REJECTED opens and is fixed inside mos_dr.c.)
 - **drutil parity**: `mos list` index order vs `drutil list` on a
   multi-drive rig.
 - **Identity byte-shape**: DR's pre-parsed identity strings vs the
   SPC-4-trimmed INQUIRY forms (capture both; diff).
 - **Doorbell delivery**: do Appeared/Disappeared/StatusChanged fire
   under NULL-object registration at all, and at what latency vs the
-  poll floor? The probe's DA legs are the control arm (the watch no
-  longer listens to DA — compare what DR delivered against what DA
-  would have).
-- **Coexistence**: `mos_notification_probe -n` + `mos watch` through
+  poll floor? `mos probe <drive>` logs the DR legs alongside the
+  IOKit-interest legs with monotonic timestamps. (The probe's DA
+  control arm was retired 2026-06-11 with DA itself — doorbells are
+  latency-only over the poll floor, so completeness needs no
+  comparison baseline; the poll timestamps in the same log are the
+  reference.)
+- **Coexistence**: `mos probe diskN` + `mos watch diskN` through
   tray cycles — does mos's temporary exclusive GESN window make DR's
   own observers mis-observe (the §9.7 collapse on DR's side)?
 - **watch-all hot-plug**: join/leave ordering, device_appeared on
@@ -334,8 +337,9 @@ process before any retry is reintroduced.
 ## How to run
 
 ```sh
-# Build CLI, probe, and tests
-cmake -B build -DMOS_BUILD_PROBE=ON
+# Build CLI (the probe subcommand rides it; MOS_CLI_PROBE default ON)
+# and tests
+cmake -B build
 cmake --build build
 
 # Query the default (first) drive in JSON
@@ -347,23 +351,28 @@ cmake --build build
 # Watch a specific drive (NDJSON stream)
 ./build/bin/mos --watch --bsd diskN --json
 
-# Low-level smoke test with more IOKit error detail
-./build/bin/mos_probe
+# One-shot DiscRecording Info/Status dictionary capture
+./build/bin/mos probe --dump
+
+# Raw notification event stream for one drive (NDJSON, until Ctrl-C)
+./build/bin/mos probe diskN
 ```
 
 ## Capturing fixtures
 
-The CLI does not currently have a raw-dump mode. Fixture capture is
-done through the `mos_probe` binary, which prints the full
-`mos_state_result` for the detected drive plus supplementary info from
-each MMC method it exercises.
+State observations are captured through the same public-API path every
+consumer uses; the probe's `--dump` mode captures the raw DiscRecording
+dictionaries (registry path, identity byte-shape).
 
 ```sh
 # Each of these with the appropriate physical state
-./build/bin/mos_probe 2>&1 | tee tray_open_$(hostname -s).log
+./build/bin/mos status --json 2>&1 | tee tray_open_$(hostname -s).log
 drutil tray close
-./build/bin/mos_probe 2>&1 | tee tray_closed_empty_$(hostname -s).log
+./build/bin/mos status --json 2>&1 | tee tray_closed_empty_$(hostname -s).log
 # ... insert CD, DVD, BD in turn, repeat
+
+# DR dictionary capture (once per drive/media combination)
+./build/bin/mos probe --dump 2>&1 | tee dr_dump_$(hostname -s).log
 ```
 
 These logs go in `tests/fixtures/` as human-readable records. They are

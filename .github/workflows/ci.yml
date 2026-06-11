@@ -34,13 +34,14 @@ jobs:
           cc --version
 
       - name: Configure
-        # MOS_BUILD_NOTIFICATION_PROBE=ON ensures the v0.3.1-dev
-        # diagnostic tool (tools/mos_notification_probe.c) is exercised
-        # by CI — otherwise an Apple-only callback-heavy TU that nothing
-        # else compiles would bitrot silently.
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DMOS_BUILD_PROBE=ON -DMOS_BUILD_NOTIFICATION_PROBE=ON
+        # MOS_CLI_PROBE defaults ON, so the diagnostic 'mos probe'
+        # subcommand TU (cli/probe.c — Apple-only, callback-heavy) is
+        # compiled and contract-tested on every push instead of
+        # bitrotting behind an opt-in flag (the fate the standalone
+        # probe tools were rescued from, 2026-06-11).
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build (library, CLI, probe, notification probe, tests)
+      - name: Build (library, CLI, tests)
         run: cmake --build build --parallel
 
       - name: Run unit tests
@@ -109,6 +110,30 @@ jobs:
             exit 1
           }
           echo "OK: v0.3 CLI contract smoke check passed"
+
+      - name: Probe-retired build (MOS_CLI_PROBE=OFF)
+        # Keeps the retirement path compiling — flipping the option
+        # default OFF is the documented way to retire 'mos probe', so
+        # the OFF configuration must stay green — and pins the OFF
+        # binary's diagnostic: 'probe' is recognized but rejected with
+        # exit 64 and a rebuild hint, not the unknown-subcommand text.
+        run: |
+          set -e
+          cmake -B build-noprobe -DCMAKE_BUILD_TYPE=Release -DMOS_CLI_PROBE=OFF
+          cmake --build build-noprobe --target mos --parallel
+          set +e
+          ERR=$(build-noprobe/bin/mos probe disk4 2>&1 >/dev/null)
+          EC=$?
+          set -e
+          if [ "$EC" != "64" ]; then
+            echo "Expected exit 64 from 'probe' on a MOS_CLI_PROBE=OFF build, got $EC"
+            exit 1
+          fi
+          echo "$ERR" | grep -q "not built into this binary" || {
+            echo "Expected the not-built diagnostic, got: $ERR"
+            exit 1
+          }
+          echo "OK: MOS_CLI_PROBE=OFF build compiles and rejects 'probe' correctly"
 
       - name: Verify public symbol hygiene
         # Both static libraries must export only symbols prefixed `mos_`
@@ -390,8 +415,10 @@ jobs:
   strict-adapter-build:
     # macOS adapter TUs compiled with stricter -Werror flags than the
     # default CMake mos_warnings interface. As of v0.4.0-dev the list
-    # is: src/mos_scsi.c, src/mos_watch.c, src/mos_state.c, the cli/ sources,
-    # tools/mos_probe.c, tools/mos_notification_probe.c.
+    # is: src/mos_scsi.c, src/mos_watch.c, src/mos_state.c, src/mos_dr.c,
+    # and the cli/ sources (cli/probe.c compiled with -DMOS_CLI_PROBE,
+    # the ON preprocessor path; the OFF path is compiled by the
+    # build-and-test job's MOS_CLI_PROBE=OFF leg).
     # The extra
     # flags target classes of bug that Linux CI can never see because
     # they involve Apple SDK signatures:
@@ -429,8 +456,7 @@ jobs:
           for src in src/mos_scsi.c src/mos_watch.c src/mos_state.c \
                      src/mos_dr.c \
                      cli/main.c cli/common.c cli/status.c cli/list.c \
-                     cli/watch.c cli/human.c cli/io.c \
-                     tools/mos_probe.c tools/mos_notification_probe.c \
+                     cli/watch.c cli/human.c cli/io.c cli/probe.c \
                      tests/test_watch_lifetime.c; do
             obj="/tmp/strict-adapter/$(basename "$src" .c).o"
             echo "--- $src ---"
@@ -440,6 +466,7 @@ jobs:
                -Werror=int-conversion \
                -Werror=return-type \
                -mmacosx-version-min=12.0 \
+               -DMOS_CLI_PROBE=1 \
                -I include -I src \
                -c "$src" -o "$obj"
           done
