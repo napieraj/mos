@@ -434,6 +434,34 @@ the compiler; budget round-trips for it. Build wiring: add
 `src/mos_watch.c` to the `mos_adapter_fake_tests` target and the
 notification symbols to the fake (the CMake comment marks the spot).
 
+**Source-availability map (verified 2026-06-11) — what each fake
+component can and cannot be checked against:**
+- *DiscRecording*: headers SDK-only (silently dropped from current
+  SDKs, unchanged in older ones — the phracker mirror carries
+  DRCoreDevice.h etc.). **Source was never published** — not in
+  apple-oss-distributions, aosm, or opensource.apple.com. The DR side
+  of the fake has NO source oracle: headers + observed behaviour only.
+- *IOKit SCSI/MMC userspace headers* (`SCSICmds_*`,
+  `SCSICommandOperationCodes.h`, `SCSITaskLib.h`,
+  `IOSCSIPeripheralDeviceType05.h`, `IOCDTypes.h` family): current and
+  complete in the SDK.
+- *IOSCSIArchitectureModelFamily* (the SAM kext:
+  IOSCSIMultimediaCommandsDevice, the SCSITaskUserClient stack): the
+  apple-oss-distributions repo EXISTS but its last tag is
+  **139.0.2, February 2005** (verified; aosm and PureDarwin mirror the
+  same lineage). The shipping driver has ~20 years of closed drift.
+  Consequence: every kernel-predicate citation in this repo — the
+  §5.5 PollForMedia transcription, the TUR-under-exclusivity gate, the
+  GetTrayState masking — is built on Tiger-era source. The proofs
+  hold as "equals the published predicate"; the published-vs-shipping
+  gap is the hardware falsification leg's to close, and the vintage
+  makes that leg MORE load-bearing than ARCHITECTURE currently
+  conveys (candidate doctrinal annotation, not made here).
+- *IOStorageFamily* (the layer above: IOCDBlockStorageDriver,
+  IOMediaBSDClient): current and open (IOStorageFamily-323, 2025).
+- *xnu*: current and open; carries the IOKit SCSI headers at source
+  level.
+
 **Two design problems §3 names but does not solve — settle these
 FIRST, they are the actual phase-2 work:**
 - *Callback delivery into a parked run loop.* The adapter blocks in
