@@ -100,5 +100,270 @@ would be a caller bug, not a reachable state.
 
 ## In-session agent findings
 
-Pending — appended when the four agents report and their findings
-survive verification against the tree.
+Four agents, all completed 2026-06-11; every entry below re-verified
+against the tree by the triager before recording. Duplicates across
+agents are cross-referenced, recorded once. The two reviews that ran
+the pure suite independently report 219/219 green.
+
+### Agent A — library core + public API
+
+**A1. `mos.h` header claims raw access "is not on the default
+state-query path" — false since the GESN redesign.** Verified:
+include/mos.h:5-7 vs the not-ready branch (mos_state_core.c →
+`mos_internal_mmc_get_tray_state` → `mos_raw_cdb` →
+`ObtainExclusiveAccess`, src/mos_scsi.c). ARCHITECTURE §3 already
+states the opposite, correctly. mos.h:275 ("no exclusive access
+required") has the same gap. Severity: medium (public contract
+prose). Disposition: doc fix — align mos.h with ARCHITECTURE §3
+and note the brief not-ready-path lock.
+
+**A2. `mos_scsi_status.h:13-16` justifies its own existence with a
+false claim** — Apple's SCSITask.h does define RESERVATION_CONFLICT
+/ TASK_SET_FULL / ACA_ACTIVE (verified by the agent against a
+fetched macOS 15.5 SDK header; values identical to ours, behavior
+unaffected). The valid no-SDK-dependency justification already
+leads the comment. Severity: low. Disposition: strike the
+"incomplete set" sentence.
+
+**A3. ARCHITECTURE.md body still marks shipped `mos_query_disc_info`
+as planned.** Verified: heading at §4.4 updated, body at
+ARCHITECTURE.md:291-292 and :422 still say "planned" / "not yet
+implemented"; the API ships (src/mos_scsi.c, tests/test_discinfo.c).
+Severity: low. Disposition: doc fix.
+
+**A4. `mos_error_is_recoverable` docstring omits `MOS_ERR_IO` from
+both lists** (include/mos.h:573-578; impl returns false,
+src/mos_strings.c). Severity: low. Disposition: one-word doc fix.
+
+**A5. `MOS_ERR_UNSUPPORTED` carries two contradictory meanings.**
+Verified: include/mos.h:108 "command not supported by drive" vs
+mos_strings.c:51 "not implemented in this build"; both meanings
+live (kIOReturnUnsupported map vs the get_features stub). A drive
+rejection reads as a build limitation. Severity: low. Disposition:
+maintainer decision — reword the description string to cover both,
+or split the enum (v0.next; the error-code string set is open under
+mos.error.v1, but the description is consumer-visible).
+
+**A6. `mos_internal_toc_parse` has zero production callers** —
+test/fuzz-only, the orphan shape the get_features stub exists to
+avoid; referenced by the v0.4 media-info design. Severity: nit.
+Disposition: deliberate decision either way; not a removal proposal.
+
+**A7. Duplicate registry-id accessor** (src/mos_scsi.c:178 public vs
+:189-191 internal twin, identical bodies). Severity: nit.
+Disposition: cleanup pass.
+
+Agent A reports the decision tree, sense table, GESN gates, config
+walker, TOC bounds, disc-info layout, raw-CDB lock pairing, IOReturn
+map, sysexits, and BSD-name domain guards checked line-by-line
+against ARCHITECTURE/tests with no correctness findings.
+
+### Agent B — CLI + contracts
+
+**B1. Contract test pins the INVERSE of the published `bsd`
+contract.** Verified: tests/cli/test_cli.sh:179-180 comment "Field
+name is bsd_name, not bare 'bsd'" + assert_not_contains '"bsd":',
+while the emitter (cli/common.c:113), the schema
+(mos.error.v1 `bsd`), and the positive fixture all say `bsd`. The
+assertion passes only because that test's failure path legitimately
+omits the field. Same fossil in the mos.error.v1.json:5 prose
+("bsd_name field is conditional") and the negative-fixture filename
+(schemas/negative/mos.event.v1.missing_bsd_name.json). Severity:
+medium — someone "fixing" the emitter to match the test comment
+breaks the schema. Disposition: fix the test comment + assertion
+rationale, schema prose, and (optionally) fixture name. Doc/test
+text only; no behavior change.
+
+**B2. Bare positional drive is rejected as "unknown subcommand",
+contradicting the documented grammar.** Verified: README.md:22-29
+and `print_usage` (cli/main.c:37-43) declare `mos [subcommand]
+[drive] [options]` with the drive positional "like diskutil info
+disk4", but the dispatch (cli/main.c:183) intercepts every bare
+non-dash first word, so `mos 2` / `mos disk4` exit EX_USAGE.
+Untested either way. Severity: medium. Disposition: maintainer
+decision — make dispatch fall through to drive parsing when the
+word has index/BSD shape, or fix the documented grammar.
+
+**B3. validate.py's enum drift guard skips mos.list.v1.** Verified:
+schemas/validate.py:55-57 covers state/event/prev_state only;
+mos.list.v1's `drives[].state` enum is emitted from the same
+`mos_state_description()` (cli/common.c) but unchecked — and
+AGENTS.md's schema ADR claims lockstep. Severity: medium-low (CI
+gap, latent). Disposition: extend validate.py; tooling-only, safe
+to fix.
+
+**B4. mos.error.v1 `exit_code` enum lists unreachable 77; usage
+text omits reachable 70.** Verified: schema enum
+[64,66,69,70,71,74,75,77] vs `mos_error_sysexit` range
+{0,64,66,69,70,71,74,75} (src/mos_strings.c:123-138); usage
+(cli/main.c:87-88) omits 70. Severity: low. Disposition: drop 77
+from the schema (pre-tag, in place), add 70 to usage.
+
+**B5. Schema prose misdescribes `bsd` against the project's own
+naming standard.** Verified: mos.state.v1.json `bsd` description
+says "Whole-disk BSD name (e.g. disk4)" with a `/^r?disk[0-9]+$/`
+claim while its own `pattern` is `^/dev/disk[0-9]+$` and the
+emitter sends the dev node; mos.error.v1.json:16 same. Severity:
+low. Disposition: doc fix inside the schema files.
+
+**B6. Banned synonym + stale version anchor in
+INTEGRATION_HARNESS.md:387-390** ("device path", "v0.3's typed
+APIs" — the possessive evades doc-staleness.sh's regex). Verified.
+Severity: low. Disposition: doc fix; consider widening the
+staleness regex.
+
+**B7. schemas/README.md:64-65 cites emitter functions that don't
+exist** (`list_callback`, `emit_watch_json`; actual:
+`emit_list_json`, `emit_watch_ndjson` — grep confirms). Severity:
+low/nit. Disposition: doc fix.
+
+**B8. CLI identifiers violating the `mos_cli_` prefix rule;
+`mos_error_to_code` is the worst** — a CLI function wearing the
+library's reserved `mos_` prefix (cli/common.h:38), invisible to
+the archive-scoped symbol-hygiene check; plus unprefixed externs
+(`emit_list_json`, `open_sole_drive`, `resolve_index_of`, …).
+Verified. Severity: low. Disposition: rename in a cleanup pass
+(internal to the CLI binary; no external behavior).
+
+**B9. Example fixture `context` string never produced by any
+emitter** ("could not query state" vs the four real context
+strings). Verified. Severity: nit (context is documented opaque).
+Disposition: align fixture text.
+
+**B10. CMakeLists.txt:30-32 comment misenumerates the pure layer**
+(lists mos_pure.c twice; omits config/discinfo/result). Verified.
+Severity: nit. Disposition: comment fix.
+
+Agent B reports the machine-enforced surfaces clean: emitter↔schema
+field sets exact (closed-set rule holds), escaping choke points
+sound, watch NDJSON framing/signal handling pinned, dist/
+regeneration byte-identical. The drift concentrates in prose INSIDE
+contract artifacts — where doc-staleness.sh doesn't reach.
+
+### Agent C — adversarial watch (post-DR-pivot)
+
+**C1. All-mode treats DR Disappeared as removal authority; a
+spurious Disappeared permanently evicts a live drive, and the
+Appeared dedupe swallows DR's own correction.** Verified end to
+end: dr_device_disappeared_callback calls
+`mos_internal_watch_notify_removed` directly (src/mos_watch.c:632),
+contradicting the file's own axiom ("DR data never decides state",
+src/mos_watch.c:460); the slot frees only after device_removed is
+taken (src/mos_watch_core.c:585-589) but `find` matches active-only
+slots — terminated cores are still active — so a corrective
+Appeared dedupes away (src/mos_watch.c:351-353); nothing rescans,
+and StatusChanged deliberately joins nothing
+(src/mos_watch.c:503-505). Whether DR can fire a spurious
+Disappeared is an open empirical question (the pivot plan lists
+delivery semantics as a falsification target). The agent's key
+observation: switching to `notify_wake` gives IDENTICAL removal
+latency for a real removal (reopen-by-registry-id returns NO_DEVICE
+→ terminal; pinned by `watch_removed_via_reopen_failure`) while a
+spurious one costs one probe — strictly dominant on the code's own
+axioms. Severity: medium (the round's strongest finding).
+Disposition: maintainer decision; the wake-not-remove variant is
+recommended, with a fake-DR fixture test for the
+spurious-Disappeared and terminated-slot-Appeared arms. Until
+decided: a comment at the callback recording the trust assumption.
+
+**C2. `mos_watch_open_all` snapshots the directory BEFORE
+registering the Appeared observer.** Verified
+(src/mos_watch.c:892-899): a device arriving in the gap is
+permanently invisible — discovery "has no floor at all" by the
+function's own comment — unless DR replays Appeared at
+registration, which is unfalsified (the fake doesn't model replay;
+no test covers the gap). Reversing the order closes the window by
+construction; the existing dedupe already makes the overlap benign.
+Severity: medium. Disposition: maintainer decision; low-risk
+reorder + a fake-arrival-in-gap test.
+
+**C3. "Ignored until a slot frees" (include/mos.h:500-501) promises
+a recovery that doesn't exist.** Verified: the dropped Appeared is
+never replayed, slot-free triggers no rescan, StatusChanged joins
+nothing — the 17th drive needs a physical replug. Severity:
+medium-low (contract prose vs exotic 17-drive reality).
+Disposition: fix the doc now ("dropped for that plug session");
+directory-rescan-on-free is a v0.next flag.
+
+**C4. Persistently transitional states poll at transition rate
+forever.** Verified: EMPTY_OR_OPEN and UNKNOWN classify
+transitional (src/mos_watch_core.c:183-184), so a bridge where GESN
+persistently fails probes at 200 ms — each a full open +
+exclusive-lock GESN attempt + close — indefinitely, with no
+escalation analogous to the error backoff
+(src/mos_watch_core.c:347-369). Severity: medium-low. Disposition:
+v0.next policy flag (cadence change is behavior; needs the
+hardware-falsification lens per the hardware ADR).
+
+**C5. Wake/backoff/fairness interaction under a wake storm.**
+Verified components: `notify_wake` unconditionally zeroes the
+deadline (defeating error backoff); the multiplexer returns on
+first EMIT and re-enters at lowest id (starvation under sustained
+low-id emits); an UNRESOLVED StatusChanged wakes every slot
+(src/mos_watch.c:496-501) — and a failing drive is the likeliest
+StatusChanged spammer. Self-healing, deliberate bounded-work trade,
+but unexamined. Severity: low. Disposition: record as known trade
++ v0.next test items.
+
+**C6. (= D3) `visited` bitmask silently requires
+MOS_WATCH_ALL_CAP ≤ 64** (uint64_t, `1ull << i`; CAP is 16).
+Severity: nit. Disposition: add
+`_Static_assert(MOS_WATCH_ALL_CAP <= 64, …)` — matches the repo's
+width-pinning idiom; cleanup pass.
+
+**C7. All-mode StatusChanged calls CFRunLoopStop even when it woke
+nothing** (resolved-but-unknown id falls through to the stop at
+src/mos_watch.c:506; the single-target arm returns without
+stopping). Verified. Severity: nit (one spurious pump).
+Disposition: cleanup pass.
+
+Agent C additionally attests (attack attempted, held): borrowed-
+pointer lifetime including all-mode slot reuse, the run-loop gate,
+the UINT64_MAX sleep sentinel, mono/wall clock separation, and the
+dedupe-before-claim fix at HEAD. Its untested-edge-case list
+(spurious Disappeared, terminated-slot Appeared, 17th drive,
+fairness under repeated low-id emits, wake-all amplification,
+timeout_ms 0/negative through the adapter, two watches sharing the
+private mode, the multiplexer TERMINAL branch, sustained
+EMPTY_OR_OPEN cadence) is the candidate list for the next test
+batch.
+
+### Agent D — memory safety
+
+No high or medium findings; the hostile-byte parse surface and the
+CF/IOKit lifetime surface hold under static review (trace record in
+the agent report: dual-length rule at every device-length use, all
+18 CF Create/Copy sites paired, the probe parent-walk balanced on
+all five exits, watch teardown ordering, all four malloc sites, all
+12 fixed-buffer copy sites pinned).
+
+**D1. (= E4)** probe timestamp formatter — adds the observation that
+the production twin `format_rfc3339` in src/mos_watch_core.c:86-113
+DOES guard both failures, so the diagnostic path is an inconsistency,
+not just a hardening nit. Disposition unchanged (cleanup pass).
+
+**D2. `emit_list_table`/`emit_list_json` trust `n` against
+MOS_CLI_LIST_CAP-sized arrays with no local clamp.** Verified: every
+caller's `n` comes from `caq_cb`, which caps at MOS_CLI_LIST_CAP
+(cli/common.c:282-291) — safe by construction, but the invariant is
+non-local and the function is exported (cli/common.h). Severity:
+nit. Disposition: one-line clamp/assert; cleanup pass.
+
+**D3. (= C6)** CAP ≤ 64 static assert. **D4.** `mos_cli_safe_ascii`'s
+fixed 4096 buffer can truncate mid-`\xNN` (stderr diagnostics only;
+mos_safe_ascii itself fuzzed truncation-safe). Severity: nit.
+**D5. (= E5)** mos_dr.c cap-without-pointer guard. Dispositions:
+cleanup pass.
+
+## Disposition summary
+
+- **Needs maintainer decision (behavior):** E1 (JSON identity
+  contract), B2 (bare-drive grammar), C1 (Disappeared trust —
+  wake-not-remove recommended), C2 (observer/snapshot order), A5
+  (UNSUPPORTED wording), C4 (transitional cadence, v0.next).
+- **Fixable now, no behavior change:** E2 (rename+test), A1-A4
+  (doc), B1 (test comment/schema prose), B3 (validate.py), B4
+  (schema enum + usage), B5-B7, B10, C3 (mos.h wording), C6/D3
+  (static assert).
+- **Cleanup-pass batch (nits):** E3, E4/D1, E5/D5, A6, A7, B8, B9,
+  C5 (tests), C7, D2, D4.
