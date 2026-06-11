@@ -1,5 +1,5 @@
 /*
- * test_adapter_phase1.c — runs the REAL one-shot adapter TUs
+ * test_adapter_oneshot.c — runs the REAL one-shot adapter TUs
  * (mos_scsi.c / mos_state.c / mos_dr.c) headless against the link-seam
  * fake of IOKit + DiscRecording (tests/fake/mos_fake_apple.c), fed
  * committed MMC fixture bytes. Phase 1 of
@@ -244,7 +244,7 @@ TEST(adapter_disc_info_replays_fixtures)
 
 int main(void)
 {
-    printf("adapter phase-1 (headless, link-seam fake):\n");
+    printf("adapter one-shot (headless, link-seam fake):\n");
     RUN(adapter_open_index_query_ready);
     RUN(adapter_open_index_no_drive_is_no_device);
     RUN(adapter_not_ready_gesn_closed_is_empty);

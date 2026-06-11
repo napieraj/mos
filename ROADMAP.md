@@ -93,24 +93,32 @@ from that arc:
   enumerates and hands over cheap coarse status; mos interprets and
   enriches. The MMC state engine must not become a DR passthrough.
 
-- **Headless adapter emulation (phase 1 LANDED 2026-06-11; phase 2
-  open).** A link-seam fake of the IOKit + DiscRecording C symbols
-  (real CoreFoundation linked) runs the Apple adapter TUs headless
-  against committed MMC fixtures. Phase 1 shipped
-  (`tests/fake/mos_fake_apple.c`, `tests/test_adapter_phase1.c`, the
-  `adapter-fake` CI job under ASan/UBSan): the one-shot paths —
+- **Headless adapter emulation (phases 1 AND 2 LANDED 2026-06-11).**
+  A link-seam fake of the IOKit + DiscRecording C symbols (real
+  CoreFoundation linked) runs the Apple adapter TUs headless against
+  committed MMC fixtures. Phase 1 (`tests/fake/mos_fake_apple.c`,
+  `tests/test_adapter_oneshot.c`): the one-shot paths —
   open/enumerate/query through the REAL `mos_scsi.c`/`mos_state.c`/
   `mos_dr.c` — across READY/EMPTY/OPEN/LOADING/EMPTY_OR_OPEN and the
   disc-info fixtures, with the §5.5 lock balance asserted both
   directions, the GESN CDB pinned byte-for-byte, and seam-contract
-  O-1/O-3 moved from hardware-gated to CI (INTEGRATION_HARNESS
-  falsification item 0 updated). **Phase 2 (watch lifecycle —
-  `mos_watch.c` + notification/run-loop symbols) remains open**: it is
-  a real state-modelling subsystem, not a shim. This is **additive** —
-  it retires hardware-gated *status*, not the pure layer's adversarial
-  fuzz or the exhaustive nub-invariant proof, which test a different
-  (full-octet, hostile) domain and stay. Full build brief, seam
-  inventory, phased plan, and the five-leg cross-validation recipe
+  O-1/O-3 moved from hardware-gated to CI. Phase 2
+  (`tests/fake/mos_fake_watch.c`, `tests/test_adapter_watch.c`): the
+  REAL `mos_watch.c` on an interposed fake clock (mechanism settled by
+  the seam-probe canary, research doc §13) — snapshot/state-change/
+  removal lifecycles with doorbell-vs-poll-floor timing asserted in
+  exact fake milliseconds, the F1 media-swap and replug registry-ID
+  re-mints, error-backoff cadence to the millisecond, watch-all
+  join/leave/rejoin with stream_open_ms constancy, the IOReturn-mapper
+  arms (including kIOReturnNoDevice → terminal removal), and the
+  by-name absent → NO_DEVICE arm formerly pinned only on real macOS.
+  All in the `adapter-fake` CI job under ASan/UBSan. This is
+  **additive** — it retires hardware-gated *status* (what remains
+  hardware-only: Apple-layer conformance + fixture capture,
+  INTEGRATION_HARNESS), not the pure layer's adversarial fuzz or the
+  exhaustive nub-invariant proof, which test a different (full-octet,
+  hostile) domain and stay. Full build brief, seam inventory, phased
+  plan, mechanism verdicts, and the five-leg cross-validation recipe
   (against the circular-oracle problem) in
   `doc/research/2026-06-11-headless-adapter-emulation.md`.
 

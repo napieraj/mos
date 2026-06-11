@@ -8,9 +8,10 @@
  * CoreFoundation stays linked — CF objects here are genuine.
  *
  * Mechanism and rationale:
- * doc/research/2026-06-11-headless-adapter-emulation.md. This is
- * phase 1 (open / query / enumerate); the watch lifecycle (phase 2)
- * adds mos_watch.c and the notification/run-loop symbols.
+ * doc/research/2026-06-11-headless-adapter-emulation.md. This TU is
+ * phase 1 (open / query / enumerate); the watch lifecycle's
+ * notification and time symbols are phase 2, in mos_fake_watch.c
+ * (linked only into the watch test binary, mos_adapter_watch_tests).
  *
  * Model: ONE optical drive. IOKit object handles are small integers
  * (io_object_t is a mach_port_t), resolved through a fixed table; the
@@ -78,6 +79,9 @@ static struct {
     uint32_t rdi_status;        uint8_t rdi[64];  size_t rdi_len;
 
     /* Raw-CDB script (the GESN tray probe path). */
+    uint32_t method_rc[4];      /* per-method IOReturn injection (N2);
+                                   indexed by mos_fake_method, 0 = success */
+    bool     plugin_fail;
     bool     exclusive_denied;
     uint32_t raw_status;        uint8_t raw[64];  size_t raw_len;
     uint64_t raw_realized;      uint8_t raw_sense[18];
@@ -119,7 +123,12 @@ void mos_fake_reset(void)
 
 void mos_fake_set_no_drive(void) { g.present = false; }
 
+void mos_fake_set_drive_present(bool present) { g.present = present; }
+
 void mos_fake_set_bsd_unit(int64_t unit) { g.bsd_unit = unit; }
+
+void mos_fake_set_drive_id(uint64_t id) { g.drive_id = id; }
+void mos_fake_set_media_id(uint64_t id) { g.media_id = id; }
 
 void mos_fake_set_identity(const char *vendor, const char *product,
                            const char *revision)
@@ -166,6 +175,13 @@ void mos_fake_set_raw_reply(uint32_t task_status,
 }
 
 void mos_fake_set_exclusive_denied(bool denied) { g.exclusive_denied = denied; }
+
+void mos_fake_set_plugin_fail(bool fail) { g.plugin_fail = fail; }
+
+void mos_fake_set_method_ioreturn(mos_fake_method m, uint32_t io_return)
+{
+    if ((unsigned)m < 4u) g.method_rc[m] = io_return;
+}
 
 size_t mos_fake_last_cdb(uint8_t out[16])
 {
@@ -364,6 +380,7 @@ kern_return_t IOCreatePlugInInterfaceForService(io_service_t service,
 {
     (void)pluginType; (void)interfaceType;
     if (service != FAKE_SVC || !theInterface) return KERN_FAILURE;
+    if (g.plugin_fail) return KERN_FAILURE;  /* kext declines to attach */
     ensure_vtbls();
     *theInterface = &g_plugin_ptr;
     if (theScore) *theScore = 0;
@@ -389,6 +406,10 @@ static IOReturn mmc_TestUnitReady(void *self, SCSITaskStatus *taskStatus,
                                   SCSI_Sense_Data *senseDataBuffer)
 {
     (void)self;
+    /* N2: a transport failure delivers nothing — outputs untouched. */
+    if (g.method_rc[MOS_FAKE_METHOD_TUR]) {
+        return (IOReturn)g.method_rc[MOS_FAKE_METHOD_TUR];
+    }
     if (taskStatus)      *taskStatus = (SCSITaskStatus)g.tur_status;
     if (senseDataBuffer) memcpy(senseDataBuffer, g.tur_sense, 18);
     return kIOReturnSuccess;
@@ -401,6 +422,9 @@ static IOReturn mmc_GetConfiguration(void *self, SCSICmdField1Byte RT,
                                      SCSI_Sense_Data *senseDataBuffer)
 {
     (void)self; (void)RT; (void)feature; (void)senseDataBuffer;
+    if (g.method_rc[MOS_FAKE_METHOD_GETCONFIG]) {
+        return (IOReturn)g.method_rc[MOS_FAKE_METHOD_GETCONFIG];
+    }
     if (buffer && bufferSize) {
         size_t n = (g.cfg_len < (size_t)bufferSize) ? g.cfg_len : (size_t)bufferSize;
         memset(buffer, 0, bufferSize);
@@ -416,6 +440,9 @@ static IOReturn mmc_ReadDiscInformation(void *self, void *buffer,
                                         SCSI_Sense_Data *senseDataBuffer)
 {
     (void)self; (void)senseDataBuffer;
+    if (g.method_rc[MOS_FAKE_METHOD_READDISCINFO]) {
+        return (IOReturn)g.method_rc[MOS_FAKE_METHOD_READDISCINFO];
+    }
     if (buffer && bufferSize) {
         size_t n = (g.rdi_len < (size_t)bufferSize) ? g.rdi_len : (size_t)bufferSize;
         memset(buffer, 0, bufferSize);
@@ -505,6 +532,9 @@ static IOReturn task_ExecuteTaskSync(void *task,
                                      UInt64 *realizedTransferCount)
 {
     (void)task;
+    if (g.method_rc[MOS_FAKE_METHOD_EXECUTE]) {
+        return (IOReturn)g.method_rc[MOS_FAKE_METHOD_EXECUTE];
+    }
     if (g_task.buf && g_task.buf_len) {
         size_t n = (g.raw_len < g_task.buf_len) ? g.raw_len : g_task.buf_len;
         memset(g_task.buf, 0, g_task.buf_len);
@@ -526,6 +556,17 @@ static void dict_set_str(CFMutableDictionaryRef d, CFStringRef key,
     if (s) { CFDictionarySetValue(d, key, s); CFRelease(s); }
 }
 
+/* PHASE-2 LIMIT (N4, 2026-06-11): the directory stays single-drive.
+   Watch-all's adapter-layer additions — Appeared→snapshot→slot wiring,
+   Disappeared→id-resolve→per-slot removal, the doorbell-or-fail open
+   gate, stream_open_ms constancy across joins — are all exercised with
+   one drive appearing, leaving, and rejoining under a re-minted ID
+   (test_adapter_watch.c). The ascending-registry-id same-tick
+   interleave across MULTIPLE drives lives in the pure multiplexer and
+   is pinned by test_watch_core.c; modelling a second drive here would
+   restructure every singleton table in this fake to re-test it. If a
+   multi-drive adapter scenario ever earns its keep, this array is the
+   starting point. */
 CFArrayRef DRCopyDeviceArray(void)
 {
     const void *vals[1];
@@ -570,15 +611,19 @@ CFDictionaryRef DRDeviceCopyStatus(DRDeviceRef device)
     return d;
 }
 
-/* PHASE-1 LIMIT (sixth review, N1): both by-name lookups ignore their
-   argument — while the drive is present, ANY well-formed name resolves,
-   so "well-formed but absent → NO_DEVICE" through the by-name open is
-   inexpressible here (pinned only by test_cli.sh on real macOS). Phase
-   2 models name matching against the scenario's actual BSD name. */
+/* Matches the scenario's actual BSD name (N1 closed, phase 2): the
+   adapter documents passing the canonical "diskN" rendering, so a
+   media-less drive (unit < 0) has no name and ANY lookup misses —
+   "well-formed but absent → NO_DEVICE" is now expressible headless. */
 DRDeviceRef DRDeviceCopyDeviceForBSDName(CFStringRef name)
 {
-    (void)name;
-    if (!g.present) return NULL;
+    if (!g.present || g.bsd_unit < 0 || !name) return NULL;
+    char want[32], got[64];
+    snprintf(want, sizeof want, "disk%lld", (long long)g.bsd_unit);
+    if (!CFStringGetCString(name, got, sizeof got, kCFStringEncodingUTF8)) {
+        return NULL;
+    }
+    if (strcmp(got, want) != 0) return NULL;
     return (DRDeviceRef)CFRetain(FAKE_DEV); /* balances the adapter's CFRelease */
 }
 
