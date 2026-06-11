@@ -1,3 +1,10 @@
+<!-- RETIRED 2026-06-11: historical artifact, frozen. Session-status
+narrative from the brief/ZIP exchange era. The two live sections it
+carried — the hardware validation gate and the falsification-run
+checklist — moved to INTEGRATION_HARNESS.md, which is their
+maintained home. Do not update; version claims and paths below are
+of their time. -->
+
 # v0.4.0-dev — Application Status
 
 **Tree state:** v0.4.0-dev. Pure test suite green under `-Wall

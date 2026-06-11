@@ -509,8 +509,8 @@ mos's TUR are separate commands up to one poll period apart. The only
 dangerous interleaving is a backward flip — GOOD to the kernel (nub
 created), then non-GOOD to mos within the same window — plus the
 UNIT ATTENTION variant the single-TUR doctrine (§4.1) bets the kernel
-consumes. One insert-under-watch hardware run retires both (STATUS,
-hardware gate).
+consumes. One insert-under-watch hardware run retires both
+(INTEGRATION_HARNESS.md, hardware validation gate).
 
 ## 6. Discovery, addressing, and BSD-name resolution (DR directory)
 

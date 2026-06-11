@@ -133,8 +133,9 @@ device-quirk special-casing that makes optical stacks unmaintainable
 It also keeps Process rule 3 honest: "hardware validation" means the
 matrix can *refute* us or *feed* us, not steer us.
 
-**Consequences.** STATUS's hardware gate is scoped to falsification +
-fixture-acquisition runs. Quirk findings reach `src/` only through
+**Consequences.** The hardware validation gate (INTEGRATION_HARNESS.md;
+lived in STATUS.md until its 2026-06-11 retirement to doc/history/) is
+scoped to falsification + fixture-acquisition runs. Quirk findings reach `src/` only through
 committed hex with a dated fixture README entry. If a falsification
 run fails, the deliverable is the captured sense/timeline as a
 fixture — not a behavior tuned to the failing drive.

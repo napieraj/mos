@@ -100,6 +100,110 @@ design (AGENTS hardware ADR):
   plug, per-drive device_removed on unplug, two-drive interleave
   fixture.
 
+## Hardware validation gate
+
+(Moved here from STATUS.md when that file was retired to
+doc/history/, 2026-06-11 — this is the live copy.)
+
+This gates the FIRST TAG (none exists yet; the tree is v0.4.0-dev —
+v0.3 was never tagged and won't be, its line continued into v0.4
+development). The contract surface being validated is stable.
+Validation should:
+
+1. Full CMake build + `ctest` on an Apple-toolchain host.
+2. Manual smoke per matrix drive in each state:
+   - `mos --json`: confirm `"schema": "mos.state.v1"`,
+     `"bsd"` (full dev node since the 2026-06-10 CLI redesign; was `"bsd_name"`), `"current_profile"`,
+     `"current_profile_name"` populated.
+   - `mos --json --index 99` (no-drive): confirm
+     `mos.error.v1` envelope with nested
+     `error.{code, message, context, recoverable}` and
+     `exit_code: 66`.
+   - Bare `mos --index 99`: confirm empty stdout, stderr
+     diagnostic, exit 66.
+   - `mos --json --watch --bsd diskN`: confirm initial
+     `snapshot` event, then `state_changed` on tray / media
+     transitions, then `device_removed` on detach.
+3. If a query-failure can be deliberately induced, confirm
+   partial-failure `mos.error.v1` envelope surfaces `bsd_name`
+   correctly.
+4. `mos --json=v2` (or any `=value`): confirm `EX_USAGE` (64)
+   with diagnostic naming `mos.state.v1`.
+5. Capture per-drive fixtures via
+   `mos status --json > fixtures/<drive>/<state>.json` (plus
+   `mos probe --dump` for the DR dictionaries).
+
+Once 1-4 pass, the first tag is cuttable. Step 5 informs the
+typed-API design (ROADMAP v0.4).
+
+### Falsification runs (post-2026-06-10 scope reduction)
+
+The blanket "adapter unvalidated" framing has shrunk: the adapter seam
+is now verified against the kernel's own source — GetTrayState masking,
+the §5.5 nub invariant, TUR exclusivity, IOReturn pins, the GESN CDB
+(ARCHITECTURE §9.7, §5.5, §11). What hardware still owes us is
+**falsification + fixture acquisition**, never design input
+(AGENTS.md doctrine):
+
+0. **Seam contract UNGUARDED clauses** (doc/seam-contract.md appendix —
+   the three obligations the pure suite structurally cannot see, all
+   adapter-shaped):
+   - **O-1**: confirm the adapter zero-initializes `mos_state_result`
+     before filling (read `mos_scsi.c:193` on the build host; assert a
+     fresh query on an empty drive reports `current_profile: 0` not
+     garbage).
+   - **O-3**: identity-string lifetime — hold a result past a
+     `mos_close`, read `vendor/product/revision` under ASan (the rehome
+     helper makes this pass; the clause needs one on-Mac ASan run to be
+     source-verified rather than fixture-asserted).
+   - **V-1**: eject and re-insert while running one-shot queries;
+     confirm `bsd_unit` flips to -1 and back driven by NODE absence
+     (e.g. state `loading` with unit still -1 mid-spin-up is correct),
+     not by the state enum — the fake derives unit FROM state, so this
+     shape is untestable headlessly.
+
+1. **Insert-under-watch** (pass/fail): `mos --watch` at default rates
+   during a real insert; compare mount latency to a no-watch baseline,
+   watch IORegistry for repeated nub teardown. Retires the §5.5
+   backward-flip and UA slivers. While there: two rapid `mos --watch`
+   opens on the same drive must show distinct `stream_open_ms` values
+   (pins the per-process monotonicization end-to-end).
+2. **Fixture acquisitions** for paths currently spec-only:
+   descriptor-format sense (0x72/0x73) from a real device; a bridge
+   that omits `media_id` (exercises the profile-fallback swap path);
+   an LG stale-profile sequence (pins the §9 suppression with real
+   bytes); opportunistically, a damaged disc to timestamp the kernel
+   auto-eject corollary.
+3. **Index-order comparison**: `drutil list -xml` vs `mos list`,
+   repeated across hotplug (doc/research/2026-06-10-drutil-contract.md
+   tiering; retires the Inferred tier).
+
+4. **Multi-drive `mos watch` guard** (2026-06-11 fix, not headless-
+   testable): with two drives attached and no selector, `mos watch`
+   must print the mini-list to stderr and exit 64 — same contract as
+   `mos status`. One drive: implied, as before.
+
+5. **`bsd_unit` fallback branch on real bridges** (2026-06-11 fix):
+   does any owned bridge actually expose its BSD name on a non-IOMedia
+   node (taking `mos_internal_bsd_unit`'s fallback), and does that
+   node's registry ID survive a disc swap? One `mos probe --dump`
+   before/after a swap answers both. The branch now mints media_id 0
+   (don't-infer-a-swap sentinel); a captured fixture either pins that
+   or retires the question.
+
+6. **DR doorbell setup failure in practice**: `mos_watch_open_all` now
+   fails the open if `DRNotificationCenterCreate` / run-loop source
+   creation fails. (The CI doorbell guard proves driveless
+   REGISTRATION is accepted on every push; what stays here is
+   callback DELIVERY and any environment where registration fails.)
+   If a real Mac ever shows this failing, that observation funds the
+   rescan-fallback decision parked in ROADMAP (2026-06-11 intake
+   remainders).
+
+A surprise observed on hardware lands as a committed `.bin` fixture and
+the pure layer is built to the fixture — defenses generic, never
+device-special-cased.
+
 ## Anticipated quirks from prior art
 
 The closest peer in the FOSS world is systemd's `cdrom_id`
@@ -325,7 +429,7 @@ the macOS analogue of cdrom_id's: by the time a userspace client
 holds a handle, the kernel's own device initialization has already
 consumed the power-on / reset / media-change UA, so the
 application-level retry an earlier mos iteration carried was
-re-armoring an already-armored layer. (The CHANGELOG records the
+re-armoring an already-armored layer. (doc/history/CHANGELOG.md records the
 drain loop's removal; AGENTS.md carries the superseding ADR.)
 
 Hardware capture should still include stacked-UA scenarios —

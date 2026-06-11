@@ -1,7 +1,7 @@
 # ROADMAP
 
 Forward-looking only. What shipped, when, and the decision back-and-forth that
-got us here live in `CHANGELOG.md`; design rationale lives in `ARCHITECTURE.md`;
+got us here live in `doc/history/CHANGELOG.md` (retired 2026-06-11, frozen); design rationale lives in `ARCHITECTURE.md`;
 project rules in `AGENTS.md`. This file states the plan and does not relitigate
 it.
 
@@ -55,7 +55,7 @@ signal). These corroborate the spec-derived fixtures; they gate nothing.
 
 Shipped: frozen CLI/JSON contract (`ok`/`error`, `revision`), event-driven
 `--watch`, the `schemas/` family (`state`/`error`/`list`/`event` v1), a long
-correctness/hardening arc, and F1 — the `media_changed` event (see CHANGELOG);
+correctness/hardening arc, and F1 — the `media_changed` event (see doc/history/CHANGELOG.md);
 pure suite green in CI. The typed APIs that originally defined v0.3 were never
 built and have moved to v0.4. With F1 landed, the v0.3 event contract is
 considered complete — but not frozen: per the schema-evolution ADR in
@@ -215,7 +215,7 @@ watch loop + new DR glue.
   writes and later deletes (`doc/dr-field-mapping.md`, bsd_unit row). Also
   the `--index` alignment above stays drutil-tier per the evidence rating in
   `doc/research/2026-06-10-drutil-contract.md` (Documented / Inferred /
-  Undocumented; falsifier in STATUS).
+  Undocumented; falsifier in INTEGRATION_HARNESS.md).
 
 Division of labour — what mos *is* on top of DR. DR's status dict already exposes
 the coarse signals (tray-open, busy, media present / in-transition / none) as a
