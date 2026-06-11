@@ -158,7 +158,7 @@ mos_state_enum mos_state_result_state(const mos_state_result *r);
    (The PLANNED v0.4 held-handle refresh — not yet implemented; the
    DiscRecording substrate it builds on landed 2026-06-10 — will make
    the field query-time via kDRDeviceMediaBSDNameKey; see ROADMAP
-   "Architectural".) */
+   "Standing context".) */
 int64_t        mos_state_result_bsd_unit(const mos_state_result *r);
 
 /* The drive service's IORegistry entry ID — the attachment identity,

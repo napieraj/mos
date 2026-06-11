@@ -279,7 +279,8 @@ access.
 The 2026-06-10 entry's parenthetical — "the notification probe keeps
 DA legs as the falsification control arm" — no longer holds. What
 changed: the standalone probes were consolidated into the `mos probe`
-subcommand (cli/probe.c, `MOS_CLI_PROBE` default ON; ROADMAP append
+subcommand (cli/probe.c, `MOS_CLI_PROBE` default ON; the frozen record at
+doc/history/2026-06-10-dr-pivot-decision-record.md
 has the full argument) so they stop drifting outside the CLI's
 contract tests, and the DA legs were retired with the move rather
 than carried. Why the control arm goes: it existed to let a hardware

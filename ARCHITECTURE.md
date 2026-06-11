@@ -551,7 +551,8 @@ Two name operations remain, with one registry walk between them:
   `DRDeviceCopyDeviceForBSDName` behind the unchanged
   `parse_bsd_unit` gate (malformed → `invalid_arg`, well-formed-but-
   absent → `no_device`). This dissolved the never-implemented v0.3
-  walk-up plan (ROADMAP, "Architectural").
+  walk-up plan
+  (doc/history/2026-06-10-dr-pivot-decision-record.md).
 
 Per-poll reopen never re-resolves by name — it uses `IORegistryEntryIDMatching`
 on the registry ID captured at open, which is what protects a watch from
