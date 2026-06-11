@@ -79,9 +79,7 @@ mos_cli_stdout_status mos_cli_stdout_finalize(void)
        classification depend on fflush re-setting errno after a latch that
        already emptied the buffer — true on glibc, but not guaranteed by
        C/POSIX, and a needless dependency. (We also never clearerr(): that
-       would drop the sticky failure signal and could report a false OK.)
-
-       This matches the contract documented in mos_cli_io.h. */
+       would drop the sticky failure signal and could report a false OK.) */
     if (fflush(stdout) == 0 && !ferror(stdout)) return MOS_CLI_STDOUT_OK;
     return (errno == EPIPE) ? MOS_CLI_STDOUT_PIPE_CLOSED
                             : MOS_CLI_STDOUT_WRITE_ERROR;
