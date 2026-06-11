@@ -457,6 +457,17 @@ component can and cannot be checked against:**
   gap is the hardware falsification leg's to close, and the vintage
   makes that leg MORE load-bearing than ARCHITECTURE currently
   conveys (candidate doctrinal annotation, not made here).
+  *Drift calibration (verified 2026-06-11):* the CURRENT SDK
+  (MacOSX26.4) still ships `SCSITaskLib.h` with
+  "Copyright (c) 2001-2009" and availability markers stopping at
+  10.6 — the userspace SAM interface has been byte-frozen for ~17
+  years, a strong prior that the implementation is quiescent and the
+  published-vs-shipping gap small. A prior, not a proof: binaries
+  change behind frozen headers, and the Ventura 13.2 internal-SATA
+  optical breakage (hackintosh reports, 2023) proves nonzero drift
+  SOMEWHERE in the optical stack — plausibly the ATAPI transport
+  below SAM, unconfirmed. Net: the gap is probably small; the
+  hardware leg still owns the residual.
 - *IOStorageFamily* (the layer above: IOCDBlockStorageDriver,
   IOMediaBSDClient): current and open (IOStorageFamily-323, 2025).
 - *xnu*: current and open; carries the IOKit SCSI headers at source
