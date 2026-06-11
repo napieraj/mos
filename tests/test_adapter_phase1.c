@@ -59,8 +59,15 @@ TEST(adapter_open_index_query_ready)
     EXPECT_EQ(MOS_STATE_READY, mos_state_result_state(r));
     EXPECT_EQ(0x0010, mos_state_result_current_profile(r));
 
-    /* Identity flowed through the DR directory seam. */
+    /* Identity flowed through the DR directory seam. Reading the string
+       accessors under ASan is the O-3 lifetime check (seam contract):
+       the pointers must reference handle-owned storage valid while the
+       result lives — a dangle is an ASan abort here, not a lucky read. */
     EXPECT_EQ(4, mos_handle_bsd_unit(h));
+    const char *vendor  = mos_state_result_vendor(r);
+    const char *product = mos_state_result_product(r);
+    EXPECT(vendor  && strcmp(vendor,  "HL-DT-ST") == 0);
+    EXPECT(product && strcmp(product, "DVDROM")   == 0);
 
     mos_close(h);
 
