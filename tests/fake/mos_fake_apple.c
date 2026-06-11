@@ -570,6 +570,11 @@ CFDictionaryRef DRDeviceCopyStatus(DRDeviceRef device)
     return d;
 }
 
+/* PHASE-1 LIMIT (sixth review, N1): both by-name lookups ignore their
+   argument — while the drive is present, ANY well-formed name resolves,
+   so "well-formed but absent → NO_DEVICE" through the by-name open is
+   inexpressible here (pinned only by test_cli.sh on real macOS). Phase
+   2 models name matching against the scenario's actual BSD name. */
 DRDeviceRef DRDeviceCopyDeviceForBSDName(CFStringRef name)
 {
     (void)name;

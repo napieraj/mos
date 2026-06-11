@@ -255,8 +255,9 @@ sense, tray-open mid-read, disc swap mid-query. Largely implemented in
 `tests/test_state_core.c` as of v0.3.1-dev (closes the reviewer's B+→A gap at
 the function level).
 
-**Documentation polish.** `CHANGELOG.md` regenerated cleanly from git tags
-(Keep-a-Changelog); `mos_open_by_index` race documented as a known limitation and
+**Documentation polish.** A fresh root `CHANGELOG.md` (Keep-a-Changelog)
+generated from git tags at tag time — the review-era log is frozen at
+doc/history/CHANGELOG.md; `mos_open_by_index` race documented as a known limitation and
 `mos_open_by_bsd` marked preferred; the lock-composability property made explicit
 in `ARCHITECTURE.md`.
 
