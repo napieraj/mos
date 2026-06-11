@@ -1,10 +1,5 @@
 /*
- * mos_cli_io.c — implementation of the shared CLI string writers.
- *
- * Delegates the actual escaping to the library's single canonical
- * implementations (mos_json_escape / mos_safe_ascii in src/mos_strings.c),
- * so the rule is defined exactly once and every tool stays aligned with
- * what the schema fixtures and the pure tests pin.
+ * cli/io.c — shared CLI string writers; contracts in io.h.
  */
 #include "io.h"
 
