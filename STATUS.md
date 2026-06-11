@@ -237,7 +237,10 @@ they were written; see CHANGELOG for the restructure.)
 
 ## Hardware validation gate
 
-The v0.3.1-dev contract is stable for the gate. Validation should:
+This gates the FIRST TAG (none exists yet; the tree is v0.4.0-dev —
+v0.3 was never tagged and won't be, its line continued into v0.4
+development). The contract surface being validated is stable.
+Validation should:
 
 1. Full CMake build + `ctest` on an Apple-toolchain host.
 2. Manual smoke per matrix drive in each state:
@@ -262,8 +265,8 @@ The v0.3.1-dev contract is stable for the gate. Validation should:
    `mos status --json > fixtures/<drive>/<state>.json` (plus
    `mos probe --dump` for the DR dictionaries).
 
-Once 1-4 pass, v0.3 is shippable. Step 5 informs v0.4 typed-API
-design.
+Once 1-4 pass, the first tag is cuttable. Step 5 informs the
+typed-API design (ROADMAP v0.4).
 
 ### Falsification runs (post-2026-06-10 scope reduction)
 
