@@ -558,5 +558,10 @@ jobs:
           cmake -B build-adapter -DMOS_BUILD_ADAPTER_FAKE=ON -DMOS_BUILD_TESTS=OFF \
             -DCMAKE_C_FLAGS="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          # Probe first: it gates the phase-2 mechanisms (time seam,
+          # CF interpose, run-loop delivery) and names a failed
+          # mechanism in the log; canary thereafter.
+          cmake --build build-adapter --target mos_adapter_probe0
+          ./build-adapter/bin/mos_adapter_probe0
           cmake --build build-adapter --target mos_adapter_fake_tests
           ./build-adapter/bin/mos_adapter_fake_tests

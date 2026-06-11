@@ -378,6 +378,25 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
     add_test(NAME adapter_fake COMMAND mos_adapter_fake_tests)
+
+    # Phase-2 mechanism probe: settles the time-seam and run-loop
+    # interpose questions (design record §12) on real CI hardware,
+    # before scenarios are built on them; stays as a canary after.
+    # No fake, no mos sources — just the two-TU resolution experiment
+    # against real CoreFoundation.
+    add_executable(mos_adapter_probe0
+        tests/test_adapter_probe0.c
+        tests/probe0_caller.c
+    )
+    target_include_directories(mos_adapter_probe0 PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    )
+    target_link_libraries(mos_adapter_probe0 PRIVATE
+        ${COREFOUNDATION_FRAMEWORK})
+    set_target_properties(mos_adapter_probe0 PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+    add_test(NAME adapter_probe0 COMMAND mos_adapter_probe0)
 endif()
 
 # ---- Install ------------------------------------------------------------
