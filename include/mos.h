@@ -51,11 +51,10 @@ typedef enum {
     MOS_STATE_LOADING,   /* unit spinning up / becoming ready */
     MOS_STATE_READY,     /* unit reports ready; media present and addressable */
     MOS_STATE_BUSY,      /* unit busy / contended (SAM-5 BUSY-class status) */
-    /* Appended in v0.3.1-dev — surfaced distinctions the drive already
-       reports but earlier versions collapsed under LOADING/UNKNOWN. The
-       enum is int32-wide-pinned and accessor-only across the ABI, so
-       appending here is binary-compatible. Order is load-bearing only in
-       that new values stay at the end. */
+    /* Later-appended states. The enum is int32-wide-pinned and
+       accessor-only across the ABI, so appending here is binary-
+       compatible. Order is load-bearing only in that new values stay
+       at the end. */
     MOS_STATE_FORMATTING,      /* media present, format in progress (sense 04/04) */
     MOS_STATE_MEDIA_UNREADABLE,/* media present but unreadable (MEDIUM ERROR / 57/00 TOC) */
     MOS_STATE_DEVICE_FAULT,    /* drive hardware fault (sense key HARDWARE ERROR) */

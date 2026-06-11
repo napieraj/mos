@@ -6,10 +6,10 @@
 
 static void emit_human(const mos_state_result *r, int index1)
 {
-    /* Five-tier order (CLI design 2026-06-10): answer, evidence, media,
-       addressing, identity. Suppression mirrors the JSON contract
-       (pairs the schema suppresses are not in the array); structural
-       addressing/identity rows show "-" via NULL instead. */
+    /* Five-tier order (doc/research/2026-06-10-cli-design.md): answer,
+       evidence, media, addressing, identity. Suppression mirrors the
+       JSON contract (pairs the schema suppresses are not in the array);
+       structural addressing/identity rows show "-" via NULL instead. */
     mos_cli_human_pair pairs[8];
     size_t n = 0;
 

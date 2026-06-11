@@ -140,9 +140,10 @@ static int parse_index(const char *arg)
     return (int)v;
 }
 
-/* --json takes no argument in v0.3 (schema names carry their own version).
-   Reject --json=value so legacy --json=v2 callers get a clear usage error
-   instead of silent acceptance; bare --json (v == NULL) is fine. */
+/* --json takes no argument — schema names carry their own version
+   (AGENTS.md, JSON schema ADR). Reject --json=value so a caller
+   expecting per-invocation pinning gets a clear usage error instead of
+   silent acceptance; bare --json (v == NULL) is fine. */
 static bool reject_legacy_json_version(const char *v)
 {
     if (!v) return true;  /* bare --json is fine */
@@ -271,11 +272,11 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Positional drive subject (CLI design 2026-06-10): one bare
-       argument; SYNTACTIC disambiguation — all digits = index, anything
-       else = a bsd form (the library parse accepts disk4 / rdisk4 /
-       /dev/diskN). --registry-id (future) stays flag-only: its large
-       decimals would collide with the index grammar. */
+    /* Positional drive subject (doc/research/2026-06-10-cli-design.md):
+       one bare argument; SYNTACTIC disambiguation — all digits = index,
+       anything else = a bsd form (the library parse accepts disk4 /
+       rdisk4 / /dev/diskN). --registry-id (future) stays flag-only: its
+       large decimals would collide with the index grammar. */
     if (optind < argc) {
         const char *subject = argv[optind];
         if (optind + 1 < argc) {

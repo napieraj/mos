@@ -73,10 +73,10 @@
    would produce nonsense like 1970-01-01T00:00:12Z.
 
    SATURATING: the schema pattern requires a 4-digit year, and the clock
-   is an INPUT to this pure layer (the fourth review's point: the
-   hostile-input discipline applies to ops->wall_ms exactly as it does
-   to drive-controlled bytes — an insane host clock, NTP step, or fuzzed
-   ops table must not produce a schema-invalid line). Values past
+   is an INPUT to this pure layer — the hostile-input discipline applies
+   to ops->wall_ms exactly as it does to drive-controlled bytes; an
+   insane host clock, NTP step, or fuzzed ops table must not produce a
+   schema-invalid line. Values past
    9999-12-31T23:59:59Z clamp to that instant; a 5-digit year from
    strftime (21 chars) and an empty string from a gmtime_r failure are
    both schema violations, so neither can escape. Post-clamp, gmtime_r
@@ -94,9 +94,9 @@ static void format_rfc3339(uint64_t wall_ms, char *out, size_t cap)
     time_t secs = (time_t)s64;
     struct tm tm;
     /* gmtime_r: POSIX.1-2008, present on every platform this project
-       compiles on (macOS targets, Linux pure-test CI). A _WIN32/gmtime_s
-       branch used to live here; removed as dead — Windows is neither a
-       build nor a test target, and untestable code is unverifiable. */
+       compiles on (macOS targets, Linux pure-test CI). Deliberately no
+       _WIN32/gmtime_s branch — Windows is neither a build nor a test
+       target, and untestable code is unverifiable. */
     if (gmtime_r(&secs, &tm) != NULL) {
         /* All-numeric strftime specifiers (%Y %m %d %H %M %S) are
            POSIX-defined as locale-independent — locale only affects textual
@@ -317,8 +317,8 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
        termination flag and let the next pump emit the device_removed
        event through the terminated path above. This handles the case
        where notifications didn't register (or aren't supported on
-       the OS) — poll-only mode used to spin emitting error events
-       forever when the drive was unplugged; now it terminates. */
+       the OS): without it, poll-only mode would spin emitting error
+       events forever for an unplugged drive. */
     if (perr == MOS_ERR_NO_DEVICE) {
         w->terminated = true;
         fill_event_base(w, &d.event);
@@ -379,10 +379,9 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
        events with a fresh probe carry r.bsd_unit directly, but the
        error/device_removed fallback in fill_event_base reads w->bsd_unit
        — which must therefore track the last OBSERVED unit, not the
-       open-time one. This used to be the Apple adapter's job (a direct
-       w->core.bsd_unit write), which meant any second adapter had to
-       rediscover the obligation and the pure-only behavior was wrong;
-       the core owns it now, where the data already is. */
+       open-time one. The CORE owns this update: pushing it to adapters
+       would leave pure-only behavior wrong and make every adapter
+       rediscover the obligation. */
     w->bsd_unit = r.bsd_unit;
 
 

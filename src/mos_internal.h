@@ -155,8 +155,8 @@ io_service_t mos_internal_handle_get_service(mos_handle_t *h);
  * The cleanup attribute is a gcc/clang extension that runs the named
  * callback when the variable goes out of scope. We use it to make
  * refcount discipline automatic in functions with multiple early-exit
- * paths (iterator loops, two-pass property lookups) where forgetting an
- * explicit release on one branch has bitten us before.
+ * paths (iterator loops, two-pass property lookups) where an explicit
+ * release is easy to miss on one branch.
  *
  * Usage:
  *   io_object_t child MOS_IO_AUTO = IOIteratorNext(it);

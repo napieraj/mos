@@ -17,11 +17,11 @@ void mos_cli_json_str(FILE *f, const char *s)
 {
     if (!s) { fputs("null", f); return; }
     /* Size first (out=NULL,cap=0 returns the escaped length excluding the
-       NUL), then escape into an exactly-sized buffer. The old fixed 4096
-       buffer silently truncated — and truncation can land mid-escape
-       (after a backslash, or inside a \uXXXX), emitting invalid JSON. A
-       small stack buffer covers the common short fields; longer strings
-       (e.g. CF properties via the notification probe) fall back to malloc. */
+       NUL), then escape into an exactly-sized buffer — a fixed-cap buffer
+       would truncate, and truncation can land mid-escape (after a
+       backslash, or inside a \uXXXX), emitting invalid JSON. A small stack
+       buffer covers the common short fields; longer strings (e.g. CF
+       properties via the notification probe) fall back to malloc. */
     char stack[256];
     size_t need = mos_json_escape(s, NULL, 0);
     char *buf = stack;
@@ -47,13 +47,12 @@ void mos_cli_safe_ascii(FILE *f, const char *s)
 void mos_cli_bsd_dev_node(FILE *f, int64_t unit)
 {
     char path[24];
-    /* CLI-design decision 2026-06-10: the JSON `bsd` field carries the
-       full canonical device node ("/dev/diskN") — pasteable, pipeable,
-       and always a valid `--bsd` argument when non-null.
-       mos_bsd_dev_node writes "" + false for unit < 0 (no media) and
-       for units above UINT32_MAX (domain-refused — see its guard).
-       Either way the JSON value is null — never a corrupted node.
-       (24 bytes always holds an in-domain unit:
+    /* The JSON `bsd` field carries the full canonical device node
+       ("/dev/diskN") — pasteable, pipeable, always a valid `--bsd`
+       argument when non-null (doc/research/2026-06-10-cli-design.md).
+       mos_bsd_dev_node refuses unit < 0 (no media) and units above
+       UINT32_MAX, so the value is null or a valid node — never a
+       corrupted one. (24 bytes always holds an in-domain unit:
        "/dev/disk4294967295".) */
     if (!mos_bsd_dev_node(unit, path, sizeof path)) {
         fputs("null", f);

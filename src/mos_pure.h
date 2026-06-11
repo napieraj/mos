@@ -51,14 +51,13 @@ struct mos_watch_event {
     mos_event_kind kind;
     uint64_t       seq;
     char           ts[24];        /* RFC 3339 UTC, NUL-terminated */
-    /* Session identity, as two plain values (no composite token — JSON
-       carries them as separate fields and consumers needing a single
-       correlation key derive one; the data layer stays normalized).
-       registry_id is the watch target's attachment identity (on the
-       Apple adapter, the IORegistry entry ID — xnu guarantees real IDs
-       >= 2^32+256); stream_open_wall_ms is the per-process-
-       monotonicized wall epoch captured at watch open. The pair is
-       unique per session; both are constant for the stream's life. */
+    /* Session identity, as two plain values: registry_id is the watch
+       target's attachment identity (on the Apple adapter, the IORegistry
+       entry ID — xnu guarantees real IDs >= 2^32+256);
+       stream_open_wall_ms is the per-process-monotonicized wall epoch
+       captured at watch open. The pair is unique per session; both are
+       constant for the stream's life. JSON carries them as separate
+       fields; consumers needing a single correlation key derive one. */
     uint64_t       registry_id;
     uint64_t       stream_open_wall_ms;
     int64_t        bsd_unit;
@@ -339,10 +338,9 @@ typedef struct {
 
        Splitting mono_ms and wall_ms into two callbacks at the type
        level makes a clock-domain mixup impossible at adapter wiring
-       time: scheduling code calls mono_ms, ts-emission calls
-       wall_ms. The two values are not interchangeable — passing one
-       where the other is expected previously produced a first-poll
-       deadline decades in the future. */
+       time: scheduling code calls mono_ms, ts-emission calls wall_ms.
+       The two values are not interchangeable — a mixup puts the
+       first-poll deadline decades in the future. */
     uint64_t  (*mono_ms)(void *ctx);
 
     /* Returns current WALL-CLOCK time in milliseconds since Unix
@@ -365,8 +363,7 @@ typedef struct {
        The vendor/product/revision pointers are adapter-owned (see
        mos_watch.c's pointer-lifetime invariant); registry_id,
        stream_open_wall_ms, and bsd_unit are plain values with no
-       lifetime constraint — the former composite stream_id string was
-       retired in favor of the two value fields. */
+       lifetime constraint. */
     mos_watch_event         event;
     /* When kind == SLEEP_UNTIL, this is the MONOTONIC-ms deadline
        the caller should sleep until. */
@@ -428,8 +425,7 @@ typedef struct {
        adapter: the IORegistry entry ID; tests: any value, 0 included).
      - start_wall_ms: Unix-epoch ms at init time, recorded as
        stream_open_wall_ms on every event. Session identity is the
-       (registry_id, stream_open_wall_ms) pair; the former composite
-       stream_id string is retired.
+       (registry_id, stream_open_wall_ms) pair.
    stable_poll_ms == 0 → 2000ms default; transition_poll_ms == 0 →
    200ms default. */
 void mos_internal_watch_init(mos_watch_state *w,

@@ -100,9 +100,9 @@ mos_error mos_internal_query_state_core(const mos_state_env_t *env,
         out->sense_key = sk; out->asc = asc; out->ascq = ascq;
     }
     /* NUB GATE — must equal the kernel's nub predicate, not approximate
-       it (seam audit, Item 2: the old `sk==0 && asc==0 && ascq==0` gate
-       diverged on exactly 11 inputs, mechanically proven by exhaustive
-       enumeration in tests/audit/nub_invariant_check.c).
+       it: the plausible `sk==0 && asc==0 && ascq==0` gate diverges on
+       exactly 11 inputs, mechanically proven by exhaustive enumeration
+       in tests/audit/nub_invariant_check.c.
 
        PollForMedia sets mediaFound on CC + ASC/ASCQ 00/00 INDEPENDENT of
        the sense key (IOSCSIMultimediaCommandsDevice.cpp:3890-3894 — the

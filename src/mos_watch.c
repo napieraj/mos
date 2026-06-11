@@ -431,10 +431,9 @@ static void watch_interest_callback(void *refcon,
  * latency only, so any setup failure falls back to poll-only
  * (dr_center/dr_source stay NULL; close treats NULL as a no-op).
  *
- * Replaces the DA description-changed wake (DR pivot Phase 2a): DR's
- * notification is DEVICE-scoped where DA's was media-scoped and
- * bsd_unit-filtered, so this doorbell also rings for tray-open /
- * no-media drives, which previously relied on poll + kIOGeneralInterest.
+ * DR's notification is DEVICE-scoped (not media-scoped), so this
+ * doorbell also rings for tray-open / no-media drives (DR pivot
+ * Phase 2a, doc/research/2026-06-10-dr-pivot-implementation-plan.md).
  *
  * The callback filters by registry ID — a parameter, not a structural
  * assumption, so a future watch-all mode widens the filter rather than

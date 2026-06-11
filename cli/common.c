@@ -1,7 +1,4 @@
-/* cli/common.c — shared CLI state and helpers; see common.h. Bodies
- * are verbatim relocations from the former tools/mos.c (restructure
- * 2026-06-10); only linkage and includes changed, except the
- * reconstructed finalize pair (see its comment). */
+/* cli/common.c — shared CLI state and helpers; see common.h. */
 #include "common.h"
 
 #include <string.h>
@@ -141,13 +138,13 @@ int emit_unknown_and_fail(const char *context, mos_error err,
 /* ---- List: one snapshot, probe in-callback ---------------------------- *
  *
  * Enumeration yields bsd_unit + registry_id only; the State / Vendor /
- * Product / Rev columns of the list contract (CLI design 2026-06-10)
- * need one open + query per drive — the same proven probe `mos status`
- * runs, opened in-callback via mos_open_device (atomic registry-ID
- * resolve; the pre-pivot per-index reopen and its selection-time
- * TOCTOU died with the DR pivot). Per-entry containment: a drive
- * whose open/query fails shows state "error" with identity dashes;
- * one sick drive never kills the rig overview.                       */
+ * Product / Rev columns of the list contract
+ * (doc/research/2026-06-10-cli-design.md) need one open + query per
+ * drive — the same probe `mos status` runs, opened in-callback via
+ * mos_open_device (atomic registry-ID resolve, no selection-time
+ * TOCTOU). Per-entry containment: a drive whose open/query fails shows
+ * state "error" with identity dashes; one sick drive never kills the
+ * rig overview. */
 
 /* id/unit collector — used by resolve_index_of's index lookup. */
 typedef struct {
