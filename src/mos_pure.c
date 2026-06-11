@@ -11,9 +11,6 @@
 
 #include <string.h>
 
-/* True if the BSD name looks like a whole-disk entry (diskN or rdiskN)
-   rather than a partition (diskNsM or similar). Pure string predicate;
-   pinned by tests/test_bsd_name.c. */
 bool mos_internal_bsd_name_is_whole_shape(const char *bsd_name)
 {
     if (!bsd_name || !*bsd_name) return false;
@@ -28,14 +25,6 @@ bool mos_internal_bsd_name_is_whole_shape(const char *bsd_name)
     return *p == 0;
 }
 
-/* True if `reported` (a raw DA/IOKit name like "disk4" or "disk4s1") names
-   whole-disk unit `whole_unit` or one of its partition children. Compares
-   the unit numerically so prefix collisions can't match (disk40 vs unit 4 is
-   40 != 4, no "is the next char a digit" reasoning). The suffix must be
-   `(s<digits>)*` — "disk4s1", APFS "disk4s1s2"; "disk4s", "disk4sx",
-   "disk4s1x" are rejected. Pinned by tests/test_bsd_name.c. No in-tree
-   consumers since the DA retirement (2026-06-11; see mos_pure.h) —
-   kept as the pinned partition-child matching rule. */
 bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit)
 {
     if (!reported || whole_unit < 0) return false;
@@ -57,9 +46,6 @@ bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit)
     return *p == '\0';
 }
 
-/* Normalize any of the four accepted BSD-name forms ("disk4", "rdisk4",
-   "/dev/disk4", "/dev/rdisk4") to the IOKit canonical form ("disk4").
-   Returns a pointer into the input string (no allocation). */
 const char *mos_internal_normalize_bsd_name(const char *in)
 {
     if (!in) return NULL;
@@ -143,6 +129,11 @@ mos_error mos_internal_ioreturn_to_error(int32_t rc)
     }
 }
 
+/* READ TOC/PMA/ATIP format 0000b layout (MMC-6 §6.27.2.3): 2-byte TOC
+   Data Length (BE, counts bytes AFTER itself), first/last track; then
+   8-byte descriptors — [1]=ADR<<4|CONTROL, [2]=track (0xAA=lead-out),
+   [4..7]=start LBA (BE, MSF=0). Cross-checked against Linux sr.c /
+   cdrom.h TOC ioctls and libcdio. Contract in mos_pure.h. */
 bool mos_internal_toc_parse(const uint8_t *buf, size_t len, mos_toc *out)
 {
     if (!out) return false;

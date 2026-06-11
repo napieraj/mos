@@ -179,10 +179,11 @@ static uint32_t getenv_uint(const char *name, uint32_t default_value)
 
 int run_watch(void)
 {
-    /* Watch is NDJSON end to end (CLI design 2026-06-10): the event
-       stream AND any error envelope. Forcing the flag here keeps
-       emit_unknown_and_fail on its compact single-line framing without
-       a second mode check. */
+    /* Watch is NDJSON end to end — the event stream AND any error
+       envelope (doc/research/2026-06-10-cli-design.md): a stream
+       consumed by orchestrators has one format. Forcing the flag here
+       keeps emit_unknown_and_fail on its compact single-line framing
+       without a second mode check. */
     flag_json = true;
 
     /* Register SIGINT handler before opening the watch — if the user
@@ -252,9 +253,8 @@ int run_watch(void)
                                          bsd_buf[0] ? bsd_buf : NULL);
         }
 
-        /* CLI design 2026-06-10: watch is NDJSON unconditionally — a
-           stream consumed by orchestrators has one format. --json is a
-           no-op here; the plain token-per-line mode is removed. */
+        /* NDJSON unconditionally (forced in run_watch); --json is a
+           no-op here. */
         watch_emit_status est = emit_watch_ndjson(ev);
 
         /* Downstream pipe handling. SIGPIPE is ignored at main() entry

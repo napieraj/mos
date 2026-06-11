@@ -39,6 +39,26 @@ typedef struct mos_device_info mos_device_info_t;
 
 /* ---- Enumerations ---------------------------------------------------- */
 
+/* ABI-width pin, applied to every public enum just after its
+   definition. Public enums must be exactly int32_t-wide: consumer FFI
+   bindings (Swift importer, bindgen, cgo) assume it, and a bare enum
+   lets the compiler pick any representing type — under -fshort-enums
+   (positive-only value sets are especially free to narrow) a consumer
+   assuming int32_t reads garbage upper bits, and an enum embedded in a
+   struct corrupts the layout silently. mos_error's negative values
+   force a signed type; the others rely on the pin entirely. If a pin
+   fires: use `enum ... : int32_t` (C23) or disable -fshort-enums. See
+   doc/research/2026-04-27-v2-contract-design.md item 5. */
+#if defined(__cplusplus)
+#define MOS_ABI_PIN_I32(T) \
+    static_assert(sizeof(T) == sizeof(int32_t), \
+                  #T " must be int32_t-wide for FFI ABI stability")
+#else
+#define MOS_ABI_PIN_I32(T) \
+    _Static_assert(sizeof(T) == sizeof(int32_t), \
+                   #T " must be int32_t-wide for FFI ABI stability")
+#endif
+
 /*
  * Reportable drive states. "ready" means the unit reported ready via
  * TEST UNIT READY — NOT merely that media is present. See ARCHITECTURE.md
@@ -51,11 +71,10 @@ typedef enum {
     MOS_STATE_LOADING,   /* unit spinning up / becoming ready */
     MOS_STATE_READY,     /* unit reports ready; media present and addressable */
     MOS_STATE_BUSY,      /* unit busy / contended (SAM-5 BUSY-class status) */
-    /* Appended in v0.3.1-dev — surfaced distinctions the drive already
-       reports but earlier versions collapsed under LOADING/UNKNOWN. The
-       enum is int32-wide-pinned and accessor-only across the ABI, so
-       appending here is binary-compatible. Order is load-bearing only in
-       that new values stay at the end. */
+    /* Later-appended states. The enum is int32-wide-pinned and
+       accessor-only across the ABI, so appending here is binary-
+       compatible. Order is load-bearing only in that new values stay
+       at the end. */
     MOS_STATE_FORMATTING,      /* media present, format in progress (sense 04/04) */
     MOS_STATE_MEDIA_UNREADABLE,/* media present but unreadable (MEDIUM ERROR / 57/00 TOC) */
     MOS_STATE_DEVICE_FAULT,    /* drive hardware fault (sense key HARDWARE ERROR) */
@@ -67,17 +86,13 @@ typedef enum {
                                   transitional so a re-poll resolves it once GESN
                                   is reachable. */
 } mos_state_enum;
+MOS_ABI_PIN_I32(mos_state_enum);
 
 /*
  * Error codes. mos_query_state() returns MOS_OK even when the reported
  * state is UNKNOWN — that is a valid query result. Negative codes mean
  * the query itself could not be executed.
  */
-/* Storage type pinned to int32_t. A bare enum lets the compiler pick any
-   representing type; under -fshort-enums (or Swift/bindgen FFI on
-   out-of-set values) that varies. The value list has negatives (MOS_ERR_*)
-   so the type is signed, and the static_assert below pins the width to
-   int32_t exactly. See doc/research/2026-04-27-v2-contract-design.md item 5. */
 typedef enum {
     MOS_OK                    =  0,
     MOS_ERR_INVALID_ARG       = -1,
@@ -93,37 +108,7 @@ typedef enum {
     MOS_ERR_UNSUPPORTED       = -8, /* command not supported by drive */
     MOS_ERR_OOM               = -9,
 } mos_error;
-#if defined(__cplusplus)
-static_assert(sizeof(mos_error) == sizeof(int32_t),
-              "mos_error must be int32_t-wide for FFI ABI stability (Swift "
-              "importer, bindgen, cgo). If this fires the compiler narrowed "
-              "the enum — use `enum mos_error : int32_t` (C23) or disable "
-              "-fshort-enums.");
-#else
-_Static_assert(sizeof(mos_error) == sizeof(int32_t),
-               "mos_error must be int32_t-wide for FFI ABI stability (Swift "
-               "importer, bindgen, cgo). If this fires the compiler narrowed "
-               "the enum — use `enum mos_error : int32_t` (C23) or disable "
-               "-fshort-enums.");
-#endif
-
-/* ABI-width pins for the other public enums. Same FFI argument as
- * mos_error, but these are positive-only, so the compiler can narrow them
- * more freely (no negative value forcing a signed width) — under
- * -fshort-enums a consumer assuming int32_t would read garbage upper bits.
- * Fix paths if one fires are the same as mos_error's. */
-#if defined(__cplusplus)
-static_assert(sizeof(mos_state_enum) == sizeof(int32_t),
-              "mos_state_enum must be int32_t-wide for ABI stability");
-#else
-_Static_assert(sizeof(mos_state_enum) == sizeof(int32_t),
-               "mos_state_enum must be int32_t-wide for ABI stability — "
-               "see mos_error width pin above for the FFI rationale and "
-               "fix paths.");
-#endif
-/* mos_xfer_dir asserted below its own definition; mos_event_kind
-   asserted below its own definition too (both are declared later
-   in this file). */
+MOS_ABI_PIN_I32(mos_error);
 
 /* Transfer direction constants for mos_raw_cdb(). */
 typedef enum {
@@ -131,19 +116,7 @@ typedef enum {
     MOS_XFER_FROM_TARGET  = 2, /* drive → host (read-like) */
     MOS_XFER_TO_TARGET    = 1, /* host → drive (write-like) */
 } mos_xfer_dir;
-
-/* ABI-width pin — see mos_error and mos_state_enum width pins earlier
-   in this file for the FFI rationale (consumer Swift/Rust/Go FFI
-   bindings rely on int32_t width; -fshort-enums could narrow this
-   positive-only enum). */
-#if defined(__cplusplus)
-static_assert(sizeof(mos_xfer_dir) == sizeof(int32_t),
-              "mos_xfer_dir must be int32_t-wide for ABI stability");
-#else
-_Static_assert(sizeof(mos_xfer_dir) == sizeof(int32_t),
-               "mos_xfer_dir must be int32_t-wide for ABI stability — "
-               "see mos_error width pin earlier in this file.");
-#endif
+MOS_ABI_PIN_I32(mos_xfer_dir);
 
 /* READ DISC INFORMATION disc status (MMC-6 0x51 byte 2, bits 1:0) —
    the disc-completion signal a blank-vs-finalized decision needs. */
@@ -153,16 +126,7 @@ typedef enum {
     MOS_DISC_COMPLETE   = 2,  /* finalized                         */
     MOS_DISC_OTHER      = 3,  /* reserved/other (random-recordable) */
 } mos_disc_status;
-
-/* ABI-width pin — same FFI rationale as the enums above. */
-#if defined(__cplusplus)
-static_assert(sizeof(mos_disc_status) == sizeof(int32_t),
-              "mos_disc_status must be int32_t-wide for ABI stability");
-#else
-_Static_assert(sizeof(mos_disc_status) == sizeof(int32_t),
-               "mos_disc_status must be int32_t-wide for ABI stability — "
-               "see mos_error width pin earlier in this file.");
-#endif
+MOS_ABI_PIN_I32(mos_disc_status);
 
 /* ---- Query result struct -------------------------------------------- */
 
@@ -433,19 +397,7 @@ typedef enum {
                                       instead. Single-target watches never
                                       emit this. */
 } mos_event_kind;
-
-/* ABI-width pin — same FFI rationale as mos_state_enum / mos_xfer_dir
-   above. mos_event_kind is embedded in mos_watch_event below, so a
-   narrowed enum would corrupt the struct layout consumers read. */
-#if defined(__cplusplus)
-static_assert(sizeof(mos_event_kind) == sizeof(int32_t),
-              "mos_event_kind must be int32_t-wide for ABI stability");
-#else
-_Static_assert(sizeof(mos_event_kind) == sizeof(int32_t),
-               "mos_event_kind must be int32_t-wide for ABI stability — "
-               "see mos_error width pin earlier in this file for the FFI "
-               "rationale and fix paths.");
-#endif
+MOS_ABI_PIN_I32(mos_event_kind);
 
 /* A watch event. Opaque and ABI-stable on the same terms as
    mos_state_result: read through accessors; borrowed, owned by the watch,

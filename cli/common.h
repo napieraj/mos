@@ -4,8 +4,7 @@
  * The CLI is one file per command (cli/status.c, cli/list.c,
  * cli/watch.c) over this shared layer, dispatched from cli/main.c.
  * Presentation code (cli/human.{h,c}) lives HERE, not in the library:
- * libmos is embeddable and ships no terminal formatting (restructure
- * decided in review, 2026-06-10).
+ * libmos is embeddable and ships no terminal formatting.
  */
 #ifndef MOS_CLI_COMMON_H
 #define MOS_CLI_COMMON_H

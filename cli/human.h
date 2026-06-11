@@ -8,7 +8,7 @@
  * tests/test_human.c pin the exact bytes of the design mocks
  * (doc/research/2026-06-10-cli-design.md).
  *
- * Conventions (decided in the CLI design review):
+ * Conventions:
  *   - Aligned key blocks: keys right-aligned to the longest key,
  *     ":" then two-space gutter, one pair per line.
  *   - Suppression is the CALLER's job: a pair the schema suppresses is

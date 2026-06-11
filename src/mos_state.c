@@ -50,12 +50,10 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
         .revision            = h->revision_str[0] ? h->revision_str : NULL,
     };
 
-    /* TODO: ReadDiscInformation — not needed for any state decision, but
-       NOTE(v0.4): its parse bound MUST come from mos_internal_trusted_len
-       (seam contract O-4) — allocated, realized, and header-claimed are
-       three different authorities and only the first two are trusted.
-       would distinguish blank vs finalized discs in --verbose. A 4th vtable
-       entry + an enrichment branch in the core. See ARCHITECTURE.md §4.4. */
+    /* Disc-completion data (blank vs finalized) is deliberately NOT an
+       enrichment branch here: no state decision needs it, so it ships as
+       the on-demand typed query instead (mos_query_disc_info, mos_scsi.c;
+       ARCHITECTURE.md §4.4). */
 
     mos_error rc = mos_internal_query_state_core(&env, &h->result);
     if (rc == MOS_OK) *out = &h->result;

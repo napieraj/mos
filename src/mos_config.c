@@ -95,21 +95,11 @@ bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
     return true;
 }
 
-/* Extract the Current Profile from a GET CONFIGURATION (0x46) response,
-   gated on the device-reported Feature Header Data Length so a truncated
-   reply can't be silently read as profile 0x0000 (= "no media").
-
-   Feature Header (MMC-6 §5.4): bytes 0-3 Data Length (big-endian, the count
-   of bytes that FOLLOW this field), bytes 4-5 reserved, bytes 6-7 Current
-   Profile. So the profile field is present only when the drive claims at
-   least 4 following bytes (covering bytes 4-7).
-
-   `len` bounds the buffer (the span you zero-initialized and passed to the
-   command); validity comes from the reply's own Data Length, since the MMC
-   convenience GetConfiguration reports no realized transfer count. Returns
-   true and sets *profile only when the header is present and the Data Length
-   covers the profile field; false (caller treats as "no profile") otherwise.
-   Pure and bounds-checked, so the offsets are fuzz/ASan-verifiable headless. */
+/* Current Profile = feature-header bytes 6-7, gated on the header's own
+   Data Length (bytes 0-3, counting bytes that FOLLOW it): the profile
+   field exists only when the drive claims >= 4 following bytes. The gate
+   is what keeps a truncated reply from being read as profile 0x0000
+   (= "no media"). Header layout above; contract in mos_pure.h. */
 bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
                                          uint16_t *profile)
 {

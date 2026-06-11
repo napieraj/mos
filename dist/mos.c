@@ -123,14 +123,13 @@ struct mos_watch_event {
     mos_event_kind kind;
     uint64_t       seq;
     char           ts[24];        /* RFC 3339 UTC, NUL-terminated */
-    /* Session identity, as two plain values (no composite token — JSON
-       carries them as separate fields and consumers needing a single
-       correlation key derive one; the data layer stays normalized).
-       registry_id is the watch target's attachment identity (on the
-       Apple adapter, the IORegistry entry ID — xnu guarantees real IDs
-       >= 2^32+256); stream_open_wall_ms is the per-process-
-       monotonicized wall epoch captured at watch open. The pair is
-       unique per session; both are constant for the stream's life. */
+    /* Session identity, as two plain values: registry_id is the watch
+       target's attachment identity (on the Apple adapter, the IORegistry
+       entry ID — xnu guarantees real IDs >= 2^32+256);
+       stream_open_wall_ms is the per-process-monotonicized wall epoch
+       captured at watch open. The pair is unique per session; both are
+       constant for the stream's life. JSON carries them as separate
+       fields; consumers needing a single correlation key derive one. */
     uint64_t       registry_id;
     uint64_t       stream_open_wall_ms;
     int64_t        bsd_unit;
@@ -181,8 +180,8 @@ mos_state_enum mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uin
  * verify the real rule, not a hand-copy. */
 const char *mos_internal_normalize_bsd_name(const char *in);
 
-/* True if the BSD name looks like a whole-disk entry (diskN) rather
-   than a partition (diskNsM). */
+/* True if the BSD name looks like a whole-disk entry (diskN or rdiskN)
+   rather than a partition (diskNsM). */
 bool mos_internal_bsd_name_is_whole_shape(const char *bsd_name);
 
 /* Parse any accepted whole-disk name form ("disk4", "rdisk4",
@@ -195,16 +194,14 @@ int64_t mos_internal_parse_bsd_unit(const char *name);
 
 /* True if `reported` (a raw DA/IOKit BSD name, e.g. "disk4" or
    "disk4s1") names whole-disk unit `whole_unit` itself or one of its
-   partition children. The unit is parsed from reported's leading digits
-   and compared numerically — so the disk4-vs-disk40 prefix collision is
-   simply 4 != 40 — and the suffix is validated as `(s<digits>)*`. Returns
-   false for NULL reported, whole_unit < 0, a non-"disk" prefix, or a
-   malformed suffix. Pure, no IOKit. Pinned by tests/test_bsd_name.c.
-   No in-tree consumers since the DA retirement (2026-06-11): its call
-   sites were the DiskArbitration event filters (the watch's, retired
-   in DR pivot Phase 2a, then the probe's, retired with the probe
-   consolidation). Kept as the pinned partition-child matching rule
-   for any future BSD-name event filtering. */
+   partition children. The unit is compared numerically (disk40 vs unit 4
+   is 40 != 4) and the suffix validated as `(s<digits>)*`; false for NULL,
+   whole_unit < 0, a non-"disk" prefix, or a malformed suffix. Pinned by
+   tests/test_bsd_name.c. No in-tree consumers since the DA retirement
+   (2026-06-11): its call sites were the DiskArbitration event filters
+   (the watch's, retired in DR pivot Phase 2a, then the probe's, retired
+   with the probe consolidation). Kept as the pinned partition-child
+   matching rule for any future BSD-name event filtering. */
 bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit);
 
 /* ---- GET CONFIGURATION feature walk (mos_config.c) --------------- *
@@ -230,25 +227,13 @@ typedef struct {
  * region. Device-reported lengths can only shorten the walk — no call ever
  * reads outside [buf, buf+len). Pure, so it is ASan/fuzz-checked headless. */
 /* READ TOC/PMA/ATIP format 0000b response — the normalized table of
- * contents. THE disc-identity primitive for batch-rip dedup: the track
- * layout + leadout is the canonical known-good fingerprint of a CD
- * (MusicBrainz/CDDB ids are pure functions of exactly these fields),
- * and reading it is unprivileged — no LibreDrive, no exclusive access,
- * no raw CDB (ReadTableOfContents is an MMCDeviceInterface convenience
- * method). Layout per MMC-6 §6.27.2.3 (response header: 2-byte TOC Data
- * Length counting bytes AFTER itself, first/last track; then 8-byte
- * descriptors: [1]=ADR<<4|CONTROL, [2]=track (0xAA=lead-out),
- * [4..7]=start LBA big-endian with MSF=0). Cross-checked against Linux
- * sr.c / cdrom.h TOC ioctls and libcdio.
- *
- * `len` is the TRUSTED length (O-4 at the seam); the header's own Data
- * Length is a device claim that only SHRINKS the walk (computed in
- * 64-bit, clamped via mos_internal_trusted_len). FAIL-CLOSED like the
- * config walk: a track number outside 1..99/0xAA, a duplicate, or a
- * non-ascending track sequence rejects the whole TOC — identity derived
+ * contents, THE disc-identity primitive (MusicBrainz/CDDB ids are pure
+ * functions of exactly these fields), read unprivileged via the
+ * ReadTableOfContents convenience method. FAIL-CLOSED: an out-of-range,
+ * duplicate, or non-ascending track rejects the whole TOC — identity
  * from a half-parsed hostile TOC would be a falsely-stable fingerprint.
  * A TOC without a lead-out parses (have_leadout=false); identity
- * consumers must require it. */
+ * consumers must require it. Byte layout at the decoder (mos_pure.c). */
 #define MOS_TOC_MAX_TRACKS 99
 typedef struct {
     uint8_t  track;        /* 1..99 */
@@ -294,11 +279,10 @@ size_t mos_internal_trusted_len(size_t allocated, size_t transferred,
 bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
                                       size_t *cursor, mos_config_feature *out);
 
-/* Extract the Current Profile from a GET CONFIGURATION feature header,
-   gated on the reply's own Data Length (bytes 0-3) so a truncated response
-   is reported as "no profile" (false) rather than silently read as profile
-   0x0000. `len` bounds the buffer; validity comes from the Data Length.
-   See mos_config.c. Pure, fuzz/ASan-checked headless. */
+/* Current Profile from a GET CONFIGURATION response; false ("no
+   profile") unless the reply's own Data Length covers the field, so a
+   truncated reply is never read as profile 0x0000 (= "no media").
+   Layout and gating at the decoder (mos_config.c). */
 bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
                                          uint16_t *profile);
 
@@ -324,16 +308,11 @@ struct mos_disc_info {
     uint16_t last_track_last_session;    /* byte 11 : byte 6 */
 };
 
-/* Decode a READ DISC INFORMATION (0x51, data type 000b) response. `buf`/`len`
- * are the response and the byte count you trust. Fills *out and returns true
- * when the fixed numeric region (through byte 11) is present per BOTH `len`
- * and the response's own Disc Information Length; returns false on a NULL
- * argument or a buffer/declared length too short to hold those fields. The
- * device-reported length can only shrink the trusted region — no read ever
- * leaves [buf, buf+len). Address fields (lead-in/lead-out, bytes 16..23) and
- * the validity-gated identifiers are deliberately not decoded here: status and
- * the counts are the disc-completion/capacity signal; the rest is v0.4+. Pure, so
- * ASan/fuzz-checked headless. */
+/* Decode a READ DISC INFORMATION (0x51, data type 000b) response into
+ * *out. True only when the fixed numeric region (through byte 11) is
+ * present per BOTH `len` and the reply's own declared length. Address
+ * fields and validity-gated identifiers are deliberately not decoded
+ * (v0.4+). Layout and safety contract at the decoder (mos_discinfo.c). */
 bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
                                   mos_disc_info *out);
 
@@ -347,72 +326,33 @@ bool mos_internal_status_is_contended(uint32_t status);
 /* ---- GET EVENT STATUS NOTIFICATION media decode (mos_pure.c) ------- *
  *
  * Pull the authoritative Door/Tray-open bit out of a raw GESN (0x4A)
- * Media-class polled reply. Returns true and fills *door_open only when the
- * reply is a valid, NEA-clear, full-span Media descriptor; false (no
- * authoritative bit → caller forks on sense) otherwise. The state core's
- * get_tray_state op is built on this so the bit offsets are fuzz/ASan-checked
- * headless rather than living only in the Apple shell. See ARCHITECTURE.md
- * §4.2 and research/2026-05-29-gesn-single-poll.md. */
+ * Media-class polled reply. True + *door_open only for a valid,
+ * NEA-clear, full-span Media descriptor; false = no authoritative bit
+ * (caller forks on sense). Validity gates at the decoder (mos_pure.c);
+ * ARCHITECTURE.md §4.2. */
 bool mos_internal_gesn_media_door_open(const uint8_t *resp, size_t len,
                                        bool *door_open);
 
 /* ---- IOReturn → mos_error mapping (mos_pure.c) -------------------- *
  *
- * Translate an IOReturn (or any int32_t mach-style error code from
- * <IOKit/IOReturn.h>) to a mos_error. The pure interface takes int32_t
- * so this function can live in the pure layer and be unit-tested
- * without IOKit headers; the Apple adapter passes the IOReturn through
- * with a cast.
- *
- * The IOKit symbolic constants are stable ABI; the Apple adapter in
- * src/mos_scsi.c static_asserts the symbolic names against the numeric
- * values this function maps, so an SDK change fails the build loudly
- * rather than silently miscategorizing errors.
- *
- * Putting the mapping in the pure layer is the load-bearing decision:
- * an unplugged drive surfaces as kIOReturnNoDevice from the IOKit
- * convenience methods, and the watch core depends on that being
- * mapped to MOS_ERR_NO_DEVICE so its terminal-removal path can fire.
- * Manual mapping at individual callsites is the bug shape this
- * function exists to prevent — every IOReturn-handling site in the
- * adapter should route through here. */
+ * Translate an IOReturn (any int32_t mach-style code) to a mos_error.
+ * Takes int32_t so it lives in the pure layer; the Apple adapter casts
+ * at the call site and static_asserts the SDK constants (mos_scsi.c).
+ * Every IOReturn-handling adapter site must route through here —
+ * notably NoDevice/NotAttached must map to MOS_ERR_NO_DEVICE for the
+ * watch core's terminal-removal path. Groupings at the mapper. */
 mos_error mos_internal_ioreturn_to_error(int32_t rc);
 
 /* ---- Decision-tree core (mos_state_core.c) ------------------------- *
  *
- * The mos_query_state() decision tree operates against a small vtable
- * (mos_mmc_ops_t) whose three callbacks issue the MMC convenience
- * commands the tree consumes. The Apple-side mos_query_state() in
- * mos_state.c fills env from a real mos_handle_t and forwards here.
- * Tests in tests/test_state_core.c provide a fake mos_mmc_ops_t whose
- * callbacks return scripted responses, exercising every branch of the
- * tree without IOKit.
- *
- * Each callback:
- *   - Receives a caller-supplied void *ctx (handle on the real path,
- *     fixture pointer on the test path).
- *   - Returns MOS_OK on success and fills its out-parameter.
- *   - Returns a negative mos_error otherwise. The decision tree's
- *     interpretation of those errors is documented in mos_state_core.c.
- *
- * Division of labour (see mos_state_core.c for the full tree):
- *   - test_unit_ready: the CONVENIENCE TUR, non-exclusive. Trusted for
- *     PRESENCE ("do I have a disc, am I ready"). Runs first, always; a GOOD
- *     status short-circuits to READY without ever taking a lock. Its sense
- *     bytes also enrich the closed branch below.
- *   - get_tray_state: the tray bit, and ONLY the tray bit. The Apple impl
- *     issues a RAW GET EVENT STATUS NOTIFICATION under exclusive access and
- *     reads the door-open bit — never the GetTrayState convenience method,
- *     which hard-codes (closed, success) on a GESN failure and so would
- *     mask a failure as a confident "closed." Reached only when TUR is not
- *     ready (⇒ not mounted ⇒ the lock is free). MOS_OK means *tray_open is
- *     authoritative; ANY error (no lock, or GESN silent) means "no bit" and
- *     the tree forks on the TUR sense instead. A good GESN verdict is never
- *     overturned by the sense.
- *   - get_current_profile: READY-only metadata enrichment.
- *
- * sense buffer is fixed-format 18 bytes per SPC-4 §4.5.3, matching the
- * existing mos_internal_mmc_test_unit_ready() contract. */
+ * mos_query_state()'s decision tree runs against this vtable: the Apple
+ * adapter (mos_state.c) fills it from a real handle, tests script it.
+ * Each callback receives the caller's ctx and either returns MOS_OK and
+ * fills its out-parameter, or returns a negative mos_error. Division of
+ * labour — TUR owns presence, the raw-GESN tray op owns the one tray
+ * bit (never the masking GetTrayState convenience, ARCHITECTURE.md
+ * §9.7), profile is READY-only enrichment — is documented at the tree
+ * (mos_state_core.c). sense is fixed-format 18 bytes (SPC-4 §4.5.3). */
 typedef struct {
     mos_error (*test_unit_ready)    (void *ctx, uint32_t *status,
                                                 uint8_t sense[18]);
@@ -470,10 +410,9 @@ typedef struct {
 
        Splitting mono_ms and wall_ms into two callbacks at the type
        level makes a clock-domain mixup impossible at adapter wiring
-       time: scheduling code calls mono_ms, ts-emission calls
-       wall_ms. The two values are not interchangeable — passing one
-       where the other is expected previously produced a first-poll
-       deadline decades in the future. */
+       time: scheduling code calls mono_ms, ts-emission calls wall_ms.
+       The two values are not interchangeable — a mixup puts the
+       first-poll deadline decades in the future. */
     uint64_t  (*mono_ms)(void *ctx);
 
     /* Returns current WALL-CLOCK time in milliseconds since Unix
@@ -496,8 +435,7 @@ typedef struct {
        The vendor/product/revision pointers are adapter-owned (see
        mos_watch.c's pointer-lifetime invariant); registry_id,
        stream_open_wall_ms, and bsd_unit are plain values with no
-       lifetime constraint — the former composite stream_id string was
-       retired in favor of the two value fields. */
+       lifetime constraint. */
     mos_watch_event         event;
     /* When kind == SLEEP_UNTIL, this is the MONOTONIC-ms deadline
        the caller should sleep until. */
@@ -525,23 +463,13 @@ typedef struct {
     /* State tracking. */
     mos_state_enum last_state;
     bool           have_last_state;
-    /* Error backoff (P2): consecutive identical probe errors escalate the
-       retry interval from transition_poll_ms toward stable_poll_ms by
-       doubling, so a persistently failing probe (another client holding
-       the drive for an hour) emits a bounded error stream instead of one
-       event per transition poll (~18k lines/hour at the 200 ms default).
-       Every error still emits — the stream stays live — only the spacing
-       grows. A success, a different error code, or a notify_wake (which
-       pulls the deadline to 0 regardless) resets the escalation. */
+    /* Error-backoff tracking: consecutive identical probe errors widen
+       the retry interval (escalation rule at the pump, mos_watch_core.c). */
     int32_t        last_probe_err;     /* mos_error of the previous probe, MOS_OK if it succeeded */
     uint32_t       consec_probe_errs;  /* consecutive probes returning last_probe_err */
-    /* Remembered media identity for same-state swap detection (F1). The
-       primary fingerprint is last_media_id (the whole-disk IOMedia registry
-       entry ID); last_profile doubles as the fallback gate on bridges that
-       never expose an id (cross-class swaps only). Both refresh on every
-       event built from a fresh probe; on a no-change probe each refreshes
-       only when non-zero — 0 means "unavailable", never an observation, so
-       a known identity is kept across an unavailability gap. */
+    /* Media identity for same-state swap detection (F1): last_media_id is
+       the fingerprint, last_profile the no-id-bridge fallback. 0 means
+       "unavailable", never an observation. Rules at the pump. */
     uint64_t       last_media_id;
     uint16_t       last_profile;
     uint64_t       next_seq;
@@ -569,8 +497,7 @@ typedef struct {
        adapter: the IORegistry entry ID; tests: any value, 0 included).
      - start_wall_ms: Unix-epoch ms at init time, recorded as
        stream_open_wall_ms on every event. Session identity is the
-       (registry_id, stream_open_wall_ms) pair; the former composite
-       stream_id string is retired.
+       (registry_id, stream_open_wall_ms) pair.
    stable_poll_ms == 0 → 2000ms default; transition_poll_ms == 0 →
    200ms default. */
 void mos_internal_watch_init(mos_watch_state *w,
@@ -796,26 +723,20 @@ mos_error mos_internal_mmc_get_features       (mos_handle_t *h);
    racing on BSD-name re-resolution. */
 uint64_t mos_internal_device_info_registry_id(const mos_device_info_t *i);
 
-/* Open a drive by its IORegistry entry ID (captured during enumeration or
-   from a validated handle). The identity-stable primitive: the kernel
-   resolves IORegistryEntryIDMatching atomically, so the open either returns
-   the SAME io_service_t the ID came from, or NO_DEVICE if that entry has
-   been terminated. Unlike mos_open_by_bsd_name, a reassigned name (hot-unplug
-   + sibling reattach recycling disk4) cannot land it on a different drive —
-   so this is the watch's authority for which drive a session probes. Not in
-   public mos.h: registry IDs are IOKit-specific and shouldn't enter the
-   portable surface. *err_out: NO_DEVICE (entry gone) or IO (dict alloc). */
+/* Open a drive by its IORegistry entry ID — the identity-stable
+   primitive: the kernel resolves IORegistryEntryIDMatching atomically,
+   so this returns the SAME entry the ID came from or NO_DEVICE if it
+   terminated; a recycled BSD name cannot rebind it to a different
+   drive. The watch's authority for which drive a session probes. Not
+   public: registry IDs are IOKit-specific. *err_out: NO_DEVICE or IO. */
 mos_handle_t *mos_internal_open_by_registry_id(uint64_t id,
                                                mos_error *err_out);
 
-/* Exposes the validated io_service_t a handle was opened against, so a caller
-   can transfer registry-level identity without a second BSD lookup (which
-   would open a TOCTOU window — a hot unplug + reattach could rebind to a
-   different drive). Used by mos_watch.c to register kIOGeneralInterest.
-
-   Returns IO_OBJECT_NULL on NULL input. The caller MUST IOObjectRetain the
-   result before mos_close(h) (which drops the handle's own reference); after
-   that, the caller owns the extra retain and must IOObjectRelease it. */
+/* The validated io_service_t a handle was opened against — identity
+   transfer without a second BSD lookup (which would be a TOCTOU window).
+   IO_OBJECT_NULL on NULL input. The caller MUST IOObjectRetain the
+   result before mos_close(h) drops the handle's own reference; the
+   caller then owns the extra retain and must IOObjectRelease it. */
 io_service_t mos_internal_handle_get_service(mos_handle_t *h);
 
 /* ---- Auto-cleanup helpers for IOKit / CoreFoundation refcounts ----- *
@@ -823,8 +744,8 @@ io_service_t mos_internal_handle_get_service(mos_handle_t *h);
  * The cleanup attribute is a gcc/clang extension that runs the named
  * callback when the variable goes out of scope. We use it to make
  * refcount discipline automatic in functions with multiple early-exit
- * paths (iterator loops, two-pass property lookups) where forgetting an
- * explicit release on one branch has bitten us before.
+ * paths (iterator loops, two-pass property lookups) where an explicit
+ * release is easy to miss on one branch.
  *
  * Usage:
  *   io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
@@ -979,9 +900,6 @@ mos_state_enum mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uin
 
 #include <string.h>
 
-/* True if the BSD name looks like a whole-disk entry (diskN or rdiskN)
-   rather than a partition (diskNsM or similar). Pure string predicate;
-   pinned by tests/test_bsd_name.c. */
 bool mos_internal_bsd_name_is_whole_shape(const char *bsd_name)
 {
     if (!bsd_name || !*bsd_name) return false;
@@ -996,14 +914,6 @@ bool mos_internal_bsd_name_is_whole_shape(const char *bsd_name)
     return *p == 0;
 }
 
-/* True if `reported` (a raw DA/IOKit name like "disk4" or "disk4s1") names
-   whole-disk unit `whole_unit` or one of its partition children. Compares
-   the unit numerically so prefix collisions can't match (disk40 vs unit 4 is
-   40 != 4, no "is the next char a digit" reasoning). The suffix must be
-   `(s<digits>)*` — "disk4s1", APFS "disk4s1s2"; "disk4s", "disk4sx",
-   "disk4s1x" are rejected. Pinned by tests/test_bsd_name.c. No in-tree
-   consumers since the DA retirement (2026-06-11; see mos_pure.h) —
-   kept as the pinned partition-child matching rule. */
 bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit)
 {
     if (!reported || whole_unit < 0) return false;
@@ -1025,9 +935,6 @@ bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit)
     return *p == '\0';
 }
 
-/* Normalize any of the four accepted BSD-name forms ("disk4", "rdisk4",
-   "/dev/disk4", "/dev/rdisk4") to the IOKit canonical form ("disk4").
-   Returns a pointer into the input string (no allocation). */
 const char *mos_internal_normalize_bsd_name(const char *in)
 {
     if (!in) return NULL;
@@ -1111,6 +1018,11 @@ mos_error mos_internal_ioreturn_to_error(int32_t rc)
     }
 }
 
+/* READ TOC/PMA/ATIP format 0000b layout (MMC-6 §6.27.2.3): 2-byte TOC
+   Data Length (BE, counts bytes AFTER itself), first/last track; then
+   8-byte descriptors — [1]=ADR<<4|CONTROL, [2]=track (0xAA=lead-out),
+   [4..7]=start LBA (BE, MSF=0). Cross-checked against Linux sr.c /
+   cdrom.h TOC ioctls and libcdio. Contract in mos_pure.h. */
 bool mos_internal_toc_parse(const uint8_t *buf, size_t len, mos_toc *out)
 {
     if (!out) return false;
@@ -1314,21 +1226,11 @@ bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
     return true;
 }
 
-/* Extract the Current Profile from a GET CONFIGURATION (0x46) response,
-   gated on the device-reported Feature Header Data Length so a truncated
-   reply can't be silently read as profile 0x0000 (= "no media").
-
-   Feature Header (MMC-6 §5.4): bytes 0-3 Data Length (big-endian, the count
-   of bytes that FOLLOW this field), bytes 4-5 reserved, bytes 6-7 Current
-   Profile. So the profile field is present only when the drive claims at
-   least 4 following bytes (covering bytes 4-7).
-
-   `len` bounds the buffer (the span you zero-initialized and passed to the
-   command); validity comes from the reply's own Data Length, since the MMC
-   convenience GetConfiguration reports no realized transfer count. Returns
-   true and sets *profile only when the header is present and the Data Length
-   covers the profile field; false (caller treats as "no profile") otherwise.
-   Pure and bounds-checked, so the offsets are fuzz/ASan-verifiable headless. */
+/* Current Profile = feature-header bytes 6-7, gated on the header's own
+   Data Length (bytes 0-3, counting bytes that FOLLOW it): the profile
+   field exists only when the drive claims >= 4 following bytes. The gate
+   is what keeps a truncated reply from being read as profile 0x0000
+   (= "no media"). Header layout above; contract in mos_pure.h. */
 bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
                                          uint16_t *profile)
 {
@@ -1688,9 +1590,9 @@ mos_error mos_internal_query_state_core(const mos_state_env_t *env,
         out->sense_key = sk; out->asc = asc; out->ascq = ascq;
     }
     /* NUB GATE — must equal the kernel's nub predicate, not approximate
-       it (seam audit, Item 2: the old `sk==0 && asc==0 && ascq==0` gate
-       diverged on exactly 11 inputs, mechanically proven by exhaustive
-       enumeration in tests/audit/nub_invariant_check.c).
+       it: the plausible `sk==0 && asc==0 && ascq==0` gate diverges on
+       exactly 11 inputs, mechanically proven by exhaustive enumeration
+       in tests/audit/nub_invariant_check.c.
 
        PollForMedia sets mediaFound on CC + ASC/ASCQ 00/00 INDEPENDENT of
        the sense key (IOSCSIMultimediaCommandsDevice.cpp:3890-3894 — the
@@ -1840,10 +1742,10 @@ enrich:
    would produce nonsense like 1970-01-01T00:00:12Z.
 
    SATURATING: the schema pattern requires a 4-digit year, and the clock
-   is an INPUT to this pure layer (the fourth review's point: the
-   hostile-input discipline applies to ops->wall_ms exactly as it does
-   to drive-controlled bytes — an insane host clock, NTP step, or fuzzed
-   ops table must not produce a schema-invalid line). Values past
+   is an INPUT to this pure layer — the hostile-input discipline applies
+   to ops->wall_ms exactly as it does to drive-controlled bytes; an
+   insane host clock, NTP step, or fuzzed ops table must not produce a
+   schema-invalid line. Values past
    9999-12-31T23:59:59Z clamp to that instant; a 5-digit year from
    strftime (21 chars) and an empty string from a gmtime_r failure are
    both schema violations, so neither can escape. Post-clamp, gmtime_r
@@ -1861,9 +1763,9 @@ static void format_rfc3339(uint64_t wall_ms, char *out, size_t cap)
     time_t secs = (time_t)s64;
     struct tm tm;
     /* gmtime_r: POSIX.1-2008, present on every platform this project
-       compiles on (macOS targets, Linux pure-test CI). A _WIN32/gmtime_s
-       branch used to live here; removed as dead — Windows is neither a
-       build nor a test target, and untestable code is unverifiable. */
+       compiles on (macOS targets, Linux pure-test CI). Deliberately no
+       _WIN32/gmtime_s branch — Windows is neither a build nor a test
+       target, and untestable code is unverifiable. */
     if (gmtime_r(&secs, &tm) != NULL) {
         /* All-numeric strftime specifiers (%Y %m %d %H %M %S) are
            POSIX-defined as locale-independent — locale only affects textual
@@ -2084,8 +1986,8 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
        termination flag and let the next pump emit the device_removed
        event through the terminated path above. This handles the case
        where notifications didn't register (or aren't supported on
-       the OS) — poll-only mode used to spin emitting error events
-       forever when the drive was unplugged; now it terminates. */
+       the OS): without it, poll-only mode would spin emitting error
+       events forever for an unplugged drive. */
     if (perr == MOS_ERR_NO_DEVICE) {
         w->terminated = true;
         fill_event_base(w, &d.event);
@@ -2146,10 +2048,9 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
        events with a fresh probe carry r.bsd_unit directly, but the
        error/device_removed fallback in fill_event_base reads w->bsd_unit
        — which must therefore track the last OBSERVED unit, not the
-       open-time one. This used to be the Apple adapter's job (a direct
-       w->core.bsd_unit write), which meant any second adapter had to
-       rediscover the obligation and the pure-only behavior was wrong;
-       the core owns it now, where the data already is. */
+       open-time one. The CORE owns this update: pushing it to adapters
+       would leave pure-only behavior wrong and make every adapter
+       rediscover the obligation. */
     w->bsd_unit = r.bsd_unit;
 
 
@@ -2424,12 +2325,10 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
         .revision            = h->revision_str[0] ? h->revision_str : NULL,
     };
 
-    /* TODO: ReadDiscInformation — not needed for any state decision, but
-       NOTE(v0.4): its parse bound MUST come from mos_internal_trusted_len
-       (seam contract O-4) — allocated, realized, and header-claimed are
-       three different authorities and only the first two are trusted.
-       would distinguish blank vs finalized discs in --verbose. A 4th vtable
-       entry + an enrichment branch in the core. See ARCHITECTURE.md §4.4. */
+    /* Disc-completion data (blank vs finalized) is deliberately NOT an
+       enrichment branch here: no state decision needs it, so it ships as
+       the on-demand typed query instead (mos_query_disc_info, mos_scsi.c;
+       ARCHITECTURE.md §4.4). */
 
     mos_error rc = mos_internal_query_state_core(&env, &h->result);
     if (rc == MOS_OK) *out = &h->result;
@@ -2869,10 +2768,9 @@ static void watch_interest_callback(void *refcon,
  * latency only, so any setup failure falls back to poll-only
  * (dr_center/dr_source stay NULL; close treats NULL as a no-op).
  *
- * Replaces the DA description-changed wake (DR pivot Phase 2a): DR's
- * notification is DEVICE-scoped where DA's was media-scoped and
- * bsd_unit-filtered, so this doorbell also rings for tray-open /
- * no-media drives, which previously relied on poll + kIOGeneralInterest.
+ * DR's notification is DEVICE-scoped (not media-scoped), so this
+ * doorbell also rings for tray-open / no-media drives (DR pivot
+ * Phase 2a, doc/research/2026-06-10-dr-pivot-implementation-plan.md).
  *
  * The callback filters by registry ID — a parameter, not a structural
  * assumption, so a future watch-all mode widens the filter rather than

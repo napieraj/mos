@@ -134,26 +134,20 @@ mos_error mos_internal_mmc_get_features       (mos_handle_t *h);
    racing on BSD-name re-resolution. */
 uint64_t mos_internal_device_info_registry_id(const mos_device_info_t *i);
 
-/* Open a drive by its IORegistry entry ID (captured during enumeration or
-   from a validated handle). The identity-stable primitive: the kernel
-   resolves IORegistryEntryIDMatching atomically, so the open either returns
-   the SAME io_service_t the ID came from, or NO_DEVICE if that entry has
-   been terminated. Unlike mos_open_by_bsd_name, a reassigned name (hot-unplug
-   + sibling reattach recycling disk4) cannot land it on a different drive —
-   so this is the watch's authority for which drive a session probes. Not in
-   public mos.h: registry IDs are IOKit-specific and shouldn't enter the
-   portable surface. *err_out: NO_DEVICE (entry gone) or IO (dict alloc). */
+/* Open a drive by its IORegistry entry ID — the identity-stable
+   primitive: the kernel resolves IORegistryEntryIDMatching atomically,
+   so this returns the SAME entry the ID came from or NO_DEVICE if it
+   terminated; a recycled BSD name cannot rebind it to a different
+   drive. The watch's authority for which drive a session probes. Not
+   public: registry IDs are IOKit-specific. *err_out: NO_DEVICE or IO. */
 mos_handle_t *mos_internal_open_by_registry_id(uint64_t id,
                                                mos_error *err_out);
 
-/* Exposes the validated io_service_t a handle was opened against, so a caller
-   can transfer registry-level identity without a second BSD lookup (which
-   would open a TOCTOU window — a hot unplug + reattach could rebind to a
-   different drive). Used by mos_watch.c to register kIOGeneralInterest.
-
-   Returns IO_OBJECT_NULL on NULL input. The caller MUST IOObjectRetain the
-   result before mos_close(h) (which drops the handle's own reference); after
-   that, the caller owns the extra retain and must IOObjectRelease it. */
+/* The validated io_service_t a handle was opened against — identity
+   transfer without a second BSD lookup (which would be a TOCTOU window).
+   IO_OBJECT_NULL on NULL input. The caller MUST IOObjectRetain the
+   result before mos_close(h) drops the handle's own reference; the
+   caller then owns the extra retain and must IOObjectRelease it. */
 io_service_t mos_internal_handle_get_service(mos_handle_t *h);
 
 /* ---- Auto-cleanup helpers for IOKit / CoreFoundation refcounts ----- *
@@ -161,8 +155,8 @@ io_service_t mos_internal_handle_get_service(mos_handle_t *h);
  * The cleanup attribute is a gcc/clang extension that runs the named
  * callback when the variable goes out of scope. We use it to make
  * refcount discipline automatic in functions with multiple early-exit
- * paths (iterator loops, two-pass property lookups) where forgetting an
- * explicit release on one branch has bitten us before.
+ * paths (iterator loops, two-pass property lookups) where an explicit
+ * release is easy to miss on one branch.
  *
  * Usage:
  *   io_object_t child MOS_IO_AUTO = IOIteratorNext(it);

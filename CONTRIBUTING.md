@@ -110,6 +110,34 @@ CI enforces this via `nm` on both built static libraries
 (`libmos.a` and `libmos_pure.a` — see CMakeLists.txt for the
 two-tier split rationale). Non-`mos_` symbols fail the build.
 
+## Comment doctrine
+
+Two rules keep commentary useful and bounded (the survey behind them
+is `doc/research/2026-06-11-comment-refactor-plan.md`):
+
+1. **Budget scales with audience.**
+   - `include/mos.h` is the documentation of record for external
+     consumers, who see only opaque types and accessors. Full caller
+     contracts, ownership/lifetime rules, threading, and ABI rationale
+     belong there.
+   - Internal seam headers (`src/mos_pure.h`, `src/mos_internal.h`,
+     `cli/*.h`) address contributors who can open the `.c`. Prototypes
+     get one-to-three-line contracts: args, return domain, ownership
+     when non-obvious. Exception: a cross-cutting safety contract that
+     governs multiple implementations (the dual-length rule) keeps its
+     one full statement in the header, because no single `.c` owns it.
+   - `.c` files carry why-comments at the code — constraints the code
+     cannot express (kernel behavior, spec citations, safety gates) —
+     never restated contracts, never narration of the next line.
+
+2. **Each fact has exactly one home.** Caller contract → header.
+   Implementation why → `.c`, at the relevant lines. Decisions, dates,
+   review/audit provenance → `ARCHITECTURE.md` / `CHANGELOG.md` /
+   `doc/research/`, with a `§` pointer from code. Spec byte layouts →
+   the `.c` that does the parsing. File headers: at most three lines
+   (what the file is, plus the one constraint that governs it).
+   Cross-reference, never restate.
+
 ## What goes in which file
 
 - **`src/mos_sense.c`** — sense parsing, sense-to-state mapping. Pure
