@@ -1,6 +1,5 @@
 /*
- * cli/io.h — shared stdout/stderr writers for the mos command-line
- * tools (mos, mos_probe, mos_notification_probe).
+ * cli/io.h — shared stdout/stderr writers for the mos CLI.
  *
  * The JSON / ASCII escaping *rule* lives once in the library
  * (mos_json_escape / mos_safe_ascii, src/mos_strings.c); these are the

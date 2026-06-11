@@ -42,6 +42,12 @@ void print_usage(FILE *f)
         "  status [drive]    Report drive state (default if no subcommand).\n"
         "  list              List all drives with their states.\n"
         "  watch  [drive]    Stream state events (NDJSON) until SIGINT.\n"
+#ifdef MOS_CLI_PROBE
+        "  probe  <drive>    Diagnostic: stream raw IOKit/DiscRecording\n"
+        "                    notification events (NDJSON, mos.probe.v0)\n"
+        "                    until SIGINT; with --dump, a one-shot\n"
+        "                    DiscRecording Info/Status plist capture.\n"
+#endif
         "Future subcommands (v0.4+ typed APIs, not yet implemented):\n"
         "  ",
         progname);
@@ -61,6 +67,10 @@ void print_usage(FILE *f)
         "      --all         With watch: stream events for EVERY drive\n"
         "                    (hot-plug joins as device_appeared; removal\n"
         "                    is per-drive, the stream continues)\n"
+#ifdef MOS_CLI_PROBE
+        "      --dump        With probe: one-shot DR dictionary capture\n"
+        "                    (text + XML plists; takes no drive argument)\n"
+#endif
         "  -j, --json        Emit JSON (mos.state.v1 / mos.error.v1 /\n"
         "                    mos.list.v1). watch is always NDJSON\n"
         "                    (mos.event.v1); --json is a no-op there.\n"
@@ -95,6 +105,9 @@ enum {
     OPT_BSD = 1000,
     OPT_VERSION,
     OPT_ALL,
+#ifdef MOS_CLI_PROBE
+    OPT_DUMP,
+#endif
 };
 
 static const struct option long_options[] = {
@@ -103,6 +116,11 @@ static const struct option long_options[] = {
     { "list",    no_argument,       0, 'l' },
     { "watch",   no_argument,       0, 'w' },
     { "all",     no_argument,       0, OPT_ALL },
+#ifdef MOS_CLI_PROBE
+    /* Compiled out with the probe so an OFF build rejects --dump as an
+       unknown option (usage + 64) instead of half-recognizing it. */
+    { "dump",    no_argument,       0, OPT_DUMP },
+#endif
     /* optional_argument, not no_argument: lets --json=v2 reach the
        legacy-rejection diagnostic (no_argument would silently discard the
        =value). Bare --json works — optarg defaults to NULL. */
@@ -173,6 +191,18 @@ int main(int argc, char **argv)
             flag_list = true;
         } else if (strcmp(cmd, "watch") == 0) {
             flag_watch = true;
+        } else if (strcmp(cmd, "probe") == 0) {
+#ifdef MOS_CLI_PROBE
+            flag_probe = true;
+#else
+            /* Known verb, compiled out — a specific diagnostic, not the
+               unknown-subcommand or reserved-name message (both would
+               mislead: the verb exists and is not a future typed API). */
+            fprintf(stderr, "%s: 'probe' is not built into this binary "
+                    "(diagnostic subcommand; rebuild with "
+                    "-DMOS_CLI_PROBE=ON)\n", progname);
+            return EX_USAGE;
+#endif
         } else if (is_reserved_subcommand(cmd)) {
             /* cmd is provably one of the five literals here, so escaping is
                unnecessary — done anyway so a future edit that broadens the
@@ -189,8 +219,11 @@ int main(int argc, char **argv)
         } else {
             fprintf(stderr, "%s: unknown subcommand: ", progname);
             mos_cli_safe_ascii(stderr, cmd);
-            fputs("\nRecognized: status, list, watch.\n"
-                  "Reserved (v0.4): ", stderr);
+            fputs("\nRecognized: status, list, watch"
+#ifdef MOS_CLI_PROBE
+                  ", probe"
+#endif
+                  ".\nReserved (v0.4): ", stderr);
             print_reserved_subcommands(stderr);
             fputs(".\n", stderr);
             return EX_USAGE;
@@ -222,6 +255,9 @@ int main(int argc, char **argv)
             case 'l': flag_list  = true;  break;
             case 'w': flag_watch = true;  break;
             case OPT_ALL: flag_all = true; break;
+#ifdef MOS_CLI_PROBE
+            case OPT_DUMP: flag_dump = true; break;
+#endif
             case 'j':
                 if (!reject_legacy_json_version(optarg)) return EX_USAGE;
                 flag_json = true;
@@ -311,6 +347,42 @@ int main(int argc, char **argv)
     /* (--list + selector is rejected above, where the positional
        subject also lands — one guard, one message.) */
 
+#ifdef MOS_CLI_PROBE
+    /* probe is its own dispatch — the one-shot/list/watch flags
+       contradict it. (probe + --all is already rejected above:
+       --all requires --watch, and probe + --watch lands here.) */
+    if (flag_probe && (flag_list || flag_watch)) {
+        fprintf(stderr, "%s: probe cannot be combined with %s\n",
+                progname, flag_list ? "--list" : "--watch");
+        return EX_USAGE;
+    }
+    if (flag_dump && !flag_probe) {
+        fprintf(stderr, "%s: --dump requires the probe subcommand\n",
+                progname);
+        return EX_USAGE;
+    }
+    if (flag_dump && (opt_index || opt_bsd)) {
+        fprintf(stderr, "%s: probe --dump captures every DiscRecording "
+                        "device; a drive argument contradicts it\n",
+                progname);
+        return EX_USAGE;
+    }
+    if (flag_dump && flag_json) {
+        fprintf(stderr, "%s: probe --dump output is plain text + XML "
+                        "plists; --json does not apply\n", progname);
+        return EX_USAGE;
+    }
+    if (flag_probe && !flag_dump && !opt_index && !opt_bsd) {
+        /* No sole-drive default here: the probe is a diagnostic aimed
+           at one explicit drive (or --dump for the whole directory). */
+        fprintf(stderr, "%s: probe requires a drive (index or BSD form) "
+                        "or --dump\n", progname);
+        return EX_USAGE;
+    }
+    /* probe's event stream is NDJSON unconditionally; --json is a
+       no-op there, same documented rule as watch. */
+#endif
+
     if (had_status_subcommand && (flag_list || flag_watch)) {
         fprintf(stderr,
                 "%s: 'status' subcommand cannot be combined with %s\n",
@@ -318,6 +390,9 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 
+#ifdef MOS_CLI_PROBE
+    if (flag_probe) return run_probe();
+#endif
     if (flag_list)  return run_list();
     if (flag_watch) return run_watch();
     return run_query();

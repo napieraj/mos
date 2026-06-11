@@ -25,6 +25,8 @@ extern bool        flag_list;
 extern bool        flag_json;
 extern bool        flag_watch;
 extern bool        flag_all;
+extern bool        flag_probe;    /* probe subcommand (MOS_CLI_PROBE builds) */
+extern bool        flag_dump;     /* probe --dump one-shot DR capture */
 extern const char *progname;
 
 /* stdout finalization (shared one-shot/watch write-outcome fold). */
@@ -72,10 +74,19 @@ int  resolve_index_of(uint64_t reg);
    handle is non-NULL only when *total == 1 and the open succeeded). */
 mos_handle_t *open_sole_drive(mos_error *err, int *total);
 
+/* Resolve a 1-based index to its enumeration snapshot's bsd_unit, one
+   enumeration pass, no drive opens. Returns false when no drive holds
+   that index; on true, *unit may still be -1 = no whole-disk IOMedia
+   node (media absent). */
+bool mos_cli_unit_for_index(int index, int64_t *unit);
+
 /* Command entry points. */
 int run_query(void);   /* status (default) */
 int run_list(void);
 int run_watch(void);
+int run_probe(void);   /* defined only in MOS_CLI_PROBE builds
+                          (cli/probe.c); the sole call site in main.c
+                          is #ifdef-guarded to match. */
 
 void print_usage(FILE *f);
 

@@ -2,9 +2,9 @@
 #
 # Targets:
 #   mos_core                  — static library (the C API; what HandBrake/VLC/ARM link)
-#   mos                       — CLI binary (installable)
-#   mos_probe                 — hardware smoke-test CLI (opt-in, not installed)
-#   mos_notification_probe    — IOKit/DA notification empirical probe (opt-in, not installed)
+#   mos                       — CLI binary (installable; the diagnostic
+#                               'probe' subcommand rides it under
+#                               MOS_CLI_PROBE, default ON)
 #   mos_tests                 — pure-data unit tests (opt-in, on by default)
 #
 # Embedding in a downstream CMake project:
@@ -30,7 +30,7 @@ if(NOT APPLE)
     # On non-Apple, this CMakeLists:
     #   - Builds mos_pure normally (real static library).
     #   - Builds mos_tests normally (links against mos_pure).
-    #   - Skips mos_core, mos, mos_probe (require IOKit/CoreFoundation).
+    #   - Skips mos_core and mos (require IOKit/CoreFoundation).
     #   - Skips the CLI contract test (depends on the mos executable).
     #
     # Downstream CMake consumers that want empty target stubs on non-Apple
@@ -49,7 +49,7 @@ if(NOT APPLE)
         return()
     endif()
     message(STATUS "mac-optical-state: non-Apple platform; building pure layer + tests only "
-                   "(mos_core, mos, mos_probe require IOKit and are skipped). "
+                   "(mos_core and mos require IOKit and are skipped). "
                    "Pass -DMOS_NON_APPLE_STUB=ON for INTERFACE-library stubs instead.")
 endif()
 
@@ -93,7 +93,7 @@ endif()
 # Single source of truth for project warning flags. INTERFACE library
 # means it carries no objects of its own — linking it just propagates the
 # compile options to the consuming target. This way the executables (mos,
-# mos_probe, mos_tests) get the same warnings as the static libraries
+# mos_tests) get the same warnings as the static libraries
 # instead of silently building with compiler defaults. Concrete failure
 # the previous PRIVATE-on-libraries-only setup allowed: a switch on
 # mos_error in cli/common.c with no `default:` case wouldn't warn when a
@@ -154,9 +154,9 @@ set_target_properties(mos_pure PROPERTIES
 
 # --- IOKit-dependent targets gate ---------------------------------------
 #
-# mos_core, the mos CLI, mos_probe, and the CLI contract test all require
-# IOKit, CoreFoundation, and DiskArbitration — frameworks that only exist
-# on Apple platforms.
+# mos_core, the mos CLI, and the CLI contract test all require IOKit,
+# CoreFoundation, and DiscRecording — frameworks that only exist on
+# Apple platforms.
 # On non-Apple platforms, the early-message branch above explained we ship
 # only mos_pure and mos_tests; this gate is what actually enforces it.
 # Without it, find_library(IOKit) errors out at configure time on Linux
@@ -192,8 +192,8 @@ find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
 find_library(DISCRECORDING_FRAMEWORK  DiscRecording  REQUIRED)
 
 # DiskArbitration left the library link line in DR pivot Phase 2a (the
-# watch's DA wake retired; the notification probe still links DA via
-# its own target flags below).
+# watch's DA wake retired) and the project entirely with the probe
+# consolidation (2026-06-11, ROADMAP append): no target links DA.
 target_link_libraries(mos_core
     PUBLIC  mos_pure
             ${IOKIT_FRAMEWORK}
@@ -218,45 +218,25 @@ set_target_properties(mos PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
-# ---- Opt-in: hardware probe --------------------------------------------
-
-option(MOS_BUILD_PROBE "Build the mos_probe smoke-test CLI" OFF)
-if(MOS_BUILD_PROBE)
-    add_executable(mos_probe tools/mos_probe.c cli/io.c)
-    target_link_libraries(mos_probe PRIVATE mos_core mos_warnings)
-    set_target_properties(mos_probe PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-    )
-endif()
-
-# ---- Opt-in: notification-source empirical probe -----------------------
+# ---- Diagnostic 'mos probe' subcommand (default ON) ---------------------
 #
-# tools/mos_notification_probe.c is a standalone diagnostic that
-# subscribes to every plausible push-notification source for a given
-# drive (kIOGeneralInterest, kIOBusyInterest, DA disk-appeared,
-# DA disk-disappeared, DA description-changed, and the DiscRecording
-# Appeared/Disappeared/StatusChanged doorbells) and logs every event
-# as NDJSON; --dr-dump is the one-shot DR Info/Status plist capture
-# (DR-pivot Phase 0). Purpose: characterize empirically which
-# notifications actually fire for which events on which drive class,
-# at what latency. See ROADMAP §"Notification-source empirical probe".
-# Does NOT link against mos_core — uses raw IOKit/DA so observations
-# aren't filtered through mos's own abstractions.
+# cli/probe.c is the consolidated substrate observer (2026-06-11; the
+# former tools/mos_probe and tools/mos_notification_probe — see the
+# ROADMAP append): `mos probe <drive>` streams raw IOKit-interest and
+# DiscRecording notification events as NDJSON, `mos probe --dump` is
+# the one-shot DR Info/Status plist fixture capture. Default ON so the
+# Apple-only, callback-heavy TU is compiled (and contract-tested) on
+# every CI run instead of bitrotting behind an opt-in flag; retiring
+# the command later is one default flip — the OFF build rejects
+# `probe` with a "not built into this binary" diagnostic. No extra
+# frameworks: IOKit/CoreFoundation/DiscRecording already reach the mos
+# target via mos_core's PUBLIC linkage.
 
-option(MOS_BUILD_NOTIFICATION_PROBE
-       "Build the mos_notification_probe diagnostic CLI" OFF)
-if(MOS_BUILD_NOTIFICATION_PROBE)
-    add_executable(mos_notification_probe tools/mos_notification_probe.c cli/io.c)
-    target_link_libraries(mos_notification_probe PRIVATE
-        "-framework CoreFoundation"
-        "-framework IOKit"
-        "-framework DiskArbitration"
-        "-framework DiscRecording"   # DR doorbell legs + --dr-dump (Phase 0)
-        mos_pure        # for mos_internal_normalize_bsd_name and bsd_name_is_whole_shape
-        mos_warnings)
-    set_target_properties(mos_notification_probe PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-    )
+option(MOS_CLI_PROBE
+       "Compile the diagnostic 'mos probe' subcommand into the mos CLI" ON)
+if(MOS_CLI_PROBE)
+    target_sources(mos PRIVATE cli/probe.c)
+    target_compile_definitions(mos PRIVATE MOS_CLI_PROBE=1)
 endif()
 
 endif() # APPLE

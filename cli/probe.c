@@ -1,42 +1,49 @@
-/*
- * mos_notification_probe.c — diagnostic that subscribes to every plausible
- * push-notification source for one optical drive and logs each event as
- * NDJSON (mos.notification_probe.v0) with monotonic + RFC 3339 timestamps.
+/* cli/probe.c — the probe command: diagnostic substrate observer.
+ * Relocated from tools/mos_notification_probe.c (2026-06-11) when the
+ * standalone probes were consolidated into the CLI; compiled in only
+ * under MOS_CLI_PROBE (default ON — see CMakeLists.txt; retiring the
+ * command is one default flip).
  *
- * Purpose: measure empirically which IOKit/DA notifications actually fire
- * for the MMC storage stack, and at what latency — the data the mos watch
- * architecture's "free push notifications" assumption rests on, which
- * Apple's docs don't pin down.
+ * Two modes:
  *
- * Usage: mos_notification_probe <bsd_name>.  Subscribes to:
- *   - kIOGeneralInterest on the io_service_t (IsTerminated, PropertyChange,
- *     BusyStateChange, WasClosed, ...)
- *   - kIOBusyInterest on the io_service_t (BusyStateChange)
- *   - DARegisterDiskDescriptionChangedCallback on the BSD name
- *   - DRNotificationCenter: kDRDeviceAppeared / kDRDeviceDisappeared /
- *     kDRDeviceStatusChanged (device-global — the DR pivot's doorbell
- *     candidates; events for OTHER drives are emitted too, tagged by
- *     whatever identity the info dictionary carries)
- * Runs until SIGINT.
+ *   mos probe <drive>   Subscribe to the empirical push-notification
+ *                       sources for one optical drive and log each
+ *                       event as NDJSON (mos.probe.v0) with monotonic
+ *                       + RFC 3339 timestamps, until SIGINT:
+ *                         - kIOGeneralInterest on the io_service_t
+ *                           (IsTerminated, PropertyChange,
+ *                           BusyStateChange, WasClosed, ...)
+ *                         - kIOBusyInterest on the io_service_t
+ *                         - DRNotificationCenter: kDRDeviceAppeared /
+ *                           kDRDeviceDisappeared / kDRDeviceStatusChanged
+ *                           (device-global — the DR doorbell; events for
+ *                           OTHER drives are emitted too, tagged by
+ *                           whatever identity the info dictionary carries)
  *
- * Usage: mos_notification_probe --dr-dump
- *   One-shot instead: DRCopyDeviceArray order plus each device's
- *   DRDeviceCopyInfo / DRDeviceCopyStatus dictionary as an XML plist,
- *   then exit. This is the Phase 0 fixture-capture mode of the DR
- *   pivot (doc/research/2026-06-10-dr-pivot-implementation-plan.md);
- *   it answers the registry-path-shape and identity-byte-shape
- *   questions the plan lists. (Absorbed from the briefly-separate
- *   mos_dr_probe — one observation tool, not a zoo.)
+ *   mos probe --dump    One-shot instead: DRCopyDeviceArray order plus
+ *                       each device's DRDeviceCopyInfo / DRDeviceCopyStatus
+ *                       dictionary as an XML plist, then exit. This is the
+ *                       DR-pivot fixture-capture mode; it answers the
+ *                       registry-path-shape and identity-byte-shape
+ *                       questions in INTEGRATION_HARNESS.md.
  *
- * Deliberately does NOT link mos_core — only IOKit/CoreFoundation/DA/
- * DiscRecording directly — so it still builds if the library is broken
- * and its observations pass through none of mos's abstractions.
+ * The DiskArbitration legs the standalone tool carried were retired with
+ * the consolidation (2026-06-11, ROADMAP append): DA is filesystem-level,
+ * the DR doorbell is the design's wake source, and no decision depends on
+ * doorbell completeness — doorbells are latency-only over the poll floor
+ * and the kernel itself polls media at 1000 ms.
+ *
+ * The standalone tool deliberately did not link mos_core, so it still
+ * built when the library was broken; that build independence was traded
+ * away in the consolidation. The OBSERVATION path is still raw — events
+ * come straight from IOKit/DiscRecording callbacks and pass through none
+ * of mos's state interpretation.
  */
+#include "common.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <DiscRecording/DRCoreDevice.h>
 #include <DiscRecording/DRCoreNotifications.h>
-#include <DiskArbitration/DiskArbitration.h>
 #include <IOKit/IOBSD.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/IOMessage.h>
@@ -51,14 +58,12 @@
 #include <sysexits.h>
 #include <time.h>
 
-/* mos_pure.h / mos.h give us mos_internal_normalize_bsd_name and the
-   canonical mos_json_escape. These live in the pure layer (no IOKit, no
-   state interpretation), so including them does NOT link mos_core and does
-   not compromise the observe-unfiltered design — and it avoids a second,
-   subtly-different escape rule in the repo. */
+/* mos_pure.h gives us mos_internal_parse_bsd_unit. It lives in the pure
+   layer (no IOKit, no state interpretation), so the observe-unfiltered
+   design is intact — and it avoids a second, subtly-different BSD-name
+   parse rule in the repo. The only cli/ TU that reaches a private
+   header (CONTRIBUTING.md records the exception). */
 #include "../src/mos_pure.h"
-#include "mos.h"
-#include "../cli/io.h"
 
 /* ---- Signal handling --------------------------------------------- */
 
@@ -136,8 +141,8 @@ static const char *message_type_name(uint32_t mt) {
 
 /* Read a CFTypeRef expected to be a CFString into a C buffer. Returns true
    only if it was a CFString and CFStringGetCString succeeded; on false the
-   buffer is left empty. Pre-escape step for CFString-sourced values (DA
-   description keys, IORegistry property strings). */
+   buffer is left empty. Pre-escape step for CFString-sourced values
+   (IORegistry property strings, DR dictionary values). */
 
 static bool cf_string_to_cstr_safe(CFTypeRef cf, char *buf, size_t cap) {
     if (cap == 0) return false;
@@ -163,7 +168,7 @@ static void emit_startup(const char *bsd_name, const char *vendor,
     /* vendor/product are INQUIRY-derived (drive controls the bytes), so all
        strings go through mos_cli_json_str, which quotes and escapes. */
     fputs("{", stdout);
-    fputs("\"schema\":\"mos.notification_probe.v0\"", stdout);
+    fputs("\"schema\":\"mos.probe.v0\"", stdout);
     fputs(",\"event\":\"startup\"", stdout);
     fputs(",\"ts\":", stdout); mos_cli_json_str(stdout, ts);
     printf(",\"mono_ms\":%" PRIu64, mono_ms_since_start());
@@ -185,7 +190,7 @@ static void emit_iokit_event(const char *source,
     char ts[64];
     format_rfc3339_utc(ts, sizeof(ts));
     fputs("{", stdout);
-    fputs("\"schema\":\"mos.notification_probe.v0\"", stdout);
+    fputs("\"schema\":\"mos.probe.v0\"", stdout);
     fputs(",\"event\":\"iokit_message\"", stdout);
     fputs(",\"ts\":", stdout); mos_cli_json_str(stdout, ts);
     printf(",\"mono_ms\":%" PRIu64, mono_ms_since_start());
@@ -206,50 +211,11 @@ static void emit_iokit_event(const char *source,
     fflush(stdout);
 }
 
-static void emit_da_event(const char *event_name,
-                          const char *bsd_name,
-                          CFArrayRef keys) {
-    char ts[64];
-    format_rfc3339_utc(ts, sizeof(ts));
-    fputs("{", stdout);
-    fputs("\"schema\":\"mos.notification_probe.v0\"", stdout);
-    fputs(",\"event\":", stdout); mos_cli_json_str(stdout, event_name);
-    fputs(",\"ts\":", stdout); mos_cli_json_str(stdout, ts);
-    printf(",\"mono_ms\":%" PRIu64, mono_ms_since_start());
-    fputs(",\"source\":\"da\"", stdout);
-    fputs(",\"bsd_name\":", stdout); mos_cli_json_str(stdout, bsd_name);
-    /* For description-changed events, surface which keys changed.
-       Each entry must be validated (CFTypeRef → CFString → C string)
-       and JSON-escaped. Entries that fail validation are skipped
-       entirely, NOT emitted as empty strings, so the comma logic
-       tracks whether any entry has actually been written. */
-    if (keys) {
-        fputs(",\"keys_changed\":[", stdout);
-        CFIndex n = CFArrayGetCount(keys);
-        bool any_emitted = false;
-        for (CFIndex i = 0; i < n; i++) {
-            CFTypeRef k = CFArrayGetValueAtIndex(keys, i);
-            char buf[256];
-            if (!cf_string_to_cstr_safe(k, buf, sizeof(buf))) {
-                /* Not a CFString, or didn't fit in buf. Skip this
-                   entry rather than emit potentially-malformed JSON. */
-                continue;
-            }
-            if (any_emitted) fputc(',', stdout);
-            mos_cli_json_str(stdout, buf);
-            any_emitted = true;
-        }
-        fputc(']', stdout);
-    }
-    fputs("}\n", stdout);
-    fflush(stdout);
-}
-
 static void emit_shutdown(const char *bsd_name, const char *reason) {
     char ts[64];
     format_rfc3339_utc(ts, sizeof(ts));
     fputs("{", stdout);
-    fputs("\"schema\":\"mos.notification_probe.v0\"", stdout);
+    fputs("\"schema\":\"mos.probe.v0\"", stdout);
     fputs(",\"event\":\"shutdown\"", stdout);
     fputs(",\"ts\":", stdout); mos_cli_json_str(stdout, ts);
     printf(",\"mono_ms\":%" PRIu64, mono_ms_since_start());
@@ -265,8 +231,7 @@ static void emit_shutdown(const char *bsd_name, const char *reason) {
  * at log time (we can't recover the interest type from the message
  * alone — both interests can deliver overlapping message sets). */
 struct probe_ctx {
-    char    bsd_name[64];   /* canonical "diskN": NDJSON output + IOKit emit */
-    int64_t bsd_unit;       /* parsed unit: the DA self/partition filter */
+    char bsd_name[64];   /* canonical "diskN": NDJSON output + IOKit emit */
 };
 
 /* ---- DiscRecording source ----------------------------------------- */
@@ -275,13 +240,13 @@ struct probe_ctx {
    is the device's status dict; surface the doorbell-relevant fields
    (tray-open, media state, media BSD name) when present, validated
    and escaped like every other external string. Full dictionaries
-   belong to --dr-dump, not the event stream. */
+   belong to --dump, not the event stream. */
 static void emit_dr_event(CFStringRef name, CFDictionaryRef info)
 {
     char ts[64], buf[256];
     format_rfc3339_utc(ts, sizeof(ts));
     fputs("{", stdout);
-    fputs("\"schema\":\"mos.notification_probe.v0\"", stdout);
+    fputs("\"schema\":\"mos.probe.v0\"", stdout);
     fputs(",\"event\":\"dr_notification\"", stdout);
     fputs(",\"ts\":", stdout); mos_cli_json_str(stdout, ts);
     printf(",\"mono_ms\":%" PRIu64, mono_ms_since_start());
@@ -327,7 +292,7 @@ static void dr_notification_cb(DRNotificationCenterRef center,
     emit_dr_event(name, info);
 }
 
-/* ---- --dr-dump: one-shot DR dictionary capture --------------------- */
+/* ---- --dump: one-shot DR dictionary capture ------------------------ */
 
 /* XML-plist dump of any CF property-list object; the fixture format.
    Not NDJSON on purpose — captures are whole-run redirections and XML
@@ -362,10 +327,10 @@ static int run_dr_dump(void)
 
     CFArrayRef arr = DRCopyDeviceArray();
     long n = arr ? (long)CFArrayGetCount(arr) : 0;
-    printf("mos_notification_probe --dr-dump %s\n", ts);
+    printf("mos probe --dump %s\n", ts);
     printf("DRCopyDeviceArray: %ld device(s)%s\n", n,
            arr ? "" : " (NULL array)");
-    if (!arr) return EX_UNAVAILABLE;
+    if (!arr) return finalize_failure_stdout(EX_UNAVAILABLE);
 
     for (long i = 0; i < n; ++i) {
         DRDeviceRef dev =
@@ -382,7 +347,7 @@ static int run_dr_dump(void)
         if (status) CFRelease(status);
     }
     CFRelease(arr);
-    return EX_OK;
+    return finalize_oneshot_stdout(EX_OK);
 }
 
 static void general_interest_cb(void *refcon,
@@ -409,31 +374,6 @@ static void busy_interest_cb(void *refcon,
                      (uint32_t)messageType,
                      messageArgument,
                      ctx->bsd_name);
-}
-
-static void da_appeared_cb(DADiskRef disk, void *context) {
-    struct probe_ctx *ctx = (struct probe_ctx *)context;
-    if (!ctx) return;
-    const char *bsd = DADiskGetBSDName(disk);
-    if (!mos_internal_bsd_unit_matches(bsd, ctx->bsd_unit)) return;
-    emit_da_event("da_disk_appeared", bsd, NULL);
-}
-
-static void da_disappeared_cb(DADiskRef disk, void *context) {
-    struct probe_ctx *ctx = (struct probe_ctx *)context;
-    if (!ctx) return;
-    const char *bsd = DADiskGetBSDName(disk);
-    if (!mos_internal_bsd_unit_matches(bsd, ctx->bsd_unit)) return;
-    emit_da_event("da_disk_disappeared", bsd, NULL);
-}
-
-static void da_description_changed_cb(DADiskRef disk, CFArrayRef keys,
-                                      void *context) {
-    struct probe_ctx *ctx = (struct probe_ctx *)context;
-    if (!ctx) return;
-    const char *bsd = DADiskGetBSDName(disk);
-    if (!mos_internal_bsd_unit_matches(bsd, ctx->bsd_unit)) return;
-    emit_da_event("da_description_changed", bsd, keys);
 }
 
 /* ---- Service resolution by BSD name ------------------------------ */
@@ -487,52 +427,80 @@ static io_service_t resolve_io_service_by_bsd(const char *bsd_name) {
     return media;
 }
 
-/* ---- Main --------------------------------------------------------- */
+/* ---- Entry point --------------------------------------------------- */
 
-int main(int argc, char **argv) {
-    if (argc == 2 && strcmp(argv[1], "--dr-dump") == 0) {
+int run_probe(void)
+{
+    if (flag_dump) {
         init_timebase();
         return run_dr_dump();
     }
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s <bsd_name> | --dr-dump\n", argv[0]);
-        fprintf(stderr, "  e.g. %s disk4\n", argv[0]);
-        fprintf(stderr, "  --dr-dump: one-shot DiscRecording Info/Status"
-                        " plist capture\n");
-        return EX_USAGE;
-    }
 
     init_timebase();
-    signal(SIGINT, on_sigint);
 
-    /* Parse to the whole-disk unit (-1 for partition/non-whole/malformed).
-       The DA filter matches on the unit; the canonical "diskN" string
-       reconstructed below is what IOBSDNameMatching and the NDJSON need. */
-    int64_t bsd_unit = mos_internal_parse_bsd_unit(argv[1]);
-    if (bsd_unit < 0) {
-        /* argv can carry ANSI/OSC terminal-injection, so escape it even in
-           an error path — same uniform escape rule as everywhere else. */
-        fputs("error: ", stderr);
-        mos_cli_safe_ascii(stderr, argv[1]);
-        fputs(" does not look like a whole-disk BSD name\n"
-              "       (expected forms: disk4, rdisk4, /dev/disk4, /dev/rdisk4)\n",
-              stderr);
-        return EX_USAGE;
+    /* SIGINT/SIGTERM end the stream cleanly. Same shape as run_watch:
+       sigaction without SA_RESTART so the run-loop slice below notices
+       the flag promptly. */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_sigint;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT,  &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+
+    /* Selector → whole-disk unit. main.c guarantees exactly one of
+       opt_bsd / opt_index is set for the stream mode. */
+    int64_t bsd_unit = -1;
+    if (opt_bsd) {
+        /* Parse to the whole-disk unit (-1 for partition/non-whole/
+           malformed). The canonical "diskN" string reconstructed below
+           is what IOBSDNameMatching and the NDJSON need. */
+        bsd_unit = mos_internal_parse_bsd_unit(opt_bsd);
+        if (bsd_unit < 0) {
+            /* opt_bsd is user argv and can carry ANSI/OSC terminal-
+               injection, so escape it even in an error path — same
+               uniform escape rule as everywhere else. */
+            fprintf(stderr, "%s: ", progname);
+            mos_cli_safe_ascii(stderr, opt_bsd);
+            fputs(" does not look like a whole-disk BSD name\n"
+                  "       (expected forms: disk4, rdisk4, /dev/disk4,"
+                  " /dev/rdisk4)\n",
+                  stderr);
+            return EX_USAGE;
+        }
+    } else {
+        if (!mos_cli_unit_for_index(opt_index, &bsd_unit)) {
+            fprintf(stderr, "%s: no drive at index %d (see 'mos list')\n",
+                    progname, opt_index);
+            return EX_NOINPUT;
+        }
+        if (bsd_unit < 0) {
+            /* The drive exists but has no whole-disk IOMedia node (media
+               absent) — and the probe resolves its IOKit service through
+               that node, so there is nothing to subscribe to yet. */
+            fprintf(stderr,
+                    "%s: drive %d has no BSD node (media absent); the probe"
+                    " resolves its service by BSD name —\n"
+                    "     load media first, or give a BSD form directly\n",
+                    progname, opt_index);
+            return EX_UNAVAILABLE;
+        }
     }
 
     /* Reconstruct canonical "diskN" for IOBSDNameMatching / NDJSON. Reject a
        unit that won't format rather than fail resolution with a vaguer error. */
     char bsd_name[16];
     if (!mos_bsd_name_format(bsd_unit, bsd_name, sizeof bsd_name)) {
-        fprintf(stderr, "error: bsd unit %lld is not a valid whole-disk unit\n",
-                (long long)bsd_unit);
+        fprintf(stderr, "%s: bsd unit %lld is not a valid whole-disk unit\n",
+                progname, (long long)bsd_unit);
         return EX_USAGE;
     }
 
     /* Resolve the drive's io_service_t. Fail fast if not found. */
     io_service_t svc = resolve_io_service_by_bsd(bsd_name);
     if (svc == IO_OBJECT_NULL) {
-        fprintf(stderr, "error: no IOKit service for bsd_name=%s\n", bsd_name);
+        fprintf(stderr, "%s: no IOKit service for bsd_name=%s\n",
+                progname, bsd_name);
         return EX_NOINPUT;
     }
 
@@ -563,19 +531,19 @@ int main(int argc, char **argv) {
     /* Set up context for callbacks. */
     struct probe_ctx ctx = {0};
     snprintf(ctx.bsd_name, sizeof(ctx.bsd_name), "%s", bsd_name);
-    ctx.bsd_unit = bsd_unit;
 
     /* Notification port shared by both IOKit interests. */
     IONotificationPortRef port = IONotificationPortCreate(kIOMainPortDefault);
     if (!port) {
-        fprintf(stderr, "error: IONotificationPortCreate failed\n");
+        fprintf(stderr, "%s: IONotificationPortCreate failed\n", progname);
         IOObjectRelease(svc);
         return EX_OSERR;
     }
 
     CFRunLoopSourceRef rls = IONotificationPortGetRunLoopSource(port);
     if (!rls) {
-        fprintf(stderr, "error: IONotificationPortGetRunLoopSource failed\n");
+        fprintf(stderr, "%s: IONotificationPortGetRunLoopSource failed\n",
+                progname);
         IONotificationPortDestroy(port);
         IOObjectRelease(svc);
         return EX_OSERR;
@@ -598,22 +566,6 @@ int main(int argc, char **argv) {
             busy_interest_cb, &ctx, &busy_token);
     if (kr != KERN_SUCCESS) {
         fprintf(stderr, "warning: kIOBusyInterest subscription failed (0x%x)\n", kr);
-    }
-
-    /* Set up DiskArbitration. */
-    DASessionRef da = DASessionCreate(kCFAllocatorDefault);
-    if (!da) {
-        fprintf(stderr, "warning: DASessionCreate failed; DA events disabled\n");
-    } else {
-        DARegisterDiskAppearedCallback(da, NULL,
-                                       da_appeared_cb, &ctx);
-        DARegisterDiskDisappearedCallback(da, NULL,
-                                          da_disappeared_cb, &ctx);
-        DARegisterDiskDescriptionChangedCallback(da, NULL, NULL,
-                                                 da_description_changed_cb,
-                                                 &ctx);
-        DASessionScheduleWithRunLoop(da, CFRunLoopGetCurrent(),
-                                     kCFRunLoopDefaultMode);
     }
 
     /* Set up the DiscRecording notification source (device-global —
@@ -649,32 +601,36 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Run the loop until SIGINT. CFRunLoopRunInMode with a short
-       interval lets us notice the SIGINT flag promptly. */
-    while (!g_interrupted) {
+    /* Run the loop until SIGINT — or until stdout dies. The standalone
+       tool relied on default SIGPIPE delivery to exit when its consumer
+       closed the pipe; inside mos, SIGPIPE is ignored process-wide
+       (main.c), writes return EPIPE, and the emitters' fflush latches
+       sticky ferror — which this condition checks. Without it,
+       `mos probe diskN | head` would spin forever against a dead
+       stream. CFRunLoopRunInMode with a short interval lets us notice
+       both flags promptly. */
+    while (!g_interrupted && !ferror(stdout)) {
         CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.25, true);
     }
 
-    emit_shutdown(bsd_name, "sigint");
-
-    /* Cleanup. */
-    if (da) {
-        /* Full teardown symmetry with mos_watch.c — unschedule,
-           unregister every callback with its registration-time
-           (fn, context) pair, then release — so a future
-           copy-from-probe cannot regress the watch's sequence
-           (fifth review, F12e: only the unregisters were missing). */
-        DASessionUnscheduleFromRunLoop(da, CFRunLoopGetCurrent(),
-                                       kCFRunLoopDefaultMode);
-        DAUnregisterCallback(da, (void *)da_appeared_cb, &ctx);
-        DAUnregisterCallback(da, (void *)da_disappeared_cb, &ctx);
-        DAUnregisterCallback(da, (void *)da_description_changed_cb, &ctx);
-        CFRelease(da);
+    int rc;
+    if (g_interrupted) {
+        emit_shutdown(bsd_name, "sigint");
+        /* Clean write → EX_OK; consumer closed the pipe → still EX_OK
+           (tail -f semantics, same fold as the watch); real write
+           error → EX_IOERR. */
+        rc = finalize_oneshot_stdout(EX_OK);
+    } else {
+        /* stdout failed mid-stream — the stream is dead, so no
+           shutdown envelope; classify the latched failure. */
+        rc = (mos_cli_stdout_finalize() == MOS_CLI_STDOUT_PIPE_CLOSED)
+                 ? EX_OK : EX_IOERR;
     }
+
+    /* Cleanup. Teardown symmetry rule (fifth review, F12e): remove
+       every observer with its registration-time (observer, name)
+       pair, drop the source, then release. */
     if (dr) {
-        /* Same teardown symmetry rule as the DA block above: remove
-           every observer with its registration-time (observer, name)
-           pair, drop the source, then release. */
         DRNotificationCenterRemoveObserver(dr, &ctx,
                                            kDRDeviceAppearedNotification,
                                            NULL);
@@ -695,5 +651,5 @@ int main(int argc, char **argv) {
     IONotificationPortDestroy(port);
     IOObjectRelease(svc);
 
-    return EX_OK;
+    return rc;
 }
