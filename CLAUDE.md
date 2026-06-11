@@ -200,20 +200,8 @@ failure mode.
 
 ## Process
 
-1. If context was compacted, check whether a transcript pointer
-   is in the compaction summary. Concrete first actions if it's
-   there:
-   - Read the last ~20 turns of the transcript before editing.
-   - `git log --oneline -20 src/` to see what actually changed,
-     against what the transcript says was decided.
-   - `git diff <last-tag>..HEAD` to see the v0.next-in-progress
-     delta.
-   - Run the unit tests (`make test` or `cmake --build build &&
-     ctest --test-dir build`) to confirm the tree is green
-     before any edit.
-
-   If no pointer is in the summary, the transcript may not be
-   available — say so rather than guessing what was discussed.
+1. Run the unit tests before the first edit of a session that will
+   modify code — confirm the tree is green before touching it.
 
 2. Append-only with abstraction. Add entries when new failure
    modes are documented; don't rewrite history. Prune quarterly
@@ -222,3 +210,4 @@ failure mode.
 
 3. New entries reference the transcript or session that produced
    them.
+
