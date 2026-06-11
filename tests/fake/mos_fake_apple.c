@@ -79,6 +79,8 @@ static struct {
     uint32_t rdi_status;        uint8_t rdi[64];  size_t rdi_len;
 
     /* Raw-CDB script (the GESN tray probe path). */
+    uint32_t method_rc[4];      /* per-method IOReturn injection (N2);
+                                   indexed by mos_fake_method, 0 = success */
     bool     plugin_fail;
     bool     exclusive_denied;
     uint32_t raw_status;        uint8_t raw[64];  size_t raw_len;
@@ -175,6 +177,11 @@ void mos_fake_set_raw_reply(uint32_t task_status,
 void mos_fake_set_exclusive_denied(bool denied) { g.exclusive_denied = denied; }
 
 void mos_fake_set_plugin_fail(bool fail) { g.plugin_fail = fail; }
+
+void mos_fake_set_method_ioreturn(mos_fake_method m, uint32_t io_return)
+{
+    if ((unsigned)m < 4u) g.method_rc[m] = io_return;
+}
 
 size_t mos_fake_last_cdb(uint8_t out[16])
 {
@@ -399,6 +406,10 @@ static IOReturn mmc_TestUnitReady(void *self, SCSITaskStatus *taskStatus,
                                   SCSI_Sense_Data *senseDataBuffer)
 {
     (void)self;
+    /* N2: a transport failure delivers nothing — outputs untouched. */
+    if (g.method_rc[MOS_FAKE_METHOD_TUR]) {
+        return (IOReturn)g.method_rc[MOS_FAKE_METHOD_TUR];
+    }
     if (taskStatus)      *taskStatus = (SCSITaskStatus)g.tur_status;
     if (senseDataBuffer) memcpy(senseDataBuffer, g.tur_sense, 18);
     return kIOReturnSuccess;
@@ -411,6 +422,9 @@ static IOReturn mmc_GetConfiguration(void *self, SCSICmdField1Byte RT,
                                      SCSI_Sense_Data *senseDataBuffer)
 {
     (void)self; (void)RT; (void)feature; (void)senseDataBuffer;
+    if (g.method_rc[MOS_FAKE_METHOD_GETCONFIG]) {
+        return (IOReturn)g.method_rc[MOS_FAKE_METHOD_GETCONFIG];
+    }
     if (buffer && bufferSize) {
         size_t n = (g.cfg_len < (size_t)bufferSize) ? g.cfg_len : (size_t)bufferSize;
         memset(buffer, 0, bufferSize);
@@ -426,6 +440,9 @@ static IOReturn mmc_ReadDiscInformation(void *self, void *buffer,
                                         SCSI_Sense_Data *senseDataBuffer)
 {
     (void)self; (void)senseDataBuffer;
+    if (g.method_rc[MOS_FAKE_METHOD_READDISCINFO]) {
+        return (IOReturn)g.method_rc[MOS_FAKE_METHOD_READDISCINFO];
+    }
     if (buffer && bufferSize) {
         size_t n = (g.rdi_len < (size_t)bufferSize) ? g.rdi_len : (size_t)bufferSize;
         memset(buffer, 0, bufferSize);
@@ -515,6 +532,9 @@ static IOReturn task_ExecuteTaskSync(void *task,
                                      UInt64 *realizedTransferCount)
 {
     (void)task;
+    if (g.method_rc[MOS_FAKE_METHOD_EXECUTE]) {
+        return (IOReturn)g.method_rc[MOS_FAKE_METHOD_EXECUTE];
+    }
     if (g_task.buf && g_task.buf_len) {
         size_t n = (g.raw_len < g_task.buf_len) ? g.raw_len : g_task.buf_len;
         memset(g_task.buf, 0, g_task.buf_len);
@@ -591,15 +611,19 @@ CFDictionaryRef DRDeviceCopyStatus(DRDeviceRef device)
     return d;
 }
 
-/* PHASE-1 LIMIT (sixth review, N1): both by-name lookups ignore their
-   argument — while the drive is present, ANY well-formed name resolves,
-   so "well-formed but absent → NO_DEVICE" through the by-name open is
-   inexpressible here (pinned only by test_cli.sh on real macOS). Phase
-   2 models name matching against the scenario's actual BSD name. */
+/* Matches the scenario's actual BSD name (N1 closed, phase 2): the
+   adapter documents passing the canonical "diskN" rendering, so a
+   media-less drive (unit < 0) has no name and ANY lookup misses —
+   "well-formed but absent → NO_DEVICE" is now expressible headless. */
 DRDeviceRef DRDeviceCopyDeviceForBSDName(CFStringRef name)
 {
-    (void)name;
-    if (!g.present) return NULL;
+    if (!g.present || g.bsd_unit < 0 || !name) return NULL;
+    char want[32], got[64];
+    snprintf(want, sizeof want, "disk%lld", (long long)g.bsd_unit);
+    if (!CFStringGetCString(name, got, sizeof got, kCFStringEncodingUTF8)) {
+        return NULL;
+    }
+    if (strcmp(got, want) != 0) return NULL;
     return (DRDeviceRef)CFRetain(FAKE_DEV); /* balances the adapter's CFRelease */
 }
 

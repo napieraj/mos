@@ -35,6 +35,12 @@ int mos_tests_failed = 0;
 #define STABLE_MS     2000
 #define TRANSITION_MS 200
 
+/* IOReturn literals for the N2 transport-failure injections. This TU
+   is SDK-header-free; the values are pinned against the SDK by the
+   _Static_asserts in mos_scsi.c. */
+#define FAKE_KIORETURN_TIMEOUT   0xE00002D6u  /* kIOReturnTimeout  */
+#define FAKE_KIORETURN_NO_DEVICE 0xE00002C0u  /* kIOReturnNoDevice */
+
 /* Load a committed fixture into `buf`; returns byte count or aborts. */
 static size_t load_fixture(const char *name, uint8_t *buf, size_t cap)
 {
@@ -186,6 +192,19 @@ static void act_remint_fire_appeared(void *ctx)
     (void)ctx;
     mos_fake_set_drive_id(0x100000BBBull);
     mos_fake_fire_dr_appeared();
+}
+
+static void act_tur_ioreturn_timeout(void *ctx)
+{
+    (void)ctx;
+    mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_TUR, FAKE_KIORETURN_TIMEOUT);
+}
+
+static void act_tur_ioreturn_no_device(void *ctx)
+{
+    (void)ctx;
+    mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_TUR,
+                                 FAKE_KIORETURN_NO_DEVICE);
 }
 
 /* Open a watch on the default drive and consume the snapshot event,
@@ -630,6 +649,113 @@ TEST(all_disappeared_unresolved_falls_to_poll_floor)
     return 0;
 }
 
+TEST(by_name_resolves_only_actual_name)
+{
+    /* N1 closed: the fake matches the scenario's actual BSD name, so
+       the "well-formed but absent → NO_DEVICE" arm — previously pinned
+       only by test_cli.sh on real macOS — runs headless. */
+    mos_fake_reset();
+    mos_fake_watch_reset();
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_bsd_name("disk4", &err);
+    EXPECT(h != NULL);
+    EXPECT_EQ(MOS_OK, err);
+    mos_close(h);
+
+    h = mos_open_by_bsd_name("disk9", &err);   /* well-formed, absent */
+    EXPECT(h == NULL);
+    EXPECT_EQ(MOS_ERR_NO_DEVICE, err);
+
+    mos_watch_t *w = mos_watch_open_by_bsd_name("disk9", STABLE_MS,
+                                                TRANSITION_MS, &err);
+    EXPECT(w == NULL);
+    EXPECT_EQ(MOS_ERR_NO_DEVICE, err);
+    EXPECT_EQ(0, mos_fake_outstanding_notify_objects());
+    return 0;
+}
+
+TEST(tur_transport_timeout_emits_error_event)
+{
+    /* N2 closed, non-terminal arm: a TUR TRANSPORT failure (vs the
+       CHECK-CONDITION path task_status carries) maps kIOReturnTimeout
+       → MOS_ERR_TIMEOUT and surfaces as an error event at the poll. */
+    scenario_ready_at_t0();
+
+    mos_watch_t *w = NULL;
+    uint64_t so = 0;
+    int rc = open_and_take_snapshot(&w, &so);
+    if (rc) return rc;
+
+    mos_fake_step(100, act_tur_ioreturn_timeout, NULL);
+
+    const mos_watch_event *e = NULL;
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 3000));
+    EXPECT_EQ(MOS_EVENT_ERROR, mos_watch_event_kind(e));
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_watch_event_error(e));
+    EXPECT_EQ(2000, mos_fake_clock_now());
+    EXPECT_EQ(so, mos_watch_event_stream_open_ms(e));
+
+    mos_watch_close(w);
+    EXPECT_EQ(0, mos_fake_outstanding_notify_objects());
+    return 0;
+}
+
+TEST(tur_transport_nodevice_is_terminal_removal)
+{
+    /* N2 closed, terminal arm: kIOReturnNoDevice from the transport
+       maps to MOS_ERR_NO_DEVICE, which the watch core converts to a
+       terminal device_removed — the exact dependency the
+       kIOReturnNoDevice _Static_assert in mos_scsi.c names. */
+    scenario_ready_at_t0();
+
+    mos_watch_t *w = NULL;
+    uint64_t so = 0;
+    int rc = open_and_take_snapshot(&w, &so);
+    if (rc) return rc;
+
+    mos_fake_step(100, act_tur_ioreturn_no_device, NULL);
+
+    const mos_watch_event *e = NULL;
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 3000));
+    EXPECT_EQ(MOS_EVENT_DEVICE_REMOVED, mos_watch_event_kind(e));
+    EXPECT_EQ(2000, mos_fake_clock_now());
+    EXPECT_EQ(MOS_ERR_NO_DEVICE, mos_watch_next_event(w, &e, 100));
+
+    mos_watch_close(w);
+    EXPECT_EQ(0, mos_fake_outstanding_notify_objects());
+    return 0;
+}
+
+TEST(gesn_transport_failure_falls_back_to_sense)
+{
+    /* N2 on the raw path: ExecuteTaskSync fails at the transport, so
+       GESN yields no authoritative tray bit and 3A/00 alone classifies
+       EMPTY_OR_OPEN — and the exclusive lock taken for the raw task is
+       still released on the error path (§5.5 both directions). */
+    mos_fake_reset();
+    mos_fake_watch_reset();
+    uint8_t sense[18];
+    make_sense(sense, 0x02, 0x3A, 0x00);
+    mos_fake_set_bsd_unit(-1);
+    mos_fake_set_tur(0x02, sense);
+    mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_EXECUTE,
+                                 FAKE_KIORETURN_TIMEOUT);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    const mos_state_result *r = NULL;
+    EXPECT_EQ(MOS_OK, mos_query_state(h, &r));
+    EXPECT_EQ(MOS_STATE_EMPTY_OR_OPEN, mos_state_result_state(r));
+
+    mos_close(h);
+    EXPECT_EQ(1, mos_fake_lock_acquires());
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    return 0;
+}
+
 int main(void)
 {
     printf("adapter phase-2 (watch lifecycle, fake clock):\n");
@@ -645,6 +771,10 @@ int main(void)
     RUN(all_open_fails_without_doorbell);
     RUN(all_empty_stream_hotplug_join_leave_rejoin);
     RUN(all_disappeared_unresolved_falls_to_poll_floor);
+    RUN(by_name_resolves_only_actual_name);
+    RUN(tur_transport_timeout_emits_error_event);
+    RUN(tur_transport_nodevice_is_terminal_removal);
+    RUN(gesn_transport_failure_falls_back_to_sense);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);
     return mos_tests_failed ? 1 : 0;

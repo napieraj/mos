@@ -74,18 +74,25 @@ void mos_fake_set_readdiscinfo_reply(uint32_t task_status,
    that lies in both directions (under-reports a full transfer, or
    claims more than it delivered). That is exactly the shape the
    seam-contract O-4 realizedByteCount A/B needs; do not "fix" the
-   fake to clamp realized to delivery.
-
-   PHASE-1 LIMIT (N2): the convenience methods (TestUnitReady,
-   GetConfiguration, ReadDiscInformation) always return
-   kIOReturnSuccess — failures are expressible only via task_status.
-   The adapter's transport-failure arms (the IOReturn mapper paths)
-   are therefore unreachable through this fake; per-method IOReturn
-   injection is a phase-2 control. */
+   fake to clamp realized to delivery. */
 void mos_fake_set_raw_reply(uint32_t task_status,
                             const uint8_t *bytes, size_t len,
                             uint64_t realized,
                             const uint8_t sense[18]);
+
+/* Per-method IOReturn injection (N2 closed, phase 2): make one method
+   fail at the TRANSPORT layer — it returns the injected IOReturn and
+   delivers nothing (outputs untouched), reaching the adapter's
+   IOReturn-mapper arms that task_status alone cannot express. Raw
+   IOReturn value (e.g. kIOReturnTimeout 0xE00002D6); 0 restores
+   success. Cleared by mos_fake_reset(). */
+typedef enum {
+    MOS_FAKE_METHOD_TUR          = 0,
+    MOS_FAKE_METHOD_GETCONFIG    = 1,
+    MOS_FAKE_METHOD_READDISCINFO = 2,
+    MOS_FAKE_METHOD_EXECUTE      = 3,  /* ExecuteTaskSync (raw GESN) */
+} mos_fake_method;
+void mos_fake_set_method_ioreturn(mos_fake_method m, uint32_t io_return);
 
 /* Make ObtainExclusiveAccess fail with kIOReturnExclusiveAccess
    (another client holds the drive). Cleared by mos_fake_reset(). */
