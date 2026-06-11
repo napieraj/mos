@@ -110,7 +110,7 @@ few lines, not a script:
 
 ```sh
 while :; do
-    out=$(mos --json) || { sleep 2; continue; }
+    out=$(mos status --json) || { sleep 2; continue; }
     [ "$(printf '%s' "$out" | jq -r .state)" = "ready" ] && break
     sleep 2
 done
