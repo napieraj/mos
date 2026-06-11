@@ -349,10 +349,13 @@ endif()
 # need surrogate headers — deferred, since that would test a
 # transcription instead of the real types). The seam is: link mos_pure
 # + REAL CoreFoundation, and NOT IOKit / DiscRecording — the fake
-# supplies those ~26 symbols (phase 1 needs no watch/notification
-# symbols, so mos_watch.c is excluded). No mos_warnings/-Werror here:
-# this is a behaviour test, and the strict-adapter CI leg already lints
-# these same TUs.
+# supplies the symbols the adapter imports. Two binaries: phase 1
+# (one-shot paths; no watch/notification symbols, mos_watch.c
+# excluded) and phase 2 (adds mos_watch.c + tests/fake/mos_fake_watch.c,
+# whose interposed clock_gettime/nanosleep/CFRunLoopRunInMode must stay
+# OUT of the phase-1 binary). No mos_warnings/-Werror here: these are
+# behaviour tests, and the strict-adapter CI leg already lints the same
+# TUs.
 option(MOS_BUILD_ADAPTER_FAKE "Build the headless adapter test (link-seam fake of IOKit+DiscRecording)" OFF)
 if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
     add_executable(mos_adapter_fake_tests
@@ -378,6 +381,34 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
     add_test(NAME adapter_fake COMMAND mos_adapter_fake_tests)
+
+    # Phase 2: the watch lifecycle through the REAL mos_watch.c, on the
+    # fake clock. Separate executable — its fake TU interposes libc/CF
+    # symbols, and it has its own main.
+    add_executable(mos_adapter_phase2_tests
+        tests/test_adapter_phase2.c
+        tests/fake/mos_fake_apple.c
+        tests/fake/mos_fake_watch.c
+        src/mos_scsi.c
+        src/mos_state.c
+        src/mos_dr.c
+        src/mos_watch.c
+    )
+    target_include_directories(mos_adapter_phase2_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fake
+    )
+    target_compile_definitions(mos_adapter_phase2_tests PRIVATE
+        MOS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+    )
+    target_link_libraries(mos_adapter_phase2_tests PRIVATE
+        mos_pure ${COREFOUNDATION_FRAMEWORK})
+    set_target_properties(mos_adapter_phase2_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+    add_test(NAME adapter_phase2 COMMAND mos_adapter_phase2_tests)
 
     # Phase-2 mechanism probe: settles the time-seam and run-loop
     # interpose questions (design record §12) on real CI hardware,

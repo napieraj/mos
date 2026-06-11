@@ -565,3 +565,5 @@ jobs:
           ./build-adapter/bin/mos_adapter_probe0
           cmake --build build-adapter --target mos_adapter_fake_tests
           ./build-adapter/bin/mos_adapter_fake_tests
+          cmake --build build-adapter --target mos_adapter_phase2_tests
+          ./build-adapter/bin/mos_adapter_phase2_tests

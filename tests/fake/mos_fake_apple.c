@@ -8,9 +8,10 @@
  * CoreFoundation stays linked — CF objects here are genuine.
  *
  * Mechanism and rationale:
- * doc/research/2026-06-11-headless-adapter-emulation.md. This is
- * phase 1 (open / query / enumerate); the watch lifecycle (phase 2)
- * adds mos_watch.c and the notification/run-loop symbols.
+ * doc/research/2026-06-11-headless-adapter-emulation.md. This TU is
+ * phase 1 (open / query / enumerate); the watch lifecycle's
+ * notification and time symbols are phase 2, in mos_fake_watch.c
+ * (linked only into the phase-2 test binary).
  *
  * Model: ONE optical drive. IOKit object handles are small integers
  * (io_object_t is a mach_port_t), resolved through a fixed table; the
@@ -120,6 +121,9 @@ void mos_fake_reset(void)
 void mos_fake_set_no_drive(void) { g.present = false; }
 
 void mos_fake_set_bsd_unit(int64_t unit) { g.bsd_unit = unit; }
+
+void mos_fake_set_drive_id(uint64_t id) { g.drive_id = id; }
+void mos_fake_set_media_id(uint64_t id) { g.media_id = id; }
 
 void mos_fake_set_identity(const char *vendor, const char *product,
                            const char *revision)

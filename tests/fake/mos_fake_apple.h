@@ -10,9 +10,10 @@
  * stays linked). Design record:
  * doc/research/2026-06-11-headless-adapter-emulation.md.
  *
- * Phase 1 scope: a single optical drive, one-shot paths
- * (open/query/enumerate). No notifications, no watch lifecycle — that
- * is phase 2.
+ * Scope: a single optical drive. Phase 1 covers the one-shot paths
+ * (open/query/enumerate); the watch lifecycle (notification delivery,
+ * deterministic time) is phase 2, with its own control surface in
+ * mos_fake_watch.h — linked only into the phase-2 test binary.
  */
 
 #ifndef MOS_FAKE_APPLE_H
@@ -37,6 +38,13 @@ void mos_fake_set_no_drive(void);
 void mos_fake_set_bsd_unit(int64_t unit);
 void mos_fake_set_identity(const char *vendor, const char *product,
                            const char *revision);
+
+/* Override the drive's / whole-disk media's IORegistry entry ID
+   (defaults 0x100000123 / 0x100000456). Re-minting mid-scenario models
+   what xnu's never-reused ID counter does on replug (drive id) and on
+   media swap (media id — the F1 swap fingerprint). */
+void mos_fake_set_drive_id(uint64_t id);
+void mos_fake_set_media_id(uint64_t id);
 
 /* The MMC reply scripts. Bytes are copied into the fake; pass the
    committed fixture bytes. `task_status` is an SCSITaskStatus value
