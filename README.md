@@ -131,6 +131,32 @@ $ mos watch 1
 {"schema":"mos.event.v1","event":"state_changed",...,"bsd":"/dev/disk4","state":"ready",...}
 ```
 
+### Shell integration
+
+The core pattern — block until READY, dispatch by media class — is a
+few lines, not a script:
+
+```sh
+while :; do
+    out=$(mos --json) || { sleep 2; continue; }
+    [ "$(printf '%s' "$out" | jq -r .state)" = "ready" ] && break
+    sleep 2
+done
+case "$(printf '%s' "$out" | jq -r .media_class)" in
+    cd)     cdparanoia -B ;;
+    dvd|bd) makemkvcon ... ;;
+esac
+```
+
+One `mos` invocation per iteration, JSON-once-and-parse, tolerant of
+transient failures. For long-running monitoring use `mos watch`
+instead of the poll loop — one event per transition, no process spawn
+per poll. Everything else composes from tools that already exist:
+tray control is `drutil tray eject` / `drutil tray close`, mount
+control is `diskutil mount` / `diskutil unmount`, CD audio is
+`cdparanoia`, DVD/BD rip is `makemkvcon`, transcode is `HandBrakeCLI`.
+Keep your integration shallow; the power is in composition.
+
 ## Install
 
 ### Homebrew (tap)

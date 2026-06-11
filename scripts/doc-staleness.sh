@@ -27,7 +27,7 @@ FAIL=0
 
 # Live documentation set (archives deliberately excluded).
 LIVE_DOCS="README.md ARCHITECTURE.md CONTRIBUTING.md INTEGRATION_HARNESS.md \
-ROADMAP.md STATUS.md examples/README.md schemas/README.md \
+ROADMAP.md STATUS.md schemas/README.md \
 tests/fixtures/README.md doc/dr-field-mapping.md"
 
 deny() {
@@ -86,7 +86,7 @@ deny 'v0\.3 typed API|v0\.3 introduces' \
 deny 'mos_notification_probe|tools/mos_probe|MOS_BUILD_(NOTIFICATION_)?PROBE|\-\-dr-dump' \
      "probes consolidated into 'mos probe' (cli/probe.c, MOS_CLI_PROBE), 2026-06-11" \
      "README.md ARCHITECTURE.md CONTRIBUTING.md INTEGRATION_HARNESS.md \
-STATUS.md examples/README.md schemas/README.md tests/fixtures/README.md \
+STATUS.md schemas/README.md tests/fixtures/README.md \
 doc/dr-field-mapping.md"
 
 if [ "$FAIL" -eq 1 ]; then

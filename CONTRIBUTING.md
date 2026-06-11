@@ -32,7 +32,6 @@ mac-optical-state/
 ├── docs/                        # NOT tracked documentation: local-only
 │                                #   vendored SDK headers (docs/apple/),
 │                                #   stripped from archives by preflight
-├── examples/                    # shell-integration patterns
 ├── include/
 │   └── mos.h                    # ONLY public header — API surface
 ├── src/
