@@ -91,6 +91,15 @@ in `AGENTS.md`. The chain of files is the audit trail.
   bit because GetTrayState's masking is header-provable, while the
   note's broader claim (no multi-signal GESN polling) still stands.
 
+- `2026-06-11-comment-refactor-plan.md` — Survey and phased plan for
+  deduplicating the comment mass: per-file comment-density table,
+  four bloat categories (header↔.c duplication, history-in-code,
+  ABI-pin boilerplate, narration) with verified instances, a
+  protected load-bearing category that the plan refuses to cut, a
+  public-vs-internal commentary-tier rule plus the single-home rule
+  (both destined for CONTRIBUTING.md), and five comment-only
+  execution phases gated on tests + `dist/` regen.
+
 (An entry for a `2026-04-26-doctrine-review.md` note previously
 appeared in this index; that file was never committed and the entry
 was removed 2026-06-10.)
