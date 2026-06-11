@@ -93,6 +93,23 @@ from that arc:
   enumerates and hands over cheap coarse status; mos interprets and
   enriches. The MMC state engine must not become a DR passthrough.
 
+- **Headless adapter emulation (approved, not yet built).** A link-seam
+  fake of the IOKit + DiscRecording C symbols (~36, real CoreFoundation
+  linked) lets the Apple adapter TUs (`mos_scsi.c`, `mos_dr.c`,
+  `mos_watch.c`) run headless against committed MMC fixtures — closing
+  the one gap where runtime behaviour is currently unverified until a
+  drive is attached. Phase 1 (open/query/enumerate) is weekend-sized;
+  phase 2 (watch lifecycle) is a real subsystem. The point is the
+  **hardware gate collapsing to falsification-only**: adapter behaviour,
+  watch lifecycle, and identity semantics move into CI, leaving the rig
+  only "does Apple's own layer behave as documented" + fixture capture.
+  This is **additive** — it retires hardware-gated *status*, not the
+  pure layer's adversarial fuzz or the exhaustive nub-invariant proof,
+  which test a different (full-octet, hostile) domain and stay. Full
+  build brief, seam inventory, phased plan, and the five-leg
+  cross-validation recipe (against the circular-oracle problem) in
+  `doc/research/2026-06-11-headless-adapter-emulation.md`.
+
 ---
 
 ## Now — v0.4 — typed APIs, tray verbs, drop `raw_cdb`
