@@ -391,6 +391,75 @@ they are authored.
 
 ---
 
+## 12. Phase-2 pickup brief (appended 2026-06-11, after phase 1 landed)
+
+Phase 1 was built from this doc PLUS session context that was never
+written down. This section records that context so a fresh session can
+start without rediscovering it. (The Linux-build open question in §10
+item 4 is settled: macOS-only by design — the fake populates real SDK
+vtable structs.)
+
+**Load before writing anything:**
+1. This doc: §2 (the watch symbols are already in the inventory),
+   §3 items 1 and 4 (the two stateful models phase 2 IS), §4 (scope +
+   the scenario list).
+2. `src/mos_watch.c` IN FULL — it is the spec the fake must satisfy:
+   the DR callback signatures are visible in its own callback
+   definitions (`dr_status_changed_callback` etc.), the private
+   run-loop mode constant, the pump's deadline math, the degraded
+   paths, and the all-mode open's doorbell-or-fail gate.
+3. `src/mos_watch_core.c` header comment (the ops contract, the
+   mono/wall clock domains) and `tests/test_watch_core.c` — the
+   expected event sequences phase-2 scenarios must reproduce through
+   the REAL adapter instead of fake ops.
+4. `tests/fake/mos_fake_apple.{c,h}` and `tests/test_adapter_phase1.c`
+   — extend, don't replace. N1 (by-name matching) and N2 (IOReturn
+   injection) are recorded at their sites as phase-2 controls.
+5. **Exact SDK signatures — fetch, never write from memory.** Phase 1
+   pulled them from the phracker/MacOSX-SDKs GitHub mirror, e.g.
+   `raw.githubusercontent.com/phracker/MacOSX-SDKs/master/
+   MacOSX10.9.sdk/System/Library/Frameworks/IOKit.framework/Versions/
+   A/Headers/IOKitLib.h` (notification-port functions live there;
+   SCSITaskLib.h and CFPlugInCOM.h were already harvested for phase 1).
+   DiscRecording is silently absent from current SDKs but unchanged —
+   old SDKs in the same mirror carry DRCoreDevice.h. Zero
+   signature-mismatch CI iterations in phase 1 is attributable to this
+   step.
+
+**Authoring workflow (the dev container is Linux, no Apple SDK):** the
+fake and adapter TUs cannot compile locally. The loop that worked:
+edit → `gcc -fsyntax-only` the Apple-header-free test TU → push →
+`workflow_dispatch` CI (runs ~40 s) → adapter-fake job verdict. CI is
+the compiler; budget round-trips for it. Build wiring: add
+`src/mos_watch.c` to the `mos_adapter_fake_tests` target and the
+notification symbols to the fake (the CMake comment marks the spot).
+
+**Two design problems §3 names but does not solve — settle these
+FIRST, they are the actual phase-2 work:**
+- *Callback delivery into a parked run loop.* The adapter blocks in
+  `CFRunLoopRunInMode` (private mode); the fake's
+  `IONotificationPortGetRunLoopSource` /
+  `DRNotificationCenterCreateRunLoopSource` must return REAL
+  `CFRunLoopSourceRef`s (CF is linked real) and the fake must wake the
+  loop at scripted points. Candidate mechanism: version-0
+  CFRunLoopSource, signalled (`CFRunLoopSourceSignal` +
+  `CFRunLoopWakeUp`) from inside the fake's scripted probe hooks, so
+  events land between pump steps deterministically and without
+  threads. Unvalidated — prove it on CI before building scenarios on
+  it.
+- *Time control.* `mos_watch.c` has its own static `monotonic_ms()`
+  over real `clock_gettime` — poll-deadline scenarios are
+  nondeterministic unless time is seamed too. Candidate: define
+  `clock_gettime` in the fake TU; calls from TUs statically linked
+  into the same executable should resolve to it ahead of libSystem.
+  **This is the load-bearing unknown of phase 2 — verify with a
+  one-assert CI probe before anything else.** Fallback if it fails:
+  real-time tests with generous tolerances (slower, softer
+  assertions), or accept that wake-ORDER is assertable and wake-TIMING
+  is not.
+
+---
+
 ## 11. Source index (verified during the 2026-06-11 research)
 
 Confidence and provenance for the load-bearing external claims:
