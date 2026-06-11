@@ -230,17 +230,13 @@ int main(int argc, char **argv)
             return EX_USAGE;
         }
         /* Shift past the subcommand word so getopt parses the
-           remaining args from position 1. argv[0] now points at the
-           subcommand word, which getopt skips like a progname.
-           NON-ISSUE on the shipping platform (sixth review F6,
-           rebutted): Apple's getopt_long emits diagnostics via
-           warnx() — getprogname(), the exec-time name, never argv[0]
-           (apple-oss-distributions/Libc, stdlib/FreeBSD/
-           getopt_long.c) — so macOS binaries print "mos: ..."
-           regardless of this shift. The "watch: unrecognized option"
-           artifact is glibc reading argv[0], visible only in Linux
-           review environments where the CLI neither builds nor ships.
-           Nothing to fix; recorded so the finding stays closed. */
+           remaining args from position 1. Copy the real program name
+           into the slot getopt will see as argv[0] first: getopt's
+           own diagnostics keep the real progname on every libc
+           (glibc prints argv[0]; Apple's warnx/getprogname never
+           reads it). The subcommand word was already consumed by the
+           dispatch above — nothing references it past this point. */
+        argv[1] = argv[0];
         argc--;
         argv++;
     }
