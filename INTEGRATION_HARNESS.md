@@ -154,8 +154,20 @@ the §5.5 nub invariant, TUR exclusivity, IOReturn pins, the GESN CDB
    assertion on every non-READY scenario, O-3 as ASan-checked
    vendor/product reads on a live result through the REAL adapter. The
    same job pins the §5.5 lock balance (acquired-exactly-once AND
-   returned-to-zero) and the GESN CDB bytes. What hardware still owes
-   this item is only V-1:*
+   returned-to-zero) and the GESN CDB bytes.*
+   *Status 2026-06-11, phase 2 (tests/test_adapter_phase2.c): the
+   watch lifecycle and identity semantics joined the same job — the
+   REAL mos_watch.c on a fake clock replays snapshot/state-change/
+   removal (notification AND poll-floor paths), the F1 and replug
+   registry-ID re-mints, stream_open_ms constancy and uniqueness
+   across streams, the error-backoff cadence in exact fake
+   milliseconds, watch-all join/leave/rejoin with the doorbell-or-fail
+   open gate, and the IOReturn-mapper arms including
+   kIOReturnNoDevice → terminal removal. What that CANNOT vouch for is
+   unchanged in kind: whether APPLE's kext/DiscRecording behave as the
+   fake models them — which is exactly items 1 and 6 below, plus
+   fixture capture (item 2). What hardware still owes THIS item is
+   only V-1:*
    - **V-1**: eject and re-insert while running one-shot queries;
      confirm `bsd_unit` flips to -1 and back driven by NODE absence
      (e.g. state `loading` with unit still -1 mid-spin-up is correct),
@@ -167,8 +179,12 @@ the §5.5 nub invariant, TUR exclusivity, IOReturn pins, the GESN CDB
    during a real insert; compare mount latency to a no-watch baseline,
    watch IORegistry for repeated nub teardown. Retires the §5.5
    backward-flip and UA slivers. While there: two rapid `mos --watch`
-   opens on the same drive must show distinct `stream_open_ms` values
-   (pins the per-process monotonicization end-to-end).
+   opens on the same drive must show distinct `stream_open_ms` values.
+   *(2026-06-11: the monotonicization mechanism itself is now pinned
+   headless — adapter-fake phase 2's replug scenario asserts distinct
+   stream_open_ms across two streams on a controlled wall clock; what
+   this run still owes is the real-kext/DR delivery behaviour around
+   it.)*
 2. **Fixture acquisitions** for paths currently spec-only:
    descriptor-format sense (0x72/0x73) from a real device; a bridge
    that omits `media_id` (exercises the profile-fallback swap path);
@@ -195,8 +211,10 @@ the §5.5 nub invariant, TUR exclusivity, IOReturn pins, the GESN CDB
 6. **DR doorbell setup failure in practice**: `mos_watch_open_all` now
    fails the open if `DRNotificationCenterCreate` / run-loop source
    creation fails. (The CI doorbell guard proves driveless
-   REGISTRATION is accepted on every push; what stays here is
-   callback DELIVERY and any environment where registration fails.)
+   REGISTRATION is accepted on every push; adapter-fake phase 2
+   exercises the fail-the-open gate and full callback delivery through
+   OUR fake center — what stays here is delivery through APPLE's real
+   DiscRecording, and any environment where registration fails.)
    If a real Mac ever shows this failing, that observation funds the
    rescan-fallback decision parked in ROADMAP (2026-06-11 intake
    remainders).
