@@ -77,8 +77,8 @@ struct mos_watch_event {
 /* ---- Fixed-buffer capacities -------------------------------------- *
  *
  * Sizes for the transient BSD-name strings that appear only at I/O
- * boundaries — reading kIOBSDNameKey in the adapter, the DA reported
- * name, argv in the probes. Drive identity itself is an int64 unit
+ * boundaries — reading kIOBSDNameKey in the adapter, argv in the
+ * probes. Drive identity itself is an int64 unit
  * (mos_*_bsd_unit), not a string; these caps bound only the short-lived
  * names that get parsed to a unit (or formatted from one) and discarded.
  *
@@ -120,7 +120,7 @@ bool mos_internal_bsd_name_is_whole_shape(const char *bsd_name);
    identity. Pinned by tests/test_bsd_name.c. */
 int64_t mos_internal_parse_bsd_unit(const char *name);
 
-/* True if `reported` (a raw DA/IOKit BSD name, e.g. "disk4" or
+/* True if `reported` (a raw IOKit-reported BSD name, e.g. "disk4" or
    "disk4s1") names whole-disk unit `whole_unit` itself or one of its
    partition children. The unit is compared numerically (disk40 vs unit 4
    is 40 != 4) and the suffix validated as `(s<digits>)*`; false for NULL,
