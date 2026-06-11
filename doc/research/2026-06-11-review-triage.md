@@ -116,6 +116,75 @@ evidence (disassembly or Apple doc), dated, recorded here. The
 in the same artifact as a candidate doctrinal annotation; nothing
 new to add from this audit.
 
+**RESOLVED (2026-06-11, maintainer + session convergence).** Design
+discussion record; supersedes the (a)/(b) fork above. Decision:
+
+1. **Raw storage everywhere; escaping is per-surface display armor.**
+   `list_row` stores raw identity; `mos_safe_ascii` moves from row
+   construction to the TABLE emitter only. All three JSON surfaces
+   (state/event/list) then emit byte-faithful identity through
+   `mos_cli_json_str` — identical bytes by invariant. (E1's original
+   divergence fix = option (a).)
+2. **Ingestion gate at the anticipated single home**
+   (`mos_internal_dr_copy_identity_from_info`): unpad TRAILING
+   spaces only (SPC defines them as wire padding, not data —
+   idempotent with the kernel's own StripWhiteSpace) and compute
+   per-field validity = every byte in 0x20–0x7E. No other mutation:
+   leading/interior spaces are in-charset data, and byte-exactness
+   is what makes pre/post-flash equality checks trustworthy.
+3. **Explicit out-of-band signal, attribution-free.** New OPTIONAL
+   field `identity_nonprintable` (array, closed enum
+   ["vendor","product","revision"]) on mos.state.v1, mos.event.v1,
+   and mos.list.v1 rows, emitted only when non-empty. Semantics are
+   scoped to OUR input boundary: "the delivered value contains
+   bytes outside printable ASCII." NOT a drive-conformance verdict —
+   we never see wire INQUIRY, only the kext→registry→DR→CFString
+   pipeline's output, so cause (hostile drive, corrupted firmware,
+   lossy bridge, platform transformation) is deliberately
+   unattributed. SPC's role is to justify the PREDICATE (the
+   legitimate end-to-end domain is ASCII-graphic, the one subdomain
+   the platform pipeline verifiably carries faithfully), not to be
+   the thing we claim to enforce. One-way evidence, documented:
+   flagged ⇒ some link deviated; unflagged ⇒ delivered-clean only —
+   closed layers could launder garbage before we see it.
+4. **Field semantics documented at the directory boundary:**
+   identity is "as delivered by the platform device directory
+   (DiscRecording)," explicitly not wire INQUIRY. Wire-truth
+   verification is out of scope (one-raw-CDB rule).
+5. **Why in-band sentinels lost:** `mos_safe_ascii`'s \xNN form is
+   ambiguous (literal backslash passes through unescaped —
+   verified, src/mos_strings.c), and any bracket-style sentinel is
+   forgeable by in-charset data. The bytes stay in the value;
+   the signal rides beside it.
+6. **Why whole-field-absent lost:** it conflates "no information"
+   with "information: the value is garbage" — the latter is the
+   operationally useful observation (drive-farm firmware-flash
+   verification persona). Absent (`null`) remains reserved for
+   DR genuinely providing nothing usable.
+7. **Cache/freshness caveat (recorded inference, falsifiable):**
+   the kernel parses INQUIRY once at nub attach and the registry/DR
+   cache it for the attachment's lifetime; a firmware flash
+   refreshes identity only via re-enumeration, which re-mints
+   registry_id by xnu construction. Flash-verification workflows
+   must therefore confirm registry_id CHANGED across the flash —
+   an unchanged id means cached pre-flash identity. mos already
+   emits registry_id in every envelope, so the workflow is
+   (registry_id, vendor, product, revision) comparison. Inference
+   consistent with the 2005 source (InterrogateDevice in the attach
+   path) and mos's own REPLUG axiom; the hardware leg can falsify
+   with a real flash if it ever matters.
+
+Implementation checklist (one commit, per the schema ADR's
+pre-tag in-place rule): gate + validity bitmask in mos_dr.c →
+plumbing through result/event/list_row → three emitters →
+schema updates (field + pattern notes) → positive AND negative
+fixtures → README contract section → validate.py if it gains an
+enum check. C-API conformance accessor deferred to the v0.4 typed
+work (library consumers already receive raw bytes). NOTE: the CLI
+and adapter TUs do not compile in the Linux dev container — the
+pure tests and schema suite gate what they can; macOS CI is the
+compile gate for the rest.
+
 ### E2. "Profile-class change" fallback compares raw profile codes
 
 **Verified.** `profile_class_changed_without_id`
