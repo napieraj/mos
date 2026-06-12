@@ -300,11 +300,11 @@ TEST(adapter_da_volume_lookup_modalities)
     EXPECT(name[0] == 0 && path[0] == 0);
 
     /* Mounted with a name. */
-    mos_fake_set_da_volume("ARRIVAL_4K_UHD", "/Volumes/ARRIVAL_4K_UHD");
+    mos_fake_set_da_volume("ARRIVAL", "/Volumes/ARRIVAL");
     EXPECT(mos_internal_da_volume("disk4", name, sizeof name,
                                   path, sizeof path));
-    EXPECT(strcmp(name, "ARRIVAL_4K_UHD") == 0);
-    EXPECT(strcmp(path, "/Volumes/ARRIVAL_4K_UHD") == 0);
+    EXPECT(strcmp(name, "ARRIVAL") == 0);
+    EXPECT(strcmp(path, "/Volumes/ARRIVAL") == 0);
 
     /* Present but unmounted (description without VolumePath):
        false, both empty — DA describes unmounted media too. */

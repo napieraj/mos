@@ -2,17 +2,17 @@
   "schema": "mos.metadata.v1",
   "bsd": "/dev/disk4",
   "captured_at": "2026-06-12T19:48:00.123Z",
-  "volume_path": null,
+  "volume_path": "/Volumes/ARRIVAL",
   "disc": {
-    "profile": "0x0040",
-    "class": "bd",
+    "profile": "0x0010",
+    "class": "dvd",
     "toc": {
-      "first_track": 1, "last_track": 1, "leadout_lba": 12219392,
+      "first_track": 1, "last_track": 1, "leadout_lba": 3824640,
       "tracks": [
         {"track": 1, "adr": 1, "control": 4, "data": true, "start_lba": 0}
       ]
     },
     "disc_info": null,
-    "volume_name": null
+    "volume_name": "ARRIVAL"
   }
 }

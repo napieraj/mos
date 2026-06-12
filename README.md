@@ -119,13 +119,13 @@ $ mos watch
 ### Metadata (disc identity)
 
 ```
-$ mos metadata 1
+$ mos metadata 1            # pressed DVD video — these genuinely mount
      BSD:  /dev/disk4
-  Volume:  ARRIVAL_4K_UHD
-    Path:  /Volumes/ARRIVAL_4K_UHD
- Profile:  bd  bd_rom  (0x0040)
-    Disc:  complete, 1 session, 1 track
-     TOC:  tracks 1-1, lead-out LBA 12219392
+  Volume:  ARRIVAL
+    Path:  /Volumes/ARRIVAL
+ Profile:  dvd  dvd_rom  (0x0010)
+    Disc:  -
+     TOC:  tracks 1-1, lead-out LBA 3824640
 ```
 
 `mos metadata --json` emits one `mos.metadata.v1` document. Its `disc`
@@ -137,7 +137,11 @@ fields, computed consumer-side. Unreadable facts emit `null`; partial
 readability is the normal regime, not an error. The volume name/path
 are mount-sourced only (one synchronous DiskArbitration description
 read): a present-but-unmounted disc reads `null` by design — sector
-reads are the consumer's privilege and parsing burden.
+reads are the consumer's privilege and parsing burden. That null is
+the NORMAL reading for BD/UHD video: those discs typically do not
+mount on macOS (the rip workload's common case), so their identity
+rides on profile/TOC/disc-info while `volume_name` carries
+DVD-video, audio-CD ("Audio CD"), and data-disc labels.
 
 ### Drive (static facts)
 

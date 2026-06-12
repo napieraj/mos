@@ -414,3 +414,15 @@ known-good implementations (session of record: the stage-1 kickoff).
   as ISO-8859-1; CRC bytes present but unverified in libcdio);
   book-type discrimination via READ DVD STRUCTURE format 00h when
   profile alone is ambiguous.
+
+**Correction (2026-06-12, same session):** the original stage-1 sketch
+above illustrates `volume_path` with `/Volumes/MY_MOVIE_UHD` — a
+mounted UHD title. Per this doc's own matrix row ("UDF BD/UHD video
+often does not auto-mount; MakeMKV prefers unmounted"), that is not
+the typical reading: BD/UHD video normally presents as
+media-present-unmounted on macOS, so the volume fields read null and
+identity rides on profile/TOC/disc-info. The shipped fixtures and
+README examples reflect this — the flagship `mos.metadata.v1` example
+is an unmounted UHD BD; the mounted examples are a DVD-video volume,
+an audio CD (macOS's generic "Audio CD" label), and data discs, which
+genuinely mount. The historical sketch above is left as written.
