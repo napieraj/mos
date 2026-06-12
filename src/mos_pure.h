@@ -219,6 +219,13 @@ size_t mos_internal_trusted_len(size_t allocated, size_t transferred,
 bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
                                       size_t *cursor, mos_config_feature *out);
 
+/* First feature matching `feature_code`, via the walker (same trust
+   bounds). False when absent or the walk fails closed. The v0.4 drive
+   verb reads AACS (0x010D) presence/version through this. */
+bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
+                                      uint16_t feature_code,
+                                      mos_config_feature *out);
+
 /* Current Profile from a GET CONFIGURATION response; false ("no
    profile") unless the reply's own Data Length covers the field, so a
    truncated reply is never read as profile 0x0000 (= "no media").

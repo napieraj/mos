@@ -95,6 +95,23 @@ bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
     return true;
 }
 
+/* Find one feature by code: the walker applied until a match. Same
+   trust bounds by construction; first match wins (MMC lists each
+   feature at most once — a duplicate from a hostile device yields the
+   earlier copy, never a re-scan). */
+bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
+                                      uint16_t feature_code,
+                                      mos_config_feature *out)
+{
+    if (!out) return false;
+    size_t cursor = 8;                            /* skip the feature header */
+    mos_config_feature f;
+    while (mos_internal_config_next_feature(buf, len, &cursor, &f)) {
+        if (f.feature_code == feature_code) { *out = f; return true; }
+    }
+    return false;
+}
+
 /* Current Profile = feature-header bytes 6-7, gated on the header's own
    Data Length (bytes 0-3, counting bytes that FOLLOW it): the profile
    field exists only when the drive claims >= 4 following bytes. The gate

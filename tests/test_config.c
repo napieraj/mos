@@ -561,8 +561,53 @@ TEST(config_payload_ending_exactly_at_span_is_accepted)
     return 0;
 }
 
+TEST(config_find_feature_returns_match_with_payload)
+{
+    /* Profile List, then an AACS descriptor (0x010D, version 2 in the
+       header bits, 4 payload bytes: BNG, nonce blocks, AGIDs, AACS
+       version 68 — the MMC-6 AACS feature shape). */
+    uint8_t buf[] = {
+        0,0,0,16,  0,0, 0x00,0x40,
+        0x00,0x00, 0x03, 0x00,
+        0x01,0x0D, 0x09, 0x04,  0x01, 0x00, 0x01, 68,
+    };
+    mos_config_feature f;
+    EXPECT(mos_internal_config_find_feature(buf, sizeof buf, 0x010D, &f));
+    EXPECT(f.feature_code == 0x010D);
+    EXPECT(f.current);
+    EXPECT(f.version == 2);
+    EXPECT(f.data_len == 4 && f.data != NULL);
+    EXPECT(f.data[3] == 68);
+    /* Earlier feature is reachable too — find is not a tail scan. */
+    EXPECT(mos_internal_config_find_feature(buf, sizeof buf, 0x0000, &f));
+    EXPECT(f.feature_code == 0x0000);
+    return 0;
+}
+
+TEST(config_find_feature_absent_or_hostile_is_false)
+{
+    uint8_t buf[] = {
+        0,0,0,8,  0,0, 0x00,0x10,
+        0x00,0x00, 0x03, 0x00,
+    };
+    mos_config_feature f;
+    EXPECT(!mos_internal_config_find_feature(buf, sizeof buf, 0x010D, &f));
+    /* Misaligned Additional Length ends the walk before any match:
+       fail-closed propagates to not-found. */
+    uint8_t bad[] = {
+        0,0,0,8,  0,0, 0x00,0x10,
+        0x01,0x0D, 0x03, 0x03,
+    };
+    EXPECT(!mos_internal_config_find_feature(bad, sizeof bad, 0x010D, &f));
+    EXPECT(!mos_internal_config_find_feature(NULL, 0, 0x010D, &f));
+    EXPECT(!mos_internal_config_find_feature(bad, sizeof bad, 0x010D, NULL));
+    return 0;
+}
+
 void register_config_tests(void)
 {
+    RUN(config_find_feature_returns_match_with_payload);
+    RUN(config_find_feature_absent_or_hostile_is_false);
     RUN(config_payload_ending_exactly_at_span_is_accepted);
     RUN(config_walks_real_dvdrom_profile_list);
     RUN(config_walks_two_well_formed_features);
