@@ -331,6 +331,33 @@ assert_ec          "watch sans --json: exit 66"          "66"   "$EC"
 assert_contains    "watch sans --json: envelope present" "$OUT" '"schema":"mos.error.v1"'
 assert_single_line "watch sans --json: one NDJSON line"  "$OUT"
 
+# Test 25a: bare `mos` is an entry point, not a status query (retired
+# implicit-status default, 2026-06-12): exit 64, NOTHING on stdout.
+# stderr carries the drive table + hint (drives attached) or the
+# no-drives line + usage (none) — non-empty either way, so these pins
+# hold on both a driveless CI runner and a developer's Mac.
+run_mos
+assert_ec     "bare mos exits 64 (entry point)"  "64" "$EC"
+assert_equals "bare mos stdout is empty"         ""   "$OUT"
+ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
+[ -n "$ERR" ] || { echo "FAIL: bare mos stderr is empty (expected table+hint or usage)"; fail=$((fail+1)); }
+
+# Test 25b: positional registry-id selector and its dispatch boundary
+# (the xnu floor 2^32+256 = 4294967552; pure-pinned in
+# tests/test_bsd_name.c, contract-pinned here). At the floor the digits
+# resolve as a registry id: well-formed, absent attachment -> 66 with
+# the structured envelope. One below the floor they resolve as an
+# index, which parse_index rejects (> INT32_MAX) -> usage 64. A value
+# too big for uint64 is rejected as out of range -> 64.
+run_mos status 4294967552 --json
+assert_ec       "registry-id selector absent: exit 66"   "66"   "$EC"
+assert_contains "registry-id selector: error envelope"   "$OUT" '"schema": "mos.error.v1"'
+assert_contains "registry-id selector: no_device"        "$OUT" '"code": "no_device"'
+run_mos status 4294967551
+assert_ec "floor-1 resolves as index, invalid: exit 64"  "64"   "$EC"
+run_mos status 99999999999999999999
+assert_ec "selector beyond uint64: out of range, 64"     "64"   "$EC"
+
 # Test 26: probe subcommand (MOS_CLI_PROBE consolidation, 2026-06-11).
 # Bare `mos probe` exits 64 in BOTH build states: usage error ("probe
 # requires a drive ... or --dump") when compiled in, the not-built
