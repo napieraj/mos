@@ -346,3 +346,71 @@ identical-drives case gets its first-order answer (class), and the
 volume name follows in v0.3.x/v0.4 with the adapter wiring, Mac-smoke
 items (DA name on a mounted disc; PVD name on an unmounted data disc;
 null on a blank), and fixtures from real media via `mos_probe`.
+
+## Addendum 2026-06-12 — stage-1 reconciliation + canonical-implementation research
+
+The 06-10 design above predates two tree changes and is now
+reconciled against them plus a research pass over the named
+known-good implementations (session of record: the stage-1 kickoff).
+
+**Decisions taken (maintainer + session):**
+
+1. **Volume name/path source: DiskArbitration, re-admitted narrowly.**
+   The 06-11 DA retirement was about the watch's wake callbacks and
+   the probe's control arm — neither returns. The metadata path gets
+   a ONE-SHOT, callback-free `DADiskCopyDescription` lookup
+   (VolumeName/VolumePath keys), gated on the media nub existing
+   (bsd_unit present; no IOMedia → fields null, DA never called).
+   Requires the dated AGENTS.md append when the wiring lands.
+2. **Verbs are `mos metadata` and `mos drive`** (per the taxonomy
+   above); the reserved-subcommand list's `identity` is their fossil
+   and retires when they land. `capacity/tray/speed/features` stay
+   reserved.
+3. **Serial ships null in stage 1** with the VPD-0x80-vs-convenience
+   question as a recorded Mac falsifier. A raw INQUIRY would need the
+   AGENTS raw-verb showing; stage 1 does not attempt it.
+4. **TOC route stays convenience `ReadTableOfContents`** (format
+   0000b, LBA), parsed by the shipped `mos_internal_toc_parse`.
+   Falsifier noted: libcdio's macOS driver reads the kernel's
+   full-TOC blob from `kIOCDMediaTOCKey` (zero commands, CD-only,
+   different wire shape — POINT descriptors, A0/A1/A2, MSF); if the
+   convenience RTOC misbehaves on real hardware, that property is
+   the kernel-authored fallback to evaluate.
+
+**Research findings (full agent reports in the session transcript):**
+
+- **READ DISC INFORMATION byte map confirmed five ways** (dvd+rw-
+  mediainfo, Linux kernel uapi, QEMU scsi-disk, libburn, systemd
+  cdrom_id): status `b2&3`, last-session `(b2>>2)&3`, erasable
+  `b2&0x10`, sessions `9<<8|4`, tracks `10<<8|5` / `11<<8|6`,
+  declared length excludes itself (+2). Zero disagreement;
+  `mos_discinfo.c` matches and is stricter than every reference
+  (dvd+rw trusts fixed offsets in a 32-byte alloc; libcdio decodes
+  only the erasable bit and never reads the reply length).
+- **Schema-prose obligations:** disc_status `11b` ("other") is the
+  NORMAL regime for DVD-RAM/BD-RE random-access media (libburn
+  pivots on it; dvd+rw-mediainfo suppresses DVD-RAM per-track info
+  as meaningless). Document, don't special-case.
+- **TOC defenses to pin in fixtures** (libcdio osx/gnu_linux
+  drivers): skip `adr != 1` descriptors; bound tracks to [1,99] and
+  clamp counts; first/last by min/max scan, not header trust;
+  missing lead-out = identity loss (the existing `leadout_lba:
+  null` rule); reject `next_lba <= start_lba`.
+- **Validation posture confirmed** (dvd+rw-mediainfo + libcdio
+  converge): two-phase fetch at the drive's declared length, clamp
+  to local buffer, zero-init reply buffers, bail on arithmetic
+  impossibilities, whitelist-and-default enums, NO per-vendor
+  branching (sole exception in 25 years of dvd+rw-tools: a Sony TOC
+  control-byte bit). This is the dual-length/GESN doctrine already
+  in force; no posture change.
+- **MediaInfo is file-only** (no SCSI/ioctl/device code in either
+  MediaArea repo; optical = parsing IFO/BDMV/ISO bytes off a mounted
+  filesystem) — a living example of the consumer-side boundary the
+  matrix's volume-name row draws.
+- **Stage-2 notes banked:** BG format status (RDI byte 7 & 3, with
+  the REQUEST SENSE progress-percent read when "in progress");
+  CD-TEXT structural gates (18-byte packs, multiple-of-18 length,
+  block count ≤ 8, charset codes lie — libcdio treats declared-ASCII
+  as ISO-8859-1; CRC bytes present but unverified in libcdio);
+  book-type discrimination via READ DVD STRUCTURE format 00h when
+  profile alone is ambiguous.
