@@ -2,6 +2,7 @@
  * command over cli/common; adding a verb = a new cli/<verb>.c + a
  * dispatch line below. */
 #include "common.h"
+#include "mos_pure.h"   /* mos_internal_value_is_registry_id (selector floor) */
 
 #include <errno.h>
 #include <getopt.h>
@@ -39,9 +40,11 @@ void print_usage(FILE *f)
         "Report the state of a macOS optical drive.\n"
         "\n"
         "Subcommands:\n"
-        "  status [drive]    Report drive state (default if no subcommand).\n"
+        "  status [drive]    Report drive state (default when only flags are given).\n"
         "  list              List all drives with their states.\n"
-        "  watch  [drive]    Stream state events (NDJSON) until SIGINT.\n"
+        "  watch  [drive]    Stream state events (NDJSON) until SIGINT;\n"
+        "                    all drives unless a drive narrows it (hot-plug\n"
+        "                    joins; removal is per-drive, stream continues).\n"
 #ifdef MOS_CLI_PROBE
         "  probe  <drive>    Diagnostic: stream raw IOKit/DiscRecording\n"
         "                    notification events (NDJSON, mos.probe.v0)\n"
@@ -62,11 +65,6 @@ void print_usage(FILE *f)
         "  -i, --index N     1-based drive index (the Index column in\n"
         "                    'mos list'); explicit form of the positional\n"
         "      --bsd NAME    BSD form; explicit form of the positional\n"
-        "  -l, --list        List drives and exit\n"
-        "  -w, --watch       Stream state events (NDJSON) until SIGINT\n"
-        "      --all         With watch: stream events for EVERY drive\n"
-        "                    (hot-plug joins as device_appeared; removal\n"
-        "                    is per-drive, the stream continues)\n"
 #ifdef MOS_CLI_PROBE
         "      --dump        With probe: one-shot DR dictionary capture\n"
         "                    (text + XML plists; takes no drive argument)\n"
@@ -77,7 +75,7 @@ void print_usage(FILE *f)
         "  -h, --help        Show this help\n"
         "      --version     Show version\n"
         "\n"
-        "Environment (--watch only; integer ms, 0..3600000, 0 = library\n"
+        "Environment (watch only; integer ms, 0..3600000, 0 = library\n"
         "default; out-of-range or non-numeric warn on stderr, use default):\n"
         "  MOS_WATCH_STABLE_MS      poll period in stable states (default 2000)\n"
         "  MOS_WATCH_TRANSITION_MS  poll period in transitional states (default 200)\n"
@@ -85,7 +83,8 @@ void print_usage(FILE *f)
         "States: open, empty, loading, ready, busy, formatting,\n"
         "        media_unreadable, device_fault, empty_or_open, unknown\n"
         "Exit:   sysexits.h codes — 0 on observed state, 64 usage, 66 no\n"
-        "        device, 69 unavailable, 71 OS err, 74 I/O, 75 temp-fail.\n",
+        "        device, 69 unavailable, 70 internal, 71 OS err, 74 I/O,\n"
+        "        75 temp-fail.\n",
         f);
 }
 
@@ -104,7 +103,6 @@ static void print_version(void)
 enum {
     OPT_BSD = 1000,
     OPT_VERSION,
-    OPT_ALL,
 #ifdef MOS_CLI_PROBE
     OPT_DUMP,
 #endif
@@ -113,9 +111,6 @@ enum {
 static const struct option long_options[] = {
     { "index",   required_argument, 0, 'i' },
     { "bsd",     required_argument, 0, OPT_BSD },
-    { "list",    no_argument,       0, 'l' },
-    { "watch",   no_argument,       0, 'w' },
-    { "all",     no_argument,       0, OPT_ALL },
 #ifdef MOS_CLI_PROBE
     /* Compiled out with the probe so an OFF build rejects --dump as an
        unknown option (usage + 64) instead of half-recognizing it. */
@@ -168,26 +163,42 @@ int main(int argc, char **argv)
        disposition). Default SIGPIPE kills the process on a closed
        downstream pipe; ignoring it makes writes return EPIPE instead, which
        the watch emitters detect (fflush + ferror) and turn into a clean
-       EX_OK exit. Installed for all subcommands, not just --watch: even
+       EX_OK exit. Installed for all subcommands, not just watch: even
        `mos --json | head -c0` can race SIGPIPE between printf and flush.
        Invariant: the emit paths must keep honoring fflush return values —
        discarding them reintroduces the kill-on-pipe-close bug. signal()
        here cannot fail (SIG_IGN is always installable). */
     signal(SIGPIPE, SIG_IGN);
 
+    /* Bare `mos` is an entry point, not an implicit status (the
+       single-drive default was a carryover from the one-word-stdout
+       era; retired 2026-06-12). Drive table + hint to stderr, EX_USAGE. */
+    if (argc == 1) {
+        static list_row rows[MOS_CLI_LIST_CAP];
+        int n = 0;
+        int total = collect_and_query(rows, &n);
+        if (total > 0) {
+            fprintf(stderr, "%s: no subcommand; %d drive%s present:\n",
+                    progname, total, total == 1 ? "" : "s");
+            emit_list_table(stderr, rows, n, false);
+            fprintf(stderr, "\nTry `%s status%s` or `%s --help`.\n",
+                    progname, total == 1 ? "" : " <index>", progname);
+        } else {
+            fprintf(stderr, "%s: no optical drives attached.\n\n", progname);
+            print_usage(stderr);
+        }
+        return EX_USAGE;
+    }
+
     /* Subcommands are additive aliases for the flag forms, recognized only
        when argv[1] is a bare word (flag-first invocations reach getopt
        unchanged). The five v0.4 names are reserved so a premature use gets
        a clearer diagnostic than "unknown subcommand". */
-    bool had_status_subcommand = false;
     if (argc >= 2 && argv[1][0] != '-' && argv[1][0] != '\0') {
         const char *cmd = argv[1];
 
         if (strcmp(cmd, "status") == 0) {
-            /* implicit-status default; no flag to set, but track the
-               explicit subcommand so we can reject `mos status --list`
-               and `mos status --watch` as contradictory. */
-            had_status_subcommand = true;
+            /* implicit-status default; nothing to set. */
         } else if (strcmp(cmd, "list") == 0) {
             flag_list = true;
         } else if (strcmp(cmd, "watch") == 0) {
@@ -242,7 +253,7 @@ int main(int argc, char **argv)
     }
 
     int c;
-    while ((c = getopt_long(argc, argv, "i:ljwh", long_options, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "i:jh", long_options, NULL)) != -1) {
         switch (c) {
             case 'i': {
                 int v = parse_index(optarg);
@@ -258,9 +269,6 @@ int main(int argc, char **argv)
             case OPT_BSD:
                 opt_bsd = optarg;
                 break;
-            case 'l': flag_list  = true;  break;
-            case 'w': flag_watch = true;  break;
-            case OPT_ALL: flag_all = true; break;
 #ifdef MOS_CLI_PROBE
             case OPT_DUMP: flag_dump = true; break;
 #endif
@@ -277,11 +285,11 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Positional drive subject (doc/research/2026-06-10-cli-design.md):
-       one bare argument; SYNTACTIC disambiguation — all digits = index,
-       anything else = a bsd form (the library parse accepts disk4 /
-       rdisk4 / /dev/diskN). --registry-id (future) stays flag-only: its
-       large decimals would collide with the index grammar. */
+    /* Positional drive subject: one bare argument, SYNTACTIC dispatch —
+       non-digit = a bsd form (disk4 / rdisk4 / /dev/diskN); all digits
+       split on the xnu registry-ID floor (mos_pure.h): at/above
+       2^32+256 = registry id, below = drutil-style index. Disjoint by
+       kernel construction, so no fallback chain. */
     if (optind < argc) {
         const char *subject = argv[optind];
         if (optind + 1 < argc) {
@@ -301,14 +309,27 @@ int main(int argc, char **argv)
         for (const char *p = subject; *p; p++)
             if (*p < '0' || *p > '9') { all_digits = false; break; }
         if (all_digits) {
-            int v = parse_index(subject);
-            if (v < 0) {
-                fprintf(stderr, "%s: invalid drive index: ", progname);
+            errno = 0;
+            unsigned long long big = strtoull(subject, NULL, 10);
+            if (errno == ERANGE) {
+                fprintf(stderr, "%s: drive selector out of range: ",
+                        progname);
                 mos_cli_safe_ascii(stderr, subject);
                 fputc('\n', stderr);
                 return EX_USAGE;
             }
-            opt_index = v;
+            if (mos_internal_value_is_registry_id(big)) {
+                opt_registry = (uint64_t)big;
+            } else {
+                int v = parse_index(subject);
+                if (v < 0) {
+                    fprintf(stderr, "%s: invalid drive index: ", progname);
+                    mos_cli_safe_ascii(stderr, subject);
+                    fputc('\n', stderr);
+                    return EX_USAGE;
+                }
+                opt_index = v;
+            }
         } else {
             opt_bsd = subject;
         }
@@ -317,7 +338,7 @@ int main(int argc, char **argv)
 
     /* list enumerates everything — a positional subject alongside it is
        the same contradiction as the flag forms below. */
-    if (flag_list && (opt_index > 0 || opt_bsd != NULL)) {
+    if (flag_list && (opt_index > 0 || opt_bsd != NULL || opt_registry)) {
         fprintf(stderr,
                 "%s: list takes no drive argument (it enumerates all)\n",
                 progname);
@@ -330,44 +351,19 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 
-    if (flag_list && flag_watch) {
-        fprintf(stderr, "%s: --list and --watch are mutually exclusive\n",
-                progname);
-        return EX_USAGE;
-    }
-
-    /* --all is watch-only (sit on the bus) and takes the whole bus —
-       a drive selector contradicts it. */
-    if (flag_all && !flag_watch) {
-        fprintf(stderr, "%s: --all requires --watch (or the watch "
-                        "subcommand)\n", progname);
-        return EX_USAGE;
-    }
-    if (flag_all && (opt_index || opt_bsd)) {
-        fprintf(stderr, "%s: --all watches every drive; a selector "
-                        "(--index/--bsd/positional) contradicts it\n",
-                progname);
-        return EX_USAGE;
-    }
-
-    /* (--list + selector is rejected above, where the positional
+    /* (list + selector is rejected above, where the positional
        subject also lands — one guard, one message.) */
 
 #ifdef MOS_CLI_PROBE
-    /* probe is its own dispatch — the one-shot/list/watch flags
-       contradict it. (probe + --all is already rejected above:
-       --all requires --watch, and probe + --watch lands here.) */
-    if (flag_probe && (flag_list || flag_watch)) {
-        fprintf(stderr, "%s: probe cannot be combined with %s\n",
-                progname, flag_list ? "--list" : "--watch");
-        return EX_USAGE;
-    }
+    /* (Verb-vs-verb contradictions are unrepresentable since verbs come
+       only from the one-word dispatch — flags-as-commands retired
+       2026-06-12.) */
     if (flag_dump && !flag_probe) {
         fprintf(stderr, "%s: --dump requires the probe subcommand\n",
                 progname);
         return EX_USAGE;
     }
-    if (flag_dump && (opt_index || opt_bsd)) {
+    if (flag_dump && (opt_index || opt_bsd || opt_registry)) {
         fprintf(stderr, "%s: probe --dump captures every DiscRecording "
                         "device; a drive argument contradicts it\n",
                 progname);
@@ -388,13 +384,6 @@ int main(int argc, char **argv)
     /* probe's event stream is NDJSON unconditionally; --json is a
        no-op there, same documented rule as watch. */
 #endif
-
-    if (had_status_subcommand && (flag_list || flag_watch)) {
-        fprintf(stderr,
-                "%s: 'status' subcommand cannot be combined with %s\n",
-                progname, flag_list ? "--list" : "--watch");
-        return EX_USAGE;
-    }
 
 #ifdef MOS_CLI_PROBE
     if (flag_probe) return run_probe();

@@ -1,3 +1,8 @@
+# typed: true
+# frozen_string_literal: true
+
+# CLI + pure-C library reporting macOS optical drive state (tray
+# open, closed-empty, loading, ready) by querying the drive directly.
 class Mos < Formula
   desc "Report macOS optical drive state (tray open, empty, ready, ...) via SCSI MMC"
   homepage "https://github.com/napieraj/mos"
@@ -32,8 +37,8 @@ class Mos < Formula
   # rejects users on supported OS versions. If the floor ever moves
   # up, both files change together — search for the literal "12.0"
   # in CMakeLists.txt to find the single source of truth.
-  depends_on macos: :monterey
   depends_on "cmake" => :build
+  depends_on macos: :monterey
 
   def install
     system "cmake", "-B", "build",

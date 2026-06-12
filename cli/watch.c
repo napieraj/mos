@@ -6,7 +6,7 @@
 #include <string.h>
 #include <sysexits.h>
 
-/* ---- Signal handling (--watch) ----------------------------------------- *
+/* ---- Signal handling (watch) ------------------------------------------- *
  *
  * SIGINT during a watch loop should terminate cleanly: stop pumping,
  * close the watch handle, exit 0. A volatile sig_atomic_t flag is the
@@ -201,36 +201,24 @@ int run_watch(void)
 
     mos_error err = MOS_OK;
     mos_watch_t *w = NULL;
-    if (flag_all) {
-        /* Sit on the bus: every drive, hot-plug joins, per-drive
-           removal. Selector conflicts were rejected in main(). */
-        w = mos_watch_open_all(stable_ms, transition_ms, &err);
-    } else if (opt_bsd) {
+    bool single_target = (opt_bsd || opt_index || opt_registry);
+    if (opt_bsd) {
         /* Same as run_query: the library parse normalizes; don't duplicate. */
         w = mos_watch_open_by_bsd_name(opt_bsd, stable_ms, transition_ms, &err);
     } else if (opt_index) {
         w = mos_watch_open_by_index(opt_index, stable_ms, transition_ms, &err);
+    } else if (opt_registry) {
+        w = mos_watch_open_by_registry_id(opt_registry, stable_ms,
+                                          transition_ms, &err);
     } else {
-        /* No selector: same contract as status (usage text; CLI design
-           2026-06-10, "Multi-drive default") — implied only when
-           exactly one drive is attached, EX_USAGE with the mini-list
-           when several are. The count pass is a bare enumeration (no
-           probe, no open); the mini-list's probe pass runs only on
-           the error path, mirroring run_query's economy. Zero drives
-           falls through to the open, which fails into the normal
-           NDJSON error envelope. */
-        int total = mos_cli_count_drives();
-        if (total > 1) {
-            static list_row rows[MOS_CLI_LIST_CAP];
-            int n = 0;
-            (void)collect_and_query(rows, &n);
-            fprintf(stderr,
-                    "%s: %d drives present; select one, e.g. `%s watch 2`:\n",
-                    progname, total, progname);
-            emit_list_table(stderr, rows, n, false);
-            return EX_USAGE;
-        }
-        w = mos_watch_open_by_index(1, stable_ms, transition_ms, &err);
+        /* No selector: the bus. Watch is a stream tool, so the default
+           is total coverage (journalctl -f shape) — a selector NARROWS.
+           Zero drives is a valid empty stream that waits for hot-plug;
+           the doorbell-unavailable case fails honestly (open_all
+           contract, mos.h). Retired here: the sole-drive default
+           (terminated on eject — every monitoring script needed a
+           restart loop) and the --all flag (2026-06-12). */
+        w = mos_watch_open_all(stable_ms, transition_ms, &err);
     }
 
     if (!w) return emit_unknown_and_fail("could not open drive for watch",
@@ -297,13 +285,14 @@ int run_watch(void)
             return EX_IOERR;
         }
 
-        if (!flag_all &&
+        if (single_target &&
             mos_watch_event_kind(ev) == MOS_EVENT_DEVICE_REMOVED) {
             rc = EX_OK;  /* Clean exit on device removal — watch ended. */
             break;
         }
-        /* In --all mode device_removed is per-drive and the stream
-           continues (mos.h open_all contract); only SIGINT/pipe ends it. */
+        /* On the bus (no selector) device_removed is per-drive and the
+           stream continues (mos.h open_all contract); only SIGINT/pipe
+           ends it. */
     }
 
     mos_watch_close(w);

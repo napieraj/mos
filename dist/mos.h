@@ -3,8 +3,9 @@
  *
  * Pure-C public surface for querying macOS optical drive state via
  * MMCDeviceInterface. Raw SCSITaskDeviceInterface access is exposed
- * only through mos_raw_cdb() for diagnostics; it is not on the
- * default state-query path. See ARCHITECTURE.md §3 for why.
+ * through mos_raw_cdb(); the default state path issues one raw CDB
+ * (GESN) on its not-ready branch, briefly taking the exclusive lock
+ * — safe by the nub invariant. See ARCHITECTURE.md §3/§5.5.
  *
  * Design goals:
  *   - Trivially embeddable in non-macOS-specific C/C++ projects.
@@ -226,8 +227,8 @@ void mos_enumerate_devices(mos_enumerate_cb cb, void *ctx);
 int64_t mos_device_info_bsd_unit(const mos_device_info_t *);
 
 /* The drive service's IORegistry entry ID for an enumeration entry —
-   the attachment identity; the value `--registry-id` will select by
-   and the one mos.state.v1/mos.event.v1 carry. 0 if unavailable. */
+   the attachment identity mos_open_by_registry_id selects by and the
+   one mos.state.v1/mos.event.v1 carry. 0 if unavailable. */
 uint64_t mos_device_info_registry_id(const mos_device_info_t *);
 
 /* Render a whole-disk unit to its canonical BSD name ("diskN") in buf.
@@ -247,6 +248,14 @@ bool mos_bsd_name_format(int64_t unit, char *buf, size_t cap);
  */
 mos_handle_t *mos_open_by_index(int one_based, mos_error *err_out);
 mos_handle_t *mos_open_by_bsd_name(const char *bsd_name, mos_error *err_out);
+
+/* Open by IORegistry entry ID — the attachment identity every result
+   and event carries as registry_id (xnu mints real IDs >= 2^32+256,
+   never reused). Selects "this exact attachment": after a replug or
+   firmware flash the old ID yields MOS_ERR_NO_DEVICE — itself the
+   confirmation that attachment is gone. */
+mos_handle_t *mos_open_by_registry_id(uint64_t registry_id,
+                                      mos_error *err_out);
 
 /*
  * Open the drive an enumeration callback is currently visiting. Call
@@ -272,8 +281,9 @@ mos_handle_t *mos_open_device(const mos_device_info_t *info,
 int64_t mos_handle_bsd_unit(const mos_handle_t *h);
 
 /*
- * Query drive state. Uses MMC convenience methods by default (no exclusive
- * access required). `out` is REQUIRED — NULL returns MOS_ERR_INVALID_ARG
+ * Query drive state. Uses MMC convenience methods, plus one raw GESN
+ * on the not-ready branch (briefly takes the exclusive lock; see
+ * ARCHITECTURE.md §5.5 for why that cannot collide with a mount). `out` is REQUIRED — NULL returns MOS_ERR_INVALID_ARG
  * (unlike the optional err_out parameters elsewhere). On success returns
  * MOS_OK and points *out at a handle-owned result; on failure returns a
  * negative code with *out set to NULL. Read it through the
@@ -468,6 +478,11 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
                                      uint32_t transition_poll_ms,
                                      mos_error *err_out);
 
+mos_watch_t *mos_watch_open_by_registry_id(uint64_t registry_id,
+                                           uint32_t stable_poll_ms,
+                                           uint32_t transition_poll_ms,
+                                           mos_error *err_out);
+
 /* Open a watch on EVERY optical drive — sit on the bus. The stream
    multiplexes per-drive events, demuxed by registry_id (and bsd when
    media is present); seq is stream-global. Contract differences from
@@ -498,7 +513,8 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
        join time); (registry_id, stream_open_ms) stays per-session
        unique because a replug re-mints the registry_id.
      - Up to 16 concurrently watched drives; arrivals beyond that are
-       ignored until a slot frees.
+       dropped for that plug session (no rescan when a slot frees — a
+       replug re-announces the drive).
    mos_watch_bsd_unit() returns -1 on an all-watch (no single unit).
    Threading/run-loop contract is identical to the single-target opens. */
 mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
@@ -548,7 +564,7 @@ const char *mos_profile_name(uint16_t profile_code);
    or NULL when no class applies (0x0000 no-profile, MO, legacy
    removable, unknown codes). The class is derived from the MMC profile
    number ranges, so it costs nothing beyond the GET CONFIGURATION the
-   state query already performs — this is what lets `--list`-style
+   state query already performs — this is what lets `mos list`-style
    output distinguish "the BD in drive A" from "the DVD in drive B" on
    identical hardware. Finer disambiguation (volume name) is the v0.4
    media-info work; see doc/research/2026-06-10-media-info-design.md. */
@@ -573,7 +589,7 @@ int mos_error_sysexit(mos_error e);
 /* Retry hint for consuming adapters: true for errors that
    typically clear on retry within seconds (BUSY, TIMEOUT,
    EXCLUSIVE_ACCESS); false for errors that won't clear without
-   external action (INVALID_ARG, NO_DEVICE, DRIVER_REJECTED,
+   external action (INVALID_ARG, NO_DEVICE, DRIVER_REJECTED, IO,
    UNSUPPORTED, OOM). MOS_OK returns false (no retry needed). */
 bool mos_error_is_recoverable(mos_error e);
 

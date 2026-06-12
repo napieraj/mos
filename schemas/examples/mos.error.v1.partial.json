@@ -5,7 +5,7 @@
   "error": {
     "code": "timeout",
     "message": "drive did not respond before deadline",
-    "context": "could not query state",
+    "context": "query failed",
     "recoverable": true
   }
 }

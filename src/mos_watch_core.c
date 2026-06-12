@@ -428,23 +428,21 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
           the strong signal; both ids must be non-zero (0 = identity
           unavailable, never inferred from).
 
-       2. Profile-class change with NO usable identity — some USB-ATAPI bridges
-          never expose a media_id (both 0). There a changed *non-zero* current
-          profile (e.g. CD-ROM 0x08 → DVD-ROM 0x10) is the only evidence a swap
-          happened, so we use last_profile as the fallback fingerprint. This
-          still cannot see a same-class swap (DVD-R → DVD-R) on such bridges —
-          no signal exists there — but it catches cross-class swaps that would
-          otherwise be silent. */
+       2. Profile change with NO usable identity — some USB-ATAPI bridges
+          never expose a media_id (both 0). ANY non-zero profile change
+          fires (cross-class 0x08→0x10 and same-class 0x10→0x11 alike): a
+          different profile with no identity means a different disc. A
+          same-PROFILE swap (DVD-R → DVD-R) is invisible here. */
     bool id_changed =
         r.media_id != 0 && w->last_media_id != 0 &&
         r.media_id != w->last_media_id;
-    bool profile_class_changed_without_id =
+    bool profile_changed_without_id =
         r.media_id == 0 && w->last_media_id == 0 &&
         r.current_profile != 0 && w->last_profile != 0 &&
         r.current_profile != w->last_profile;
 
     if (r.state == MOS_STATE_READY && w->last_state == MOS_STATE_READY &&
-        (id_changed || profile_class_changed_without_id)) {
+        (id_changed || profile_changed_without_id)) {
         fill_event_base(w, &d.event);
         d.event.kind       = MOS_EVENT_MEDIA_CHANGED;
         d.event.prev_state = w->last_state;   /* READY → READY */
@@ -553,6 +551,7 @@ mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
        is 16, an index sort would be ceremony). Returning on the first
        EMIT keeps per-call work bounded; the next call re-enters at the
        lowest id, so same-tick events drain in id order. */
+    _Static_assert(MOS_WATCH_ALL_CAP <= 64, "visited bitmask is 64-wide");
     uint64_t visited = 0; /* bitmask of slots already pumped this call */
     for (;;) {
         int best = -1;

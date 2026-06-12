@@ -20,10 +20,10 @@
 /* Parsed-option state, set by cli/main.c before dispatch. */
 extern int         opt_index;     /* 0 = unset; 1-based when set */
 extern const char *opt_bsd;
+extern uint64_t    opt_registry;  /* 0 = unset; set only positionally */
 extern bool        flag_list;
 extern bool        flag_json;
 extern bool        flag_watch;
-extern bool        flag_all;
 extern bool        flag_probe;    /* probe subcommand (MOS_CLI_PROBE builds) */
 extern bool        flag_dump;     /* probe --dump one-shot DR capture */
 extern const char *progname;
@@ -52,14 +52,21 @@ static inline bool mos_cli_profile_present(uint16_t profile)
    the multi-drive EX_USAGE mini-list share these). */
 #define MOS_CLI_LIST_CAP 64
 
+/* SPC-4 identity field widths + NUL, and the mos_safe_ascii worst
+   case (every byte → \xNN, 4x) — shared by status and list emitters. */
+#define MOS_CLI_VENDOR_CAP    9
+#define MOS_CLI_PRODUCT_CAP  17
+#define MOS_CLI_REVISION_CAP  5
+#define MOS_CLI_ESC_CAP(raw_cap) (4 * ((raw_cap) - 1) + 1)
+
 typedef struct {
     char     state[24];
     char     bsd[24];        /* "" == none */
-    /* Identity strings stored PRE-ESCAPED (mos_safe_ascii, \xNN for
-       every byte outside printable ASCII) — the human table prints
-       verbatim, so sanitization happens at row construction. Widths
-       are the SPC-4 field widths at the 4x worst-case escape. */
-    char     vendor[33], product[65], revision[17];
+    /* RAW identity bytes (trailing-stripped at extraction). JSON is
+       byte-faithful; the table escapes at emit. */
+    char     vendor[MOS_CLI_VENDOR_CAP];
+    char     product[MOS_CLI_PRODUCT_CAP];
+    char     revision[MOS_CLI_REVISION_CAP];
     uint64_t registry_id;
 } list_row;
 

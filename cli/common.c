@@ -8,10 +8,10 @@
 
 int         opt_index   = 0;     /* 0 = unset; 1-based when set */
 const char *opt_bsd     = NULL;
+uint64_t    opt_registry = 0;     /* 0 = unset; >= 2^32+256 when set */
 bool        flag_list   = false;
 bool        flag_json   = false;
 bool        flag_watch  = false;
-bool        flag_all    = false;  /* watch-all: --watch --all */
 bool        flag_probe  = false;  /* probe subcommand (MOS_CLI_PROBE builds) */
 bool        flag_dump   = false;  /* probe --dump one-shot DR capture */
 
@@ -98,7 +98,7 @@ int emit_unknown_and_fail(const char *context, mos_error err,
            NDJSON — one object per line — and a multi-line error envelope
            breaks any line-framed consumer at exactly the moment it's
            reporting a failure (third review, finding 1; the open-failure
-           path is reachable today via `--json --watch --bsd <absent>`,
+           path is reachable today via `watch --bsd <absent>`,
            the mid-stream pump-failure path is defensively unreachable
            but rendered correctly anyway). One-shot mode keeps the
            pretty-printed envelope. Same bytes-as-JSON either way: only
@@ -197,17 +197,10 @@ static void query_row(const mos_device_info_t *info, list_row *row)
     const char *v = mos_state_result_vendor(r);
     const char *p = mos_state_result_product(r);
     const char *rv = mos_state_result_revision(r);
-    /* Escape drive-controlled identity bytes at row construction —
-       the human table prints cells verbatim (layout-only contract).
-       The JSON list emitter re-escapes the stored form: for normal
-       printable identity this is the identity transform; for hostile
-       bytes the backslash of \xNN re-escapes to \\xNN — still valid,
-       unambiguous, injection-safe JSON (it renders the same text a
-       human-mode reader sees, which is the point of storing one
-       sanitized form). */
-    if (v)  (void)mos_safe_ascii(v,  row->vendor,   sizeof row->vendor);
-    if (p)  (void)mos_safe_ascii(p,  row->product,  sizeof row->product);
-    if (rv) (void)mos_safe_ascii(rv, row->revision, sizeof row->revision);
+    /* RAW bytes; escaping is per-surface, at emit time (E1). */
+    if (v)  snprintf(row->vendor,   sizeof row->vendor,   "%s", v);
+    if (p)  snprintf(row->product,  sizeof row->product,  "%s", p);
+    if (rv) snprintf(row->revision, sizeof row->revision, "%s", rv);
     mos_close(h);
 }
 
@@ -226,20 +219,28 @@ void emit_list_table(FILE *f, const list_row *rows, int n,
     static const bool ra_nv[MAXC - 1] = { true, false, false, false, false, false };
 
     size_t ncols = with_volume ? MAXC : MAXC - 1;
+    if (n > MOS_CLI_LIST_CAP) n = MOS_CLI_LIST_CAP;
     /* index strings need storage */
     char idx[MOS_CLI_LIST_CAP][12];
+    /* Rows are raw; the terminal is where \xNN escaping is owed. */
+    char v_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];
+    char p_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
+    char r_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];
     const char *cells[MOS_CLI_LIST_CAP * MAXC];
     for (int r = 0; r < n; r++) {
         snprintf(idx[r], sizeof idx[r], "%d", r + 1);
+        (void)mos_safe_ascii(rows[r].vendor,   v_esc[r], sizeof v_esc[r]);
+        (void)mos_safe_ascii(rows[r].product,  p_esc[r], sizeof p_esc[r]);
+        (void)mos_safe_ascii(rows[r].revision, r_esc[r], sizeof r_esc[r]);
         size_t c = 0;
         cells[r * ncols + c++] = idx[r];
         cells[r * ncols + c++] = rows[r].state;
         if (with_volume)
             cells[r * ncols + c++] = NULL;   /* volume_name: stage 1 */
         cells[r * ncols + c++] = rows[r].bsd[0] ? rows[r].bsd : NULL;
-        cells[r * ncols + c++] = rows[r].vendor[0]   ? rows[r].vendor   : NULL;
-        cells[r * ncols + c++] = rows[r].product[0]  ? rows[r].product  : NULL;
-        cells[r * ncols + c++] = rows[r].revision[0] ? rows[r].revision : NULL;
+        cells[r * ncols + c++] = rows[r].vendor[0]   ? v_esc[r] : NULL;
+        cells[r * ncols + c++] = rows[r].product[0]  ? p_esc[r] : NULL;
+        cells[r * ncols + c++] = rows[r].revision[0] ? r_esc[r] : NULL;
     }
     (void)mos_cli_human_table(f, with_volume ? headers_v : headers_nv,
                           cells, (size_t)n, ncols,
@@ -249,6 +250,7 @@ void emit_list_table(FILE *f, const list_row *rows, int n,
 void emit_list_json(const list_row *rows, int n)
 {
     fputs("{\n  \"schema\": \"mos.list.v1\",\n  \"drives\": [\n", stdout);
+    if (n > MOS_CLI_LIST_CAP) n = MOS_CLI_LIST_CAP;
     for (int r = 0; r < n; r++) {
         fprintf(stdout, "%s    {\"index\": %d, \"state\": ",
                 r ? ",\n" : "", r + 1);

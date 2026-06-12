@@ -19,18 +19,26 @@ and track counts) are available on demand via `mos_query_disc_info()`.
 ## Usage
 
 ```
-mos [subcommand] [drive] [options]
+mos [subcommand [drive]] [options]
 ```
 
-The drive subject is positional, like `diskutil info disk4`: an Index
-from `mos list` (all digits) or a BSD form (`disk4`, `rdisk4`,
-`/dev/disk4`). With one drive attached it may be omitted; with several,
-`mos status` without a subject exits 64 and prints the drive table to
-stderr — no first-drive guessing.
+The drive subject is positional after a subcommand, like
+`diskutil info disk4`: an Index from `mos list`, a `registry_id`
+(pasteable from any JSON output — the two digit forms cannot collide,
+xnu starts registry IDs above 2^32), or a BSD form (`disk4`,
+`rdisk4`, `/dev/disk4`). With one drive attached it may be omitted
+(`mos status`); with several, `mos status` without a subject exits 64
+and prints the drive table to stderr — no first-drive guessing. Bare
+`mos` is an entry point, not a status query: it prints the drive
+table and a hint to stderr and exits 64.
 
 Human views and JSON share every enum string verbatim
-(`empty_or_open`, `bd_rom`) — a terminal report and a jq query can
-never disagree. The `bsd` field carries the full device node
+(`ready`, `bd_rom`) — a terminal report and a jq query can
+never disagree. Identity is the same three fields on every surface
+(`vendor` / `product` / `revision`), captured from the platform's
+device directory once at device attach; when verifying a firmware
+flash, confirm `registry_id` changed too, or you're reading the
+pre-flash cache. The `bsd` field carries the full device node
 (`/dev/disk4`) in both surfaces: pasteable, pipeable, and always a
 valid drive argument when non-null (an empty drive has none).
 
@@ -38,12 +46,13 @@ valid drive argument when non-null (an empty drive has none).
 
 ```
 $ mos status 1
-   State:  ready
- Profile:  0x0040  bd_rom  (bd)
-   Index:  1
-     BSD:  /dev/disk4
 Registry:  4295032831
-   Drive:  HL-DT-ST BD-RE WH16NS60 1.00
+     BSD:  /dev/disk4
+   State:  ready
+ Profile:  bd  bd_rom  (0x0040)
+  Vendor:  HL-DT-ST
+ Product:  BD-RE WH16NS60
+     Rev:  1.00
 ```
 
 ```
@@ -63,17 +72,17 @@ $ mos status 1 --json
 }
 ```
 
-An empty/open drive shows the honest pre-disambiguation state with its
-sense evidence directly beneath:
+An open tray is resolved as exactly that — no media, no BSD node,
+no guessing:
 
 ```
 $ mos status 1
-   State:  empty_or_open
-   Sense:  02/3a/01
-   Index:  1
-     BSD:  -
 Registry:  4295032831
-   Drive:  HL-DT-ST BD-RE WH16NS60 1.00
+     BSD:  -
+   State:  open
+  Vendor:  HL-DT-ST
+ Product:  BD-RE WH16NS60
+     Rev:  1.00
 ```
 
 ### List
@@ -84,9 +93,9 @@ overview):
 
 ```
 $ mos list
- Index  State          Volume      BSD         Vendor    Product         Rev
-     1  ready          -           /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00
-     2  empty_or_open  -           -           PIONEER   BD-RW BDR-XS07  1.01
+ Index  State  Volume  BSD         Vendor    Product         Rev
+     1  ready  -       /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00
+     2  open   -       -           PIONEER   BD-RW BDR-XS07  1.01
 ```
 
 `mos list --json` emits `mos.list.v1` with the same fields per entry.
@@ -94,10 +103,15 @@ $ mos list
 ### Watch
 
 NDJSON unconditionally — one `mos.event.v1` per line, errors included;
-`--json` is a no-op here. An insert looks like:
+`--json` is a no-op here. With no drive given, `watch` streams the
+whole bus: every drive, hot-plug arrivals as `device_appeared`,
+per-drive `device_removed` with the stream continuing — zero drives
+attached is a valid empty stream that waits. A drive selector narrows
+to one drive (and the stream then ends on its removal). An insert
+looks like:
 
 ```
-$ mos watch 1
+$ mos watch
 {"schema":"mos.event.v1","event":"snapshot",...,"state":"empty","prev_state":"unknown",...}
 {"schema":"mos.event.v1","event":"state_changed",...,"state":"loading","prev_state":"empty",...}
 {"schema":"mos.event.v1","event":"state_changed",...,"bsd":"/dev/disk4","state":"ready",...}
@@ -105,23 +119,26 @@ $ mos watch 1
 
 ### Shell integration
 
-The core pattern — block until READY, dispatch by media class — is a
-few lines, not a script:
+The core pattern — act on every disc that turns readable, on any
+drive, hot-plug included — is one pipeline. No polling, no `sleep`:
 
 ```sh
-while :; do
-    out=$(mos status --json) || { sleep 2; continue; }
-    [ "$(printf '%s' "$out" | jq -r .state)" = "ready" ] && break
-    sleep 2
+mos watch | jq --unbuffered -r '
+    select(.event != "error" and .state == "ready")
+    | "\(.bsd) \(.media_class // "unknown")"' |
+while read -r dev class; do
+    case "$class" in
+        cd)     cdparanoia -B -d "$dev" ;;
+        dvd|bd) makemkvcon ... ;;
+    esac
 done
-case "$(printf '%s' "$out" | jq -r .media_class)" in
-    cd)     cdparanoia -B ;;
-    dvd|bd) makemkvcon ... ;;
-esac
 ```
 
-For long-running monitoring use `mos watch` instead — one event per
-transition, no process spawn per poll. Everything else composes from
+One event per transition drives the loop: inserting a disc fires it
+once, swapping discs fires `media_changed`, a drive plugged in
+mid-run joins the stream live, and an ejected drive doesn't end it.
+For a one-shot answer, `mos status <drive> --json` is the same
+contract in a single document. Everything else composes from
 tools that already exist: tray control is `drutil tray eject` /
 `drutil tray close`, mount control is `diskutil mount` / `diskutil
 unmount`, CD audio is `cdparanoia`, DVD/BD rip is `makemkvcon`,
@@ -147,7 +164,7 @@ git clone https://github.com/napieraj/mos
 cd mac-optical-state
 make build      # release build of library + CLI (thin wrapper over cmake)
 make test       # pure-data unit tests — no drive or hardware needed
-./build/bin/mos
+./build/bin/mos list
 ```
 
 Or drive CMake directly: `cmake -B build -DCMAKE_BUILD_TYPE=Release &&

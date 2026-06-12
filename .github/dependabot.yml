@@ -1,0 +1,10 @@
+# Keeps the full-SHA action pins fresh: dependabot PRs bump the SHA
+# and the trailing version comment together, so the pin and its label
+# can't drift apart. Actions only — C deps are vendored/none, and pip
+# is hash-pinned via schemas/requirements-ci.txt (regenerate by hand).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

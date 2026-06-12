@@ -55,11 +55,8 @@
  * them elsewhere — a second copy drifts the first time only one is updated.
  *
  * We define our own constants rather than using Apple's kSCSITaskStatus_*
- * enums from SCSITask.h because the Apple set is incomplete: it omits
- * RESERVATION_CONFLICT, TASK_SET_FULL, and ACA_ACTIVE, which our state
- * machine treats uniformly as "drive contended." Having our own set lets
- * the contention classifier (and its test) work from one consistent
- * vocabulary.
+ * enums from SCSITask.h so the contention classifier (and its test) stays
+ * SDK-free and compiles headless. Values match SAM-2 and Apple's enums.
  */
 
 
@@ -149,8 +146,8 @@ struct mos_watch_event {
 /* ---- Fixed-buffer capacities -------------------------------------- *
  *
  * Sizes for the transient BSD-name strings that appear only at I/O
- * boundaries — reading kIOBSDNameKey in the adapter, the DA reported
- * name, argv in the probes. Drive identity itself is an int64 unit
+ * boundaries — reading kIOBSDNameKey in the adapter, argv in the
+ * probes. Drive identity itself is an int64 unit
  * (mos_*_bsd_unit), not a string; these caps bound only the short-lived
  * names that get parsed to a unit (or formatted from one) and discarded.
  *
@@ -192,7 +189,7 @@ bool mos_internal_bsd_name_is_whole_shape(const char *bsd_name);
    identity. Pinned by tests/test_bsd_name.c. */
 int64_t mos_internal_parse_bsd_unit(const char *name);
 
-/* True if `reported` (a raw DA/IOKit BSD name, e.g. "disk4" or
+/* True if `reported` (a raw IOKit-reported BSD name, e.g. "disk4" or
    "disk4s1") names whole-disk unit `whole_unit` itself or one of its
    partition children. The unit is compared numerically (disk40 vs unit 4
    is 40 != 4) and the suffix validated as `(s<digits>)*`; false for NULL,
@@ -203,6 +200,14 @@ int64_t mos_internal_parse_bsd_unit(const char *name);
    with the probe consolidation). Kept as the pinned partition-child
    matching rule for any future BSD-name event filtering. */
 bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit);
+
+/* xnu mints IORegistry entry IDs from a never-reused monotone counter
+   starting at 2^32+256; CLI indexes are 1..MOS_CLI_LIST_CAP. The two
+   all-digit selector spaces are disjoint by kernel construction, so a
+   parsed value classifies deterministically. Pinned by
+   tests/test_bsd_name.c. */
+#define MOS_REGISTRY_ID_FLOOR ((1ULL << 32) + 256)
+bool mos_internal_value_is_registry_id(uint64_t v);
 
 /* ---- GET CONFIGURATION feature walk (mos_config.c) --------------- *
  *
@@ -722,11 +727,6 @@ mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profil
  * HW-validated. See mos_scsi.c for the walker seam. */
 mos_error mos_internal_mmc_get_features       (mos_handle_t *h);
 
-/* Internal-only accessor for the registry entry ID captured during
-   enumeration. Used by mos_open_by_index to reopen by stable ID rather than
-   racing on BSD-name re-resolution. */
-uint64_t mos_internal_device_info_registry_id(const mos_device_info_t *i);
-
 /* Open a drive by its IORegistry entry ID — the identity-stable
    primitive: the kernel resolves IORegistryEntryIDMatching atomically,
    so this returns the SAME entry the ID came from or NO_DEVICE if it
@@ -1145,6 +1145,11 @@ bool mos_internal_gesn_media_door_open(const uint8_t *resp, size_t len,
     /* Media Status byte (descriptor byte 1 = response byte 5): bit0 DoorOpen. */
     *door_open = (resp[5] & 0x01) != 0;
     return true;
+}
+
+bool mos_internal_value_is_registry_id(uint64_t v)
+{
+    return v >= MOS_REGISTRY_ID_FLOOR;
 }
 
 /* ==== src/mos_config.c ==== */
@@ -2115,23 +2120,21 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
           the strong signal; both ids must be non-zero (0 = identity
           unavailable, never inferred from).
 
-       2. Profile-class change with NO usable identity — some USB-ATAPI bridges
-          never expose a media_id (both 0). There a changed *non-zero* current
-          profile (e.g. CD-ROM 0x08 → DVD-ROM 0x10) is the only evidence a swap
-          happened, so we use last_profile as the fallback fingerprint. This
-          still cannot see a same-class swap (DVD-R → DVD-R) on such bridges —
-          no signal exists there — but it catches cross-class swaps that would
-          otherwise be silent. */
+       2. Profile change with NO usable identity — some USB-ATAPI bridges
+          never expose a media_id (both 0). ANY non-zero profile change
+          fires (cross-class 0x08→0x10 and same-class 0x10→0x11 alike): a
+          different profile with no identity means a different disc. A
+          same-PROFILE swap (DVD-R → DVD-R) is invisible here. */
     bool id_changed =
         r.media_id != 0 && w->last_media_id != 0 &&
         r.media_id != w->last_media_id;
-    bool profile_class_changed_without_id =
+    bool profile_changed_without_id =
         r.media_id == 0 && w->last_media_id == 0 &&
         r.current_profile != 0 && w->last_profile != 0 &&
         r.current_profile != w->last_profile;
 
     if (r.state == MOS_STATE_READY && w->last_state == MOS_STATE_READY &&
-        (id_changed || profile_class_changed_without_id)) {
+        (id_changed || profile_changed_without_id)) {
         fill_event_base(w, &d.event);
         d.event.kind       = MOS_EVENT_MEDIA_CHANGED;
         d.event.prev_state = w->last_state;   /* READY → READY */
@@ -2240,6 +2243,7 @@ mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
        is 16, an index sort would be ceremony). Returning on the first
        EMIT keeps per-call work bounded; the next call re-enters at the
        lowest id, so same-tick events drain in id order. */
+    _Static_assert(MOS_WATCH_ALL_CAP <= 64, "visited bitmask is 64-wide");
     uint64_t visited = 0; /* bitmask of slots already pumped this call */
     for (;;) {
         int best = -1;
@@ -2412,7 +2416,7 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
 #include <string.h>
 #include <time.h>
 
-/* Private run-loop mode for the watch's IOKit and DA sources — never
+/* Private run-loop mode for the watch's IOKit and DR doorbell sources — never
    kCFRunLoopDefaultMode — so a host's default-mode work can't dispatch our
    callbacks and our CFRunLoopStop can't halt a run-loop invocation the host
    owns. The pump runs this same mode, so our sources fire only while
@@ -2426,8 +2430,8 @@ struct mos_watch {
     mos_watch_state core;
 
     /* What we're watching: the whole-disk unit (N in "diskN"), or -1 for
-       an empty/open-tray drive. Tags emitted events and drives the Disk
-       Arbitration wake filter — NOT the authority for which physical
+       an empty/open-tray drive. Tags emitted events and feeds the
+       mos_watch_bsd_unit accessor — NOT the authority for which physical
        drive to probe. The actual probe identity is `registry_id` below. */
     int64_t bsd_unit;
 
@@ -2610,9 +2614,11 @@ static mos_error watch_probe(void *ctx, mos_state_result *out)
 
     /* The drive is pinned by registry ID, but the media's BSD unit is not
        stable (-1 when empty at open; changes across eject/reinsert). Refresh
-       the ADAPTER's copy for the DA wake filter; the pure core adopts the
-       probe's unit itself on every successful pump (mos_watch_core.c), so
-       the error/device_removed fallback no longer depends on this adapter
+       the ADAPTER's copy (it feeds the mos_watch_bsd_unit accessor; the DR
+       doorbell filters by registry ID, so no wake filter reads it); the pure
+       core adopts the probe's unit itself on every successful pump
+       (mos_watch_core.c), so the error/device_removed fallback no
+       longer depends on this adapter
        — a layering obligation retired by the third review. media_id (the
        F1 swap fingerprint) needs no manual tracking — it rides the
        *out = *qr copy and the core reads it from the result. */
@@ -2689,37 +2695,38 @@ static const mos_watch_ops_t apple_watch_slot_ops = {
     .wall_ms = watch_wall_ms,
 };
 
-/* Add one device to an all-watch from a DR snapshot record. The slot's
-   ctx storage is claimed via the same first-free scan add() uses (the
-   single-thread contract makes the two scans agree); on dedupe the
-   pre-filled slot entry is simply unused. */
+/* Add one device from a DR snapshot. Dedupe by registry_id BEFORE
+   touching slot storage; the slot is claimed by the same first-free
+   scan add() uses (single-thread contract keeps the scans agreeing). */
 static void watch_all_add_device(mos_watch_t *w,
                                  const mos_internal_dr_snapshot *snap,
                                  bool mid_stream)
 {
     if (!w || !snap || snap->registry_id == 0) return;
 
+    if (mos_internal_watch_all_find(&w->all, snap->registry_id) >= 0) {
+        return; /* duplicate Appeared — already streaming in a slot */
+    }
     int i = mos_internal_watch_all_free_slot(&w->all);
-    if (i < 0 && mos_internal_watch_all_find(&w->all, snap->registry_id) < 0) {
+    if (i < 0) {
         return; /* full and genuinely new — documented drop until a slot frees */
     }
-    if (i >= 0) {
-        /* Width-agreement pins: source and destination both carry the
-           SPC-4 identity widths, so these copies can never truncate.
-           Successor of the retired INQUIRY path's per-site asserts. */
-        _Static_assert(sizeof w->slots[i].vendor   == sizeof snap->vendor,
-                       "slot vendor width must match the DR snapshot's");
-        _Static_assert(sizeof w->slots[i].product  == sizeof snap->product,
-                       "slot product width must match the DR snapshot's");
-        _Static_assert(sizeof w->slots[i].revision == sizeof snap->revision,
-                       "slot revision width must match the DR snapshot's");
-        w->slots[i].registry_id = snap->registry_id;
-        strlcpy(w->slots[i].vendor,   snap->vendor,   sizeof w->slots[i].vendor);
-        strlcpy(w->slots[i].product,  snap->product,  sizeof w->slots[i].product);
-        strlcpy(w->slots[i].revision, snap->revision, sizeof w->slots[i].revision);
-    }
+    /* Width-agreement pins: source and destination both carry the
+       SPC-4 identity widths, so these copies can never truncate.
+       Successor of the retired INQUIRY path's per-site asserts. */
+    _Static_assert(sizeof w->slots[i].vendor   == sizeof snap->vendor,
+                   "slot vendor width must match the DR snapshot's");
+    _Static_assert(sizeof w->slots[i].product  == sizeof snap->product,
+                   "slot product width must match the DR snapshot's");
+    _Static_assert(sizeof w->slots[i].revision == sizeof snap->revision,
+                   "slot revision width must match the DR snapshot's");
+    w->slots[i].registry_id = snap->registry_id;
+    strlcpy(w->slots[i].vendor,   snap->vendor,   sizeof w->slots[i].vendor);
+    strlcpy(w->slots[i].product,  snap->product,  sizeof w->slots[i].product);
+    strlcpy(w->slots[i].revision, snap->revision, sizeof w->slots[i].revision);
+
     (void)mos_internal_watch_all_add(&w->all, &apple_watch_slot_ops,
-                                     i >= 0 ? &w->slots[i] : NULL,
+                                     &w->slots[i],
                                      snap->bsd_unit, snap->registry_id,
                                      monotonic_ms(),
                                      w->all_stream_open_wall_ms,
@@ -2873,7 +2880,7 @@ static void dr_status_changed_callback(DRNotificationCenterRef center,
    service termination. Called from watch_open_common after the pure
    watch core is initialized. Each step that fails tears down what
    it created and returns leaving every field NULL — caller falls
-   back to poll-only for this mechanism (the DA path below is
+   back to poll-only for this mechanism (the DR doorbell below is
    independent). The invariant this maintains: after this function
    returns, w->notify_port is non-NULL iff w->notify_source is also
    non-NULL AND a kIOGeneralInterest notification is registered.
@@ -2906,7 +2913,7 @@ static void setup_iokit_interest_wake(mos_watch_t *w)
             watch_interest_callback, w, &w->notify_token);
     if (kr != KERN_SUCCESS) {
         /* Notification registration failed; remove the source and
-           tear down the port. DA below is unaffected. */
+           tear down the port. The DR doorbell below is unaffected. */
         CFRunLoopRemoveSource(w->run_loop, w->notify_source,
                               MOS_WATCH_RUN_LOOP_MODE);
         w->notify_source = NULL;
@@ -2946,10 +2953,9 @@ static void teardown_iokit_interest_wake(mos_watch_t *w)
 
 /* All-mode lifecycle (Phase 2b): Appeared joins a device to the
    stream (its first event is relabeled device_appeared by the pure
-   multiplexer), Disappeared marks the slot's core removed so its next
-   pump emits a per-device device_removed. Both are load-bearing in
-   all mode only — single-target watches keep kIOGeneralInterest as
-   their terminal-removal source and never register these. */
+   multiplexer); Disappeared wakes the matching slot so its reopen can
+   confirm removal. All-mode only — single-target watches keep
+   kIOGeneralInterest as their terminal-removal source. */
 static void dr_device_appeared_callback(DRNotificationCenterRef center,
                                         void *observer, CFStringRef name,
                                         DRTypeRef object,
@@ -2984,7 +2990,11 @@ static void dr_device_disappeared_callback(DRNotificationCenterRef center,
     }
     int slot = (id != 0) ? mos_internal_watch_all_find(&w->all, id) : -1;
     if (slot >= 0) {
-        mos_internal_watch_notify_removed(&w->all.cores[slot]);
+        /* Wake, not removal authority: the woken reopen confirms
+           (NO_DEVICE → terminal) at the same latency, and a spurious
+           Disappeared costs one probe instead of a permanent eviction
+           (C1 — DR data never decides state). */
+        mos_internal_watch_notify_wake(&w->all.cores[slot]);
     }
     /* Unresolved id: the probe floor catches it — the slot's next
        reopen returns NO_DEVICE, which the core treats as removal. */
@@ -3211,6 +3221,21 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
                                             transition_poll_ms, err_out);
 }
 
+mos_watch_t *mos_watch_open_by_registry_id(uint64_t registry_id,
+                                           uint32_t stable_poll_ms,
+                                           uint32_t transition_poll_ms,
+                                           mos_error *err_out)
+{
+    mos_error err = MOS_OK;
+    mos_handle_t *h = mos_open_by_registry_id(registry_id, &err);
+    if (!h) {
+        if (err_out) *err_out = (err != MOS_OK) ? err : MOS_ERR_IO;
+        return NULL;
+    }
+    return watch_open_from_validated_handle(h, stable_poll_ms,
+                                            transition_poll_ms, err_out);
+}
+
 mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
                                 uint32_t transition_poll_ms,
                                 mos_error *err_out)
@@ -3233,21 +3258,15 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
     w->all_stream_open_wall_ms = stream_epoch_wall_ms();
     mos_internal_watch_all_init(&w->all);
 
-    /* Initial population from ONE directory snapshot — no per-device
-       opens (the first probe validates each device; a vanished one
-       yields its device_removed through the normal path). Zero devices
-       is a valid empty stream: the Appeared observer below is what
-       makes it live. */
-    mos_internal_dr_snapshot snap[MOS_WATCH_ALL_CAP];
-    size_t n = mos_internal_dr_copy_snapshot(snap, MOS_WATCH_ALL_CAP);
-    for (size_t i = 0; i < n; ++i) {
-        watch_all_add_device(w, &snap[i], /*mid_stream=*/false);
-    }
-
+    /* Observers BEFORE the snapshot: a device arriving in the gap is
+       caught by the queued Appeared (its callback runs only inside the
+       pump), and one landing in both dedupes by registry_id. The
+       reverse order left an unwatchable window — all-mode discovery
+       has no poll floor (C2, doc/research/2026-06-11-review-triage.md). */
     w->run_loop = CFRunLoopGetCurrent();
     setup_dr_doorbell_wake(w);
     /* No kIOGeneralInterest in all mode: removal rides DR Disappeared
-       (fast path) + per-probe NO_DEVICE (floor). */
+       (wake) + per-probe NO_DEVICE (floor). */
 
     /* UNLIKE single mode, the doorbell is NOT latency-only here, so
        its failure cannot soft-fail to polling: arrivals are discovered
@@ -3265,6 +3284,16 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
         mos_watch_close(w);
         if (err_out) *err_out = MOS_ERR_IO;
         return NULL;
+    }
+
+    /* Initial population from ONE directory snapshot — no per-device
+       opens (the first probe validates each device; a vanished one
+       yields its device_removed through the normal path). Zero devices
+       is a valid empty stream. */
+    mos_internal_dr_snapshot snap[MOS_WATCH_ALL_CAP];
+    size_t n = mos_internal_dr_copy_snapshot(snap, MOS_WATCH_ALL_CAP);
+    for (size_t i = 0; i < n; ++i) {
+        watch_all_add_device(w, &snap[i], /*mid_stream=*/false);
     }
 
     if (err_out) *err_out = MOS_OK;
@@ -3716,7 +3745,7 @@ bool mos_bsd_dev_node(int64_t unit, char *out, size_t out_cap)
 static void mos_internal_dr_copy_string(CFTypeRef value,
                                         char *dst, size_t cap)
 {
-    if (cap == 0) return;
+    if (!dst || cap == 0) return;
     dst[0] = 0;
     if (!value || CFGetTypeID(value) != CFStringGetTypeID()) return;
 
@@ -3750,11 +3779,16 @@ uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path)
     return id;
 }
 
-/* The ONE extraction of the three identity strings from an Info
-   dictionary — every reader (snapshot builder, open-time identity for
-   a service) funnels through here so a future gate on the extraction
-   (encoding validation, width policy) has a single home. Buffers keep
-   the SPC-4 field widths; bounding per mos_internal_dr_copy_string. */
+/* Strip trailing spaces (SPC wire padding; the closed DR layer may or
+   may not have trimmed). Leading/interior spaces are data and stay. */
+static void mos_internal_dr_strip_trailing_spaces(char *s)
+{
+    size_t n = strlen(s);
+    while (n > 0 && s[n - 1] == ' ') s[--n] = 0;
+}
+
+/* The ONE extraction of the three identity strings — every reader
+   funnels through here. Buffers keep the SPC-4 field widths. */
 static void mos_internal_dr_copy_identity_from_info(CFDictionaryRef info,
                                                     char *vendor, size_t vcap,
                                                     char *product, size_t pcap,
@@ -3767,6 +3801,9 @@ static void mos_internal_dr_copy_identity_from_info(CFDictionaryRef info,
     mos_internal_dr_copy_string(
         CFDictionaryGetValue(info, kDRDeviceFirmwareRevisionKey),
         revision, rcap);
+    if (vendor && vcap) mos_internal_dr_strip_trailing_spaces(vendor);
+    if (product && pcap) mos_internal_dr_strip_trailing_spaces(product);
+    if (revision && rcap) mos_internal_dr_strip_trailing_spaces(revision);
 }
 
 /* Fill identity + registry id from one device's Info dictionary. */
@@ -3877,9 +3914,9 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                                                char *product, size_t pcap,
                                                char *revision, size_t rcap)
 {
-    if (vcap) vendor[0] = 0;
-    if (pcap) product[0] = 0;
-    if (rcap) revision[0] = 0;
+    if (vendor && vcap) vendor[0] = 0;
+    if (product && pcap) product[0] = 0;
+    if (revision && rcap) revision[0] = 0;
     if (svc == IO_OBJECT_NULL) return false;
 
     io_string_t path;
@@ -4096,10 +4133,6 @@ int64_t mos_handle_bsd_unit(const mos_handle_t *h)
     return h ? h->bsd_unit : -1;
 }
 
-uint64_t mos_internal_device_info_registry_id(const mos_device_info_t *i) {
-    return i ? i->registry_id : 0;
-}
-
 io_service_t mos_internal_handle_get_service(mos_handle_t *h) {
     /* No retain taken — caller must IOObjectRetain before mos_close(h).
        Lifecycle contract in mos_internal.h. */
@@ -4206,6 +4239,16 @@ mos_handle_t *mos_open_by_bsd_name(const char *want, mos_error *err_out)
     return mos_internal_open_by_registry_id(id, err_out);
 }
 
+mos_handle_t *mos_open_by_registry_id(uint64_t registry_id,
+                                      mos_error *err_out)
+{
+    if (registry_id == 0) {
+        if (err_out) *err_out = MOS_ERR_INVALID_ARG;
+        return NULL;
+    }
+    return mos_internal_open_by_registry_id(registry_id, err_out);
+}
+
 /* Collects registry IDs (not BSD names) for by-index reopen: BSD names can
    shift on hot-plug / IOMedia reattach between the enumerate and reopen
    passes (a TOCTOU race), whereas a registry entry ID is stable for the
@@ -4220,7 +4263,7 @@ static bool mos_internal_collect_cb(const mos_device_info_t *info, void *ctx)
 {
     mos_internal_id_collect *c = (mos_internal_id_collect *)ctx;
     if (c->count >= MOS_ENUM_CAP) return false;
-    uint64_t id = mos_internal_device_info_registry_id(info);
+    uint64_t id = mos_device_info_registry_id(info);
     if (id != 0) {
         c->ids[c->count++] = id;
     }

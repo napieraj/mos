@@ -370,11 +370,29 @@ TEST(test_media_changed_on_profile_class_swap_without_id)
     return 0;
 }
 
+TEST(test_media_changed_on_same_class_profile_swap_without_id)
+{
+    /* Same class, different profile (DVD-ROM 0x10 → DVD-R 0x11): fires. */
+    fake_watch_ctx c;
+    init_default(&c, 1000);
+    c.probe_state[0] = MOS_STATE_READY; c.probe_media_id[0] = 0; c.probe_profile[0] = 0x0010;
+    c.probe_state[1] = MOS_STATE_READY; c.probe_media_id[1] = 0; c.probe_profile[1] = 0x0011;
+    c.probe_err[0] = c.probe_err[1] = MOS_OK;
+    c.probe_count = 2;
+
+    mos_watch_state w;
+    mos_internal_watch_init(&w, &fake_ops, &c, 4, 4242, 1000, 1000, 2000, 200);
+
+    (void)mos_internal_watch_pump(&w);                 /* snapshot */
+    c.mono_clock_ms = 100000;
+    mos_watch_decision d2 = mos_internal_watch_pump(&w);
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT, d2.kind);
+    EXPECT_EQ(MOS_EVENT_MEDIA_CHANGED,     d2.event.kind);
+    return 0;
+}
+
 TEST(test_no_media_changed_on_same_profile_without_id)
 {
-    /* The companion negative: same non-zero profile, no id, no swap signal —
-       a same-class DVD→DVD swap is invisible on such bridges, and we must not
-       fabricate one. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_READY; c.probe_media_id[0] = 0; c.probe_profile[0] = 0x0010;
@@ -1452,6 +1470,7 @@ void register_watch_core_tests(void)
     RUN(test_media_changed_on_same_state_ready_swap);
     RUN(test_no_media_changed_when_id_unavailable);
     RUN(test_media_changed_on_profile_class_swap_without_id);
+    RUN(test_media_changed_on_same_class_profile_swap_without_id);
     RUN(test_no_media_changed_on_same_profile_without_id);
     RUN(test_media_changed_after_late_media_id);
     RUN(test_media_changed_across_transient_zero_id);

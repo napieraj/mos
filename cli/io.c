@@ -6,6 +6,7 @@
 #include "mos.h"   /* mos_json_escape, mos_safe_ascii */
 
 #include <stdlib.h>
+#include <stdint.h>
 #include <errno.h>
 
 void mos_cli_json_str(FILE *f, const char *s)
@@ -20,6 +21,7 @@ void mos_cli_json_str(FILE *f, const char *s)
     char stack[256];
     size_t need = mos_json_escape(s, NULL, 0);
     char *buf = stack;
+    if (need > SIZE_MAX - 1) { fputs("\"<oom>\"", f); return; }
     if (need + 1 > sizeof stack) {
         buf = malloc(need + 1);
         if (!buf) { fputs("\"<oom>\"", f); return; }

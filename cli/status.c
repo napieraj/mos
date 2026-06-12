@@ -4,14 +4,45 @@
 #include <string.h>
 #include <sysexits.h>
 
-static void emit_human(const mos_state_result *r, int index1)
+static void emit_human(const mos_state_result *r, int index1,
+                       bool invoked_by_index, bool invoked_by_registry)
 {
     /* Five-tier order (doc/research/2026-06-10-cli-design.md): answer,
        evidence, media, addressing, identity. Suppression mirrors the
        JSON contract (pairs the schema suppresses are not in the array);
        structural addressing/identity rows show "-" via NULL instead. */
-    mos_cli_human_pair pairs[8];
+    mos_cli_human_pair pairs[10];
     size_t n = 0;
+
+    /* Addressing header first: Index, Registry, BSD. The selector the
+       caller invoked with is dropped (they typed it); BSD always stays
+       — it is the pasteable, downstream-useful handle. */
+    char idx_buf[12];
+    if (!invoked_by_index) {
+        if (index1 > 0) {
+            snprintf(idx_buf, sizeof idx_buf, "%d", index1);
+            pairs[n++] = (mos_cli_human_pair){ "Index", idx_buf };
+        } else {
+            pairs[n++] = (mos_cli_human_pair){ "Index", NULL };
+        }
+    }
+
+    char reg_buf[24];
+    uint64_t reg = mos_state_result_registry_id(r);
+    if (!invoked_by_registry) {
+        if (reg) {
+            snprintf(reg_buf, sizeof reg_buf, "%llu",
+                     (unsigned long long)reg);
+            pairs[n++] = (mos_cli_human_pair){ "Registry", reg_buf };
+        } else {
+            pairs[n++] = (mos_cli_human_pair){ "Registry", NULL };
+        }
+    }
+
+    char bsd_buf[24];
+    bool have_bsd = mos_bsd_dev_node(mos_state_result_bsd_unit(r),
+                                           bsd_buf, sizeof bsd_buf);
+    pairs[n++] = (mos_cli_human_pair){ "BSD", have_bsd ? bsd_buf : NULL };
 
     const char *state = mos_state_description(mos_state_result_state(r));
     pairs[n++] = (mos_cli_human_pair){ "State", state };
@@ -35,36 +66,16 @@ static void emit_human(const mos_state_result *r, int index1)
     if (mos_cli_profile_present(profile)) {
         const char *pn = mos_profile_name(profile);
         const char *pc = mos_profile_class(profile);
+        /* Coarse → precise; joining is safe only because every token
+           is space-free (identity fields are not — see below). */
         if (pn && pc)
-            snprintf(prof_buf, sizeof prof_buf, "0x%04x  %s  (%s)",
-                     profile, pn, pc);
+            snprintf(prof_buf, sizeof prof_buf, "%s  %s  (0x%04x)",
+                     pc, pn, profile);
         else if (pn)
-            snprintf(prof_buf, sizeof prof_buf, "0x%04x  %s", profile, pn);
+            snprintf(prof_buf, sizeof prof_buf, "%s  (0x%04x)", pn, profile);
         else
             snprintf(prof_buf, sizeof prof_buf, "0x%04x", profile);
         pairs[n++] = (mos_cli_human_pair){ "Profile", prof_buf };
-    }
-
-    char idx_buf[12];
-    if (index1 > 0) {
-        snprintf(idx_buf, sizeof idx_buf, "%d", index1);
-        pairs[n++] = (mos_cli_human_pair){ "Index", idx_buf };
-    } else {
-        pairs[n++] = (mos_cli_human_pair){ "Index", NULL };
-    }
-
-    char bsd_buf[24];
-    bool have_bsd = mos_bsd_dev_node(mos_state_result_bsd_unit(r),
-                                           bsd_buf, sizeof bsd_buf);
-    pairs[n++] = (mos_cli_human_pair){ "BSD", have_bsd ? bsd_buf : NULL };
-
-    char reg_buf[24];
-    uint64_t reg = mos_state_result_registry_id(r);
-    if (reg) {
-        snprintf(reg_buf, sizeof reg_buf, "%llu", (unsigned long long)reg);
-        pairs[n++] = (mos_cli_human_pair){ "Registry", reg_buf };
-    } else {
-        pairs[n++] = (mos_cli_human_pair){ "Registry", NULL };
     }
 
     const char *v  = mos_state_result_vendor(r);
@@ -75,23 +86,18 @@ static void emit_human(const mos_state_result *r, int index1)
        most hostile content but provably cannot be RELIED on for ESC
        (C0 controls survive every encoding in the chain). The human
        layout engine prints verbatim (layout only, by contract), so
-       escape HERE — \xNN per mos_safe_ascii, the same rule the JSON
-       path applies to these same strings. Buffer math: worst case
-       every byte escapes 4x (vendor 8→32, product 16→64, revision
-       4→16, + NULs). */
-    char v_esc[33], p_esc[65], rv_esc[17];
+       escape HERE — \xNN per mos_safe_ascii. Three rows, never one
+       joined line: product may contain interior spaces, so a joined
+       line has unrecoverable field boundaries. */
+    char v_esc[MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];
+    char p_esc[MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
+    char rv_esc[MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];
     (void)mos_safe_ascii(v,  v_esc,  sizeof v_esc);
     (void)mos_safe_ascii(p,  p_esc,  sizeof p_esc);
     (void)mos_safe_ascii(rv, rv_esc, sizeof rv_esc);
-    char drive_buf[120];
-    if (v || p || rv) {
-        snprintf(drive_buf, sizeof drive_buf, "%s%s%s%s%s",
-                 v_esc, v && (p || rv) ? " " : "",
-                 p_esc, p && rv ? " " : "", rv_esc);
-        pairs[n++] = (mos_cli_human_pair){ "Drive", drive_buf };
-    } else {
-        pairs[n++] = (mos_cli_human_pair){ "Drive", NULL };
-    }
+    pairs[n++] = (mos_cli_human_pair){ "Vendor",  v  ? v_esc  : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Product", p  ? p_esc  : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Rev",     rv ? rv_esc : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }
@@ -187,6 +193,9 @@ int run_query(void)
     } else if (opt_index) {
         index1 = opt_index;
         h = mos_open_by_index(opt_index, &err);
+    } else if (opt_registry) {
+        /* index1 stays 0; resolved from the result's registry_id below. */
+        h = mos_open_by_registry_id(opt_registry, &err);
     } else {
         /* No selector: fine with exactly one drive; with several this
            is EX_USAGE — no first-burner magic (CLI design 2026-06-10).
@@ -241,7 +250,7 @@ int run_query(void)
        next mos_query_state() call or mos_close()"). Freeing the handle
        first would leave r dangling. */
     if (flag_json) emit_json(r, index1);
-    else           emit_human(r, index1);
+    else           emit_human(r, index1, opt_index > 0, opt_registry != 0);
 
     /* Exit 0 on any state including unknown — state is stdout data, not
        exit status. unknown means "drive reachable, classification

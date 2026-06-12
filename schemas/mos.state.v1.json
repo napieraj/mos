@@ -39,7 +39,7 @@
         "null"
       ],
       "pattern": "^/dev/disk[0-9]+$",
-      "description": "Whole-disk BSD name (e.g. disk4), or null when the drive has no media (empty/open tray) and therefore no IOMedia child to name. The /^r?disk[0-9]+$/ shape is enforced by the library; the rdiskN form is normalized away before this is emitted. The pattern constrains the string form only; null is permitted per the empty-drive contract. CLI one-shot invocations open a fresh handle per run, so this is effectively query-time; library consumers holding a handle should know the value is captured at open and not refreshed per query in v0.3 (open-time semantics \u2014 see mos.h on mos_state_result_bsd_unit)."
+      "description": "Whole-disk dev node (e.g. /dev/disk4 \u2014 the AGENTS.md BSD vocabulary's third form), or null when the drive has no media (empty/open tray) and therefore no IOMedia child to name. CLI one-shot invocations open a fresh handle per run, so this is effectively query-time; library consumers holding a handle should know the value is captured at open and not refreshed per query (open-time semantics \u2014 see mos.h on mos_state_result_bsd_unit)."
     },
     "current_profile": {
       "type": "string",
@@ -65,7 +65,7 @@
     },
     "product": {
       "type": "string",
-      "description": "INQUIRY-derived product string. Same sanitization rules as vendor. Field present only when non-empty."
+      "description": "Product identity, same delivery boundary and byte-faithful emission rules as vendor. Field present only when non-empty."
     },
     "revision": {
       "type": "string",

@@ -58,7 +58,7 @@
 static void mos_internal_dr_copy_string(CFTypeRef value,
                                         char *dst, size_t cap)
 {
-    if (cap == 0) return;
+    if (!dst || cap == 0) return;
     dst[0] = 0;
     if (!value || CFGetTypeID(value) != CFStringGetTypeID()) return;
 
@@ -92,11 +92,16 @@ uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path)
     return id;
 }
 
-/* The ONE extraction of the three identity strings from an Info
-   dictionary — every reader (snapshot builder, open-time identity for
-   a service) funnels through here so a future gate on the extraction
-   (encoding validation, width policy) has a single home. Buffers keep
-   the SPC-4 field widths; bounding per mos_internal_dr_copy_string. */
+/* Strip trailing spaces (SPC wire padding; the closed DR layer may or
+   may not have trimmed). Leading/interior spaces are data and stay. */
+static void mos_internal_dr_strip_trailing_spaces(char *s)
+{
+    size_t n = strlen(s);
+    while (n > 0 && s[n - 1] == ' ') s[--n] = 0;
+}
+
+/* The ONE extraction of the three identity strings — every reader
+   funnels through here. Buffers keep the SPC-4 field widths. */
 static void mos_internal_dr_copy_identity_from_info(CFDictionaryRef info,
                                                     char *vendor, size_t vcap,
                                                     char *product, size_t pcap,
@@ -109,6 +114,9 @@ static void mos_internal_dr_copy_identity_from_info(CFDictionaryRef info,
     mos_internal_dr_copy_string(
         CFDictionaryGetValue(info, kDRDeviceFirmwareRevisionKey),
         revision, rcap);
+    if (vendor && vcap) mos_internal_dr_strip_trailing_spaces(vendor);
+    if (product && pcap) mos_internal_dr_strip_trailing_spaces(product);
+    if (revision && rcap) mos_internal_dr_strip_trailing_spaces(revision);
 }
 
 /* Fill identity + registry id from one device's Info dictionary. */
@@ -219,9 +227,9 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                                                char *product, size_t pcap,
                                                char *revision, size_t rcap)
 {
-    if (vcap) vendor[0] = 0;
-    if (pcap) product[0] = 0;
-    if (rcap) revision[0] = 0;
+    if (vendor && vcap) vendor[0] = 0;
+    if (product && pcap) product[0] = 0;
+    if (revision && rcap) revision[0] = 0;
     if (svc == IO_OBJECT_NULL) return false;
 
     io_string_t path;

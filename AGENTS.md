@@ -145,8 +145,8 @@ fixture — not a behavior tuned to the failing drive.
 **Decision:** schema versioning is per-document-type, not per-CLI-
 invocation. Each emitted JSON document carries a `schema` field with a
 name and version: `mos.state.v1` (one-shot success), `mos.error.v1`
-(failure envelope), `mos.list.v1` (`--list --json`), `mos.event.v1`
-(`--watch --json`). Within a schema's current version the **field set
+(failure envelope), `mos.list.v1` (`list --json`), `mos.event.v1`
+(`watch`). Within a schema's current version the **field set
 is closed**: the published schemas declare `additionalProperties:
 false`, so any field addition — like removals, renames, type changes,
 and semantic changes — requires a new schema name (e.g. `mos.state.v2`)
@@ -173,7 +173,7 @@ document already carries the version: consumers parse `.schema` and
 dispatch on it.
 
 **Why per-document rather than per-CLI-invocation:** a single `mos`
-invocation can emit different schemas. `--watch --json` produces a
+invocation can emit different schemas. `watch` produces a
 stream of `mos.event.v1` lines that may include `mos.error.v1`
 records for transient failures, and one-shot calls produce
 `mos.state.v1` or `mos.error.v1` depending on outcome. Per-document

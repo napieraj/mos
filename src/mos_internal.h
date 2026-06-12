@@ -129,11 +129,6 @@ mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profil
  * HW-validated. See mos_scsi.c for the walker seam. */
 mos_error mos_internal_mmc_get_features       (mos_handle_t *h);
 
-/* Internal-only accessor for the registry entry ID captured during
-   enumeration. Used by mos_open_by_index to reopen by stable ID rather than
-   racing on BSD-name re-resolution. */
-uint64_t mos_internal_device_info_registry_id(const mos_device_info_t *i);
-
 /* Open a drive by its IORegistry entry ID — the identity-stable
    primitive: the kernel resolves IORegistryEntryIDMatching atomically,
    so this returns the SAME entry the ID came from or NO_DEVICE if it

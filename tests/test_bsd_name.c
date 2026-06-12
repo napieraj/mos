@@ -238,6 +238,17 @@ TEST(leading_zero_units_parse_numerically)
     return 0;
 }
 
+TEST(registry_id_floor_classifies_selector_values)
+{
+    EXPECT(!mos_internal_value_is_registry_id(0));
+    EXPECT(!mos_internal_value_is_registry_id(1));
+    EXPECT(!mos_internal_value_is_registry_id(64));
+    EXPECT(!mos_internal_value_is_registry_id((1ULL << 32) + 255));
+    EXPECT(mos_internal_value_is_registry_id((1ULL << 32) + 256));
+    EXPECT(mos_internal_value_is_registry_id(UINT64_MAX));
+    return 0;
+}
+
 void register_bsd_name_tests(void)
 {
     RUN(leading_zero_units_parse_numerically);
@@ -262,4 +273,5 @@ void register_bsd_name_tests(void)
     RUN(bsd_name_format_rejects_out_of_domain);
     RUN(bsd_name_format_too_small_buffer_returns_false);
     RUN(bsd_name_format_rejects_null_buffer);
+    RUN(registry_id_floor_classifies_selector_values);
 }

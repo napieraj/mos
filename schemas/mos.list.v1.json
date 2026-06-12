@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/napieraj/mos/schemas/mos.list.v1.json",
   "title": "mos.list.v1",
-  "description": "Enumeration envelope emitted by `mos --list --json` (and `mos list --json`). The drives array may be empty (CI runners, hosts with no optical drives); empty array is success, not failure.",
+  "description": "Enumeration envelope emitted by `mos list --json`. The drives array may be empty (CI runners, hosts with no optical drives); empty array is success, not failure.",
   "type": "object",
   "required": [
     "schema",

@@ -57,7 +57,7 @@
 #include <string.h>
 #include <time.h>
 
-/* Private run-loop mode for the watch's IOKit and DA sources — never
+/* Private run-loop mode for the watch's IOKit and DR doorbell sources — never
    kCFRunLoopDefaultMode — so a host's default-mode work can't dispatch our
    callbacks and our CFRunLoopStop can't halt a run-loop invocation the host
    owns. The pump runs this same mode, so our sources fire only while
@@ -71,8 +71,8 @@ struct mos_watch {
     mos_watch_state core;
 
     /* What we're watching: the whole-disk unit (N in "diskN"), or -1 for
-       an empty/open-tray drive. Tags emitted events and drives the Disk
-       Arbitration wake filter — NOT the authority for which physical
+       an empty/open-tray drive. Tags emitted events and feeds the
+       mos_watch_bsd_unit accessor — NOT the authority for which physical
        drive to probe. The actual probe identity is `registry_id` below. */
     int64_t bsd_unit;
 
@@ -255,9 +255,11 @@ static mos_error watch_probe(void *ctx, mos_state_result *out)
 
     /* The drive is pinned by registry ID, but the media's BSD unit is not
        stable (-1 when empty at open; changes across eject/reinsert). Refresh
-       the ADAPTER's copy for the DA wake filter; the pure core adopts the
-       probe's unit itself on every successful pump (mos_watch_core.c), so
-       the error/device_removed fallback no longer depends on this adapter
+       the ADAPTER's copy (it feeds the mos_watch_bsd_unit accessor; the DR
+       doorbell filters by registry ID, so no wake filter reads it); the pure
+       core adopts the probe's unit itself on every successful pump
+       (mos_watch_core.c), so the error/device_removed fallback no
+       longer depends on this adapter
        — a layering obligation retired by the third review. media_id (the
        F1 swap fingerprint) needs no manual tracking — it rides the
        *out = *qr copy and the core reads it from the result. */
@@ -334,37 +336,38 @@ static const mos_watch_ops_t apple_watch_slot_ops = {
     .wall_ms = watch_wall_ms,
 };
 
-/* Add one device to an all-watch from a DR snapshot record. The slot's
-   ctx storage is claimed via the same first-free scan add() uses (the
-   single-thread contract makes the two scans agree); on dedupe the
-   pre-filled slot entry is simply unused. */
+/* Add one device from a DR snapshot. Dedupe by registry_id BEFORE
+   touching slot storage; the slot is claimed by the same first-free
+   scan add() uses (single-thread contract keeps the scans agreeing). */
 static void watch_all_add_device(mos_watch_t *w,
                                  const mos_internal_dr_snapshot *snap,
                                  bool mid_stream)
 {
     if (!w || !snap || snap->registry_id == 0) return;
 
+    if (mos_internal_watch_all_find(&w->all, snap->registry_id) >= 0) {
+        return; /* duplicate Appeared — already streaming in a slot */
+    }
     int i = mos_internal_watch_all_free_slot(&w->all);
-    if (i < 0 && mos_internal_watch_all_find(&w->all, snap->registry_id) < 0) {
+    if (i < 0) {
         return; /* full and genuinely new — documented drop until a slot frees */
     }
-    if (i >= 0) {
-        /* Width-agreement pins: source and destination both carry the
-           SPC-4 identity widths, so these copies can never truncate.
-           Successor of the retired INQUIRY path's per-site asserts. */
-        _Static_assert(sizeof w->slots[i].vendor   == sizeof snap->vendor,
-                       "slot vendor width must match the DR snapshot's");
-        _Static_assert(sizeof w->slots[i].product  == sizeof snap->product,
-                       "slot product width must match the DR snapshot's");
-        _Static_assert(sizeof w->slots[i].revision == sizeof snap->revision,
-                       "slot revision width must match the DR snapshot's");
-        w->slots[i].registry_id = snap->registry_id;
-        strlcpy(w->slots[i].vendor,   snap->vendor,   sizeof w->slots[i].vendor);
-        strlcpy(w->slots[i].product,  snap->product,  sizeof w->slots[i].product);
-        strlcpy(w->slots[i].revision, snap->revision, sizeof w->slots[i].revision);
-    }
+    /* Width-agreement pins: source and destination both carry the
+       SPC-4 identity widths, so these copies can never truncate.
+       Successor of the retired INQUIRY path's per-site asserts. */
+    _Static_assert(sizeof w->slots[i].vendor   == sizeof snap->vendor,
+                   "slot vendor width must match the DR snapshot's");
+    _Static_assert(sizeof w->slots[i].product  == sizeof snap->product,
+                   "slot product width must match the DR snapshot's");
+    _Static_assert(sizeof w->slots[i].revision == sizeof snap->revision,
+                   "slot revision width must match the DR snapshot's");
+    w->slots[i].registry_id = snap->registry_id;
+    strlcpy(w->slots[i].vendor,   snap->vendor,   sizeof w->slots[i].vendor);
+    strlcpy(w->slots[i].product,  snap->product,  sizeof w->slots[i].product);
+    strlcpy(w->slots[i].revision, snap->revision, sizeof w->slots[i].revision);
+
     (void)mos_internal_watch_all_add(&w->all, &apple_watch_slot_ops,
-                                     i >= 0 ? &w->slots[i] : NULL,
+                                     &w->slots[i],
                                      snap->bsd_unit, snap->registry_id,
                                      monotonic_ms(),
                                      w->all_stream_open_wall_ms,
@@ -518,7 +521,7 @@ static void dr_status_changed_callback(DRNotificationCenterRef center,
    service termination. Called from watch_open_common after the pure
    watch core is initialized. Each step that fails tears down what
    it created and returns leaving every field NULL — caller falls
-   back to poll-only for this mechanism (the DA path below is
+   back to poll-only for this mechanism (the DR doorbell below is
    independent). The invariant this maintains: after this function
    returns, w->notify_port is non-NULL iff w->notify_source is also
    non-NULL AND a kIOGeneralInterest notification is registered.
@@ -551,7 +554,7 @@ static void setup_iokit_interest_wake(mos_watch_t *w)
             watch_interest_callback, w, &w->notify_token);
     if (kr != KERN_SUCCESS) {
         /* Notification registration failed; remove the source and
-           tear down the port. DA below is unaffected. */
+           tear down the port. The DR doorbell below is unaffected. */
         CFRunLoopRemoveSource(w->run_loop, w->notify_source,
                               MOS_WATCH_RUN_LOOP_MODE);
         w->notify_source = NULL;
@@ -591,10 +594,9 @@ static void teardown_iokit_interest_wake(mos_watch_t *w)
 
 /* All-mode lifecycle (Phase 2b): Appeared joins a device to the
    stream (its first event is relabeled device_appeared by the pure
-   multiplexer), Disappeared marks the slot's core removed so its next
-   pump emits a per-device device_removed. Both are load-bearing in
-   all mode only — single-target watches keep kIOGeneralInterest as
-   their terminal-removal source and never register these. */
+   multiplexer); Disappeared wakes the matching slot so its reopen can
+   confirm removal. All-mode only — single-target watches keep
+   kIOGeneralInterest as their terminal-removal source. */
 static void dr_device_appeared_callback(DRNotificationCenterRef center,
                                         void *observer, CFStringRef name,
                                         DRTypeRef object,
@@ -629,7 +631,11 @@ static void dr_device_disappeared_callback(DRNotificationCenterRef center,
     }
     int slot = (id != 0) ? mos_internal_watch_all_find(&w->all, id) : -1;
     if (slot >= 0) {
-        mos_internal_watch_notify_removed(&w->all.cores[slot]);
+        /* Wake, not removal authority: the woken reopen confirms
+           (NO_DEVICE → terminal) at the same latency, and a spurious
+           Disappeared costs one probe instead of a permanent eviction
+           (C1 — DR data never decides state). */
+        mos_internal_watch_notify_wake(&w->all.cores[slot]);
     }
     /* Unresolved id: the probe floor catches it — the slot's next
        reopen returns NO_DEVICE, which the core treats as removal. */
@@ -856,6 +862,21 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
                                             transition_poll_ms, err_out);
 }
 
+mos_watch_t *mos_watch_open_by_registry_id(uint64_t registry_id,
+                                           uint32_t stable_poll_ms,
+                                           uint32_t transition_poll_ms,
+                                           mos_error *err_out)
+{
+    mos_error err = MOS_OK;
+    mos_handle_t *h = mos_open_by_registry_id(registry_id, &err);
+    if (!h) {
+        if (err_out) *err_out = (err != MOS_OK) ? err : MOS_ERR_IO;
+        return NULL;
+    }
+    return watch_open_from_validated_handle(h, stable_poll_ms,
+                                            transition_poll_ms, err_out);
+}
+
 mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
                                 uint32_t transition_poll_ms,
                                 mos_error *err_out)
@@ -878,21 +899,15 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
     w->all_stream_open_wall_ms = stream_epoch_wall_ms();
     mos_internal_watch_all_init(&w->all);
 
-    /* Initial population from ONE directory snapshot — no per-device
-       opens (the first probe validates each device; a vanished one
-       yields its device_removed through the normal path). Zero devices
-       is a valid empty stream: the Appeared observer below is what
-       makes it live. */
-    mos_internal_dr_snapshot snap[MOS_WATCH_ALL_CAP];
-    size_t n = mos_internal_dr_copy_snapshot(snap, MOS_WATCH_ALL_CAP);
-    for (size_t i = 0; i < n; ++i) {
-        watch_all_add_device(w, &snap[i], /*mid_stream=*/false);
-    }
-
+    /* Observers BEFORE the snapshot: a device arriving in the gap is
+       caught by the queued Appeared (its callback runs only inside the
+       pump), and one landing in both dedupes by registry_id. The
+       reverse order left an unwatchable window — all-mode discovery
+       has no poll floor (C2, doc/research/2026-06-11-review-triage.md). */
     w->run_loop = CFRunLoopGetCurrent();
     setup_dr_doorbell_wake(w);
     /* No kIOGeneralInterest in all mode: removal rides DR Disappeared
-       (fast path) + per-probe NO_DEVICE (floor). */
+       (wake) + per-probe NO_DEVICE (floor). */
 
     /* UNLIKE single mode, the doorbell is NOT latency-only here, so
        its failure cannot soft-fail to polling: arrivals are discovered
@@ -910,6 +925,16 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
         mos_watch_close(w);
         if (err_out) *err_out = MOS_ERR_IO;
         return NULL;
+    }
+
+    /* Initial population from ONE directory snapshot — no per-device
+       opens (the first probe validates each device; a vanished one
+       yields its device_removed through the normal path). Zero devices
+       is a valid empty stream. */
+    mos_internal_dr_snapshot snap[MOS_WATCH_ALL_CAP];
+    size_t n = mos_internal_dr_copy_snapshot(snap, MOS_WATCH_ALL_CAP);
+    for (size_t i = 0; i < n; ++i) {
+        watch_all_add_device(w, &snap[i], /*mid_stream=*/false);
     }
 
     if (err_out) *err_out = MOS_OK;
