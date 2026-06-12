@@ -391,6 +391,45 @@ mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
                            char *name_buf, size_t name_cap,
                            char *path_buf, size_t path_cap);
 
+/* ---- Drive capabilities (v0.4 typed API) ----------------------------- */
+
+/* Result of a drive-capabilities query. Opaque, handle-owned; valid
+   until the next mos_query_drive_caps() call or mos_close(). */
+typedef struct mos_drive_caps mos_drive_caps;
+
+/*
+ * Query the drive's AACS capability facts: one full GET CONFIGURATION
+ * (RT=0) through the non-exclusive convenience method, decoded by the
+ * bounds-checked feature walk. These are the spec-grounded fields a
+ * MakeMKV drive dump shows ("Highest AACS version", bus-encryption
+ * support) WITHOUT the LibreDrive status synthesis, which is a MakeMKV
+ * database property, not a drive property (design doc 2026-06-10).
+ * bus_encryption is the DRIVE-REPORTED support bit from the AACS
+ * feature payload (0x010D byte 0 bit 1) — a firmware assertion; the
+ * cryptographically signed BEC bit lives in the AACS drive
+ * certificate behind a raw REPORT KEY, which mos does not issue
+ * (scope doctrine: no raw verb without GESN-grade justification).
+ * Drives without the AACS feature (every non-BD unit) report
+ * aacs=false — that is data, not an error.
+ */
+mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out);
+
+/* Accessors. NULL-tolerant (NULL reads as 0/false). aacs_version and
+   bus_encryption are meaningful only when aacs is true. */
+bool    mos_drive_caps_aacs(const mos_drive_caps *c);
+uint8_t mos_drive_caps_aacs_version(const mos_drive_caps *c);
+bool    mos_drive_caps_bus_encryption(const mos_drive_caps *c);
+
+/* Drive identity for a held handle — the open-time directory data
+   (DiscRecording pre-parsed INQUIRY strings) and the drive service's
+   registry entry ID. Zero commands. Strings are borrowed from the
+   handle (valid until mos_close), NULL when the directory had no
+   identity; registry id 0 = unavailable. */
+const char *mos_handle_vendor(const mos_handle_t *h);
+const char *mos_handle_product(const mos_handle_t *h);
+const char *mos_handle_revision(const mos_handle_t *h);
+uint64_t    mos_handle_registry_id(const mos_handle_t *h);
+
 /*
  * Diagnostic: issue a raw CDB against the drive. Requires exclusive
  * access; returns MOS_ERR_BUSY or MOS_ERR_EXCLUSIVE_ACCESS if the drive

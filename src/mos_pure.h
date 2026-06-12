@@ -226,6 +226,24 @@ bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
                                       uint16_t feature_code,
                                       mos_config_feature *out);
 
+/* AACS capability facts from a full (RT=0) GET CONFIGURATION response —
+   the spec-grounded subset of what MakeMKV's drive dump shows, WITHOUT
+   the LibreDrive synthesis (design doc 2026-06-10 + 06-12 addendum).
+   bus_encryption is the DRIVE-REPORTED support bit (feature 0x010D
+   payload byte 0 bit 1, per libaacs/UDFclient agreement; the
+   authoritative signed BEC bit lives in the AACS drive certificate
+   behind REPORT KEY, out of scope). Feature present but payload
+   truncated (< 4 bytes) is malformed and reads as absent — fail
+   closed, same rule as the walker. */
+typedef struct mos_drive_caps {
+    bool    aacs;            /* feature 0x010D present in the walk      */
+    uint8_t aacs_version;    /* payload byte 3; 0 when aacs is false    */
+    bool    bus_encryption;  /* payload byte 0 bit 1; false when absent */
+} mos_drive_caps;
+
+void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
+                                        mos_drive_caps *out);
+
 /* Current Profile from a GET CONFIGURATION response; false ("no
    profile") unless the reply's own Data Length covers the field, so a
    truncated reply is never read as profile 0x0000 (= "no media").

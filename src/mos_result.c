@@ -218,3 +218,20 @@ uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i)
 {
     return (t && i < t->track_count) ? t->tracks[i].start_lba : 0;
 }
+
+/* ---- mos_drive_caps accessors (mos_query_drive_caps) ----------------- */
+
+bool mos_drive_caps_aacs(const mos_drive_caps *c)
+{
+    return c ? c->aacs : false;
+}
+
+uint8_t mos_drive_caps_aacs_version(const mos_drive_caps *c)
+{
+    return c ? c->aacs_version : 0;
+}
+
+bool mos_drive_caps_bus_encryption(const mos_drive_caps *c)
+{
+    return c ? c->bus_encryption : false;
+}

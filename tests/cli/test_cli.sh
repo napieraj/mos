@@ -277,7 +277,7 @@ assert_contains "unknown subcommand diagnostic names recognized set" "$ERR" "sta
 # This avoids the worst UX of users trying `mos capacity` once,
 # getting a vague error, and never trying again when the typed APIs
 # arrive.
-for reserved in capacity identity tray speed features; do
+for reserved in capacity tray speed features; do
     run_mos "$reserved" --bsd disk0
     assert_ec "reserved subcommand '$reserved' exits 64" "64" "$EC"
     ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
@@ -415,6 +415,16 @@ case "$ERR" in
     assert_contains "probe --dump empty directory" "$OUT" "0 device(s)"
     ;;
 esac
+
+# Test 19a (drive verb): same envelope contract as metadata below;
+# 'identity' left the reserved list when metadata + drive shipped its
+# surface, so it must now hit the UNKNOWN-subcommand diagnostic.
+run_mos drive --json --index 99
+assert_ec       "drive no-drive JSON exit 66"        "66"   "$EC"
+assert_contains "drive error envelope schema"        "$OUT" '"schema": "mos.error.v1"'
+run_mos identity --bsd disk0
+assert_ec       "retired 'identity' exits 64"        "64"   "$EC"
+assert_contains "retired 'identity' is unknown now"  "$ERR" "unknown subcommand"
 
 # Test 19 (metadata verb): selector errors carry the same mos.error.v1
 # contract as status — the verb's success path needs a drive, but the

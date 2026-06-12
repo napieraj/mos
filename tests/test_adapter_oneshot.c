@@ -357,6 +357,48 @@ TEST(adapter_query_volume_gates_on_nub)
     return 0;
 }
 
+TEST(adapter_drive_caps_roundtrip_and_absent)
+{
+    /* RT=0 reply: feature header (profile 0x0040) + Profile List +
+       AACS feature (BEC set, AACS version 68). */
+    static const uint8_t cfg_aacs[] = {
+        0,0,0,16,  0,0, 0x00,0x40,
+        0x00,0x00, 0x03, 0x00,
+        0x01,0x0D, 0x09, 0x04,  0x03, 0x00, 0x01, 68,
+    };
+    mos_fake_reset();
+    mos_fake_set_getconfig_reply(0x00, cfg_aacs, sizeof cfg_aacs);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    const mos_drive_caps *c = NULL;
+    EXPECT_EQ(MOS_OK, mos_query_drive_caps(h, &c));
+    EXPECT(mos_drive_caps_aacs(c));
+    EXPECT(mos_drive_caps_bus_encryption(c));
+    EXPECT_EQ(68, mos_drive_caps_aacs_version(c));
+
+    /* Non-BD drive: feature list without 0x010D — aacs=false is data. */
+    static const uint8_t cfg_plain[] = {
+        0,0,0,8,  0,0, 0x00,0x10,
+        0x00,0x00, 0x03, 0x00,
+    };
+    mos_fake_set_getconfig_reply(0x00, cfg_plain, sizeof cfg_plain);
+    EXPECT_EQ(MOS_OK, mos_query_drive_caps(h, &c));
+    EXPECT(!mos_drive_caps_aacs(c));
+    EXPECT(!mos_drive_caps_bus_encryption(c));
+    EXPECT_EQ(0, mos_drive_caps_aacs_version(c));
+
+    /* Transport injection maps the IOReturn. */
+    mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_GETCONFIG, 0xE00002D6u);
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_query_drive_caps(h, &c));
+    EXPECT(c == NULL);
+
+    mos_close(h);
+    return 0;
+}
+
 int main(void)
 {
     printf("adapter one-shot (headless, link-seam fake):\n");
@@ -370,6 +412,7 @@ int main(void)
     RUN(adapter_toc_round_trip_and_fail_closed);
     RUN(adapter_da_volume_lookup_modalities);
     RUN(adapter_query_volume_gates_on_nub);
+    RUN(adapter_drive_caps_roundtrip_and_absent);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);
     return mos_tests_failed ? 1 : 0;

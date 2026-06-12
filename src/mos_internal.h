@@ -55,6 +55,9 @@ struct mos_handle {
 
     /* Handle-owned TOC result (mos_query_toc). Same terms. */
     struct mos_toc            toc;
+
+    /* Handle-owned drive-caps result (mos_query_drive_caps). Same terms. */
+    struct mos_drive_caps     caps;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
@@ -138,10 +141,7 @@ mos_error mos_internal_mmc_test_unit_ready    (mos_handle_t *h,
                                                uint8_t sense[18]);
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile);
 
-/* STUB (v0.4, hardware-gated): the IOKit half of GET CONFIGURATION's feature
- * surface. Returns MOS_ERR_UNSUPPORTED until the RT=0 issuance is written and
- * HW-validated. See mos_scsi.c for the walker seam. */
-mos_error mos_internal_mmc_get_features       (mos_handle_t *h);
+
 
 /* Open a drive by its IORegistry entry ID — the identity-stable
    primitive: the kernel resolves IORegistryEntryIDMatching atomically,

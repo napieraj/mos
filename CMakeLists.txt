@@ -222,6 +222,7 @@ add_executable(mos
     cli/common.c
     cli/status.c
     cli/metadata.c
+    cli/drive.c
     cli/list.c
     cli/watch.c
     cli/human.c

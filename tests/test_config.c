@@ -561,6 +561,40 @@ TEST(config_payload_ending_exactly_at_span_is_accepted)
     return 0;
 }
 
+TEST(aacs_caps_decode_and_fail_closed)
+{
+    /* AACS feature, version 2, BEC set, AACS version 68. */
+    uint8_t buf[] = {
+        0,0,0,16,  0,0, 0x00,0x40,
+        0x00,0x00, 0x03, 0x00,
+        0x01,0x0D, 0x09, 0x04,  0x03, 0x00, 0x01, 68,
+    };
+    mos_drive_caps c;
+    mos_internal_aacs_caps_from_config(buf, sizeof buf, &c);
+    EXPECT(c.aacs && c.bus_encryption && c.aacs_version == 68);
+
+    /* BEC clear. */
+    buf[16] = 0x01;
+    mos_internal_aacs_caps_from_config(buf, sizeof buf, &c);
+    EXPECT(c.aacs && !c.bus_encryption && c.aacs_version == 68);
+
+    /* Feature absent. */
+    uint8_t plain[] = { 0,0,0,8,  0,0, 0x00,0x10,  0x00,0x00, 0x03, 0x00 };
+    mos_internal_aacs_caps_from_config(plain, sizeof plain, &c);
+    EXPECT(!c.aacs && !c.bus_encryption && c.aacs_version == 0);
+
+    /* Feature present but payload truncated to 0 bytes: malformed,
+       reads as absent (fail closed). */
+    uint8_t trunc[] = { 0,0,0,8,  0,0, 0x00,0x40,  0x01,0x0D, 0x09, 0x00 };
+    mos_internal_aacs_caps_from_config(trunc, sizeof trunc, &c);
+    EXPECT(!c.aacs);
+
+    mos_internal_aacs_caps_from_config(NULL, 0, &c);
+    EXPECT(!c.aacs);
+    mos_internal_aacs_caps_from_config(buf, sizeof buf, NULL); /* no crash */
+    return 0;
+}
+
 TEST(config_find_feature_returns_match_with_payload)
 {
     /* Profile List, then an AACS descriptor (0x010D, version 2 in the
@@ -606,6 +640,7 @@ TEST(config_find_feature_absent_or_hostile_is_false)
 
 void register_config_tests(void)
 {
+    RUN(aacs_caps_decode_and_fail_closed);
     RUN(config_find_feature_returns_match_with_payload);
     RUN(config_find_feature_absent_or_hostile_is_false);
     RUN(config_payload_ending_exactly_at_span_is_accepted);

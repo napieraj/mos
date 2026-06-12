@@ -16,7 +16,9 @@
    diagnostic, so promoting a name in v0.4 is a one-site edit.
    tests/cli/test_cli.sh (Test 18) loops over the same set. */
 static const char *const reserved_subcommands[] = {
-    "capacity", "identity", "tray", "speed", "features", NULL
+    /* "identity" retired 2026-06-12: its surface shipped as the
+       metadata + drive verbs (design doc taxonomy). */
+    "capacity", "tray", "speed", "features", NULL
 };
 
 static bool is_reserved_subcommand(const char *cmd)
@@ -47,6 +49,8 @@ void print_usage(FILE *f)
         "                    joins; removal is per-drive, stream continues).\n"
         "  metadata [drive]  Disc identity record (profile, TOC, disc\n"
         "                    info, mounted volume) — mos.metadata.v1.\n"
+        "  drive [drive]     Drive facts (identity, AACS capabilities)\n"
+        "                    — mos.drive.v1.\n"
 #ifdef MOS_CLI_PROBE
         "  probe  <drive>    Diagnostic: stream raw IOKit/DiscRecording\n"
         "                    notification events (NDJSON, mos.probe.v0)\n"
@@ -193,7 +197,7 @@ int main(int argc, char **argv)
 
     /* Subcommands are additive aliases for the flag forms, recognized only
        when argv[1] is a bare word (flag-first invocations reach getopt
-       unchanged). The five v0.4 names are reserved so a premature use gets
+       unchanged). The remaining v0.4 names are reserved so a premature use gets
        a clearer diagnostic than "unknown subcommand". */
     if (argc >= 2 && argv[1][0] != '-' && argv[1][0] != '\0') {
         const char *cmd = argv[1];
@@ -206,6 +210,8 @@ int main(int argc, char **argv)
             flag_watch = true;
         } else if (strcmp(cmd, "metadata") == 0) {
             flag_metadata = true;
+        } else if (strcmp(cmd, "drive") == 0) {
+            flag_drive = true;
         } else if (strcmp(cmd, "probe") == 0) {
 #ifdef MOS_CLI_PROBE
             flag_probe = true;
@@ -234,7 +240,7 @@ int main(int argc, char **argv)
         } else {
             fprintf(stderr, "%s: unknown subcommand: ", progname);
             mos_cli_safe_ascii(stderr, cmd);
-            fputs("\nRecognized: status, list, watch, metadata"
+            fputs("\nRecognized: status, list, watch, metadata, drive"
 #ifdef MOS_CLI_PROBE
                   ", probe"
 #endif
@@ -393,6 +399,7 @@ int main(int argc, char **argv)
 #endif
     if (flag_list)  return run_list();
     if (flag_metadata) return run_metadata();
+    if (flag_drive) return run_drive();
     if (flag_watch) return run_watch();
     return run_query();
 }

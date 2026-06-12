@@ -130,3 +130,19 @@ bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
     *profile = (uint16_t)(((uint16_t)buf[6] << 8) | buf[7]);
     return true;
 }
+
+/* Contract in mos_pure.h. */
+void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
+                                        mos_drive_caps *out)
+{
+    if (!out) return;
+    *out = (mos_drive_caps){0};
+
+    mos_config_feature f;
+    if (!mos_internal_config_find_feature(buf, len, 0x010D, &f)) return;
+    if (f.data_len < 4 || !f.data) return;    /* malformed: reads as absent */
+
+    out->aacs           = true;
+    out->bus_encryption = (f.data[0] & 0x02u) != 0;
+    out->aacs_version   = f.data[3];
+}

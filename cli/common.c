@@ -13,6 +13,7 @@ bool        flag_list   = false;
 bool        flag_json   = false;
 bool        flag_watch  = false;
 bool        flag_metadata = false;
+bool        flag_drive = false;
 bool        flag_probe  = false;  /* probe subcommand (MOS_CLI_PROBE builds) */
 bool        flag_dump   = false;  /* probe --dump one-shot DR capture */
 

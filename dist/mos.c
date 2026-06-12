@@ -295,6 +295,24 @@ bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
                                       uint16_t feature_code,
                                       mos_config_feature *out);
 
+/* AACS capability facts from a full (RT=0) GET CONFIGURATION response —
+   the spec-grounded subset of what MakeMKV's drive dump shows, WITHOUT
+   the LibreDrive synthesis (design doc 2026-06-10 + 06-12 addendum).
+   bus_encryption is the DRIVE-REPORTED support bit (feature 0x010D
+   payload byte 0 bit 1, per libaacs/UDFclient agreement; the
+   authoritative signed BEC bit lives in the AACS drive certificate
+   behind REPORT KEY, out of scope). Feature present but payload
+   truncated (< 4 bytes) is malformed and reads as absent — fail
+   closed, same rule as the walker. */
+typedef struct mos_drive_caps {
+    bool    aacs;            /* feature 0x010D present in the walk      */
+    uint8_t aacs_version;    /* payload byte 3; 0 when aacs is false    */
+    bool    bus_encryption;  /* payload byte 0 bit 1; false when absent */
+} mos_drive_caps;
+
+void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
+                                        mos_drive_caps *out);
+
 /* Current Profile from a GET CONFIGURATION response; false ("no
    profile") unless the reply's own Data Length covers the field, so a
    truncated reply is never read as profile 0x0000 (= "no media").
@@ -660,6 +678,9 @@ struct mos_handle {
 
     /* Handle-owned TOC result (mos_query_toc). Same terms. */
     struct mos_toc            toc;
+
+    /* Handle-owned drive-caps result (mos_query_drive_caps). Same terms. */
+    struct mos_drive_caps     caps;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
@@ -743,10 +764,7 @@ mos_error mos_internal_mmc_test_unit_ready    (mos_handle_t *h,
                                                uint8_t sense[18]);
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile);
 
-/* STUB (v0.4, hardware-gated): the IOKit half of GET CONFIGURATION's feature
- * surface. Returns MOS_ERR_UNSUPPORTED until the RT=0 issuance is written and
- * HW-validated. See mos_scsi.c for the walker seam. */
-mos_error mos_internal_mmc_get_features       (mos_handle_t *h);
+
 
 /* Open a drive by its IORegistry entry ID — the identity-stable
    primitive: the kernel resolves IORegistryEntryIDMatching atomically,
@@ -1306,6 +1324,22 @@ bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
     return true;
 }
 
+/* Contract in mos_pure.h. */
+void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
+                                        mos_drive_caps *out)
+{
+    if (!out) return;
+    *out = (mos_drive_caps){0};
+
+    mos_config_feature f;
+    if (!mos_internal_config_find_feature(buf, len, 0x010D, &f)) return;
+    if (f.data_len < 4 || !f.data) return;    /* malformed: reads as absent */
+
+    out->aacs           = true;
+    out->bus_encryption = (f.data[0] & 0x02u) != 0;
+    out->aacs_version   = f.data[3];
+}
+
 /* ==== src/mos_discinfo.c ==== */
 /*
  * mos_discinfo.c — pure, bounds-safe decode of a READ DISC INFORMATION
@@ -1591,6 +1625,23 @@ uint8_t mos_toc_track_control(const mos_toc *t, size_t i)
 uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i)
 {
     return (t && i < t->track_count) ? t->tracks[i].start_lba : 0;
+}
+
+/* ---- mos_drive_caps accessors (mos_query_drive_caps) ----------------- */
+
+bool mos_drive_caps_aacs(const mos_drive_caps *c)
+{
+    return c ? c->aacs : false;
+}
+
+uint8_t mos_drive_caps_aacs_version(const mos_drive_caps *c)
+{
+    return c ? c->aacs_version : 0;
+}
+
+bool mos_drive_caps_bus_encryption(const mos_drive_caps *c)
+{
+    return c ? c->bus_encryption : false;
 }
 
 /* ==== src/mos_state_core.c ==== */
@@ -4691,36 +4742,62 @@ mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
     return MOS_OK;
 }
 
-/*
- * mos_internal_mmc_get_features — STUB (v0.4, hardware-gated).
- *
- * The IOKit half of the GET CONFIGURATION feature surface. Its pure,
- * bounds-safe walker (mos_internal_config_next_feature in mos_config.c) is
- * already written and fuzz/ASan-tested; this is the production caller it
- * waits for. Wired as a real caller over an empty header — so the walker is
- * a live seam, not an orphan with only test callers — and returns
- * UNSUPPORTED until the RT=0 issuance (header + all features) is written and
- * HW-validated. The walker owns the bounds; this half must not re-derive
- * them, only issue the command and consume features.
- */
-mos_error mos_internal_mmc_get_features(mos_handle_t *h)
+mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
 {
-    if (!h || !h->mmc) return MOS_ERR_INVALID_ARG;
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
-    uint8_t            buf[8] = {0};   /* TODO(v0.4): GetConfiguration(RT=0) fills a real,
-                                          larger buffer — parse bound via
-                                          mos_internal_trusted_len (contract O-4):
-                                          min(allocated, realizedByteCount), header
-                                          Data Length only ever shrinks it. */
-    size_t             cursor = 8;     /* past the 8-byte feature header */
-    mos_config_feature feat;
+    /* RT=0: header + every feature the drive implements. 1024 bytes
+       holds real-world feature lists several times over (a loaded
+       BD-RE's full list runs ~400 bytes); a longer hostile claim is
+       simply clamped — the walker trusts sizeof buf, and the reply's
+       own lengths only ever shrink the walk (O-4). Decode is the pure,
+       fuzz-checked mos_internal_aacs_caps_from_config: feature absent
+       (every non-BD drive) reads as aacs=false, which is data, not an
+       error. Non-exclusive convenience call: no lock interaction. */
+    uint8_t         buf[1024] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
 
-    while (mos_internal_config_next_feature(buf, sizeof buf, &cursor, &feat)) {
-        /* TODO(v0.4): record feat.feature_code / feat.current / feat.data
-           into the (not-yet-designed) features output. */
+    IOReturn rc = (*h->mmc)->GetConfiguration(
+        h->mmc,
+        (UInt8)0x00,             /* RT = 00b, all features              */
+        (UInt16)0x0000,          /* starting feature number             */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
     }
 
-    return MOS_ERR_UNSUPPORTED;        /* not implemented until the issuance lands */
+    mos_internal_aacs_caps_from_config(buf, sizeof(buf), &h->caps);
+    *out = &h->caps;
+    return MOS_OK;
+}
+
+/* Open-time directory identity, exposed for the drive verb: zero
+   commands, same borrowed-string terms as the state result's copies
+   (which point into these same buffers). */
+const char *mos_handle_vendor(const mos_handle_t *h)
+{
+    return (h && h->vendor_str[0]) ? h->vendor_str : NULL;
+}
+
+const char *mos_handle_product(const mos_handle_t *h)
+{
+    return (h && h->product_str[0]) ? h->product_str : NULL;
+}
+
+const char *mos_handle_revision(const mos_handle_t *h)
+{
+    return (h && h->revision_str[0]) ? h->revision_str : NULL;
+}
+
+uint64_t mos_handle_registry_id(const mos_handle_t *h)
+{
+    return h ? h->drive_registry_id : 0;
 }
 
 /* The open-time INQUIRY (and its fixed-width SPC-4 string copier with
