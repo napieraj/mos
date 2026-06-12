@@ -26,7 +26,7 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
 
       - name: Toolchain versions
         run: |
@@ -295,7 +295,7 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
 
       - name: Configure with sanitizers
         # -O1 keeps inlining sane for stack traces while still exercising
@@ -326,7 +326,7 @@ jobs:
     name: Homebrew formula audit
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
       - name: brew style
         run: brew style homebrew/mos.rb || true
         # `|| true` until the first tag is pushed and url/sha256 are filled.
@@ -338,9 +338,9 @@ jobs:
     # drift fails CI fast without waiting for the build matrix.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
 
-      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0 (Node 24)
         with:
           # Pinned, not '3.x': requirements-ci.txt hash-pins rpds-py
           # 0.20.0, whose newest prebuilt wheels stop at cp312/cp313 —
@@ -376,7 +376,7 @@ jobs:
     # checker, then re-judge).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
       - name: build and run nub invariant checker
         run: |
           set -e
@@ -405,7 +405,7 @@ jobs:
     name: Strict pure build (-O2 -Werror, Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
 
       - name: Build pure tests under -O2 -Werror
         run: |
@@ -466,7 +466,7 @@ jobs:
     name: Strict adapter build (-Werror SDK drift, macOS)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
 
       - name: Compile macOS adapter TUs with stricter -Werror
         run: |
@@ -498,7 +498,7 @@ jobs:
     name: Doc staleness gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
       - name: Grep live docs for known-stale markers
         run: sh scripts/doc-staleness.sh
 
@@ -513,7 +513,7 @@ jobs:
     name: Fuzz pure layer (ASan+UBSan, Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
 
       - name: Build and run fuzz_pure (smoke)
         env:
@@ -547,7 +547,7 @@ jobs:
     name: Adapter fake (headless, macOS)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
 
       - name: Configure + build + run (ASan/UBSan)
         env:
