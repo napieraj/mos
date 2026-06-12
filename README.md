@@ -19,18 +19,18 @@ and track counts) are available on demand via `mos_query_disc_info()`.
 ## Usage
 
 ```
-mos [subcommand] [drive] [options]
+mos [subcommand [drive]] [options]
 ```
 
 The drive subject is positional after a subcommand, like
 `diskutil info disk4`: an Index from `mos list`, a `registry_id`
 (pasteable from any JSON output — the two digit forms cannot collide,
-xnu starts registry IDs above 2^32), or a BSD form (`disk4`, `rdisk4`,
-`/dev/disk4`). With one drive attached it may
-be omitted (`mos status`); with several, `mos status` without a
-subject exits 64 and prints the drive table to stderr — no first-drive
-guessing. Bare `mos` is an entry point, not a status query: it prints
-the drive table and a hint to stderr and exits 64.
+xnu starts registry IDs above 2^32), or a BSD form (`disk4`,
+`rdisk4`, `/dev/disk4`). With one drive attached it may be omitted
+(`mos status`); with several, `mos status` without a subject exits 64
+and prints the drive table to stderr — no first-drive guessing. Bare
+`mos` is an entry point, not a status query: it prints the drive
+table and a hint to stderr and exits 64.
 
 Human views and JSON share every enum string verbatim
 (`ready`, `bd_rom`) — a terminal report and a jq query can
@@ -38,10 +38,9 @@ never disagree. Identity is the same three fields on every surface
 (`vendor` / `product` / `revision`), captured from the platform's
 device directory once at device attach; when verifying a firmware
 flash, confirm `registry_id` changed too, or you're reading the
-pre-flash cache. The `bsd` field
-carries the full device node (`/dev/disk4`) in both surfaces:
-pasteable, pipeable, and always a valid drive argument when non-null
-(an empty drive has none).
+pre-flash cache. The `bsd` field carries the full device node
+(`/dev/disk4`) in both surfaces: pasteable, pipeable, and always a
+valid drive argument when non-null (an empty drive has none).
 
 ### Status (default)
 
@@ -112,7 +111,7 @@ to one drive (and the stream then ends on its removal). An insert
 looks like:
 
 ```
-$ mos watch 1
+$ mos watch
 {"schema":"mos.event.v1","event":"snapshot",...,"state":"empty","prev_state":"unknown",...}
 {"schema":"mos.event.v1","event":"state_changed",...,"state":"loading","prev_state":"empty",...}
 {"schema":"mos.event.v1","event":"state_changed",...,"bsd":"/dev/disk4","state":"ready",...}
@@ -162,7 +161,7 @@ git clone https://github.com/napieraj/mos
 cd mac-optical-state
 make build      # release build of library + CLI (thin wrapper over cmake)
 make test       # pure-data unit tests — no drive or hardware needed
-./build/bin/mos
+./build/bin/mos list
 ```
 
 Or drive CMake directly: `cmake -B build -DCMAKE_BUILD_TYPE=Release &&
