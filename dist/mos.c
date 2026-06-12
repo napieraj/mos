@@ -317,6 +317,18 @@ typedef struct mos_drive_caps {
 void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
                                         mos_drive_caps *out);
 
+/* One feature for the public enumeration (mos_enumerate_features) —
+   the descriptor header facts only. The payload bytes stay internal:
+   exposing a borrowed slice across the public ABI buys lifetime rules
+   no current consumer needs; a typed decode (the AACS caps above) is
+   how payload facts go public. Tagged: mos.h forward-declares it. */
+typedef struct mos_feature_info {
+    uint16_t code;
+    bool     current;
+    bool     persistent;
+    uint8_t  version;
+} mos_feature_info;
+
 /* Current Profile from a GET CONFIGURATION response; false ("no
    profile") unless the reply's own Data Length covers the field, so a
    truncated reply is never read as profile 0x0000 (= "no media").
@@ -1646,6 +1658,28 @@ uint8_t mos_drive_caps_aacs_version(const mos_drive_caps *c)
 bool mos_drive_caps_bus_encryption(const mos_drive_caps *c)
 {
     return c ? c->bus_encryption : false;
+}
+
+/* ---- mos_feature_info accessors (mos_enumerate_features) ------------- */
+
+uint16_t mos_feature_info_code(const mos_feature_info_t *f)
+{
+    return f ? f->code : 0;
+}
+
+bool mos_feature_info_current(const mos_feature_info_t *f)
+{
+    return f ? f->current : false;
+}
+
+bool mos_feature_info_persistent(const mos_feature_info_t *f)
+{
+    return f ? f->persistent : false;
+}
+
+uint8_t mos_feature_info_version(const mos_feature_info_t *f)
+{
+    return f ? f->version : 0;
 }
 
 /* ==== src/mos_state_core.c ==== */
@@ -4778,6 +4812,44 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
 
     mos_internal_aacs_caps_from_config(buf, sizeof(buf), &h->caps);
     *out = &h->caps;
+    return MOS_OK;
+}
+
+mos_error mos_enumerate_features(mos_handle_t *h,
+                                 bool (*cb)(const mos_feature_info_t *f,
+                                            void *ctx),
+                                 void *ctx)
+{
+    if (!h || !h->mmc || !cb) return MOS_ERR_INVALID_ARG;
+
+    /* Same issuance and trust terms as mos_query_drive_caps above:
+       RT=0 into a zero-init 1024-byte buffer, sizeof buf is the
+       trusted length, reply lengths only shrink the walk (O-4). */
+    uint8_t         buf[1024] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->GetConfiguration(
+        h->mmc, (UInt8)0x00, (UInt16)0x0000,
+        buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    size_t             cursor = 8;
+    mos_config_feature feat;
+    while (mos_internal_config_next_feature(buf, sizeof buf, &cursor, &feat)) {
+        mos_feature_info info = {
+            .code       = feat.feature_code,
+            .current    = feat.current,
+            .persistent = feat.persistent,
+            .version    = feat.version,
+        };
+        if (!cb(&info, ctx)) break;     /* caller stop, not an error */
+    }
     return MOS_OK;
 }
 

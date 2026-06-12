@@ -15,6 +15,7 @@ schemas/
 ├── mos.event.v1.json     # NDJSON line from `mos [watch] --json`
 ├── mos.metadata.v1.json  # disc-identity record from `mos metadata --json`
 ├── mos.drive.v1.json     # static drive facts from `mos drive --json`
+├── mos.features.v1.json  # raw MMC feature list from `mos features --json`
 ├── examples/             # positive fixtures (must validate)
 ├── negative/             # negative fixtures (must be rejected)
 └── validate.py           # validator script — used by CI, runnable locally

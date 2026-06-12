@@ -92,7 +92,10 @@ from that arc:
   `mos metadata` → `mos.metadata.v1`, `mos drive` → `mos.drive.v1`
   (serial present-and-null pending the VPD-0x80 falsifier),
   `volume_name` in mos.state.v1 and the list surfaces, and the
-  `identity` reservation retired. All of it fixture/fake-verified
+  `identity` reservation retired. Same-day follow-up: the
+  `features` verb shipped too (`mos.features.v1`, the raw RT=0
+  feature list — the medium-writability surface), leaving
+  `capacity`/`tray`/`speed` as the reserved remainder. All of it fixture/fake-verified
   headless; the standing hardware gate applies before any tag. Stage
   2 (UDF names, CD-TEXT, capacity blocks, BG format status, book
   type) stays deferred with named falsifiers banked in the design

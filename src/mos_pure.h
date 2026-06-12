@@ -244,6 +244,18 @@ typedef struct mos_drive_caps {
 void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
                                         mos_drive_caps *out);
 
+/* One feature for the public enumeration (mos_enumerate_features) —
+   the descriptor header facts only. The payload bytes stay internal:
+   exposing a borrowed slice across the public ABI buys lifetime rules
+   no current consumer needs; a typed decode (the AACS caps above) is
+   how payload facts go public. Tagged: mos.h forward-declares it. */
+typedef struct mos_feature_info {
+    uint16_t code;
+    bool     current;
+    bool     persistent;
+    uint8_t  version;
+} mos_feature_info;
+
 /* Current Profile from a GET CONFIGURATION response; false ("no
    profile") unless the reply's own Data Length covers the field, so a
    truncated reply is never read as profile 0x0000 (= "no media").

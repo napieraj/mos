@@ -177,6 +177,16 @@ flag lives in the AACS drive certificate, which mos does not fetch.
 There is deliberately no `libredrive` field: that status is a MakeMKV
 database property, not a drive property.
 
+### Features (medium writability)
+
+`mos features --json` emits `mos.features.v1`: the raw MMC feature
+list, one entry per GET CONFIGURATION descriptor — code, `current`,
+`persistent`, version. The `current` flags are the writability
+answer for the mounted medium: a blank M-DISC is *ready for archival*
+when `mos metadata` says the disc is blank **and** `mos features`
+shows the matching write feature current (0x0041 for BD-R). Codes map
+against MMC-6 §5.3; mos ships no name table.
+
 ### Shell integration
 
 The core pattern — act on every disc that turns readable, on any

@@ -399,6 +399,52 @@ TEST(adapter_drive_caps_roundtrip_and_absent)
     return 0;
 }
 
+typedef struct { int n; uint16_t codes[8]; bool cur[8]; int stop_after; } feat_ctx;
+static bool feat_cb(const mos_feature_info_t *f, void *vctx)
+{
+    feat_ctx *c = (feat_ctx *)vctx;
+    if (c->n < 8) {
+        c->codes[c->n] = mos_feature_info_code(f);
+        c->cur[c->n]   = mos_feature_info_current(f);
+    }
+    c->n++;
+    return c->stop_after == 0 || c->n < c->stop_after;
+}
+
+TEST(adapter_feature_enumeration_order_and_stop)
+{
+    /* Profile List + Core + AACS, reply order. */
+    static const uint8_t cfg[] = {
+        0,0,0,20,  0,0, 0x00,0x40,
+        0x00,0x00, 0x03, 0x00,
+        0x00,0x01, 0x01, 0x00,
+        0x01,0x0D, 0x09, 0x04,  0x03, 0x00, 0x01, 68,
+    };
+    mos_fake_reset();
+    mos_fake_set_getconfig_reply(0x00, cfg, sizeof cfg);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    feat_ctx c = {0};
+    EXPECT_EQ(MOS_OK, mos_enumerate_features(h, feat_cb, &c));
+    EXPECT_EQ(3, c.n);
+    EXPECT_EQ(0x0000, c.codes[0]);
+    EXPECT_EQ(0x0001, c.codes[1]);
+    EXPECT_EQ(0x010D, c.codes[2]);
+    EXPECT(c.cur[0] && c.cur[1] && c.cur[2]);
+
+    /* Early stop is honored and is not an error. */
+    feat_ctx c2 = {0}; c2.stop_after = 1;
+    EXPECT_EQ(MOS_OK, mos_enumerate_features(h, feat_cb, &c2));
+    EXPECT_EQ(1, c2.n);
+
+    EXPECT_EQ(MOS_ERR_INVALID_ARG, mos_enumerate_features(h, NULL, NULL));
+    mos_close(h);
+    return 0;
+}
+
 int main(void)
 {
     printf("adapter one-shot (headless, link-seam fake):\n");
@@ -413,6 +459,7 @@ int main(void)
     RUN(adapter_da_volume_lookup_modalities);
     RUN(adapter_query_volume_gates_on_nub);
     RUN(adapter_drive_caps_roundtrip_and_absent);
+    RUN(adapter_feature_enumeration_order_and_stop);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);
     return mos_tests_failed ? 1 : 0;

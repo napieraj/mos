@@ -235,3 +235,25 @@ bool mos_drive_caps_bus_encryption(const mos_drive_caps *c)
 {
     return c ? c->bus_encryption : false;
 }
+
+/* ---- mos_feature_info accessors (mos_enumerate_features) ------------- */
+
+uint16_t mos_feature_info_code(const mos_feature_info_t *f)
+{
+    return f ? f->code : 0;
+}
+
+bool mos_feature_info_current(const mos_feature_info_t *f)
+{
+    return f ? f->current : false;
+}
+
+bool mos_feature_info_persistent(const mos_feature_info_t *f)
+{
+    return f ? f->persistent : false;
+}
+
+uint8_t mos_feature_info_version(const mos_feature_info_t *f)
+{
+    return f ? f->version : 0;
+}

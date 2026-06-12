@@ -17,8 +17,9 @@
    tests/cli/test_cli.sh (Test 18) loops over the same set. */
 static const char *const reserved_subcommands[] = {
     /* "identity" retired 2026-06-12: its surface shipped as the
-       metadata + drive verbs (design doc taxonomy). */
-    "capacity", "tray", "speed", "features", NULL
+       metadata + drive verbs (design doc taxonomy); "features" shipped
+       the same day as the feature-list verb. */
+    "capacity", "tray", "speed", NULL
 };
 
 static bool is_reserved_subcommand(const char *cmd)
@@ -51,6 +52,8 @@ void print_usage(FILE *f)
         "                    info, mounted volume) — mos.metadata.v1.\n"
         "  drive [drive]     Drive facts (identity, AACS capabilities)\n"
         "                    — mos.drive.v1.\n"
+        "  features [drive]  MMC feature list with current bits (the\n"
+        "                    medium-writability surface) — mos.features.v1.\n"
 #ifdef MOS_CLI_PROBE
         "  probe  <drive>    Diagnostic: stream raw IOKit/DiscRecording\n"
         "                    notification events (NDJSON, mos.probe.v0)\n"
@@ -212,6 +215,8 @@ int main(int argc, char **argv)
             flag_metadata = true;
         } else if (strcmp(cmd, "drive") == 0) {
             flag_drive = true;
+        } else if (strcmp(cmd, "features") == 0) {
+            flag_features = true;
         } else if (strcmp(cmd, "probe") == 0) {
 #ifdef MOS_CLI_PROBE
             flag_probe = true;
@@ -240,7 +245,7 @@ int main(int argc, char **argv)
         } else {
             fprintf(stderr, "%s: unknown subcommand: ", progname);
             mos_cli_safe_ascii(stderr, cmd);
-            fputs("\nRecognized: status, list, watch, metadata, drive"
+            fputs("\nRecognized: status, list, watch, metadata, drive, features"
 #ifdef MOS_CLI_PROBE
                   ", probe"
 #endif
@@ -400,6 +405,7 @@ int main(int argc, char **argv)
     if (flag_list)  return run_list();
     if (flag_metadata) return run_metadata();
     if (flag_drive) return run_drive();
+    if (flag_features) return run_features();
     if (flag_watch) return run_watch();
     return run_query();
 }

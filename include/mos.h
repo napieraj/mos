@@ -430,6 +430,38 @@ const char *mos_handle_product(const mos_handle_t *h);
 const char *mos_handle_revision(const mos_handle_t *h);
 uint64_t    mos_handle_registry_id(const mos_handle_t *h);
 
+/* ---- Feature enumeration (v0.4 typed API) ----------------------------- */
+
+/* One MMC feature descriptor's header facts. Opaque; valid only inside
+   the callback (stack-backed per iteration, like mos_device_info_t). */
+typedef struct mos_feature_info mos_feature_info_t;
+
+uint16_t mos_feature_info_code(const mos_feature_info_t *f);
+/* True when the feature is active for the CURRENTLY mounted medium —
+   the writability answer: e.g. BD-R write support is feature 0x0041's
+   current bit with a writable BD-R inserted, false for the same drive
+   with a pressed disc in it. */
+bool     mos_feature_info_current(const mos_feature_info_t *f);
+bool     mos_feature_info_persistent(const mos_feature_info_t *f);
+uint8_t  mos_feature_info_version(const mos_feature_info_t *f);
+
+/*
+ * Enumerate every feature the drive reports: one GET CONFIGURATION
+ * (RT=0) through the non-exclusive convenience method, walked by the
+ * same bounds-checked iterator the typed queries use. The callback
+ * runs once per descriptor in reply order; return false to stop early
+ * (not an error). Feature PAYLOADS are not exposed — payload facts go
+ * public as typed queries (mos_query_drive_caps is the template).
+ * Codes are MMC feature numbers (0x0000 Profile List ... 0x010D AACS);
+ * consumers map them against MMC-6 §5.3. Same preconditions as
+ * mos_query_drive_caps; the feature list itself needs no media, but
+ * which features are CURRENT depends on what is mounted.
+ */
+mos_error mos_enumerate_features(mos_handle_t *h,
+                                 bool (*cb)(const mos_feature_info_t *f,
+                                            void *ctx),
+                                 void *ctx);
+
 /*
  * Diagnostic: issue a raw CDB against the drive. Requires exclusive
  * access; returns MOS_ERR_BUSY or MOS_ERR_EXCLUSIVE_ACCESS if the drive

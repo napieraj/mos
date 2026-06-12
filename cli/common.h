@@ -26,6 +26,7 @@ extern bool        flag_json;
 extern bool        flag_watch;
 extern bool        flag_metadata;
 extern bool        flag_drive;
+extern bool        flag_features;
 extern bool        flag_probe;    /* probe subcommand (MOS_CLI_PROBE builds) */
 extern bool        flag_dump;     /* probe --dump one-shot DR capture */
 extern const char *progname;
@@ -100,6 +101,7 @@ bool mos_cli_unit_for_index(int index, int64_t *unit);
 int run_query(void);   /* status (default) */
 int run_metadata(void); /* disc identity (mos.metadata.v1) */
 int run_drive(void);    /* drive facts (mos.drive.v1) */
+int run_features(void); /* MMC feature list (mos.features.v1) */
 int run_list(void);
 int run_watch(void);
 int run_probe(void);   /* defined only in MOS_CLI_PROBE builds

@@ -697,6 +697,44 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
     return MOS_OK;
 }
 
+mos_error mos_enumerate_features(mos_handle_t *h,
+                                 bool (*cb)(const mos_feature_info_t *f,
+                                            void *ctx),
+                                 void *ctx)
+{
+    if (!h || !h->mmc || !cb) return MOS_ERR_INVALID_ARG;
+
+    /* Same issuance and trust terms as mos_query_drive_caps above:
+       RT=0 into a zero-init 1024-byte buffer, sizeof buf is the
+       trusted length, reply lengths only shrink the walk (O-4). */
+    uint8_t         buf[1024] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->GetConfiguration(
+        h->mmc, (UInt8)0x00, (UInt16)0x0000,
+        buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    size_t             cursor = 8;
+    mos_config_feature feat;
+    while (mos_internal_config_next_feature(buf, sizeof buf, &cursor, &feat)) {
+        mos_feature_info info = {
+            .code       = feat.feature_code,
+            .current    = feat.current,
+            .persistent = feat.persistent,
+            .version    = feat.version,
+        };
+        if (!cb(&info, ctx)) break;     /* caller stop, not an error */
+    }
+    return MOS_OK;
+}
+
 /* Open-time directory identity, exposed for the drive verb: zero
    commands, same borrowed-string terms as the state result's copies
    (which point into these same buffers). */

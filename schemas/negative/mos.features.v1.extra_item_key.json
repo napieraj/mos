@@ -1,0 +1,8 @@
+{
+  "schema": "mos.features.v1",
+  "bsd": null,
+  "registry_id": 4295032831,
+  "features": [
+    {"code": "0x0041", "current": false, "persistent": false, "version": 0, "name": "BD-R write"}
+  ]
+}
