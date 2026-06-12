@@ -22,21 +22,21 @@ and track counts) are available on demand via `mos_query_disc_info()`.
 mos [subcommand] [drive] [options]
 ```
 
-The drive subject is positional, like `diskutil info disk4`: an Index
-from `mos list` (all digits) or a BSD form (`disk4`, `rdisk4`,
-`/dev/disk4`). With one drive attached it may be omitted; with several,
-`mos status` without a subject exits 64 and prints the drive table to
-stderr — no first-drive guessing.
+The drive subject is positional after a subcommand, like
+`diskutil info disk4`: an Index from `mos list` (all digits) or a BSD
+form (`disk4`, `rdisk4`, `/dev/disk4`). With one drive attached it may
+be omitted (`mos status`); with several, `mos status` without a
+subject exits 64 and prints the drive table to stderr — no first-drive
+guessing. Bare `mos` is an entry point, not a status query: it prints
+the drive table and a hint to stderr and exits 64.
 
 Human views and JSON share every enum string verbatim
-(`empty_or_open`, `bd_rom`) — a terminal report and a jq query can
+(`ready`, `bd_rom`) — a terminal report and a jq query can
 never disagree. Identity is the same three fields on every surface
-(`vendor` / `product` / `revision`): JSON carries the delivered bytes
-(string-escaped only), terminal views escape non-printables as
-`\xNN`. Identity comes from the platform's device directory —
-INQUIRY-shaped, not wire INQUIRY — and is captured once at device
-attach; when verifying a firmware flash, confirm `registry_id`
-changed too, or you're reading the pre-flash cache. The `bsd` field
+(`vendor` / `product` / `revision`), captured from the platform's
+device directory once at device attach; when verifying a firmware
+flash, confirm `registry_id` changed too, or you're reading the
+pre-flash cache. The `bsd` field
 carries the full device node (`/dev/disk4`) in both surfaces:
 pasteable, pipeable, and always a valid drive argument when non-null
 (an empty drive has none).
@@ -72,13 +72,12 @@ $ mos status 1 --json
 }
 ```
 
-An empty/open drive shows the honest pre-disambiguation state with its
-sense evidence directly beneath:
+An open tray is resolved as exactly that — no media, no BSD node,
+no guessing:
 
 ```
 $ mos status 1
-   State:  empty_or_open
-   Sense:  02/3a/01
+   State:  open
    Index:  1
      BSD:  -
 Registry:  4295032831
@@ -95,9 +94,9 @@ overview):
 
 ```
 $ mos list
- Index  State          Volume      BSD         Vendor    Product         Rev
-     1  ready          -           /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00
-     2  empty_or_open  -           -           PIONEER   BD-RW BDR-XS07  1.01
+ Index  State  Volume  BSD         Vendor    Product         Rev
+     1  ready  -       /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00
+     2  open   -       -           PIONEER   BD-RW BDR-XS07  1.01
 ```
 
 `mos list --json` emits `mos.list.v1` with the same fields per entry.

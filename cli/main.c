@@ -39,7 +39,7 @@ void print_usage(FILE *f)
         "Report the state of a macOS optical drive.\n"
         "\n"
         "Subcommands:\n"
-        "  status [drive]    Report drive state (default if no subcommand).\n"
+        "  status [drive]    Report drive state (default when only flags are given).\n"
         "  list              List all drives with their states.\n"
         "  watch  [drive]    Stream state events (NDJSON) until SIGINT.\n"
 #ifdef MOS_CLI_PROBE
@@ -175,6 +175,26 @@ int main(int argc, char **argv)
        discarding them reintroduces the kill-on-pipe-close bug. signal()
        here cannot fail (SIG_IGN is always installable). */
     signal(SIGPIPE, SIG_IGN);
+
+    /* Bare `mos` is an entry point, not an implicit status (the
+       single-drive default was a carryover from the one-word-stdout
+       era; retired 2026-06-12). Drive table + hint to stderr, EX_USAGE. */
+    if (argc == 1) {
+        static list_row rows[MOS_CLI_LIST_CAP];
+        int n = 0;
+        int total = collect_and_query(rows, &n);
+        if (total > 0) {
+            fprintf(stderr, "%s: no subcommand; %d drive%s present:\n",
+                    progname, total, total == 1 ? "" : "s");
+            emit_list_table(stderr, rows, n, false);
+            fprintf(stderr, "\nTry `%s status%s` or `%s --help`.\n",
+                    progname, total == 1 ? "" : " <index>", progname);
+        } else {
+            fprintf(stderr, "%s: no optical drives attached.\n\n", progname);
+            print_usage(stderr);
+        }
+        return EX_USAGE;
+    }
 
     /* Subcommands are additive aliases for the flag forms, recognized only
        when argv[1] is a bare word (flag-first invocations reach getopt
