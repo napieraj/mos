@@ -10,7 +10,8 @@ the drive and distinguishes them, as a CLI and an embeddable pure-C
 library.
 
 No runtime dependencies beyond Apple's own IOKit, CoreFoundation,
-and DiscRecording frameworks; no entitlements, no root. A status
+DiscRecording, and DiskArbitration frameworks; no entitlements, no
+root. A status
 query costs at most three MMC commands — the command-by-command
 rationale, decision tree, and sense tables are in `ARCHITECTURE.md`.
 Disc details beyond state (blank / appendable / finalized, session
@@ -240,7 +241,7 @@ Include `<mos.h>` — the public header depends only on `<stdint.h>`,
 `<stdbool.h>`, `<stddef.h>`; wrap calls in `#ifdef __APPLE__` in
 cross-platform code. For a single-file drop-in,
 `./scripts/amalgamate.sh` emits `dist/mos.h` + `dist/mos.c`: link
-IOKit, CoreFoundation, and DiscRecording; build with
+IOKit, CoreFoundation, DiscRecording, and DiskArbitration; build with
 `-mmacosx-version-min=12.0`.
 
 ## Requirements

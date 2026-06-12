@@ -7,7 +7,8 @@
 #
 # Consumers can drop those two files into their source tree. Compile
 # mos.c as a regular translation unit; on the link step, add IOKit,
-# CoreFoundation, and DiscRecording to the link line. No CMake, no
+# CoreFoundation, DiscRecording, and DiskArbitration to the link
+# line. No CMake, no
 # submodule.
 #
 # This is the stb / SQLite integration model. See CONTRIBUTING.md for
@@ -40,14 +41,18 @@ cat > "$H" <<'HEADER'
  *        -framework IOKit \\
  *        -framework CoreFoundation \\
  *        -framework DiscRecording \\
+ *        -framework DiskArbitration \\
  *        -mmacosx-version-min=12.0
  *
  * Or add both files (mos.h and this one) to your existing build system
- * and make sure IOKit, CoreFoundation, and DiscRecording are on your
- * link line, with the deployment target pinned to macOS 12.0 to match
- * the CMake build's CMAKE_OSX_DEPLOYMENT_TARGET. Skipping
- * -framework DiscRecording fails to link at the DRCopyDeviceArray
- * reference in mos_dr.c.
+ * and make sure IOKit, CoreFoundation, DiscRecording, and
+ * DiskArbitration are on your link line, with the deployment target
+ * pinned to macOS 12.0 to match the CMake build's
+ * CMAKE_OSX_DEPLOYMENT_TARGET. Skipping -framework DiscRecording
+ * fails to link at the DRCopyDeviceArray reference in mos_dr.c;
+ * skipping -framework DiskArbitration fails at the
+ * DADiskCopyDescription reference in mos_da.c (the one-shot
+ * mounted-volume lookup behind mos_query_volume).
  *
  * See mos.h for the API.
  * See https://github.com/napieraj/mos for source, tests,
