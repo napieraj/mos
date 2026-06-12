@@ -203,6 +203,10 @@ static void act_fire_dr_appeared(void *ctx)
 static void act_remint_fire_appeared(void *ctx)
 {
     (void)ctx;
+    /* A re-mint is a replug: present by construction. (set_drive_id
+       alone leaves a prior set_no_drive in force, and an absent device
+       rightly fails the Appeared snapshot — no join, no event.) */
+    mos_fake_set_drive_present(true);
     mos_fake_set_drive_id(0x100000BBBull);
     mos_fake_fire_dr_appeared();
 }

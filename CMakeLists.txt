@@ -222,6 +222,9 @@ add_executable(mos
     cli/io.c
 )
 target_link_libraries(mos PRIVATE mos_core mos_warnings)
+# src/ for mos_pure.h: the CLI consumes pure-layer internals it already
+# links (the registry-id selector floor, cli/main.c).
+target_include_directories(mos PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set_target_properties(mos PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
