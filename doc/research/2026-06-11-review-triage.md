@@ -534,3 +534,15 @@ cleanup pass.
   (static assert).
 - **Cleanup-pass batch (nits):** E3, E4/D1, E5/D5, A6, A7, B8, B9,
   C5 (tests), C7, D2, D4.
+
+## Landed (2026-06-12)
+
+E1 + Drive-line split (6d8ab60), E2 (242b0fe), the fix-now batch
+A1-A4, A7, B1, B3-B7, B10, C3, C6, D2, E3-E5 (3de308a), and the
+maintainer-approved C1 wake-not-remove + C2 observers-before-snapshot
+(this commit; the hotplug fixture re-pinned to the new contract —
+spurious Disappeared is benign, real removal rides the poll floor).
+Still open: B2 reframed by maintainer (no implicit-status default;
+bare `mos` should surface an entry point — design pending), A5
+(unanswered), C4 (defer to v0.next), C7, A6, B8, B9 fixture rename,
+D4, C5 test items.

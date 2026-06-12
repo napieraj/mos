@@ -594,10 +594,9 @@ static void teardown_iokit_interest_wake(mos_watch_t *w)
 
 /* All-mode lifecycle (Phase 2b): Appeared joins a device to the
    stream (its first event is relabeled device_appeared by the pure
-   multiplexer), Disappeared marks the slot's core removed so its next
-   pump emits a per-device device_removed. Both are load-bearing in
-   all mode only — single-target watches keep kIOGeneralInterest as
-   their terminal-removal source and never register these. */
+   multiplexer); Disappeared wakes the matching slot so its reopen can
+   confirm removal. All-mode only — single-target watches keep
+   kIOGeneralInterest as their terminal-removal source. */
 static void dr_device_appeared_callback(DRNotificationCenterRef center,
                                         void *observer, CFStringRef name,
                                         DRTypeRef object,
@@ -632,7 +631,11 @@ static void dr_device_disappeared_callback(DRNotificationCenterRef center,
     }
     int slot = (id != 0) ? mos_internal_watch_all_find(&w->all, id) : -1;
     if (slot >= 0) {
-        mos_internal_watch_notify_removed(&w->all.cores[slot]);
+        /* Wake, not removal authority: the woken reopen confirms
+           (NO_DEVICE → terminal) at the same latency, and a spurious
+           Disappeared costs one probe instead of a permanent eviction
+           (C1 — DR data never decides state). */
+        mos_internal_watch_notify_wake(&w->all.cores[slot]);
     }
     /* Unresolved id: the probe floor catches it — the slot's next
        reopen returns NO_DEVICE, which the core treats as removal. */
@@ -881,21 +884,15 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
     w->all_stream_open_wall_ms = stream_epoch_wall_ms();
     mos_internal_watch_all_init(&w->all);
 
-    /* Initial population from ONE directory snapshot — no per-device
-       opens (the first probe validates each device; a vanished one
-       yields its device_removed through the normal path). Zero devices
-       is a valid empty stream: the Appeared observer below is what
-       makes it live. */
-    mos_internal_dr_snapshot snap[MOS_WATCH_ALL_CAP];
-    size_t n = mos_internal_dr_copy_snapshot(snap, MOS_WATCH_ALL_CAP);
-    for (size_t i = 0; i < n; ++i) {
-        watch_all_add_device(w, &snap[i], /*mid_stream=*/false);
-    }
-
+    /* Observers BEFORE the snapshot: a device arriving in the gap is
+       caught by the queued Appeared (its callback runs only inside the
+       pump), and one landing in both dedupes by registry_id. The
+       reverse order left an unwatchable window — all-mode discovery
+       has no poll floor (C2, doc/research/2026-06-11-review-triage.md). */
     w->run_loop = CFRunLoopGetCurrent();
     setup_dr_doorbell_wake(w);
     /* No kIOGeneralInterest in all mode: removal rides DR Disappeared
-       (fast path) + per-probe NO_DEVICE (floor). */
+       (wake) + per-probe NO_DEVICE (floor). */
 
     /* UNLIKE single mode, the doorbell is NOT latency-only here, so
        its failure cannot soft-fail to polling: arrivals are discovered
@@ -913,6 +910,16 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
         mos_watch_close(w);
         if (err_out) *err_out = MOS_ERR_IO;
         return NULL;
+    }
+
+    /* Initial population from ONE directory snapshot — no per-device
+       opens (the first probe validates each device; a vanished one
+       yields its device_removed through the normal path). Zero devices
+       is a valid empty stream. */
+    mos_internal_dr_snapshot snap[MOS_WATCH_ALL_CAP];
+    size_t n = mos_internal_dr_copy_snapshot(snap, MOS_WATCH_ALL_CAP);
+    for (size_t i = 0; i < n; ++i) {
+        watch_all_add_device(w, &snap[i], /*mid_stream=*/false);
     }
 
     if (err_out) *err_out = MOS_OK;

@@ -576,8 +576,9 @@ TEST(all_empty_stream_hotplug_join_leave_rejoin)
 
     mos_fake_step(1000, act_present_fire_appeared, NULL);
     mos_fake_step(1500, act_empty_fire_dr, NULL);
-    mos_fake_step(2200, act_fire_dr_disappeared, NULL);
-    mos_fake_step(3000, act_remint_fire_appeared, NULL);
+    mos_fake_step(2200, act_fire_dr_disappeared, NULL);   /* spurious */
+    mos_fake_step(2800, act_absent_fire_dr_disappeared, NULL);
+    mos_fake_step(4500, act_remint_fire_appeared, NULL);
 
     /* Empty stream: no event before the join, and the timeout slice is
        exact in fake time. */
@@ -601,23 +602,27 @@ TEST(all_empty_stream_hotplug_join_leave_rejoin)
     EXPECT_EQ(1500, mos_fake_clock_now());
     EXPECT_EQ(so, mos_watch_event_stream_open_ms(e));
 
-    /* Disappeared with the drive still resolvable: the fast path marks
-       the slot; removal is per-slot, NOT stream-terminal. */
+    /* Spurious Disappeared (drive still present and resolvable):
+       wake-not-remove — the woken probe at t=2200 finds the drive,
+       state unchanged, nothing evicted, no event. */
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_watch_next_event(w, &e, 1000));
+    EXPECT_EQ(2500, mos_fake_clock_now());
+
+    /* Real removal: registry entry gone at 2800 (Disappeared resolves
+       0, wakes nothing) — the poll floor's reopen at 4200 (2200 probe
+       + STABLE_MS) returns NO_DEVICE. Per-slot, NOT stream-terminal. */
     EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 2000));
     EXPECT_EQ(MOS_EVENT_DEVICE_REMOVED, mos_watch_event_kind(e));
     EXPECT_EQ(3, mos_watch_event_seq(e));
-    EXPECT_EQ(2200, mos_fake_clock_now());
+    EXPECT_EQ(4200, mos_fake_clock_now());
     EXPECT_EQ(so, mos_watch_event_stream_open_ms(e));
-
-    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_watch_next_event(w, &e, 300));
-    EXPECT_EQ(2500, mos_fake_clock_now());
 
     /* Rejoin under the re-minted ID, same stream_open_ms. */
     EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 2000));
     EXPECT_EQ(MOS_EVENT_DEVICE_APPEARED, mos_watch_event_kind(e));
     EXPECT_EQ(4, mos_watch_event_seq(e));
     EXPECT_EQ(0x100000BBBull, mos_watch_event_registry_id(e));
-    EXPECT_EQ(3000, mos_fake_clock_now());
+    EXPECT_EQ(4500, mos_fake_clock_now());
     EXPECT_EQ(so, mos_watch_event_stream_open_ms(e));
 
     mos_watch_close(w);
