@@ -67,6 +67,14 @@ from that arc:
   place until the first tag that ships them; the freeze (and the
   any-new-shape-is-`.v2` rule) takes effect at that tag. Canonical:
   the AGENTS.md schema ADR (revision 2026-06-10).
+- **Transitional-state poll escalation (open, v0.4, contingent on
+  hardware evidence).** A drive persistently classifying
+  EMPTY_OR_OPEN/UNKNOWN (GESN failing through a bridge) polls at
+  transition rate — 200 ms open/exclusive-GESN/close cycles —
+  indefinitely, with no analog of the error path's 200→2000 ms
+  backoff (2026-06-11 review, C4). Cadence policy is behavior, so
+  per the hardware ADR this waits for an observed case, not a
+  review point.
 - **Held-handle identity refresh (open, lands in v0.4).** v0.3-line
   handles capture `bsd_unit`/`media_id` once at open, so a handle held
   across an insert reports READY with the open-time -1 (documented as
