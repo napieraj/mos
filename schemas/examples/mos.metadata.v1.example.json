@@ -7,9 +7,17 @@
     "profile": "0x0040",
     "class": "bd",
     "toc": {
-      "first_track": 1, "last_track": 1, "leadout_lba": 12219392,
+      "first_track": 1,
+      "last_track": 1,
+      "leadout_lba": 31457280,
       "tracks": [
-        {"track": 1, "adr": 1, "control": 4, "data": true, "start_lba": 0}
+        {
+          "track": 1,
+          "adr": 1,
+          "control": 4,
+          "data": true,
+          "start_lba": 0
+        }
       ]
     },
     "disc_info": null,
