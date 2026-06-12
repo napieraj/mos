@@ -8,8 +8,8 @@
     "class": "cd",
     "toc": {
       "first_track": 1,
-      "last_track": 2,
-      "leadout_lba": 35175,
+      "last_track": 4,
+      "leadout_lba": 86347,
       "tracks": [
         {
           "track": 1,
@@ -23,7 +23,21 @@
           "adr": 1,
           "control": 0,
           "data": false,
-          "start_lba": 18000
+          "start_lba": 24537
+        },
+        {
+          "track": 3,
+          "adr": 1,
+          "control": 0,
+          "data": false,
+          "start_lba": 47477
+        },
+        {
+          "track": 4,
+          "adr": 1,
+          "control": 0,
+          "data": false,
+          "start_lba": 67852
         }
       ]
     },
@@ -31,7 +45,7 @@
       "status": "complete",
       "erasable": false,
       "sessions": 1,
-      "tracks": 2
+      "tracks": 4
     },
     "volume_name": "Audio CD"
   }

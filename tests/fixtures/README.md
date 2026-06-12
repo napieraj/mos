@@ -98,3 +98,68 @@ If you have an optical drive and want to add realism:
    (e.g. 0x46 GET CONFIGURATION, 0x51 READ DISC INFO) and dump the buffer.
    `mos_raw_cdb` is public and works today; the `mos_capture` convenience
    wrapper does not exist yet.
+
+## Log-derived captures (2026-06-12, media-info stage 1)
+
+Three fixtures reversed from PUBLISHED tool output through the tools'
+source code — the methodology the disc-status ground-truth table above
+established, applied to the new v0.4 commands. Tier: device capture
+(realism), with the attested-vs-scaffold split recorded per fixture.
+
+| File | Command | Models | Consumed by |
+|------|---------|--------|-------------|
+| `readtoc_f0_audio_cd_single.bin` | READ TOC/PMA/ATIP 0x43 fmt 0000b | real 4-track audio CD single | `test_config.c :: toc_parses_real_pony_cd_single` |
+| `readdiscinfo_blank_bdr.bin` | READ DISC INFORMATION 0x51 | blank BD-R (BH16NS40 / JVC-AM/S6L) | `test_discinfo.c :: discinfo_blank_bdr_decodes_blank` |
+| `getconfig_aacs_wh16ns40.bin` | GET CONFIGURATION 0x46 (RT=0) | WH16NS40 1.05 AACS feature | `test_config.c :: aacs_caps_from_real_wh16ns40_capture` |
+
+### `readtoc_f0_audio_cd_single.bin` (44 bytes)
+Ginuwine "Pony" CD single (1996). Provenance: whipper rip log in
+whipper-team/whipper PR #382 — MusicBrainz disc
+`TX6lKZ481BHv1ZW6pd6007j6OY4-` (release 84e4ddc3-92fd-49d5-b15d-3be7f85c85ab),
+CDDB 2d047f04, AccurateRip-confirmed (confidence 24-34). LBAs derived
+from the log's attested `toc=1+4+86497+150+24687+47627+68002`
+(MB offset = TOC LBA + 150): tracks at 0 / 24537 / 47477 / 67852,
+lead-out 86347. Byte map per cdrecord `scsi_cdr.c struct trackdesc`
+(byte 1 = ADR<<4|control, bytes 4-7 BE32 LBA) and libcdio sector.c
+(LSN = LBA, pregap 150). ATTESTED: track count, every LBA, audio (the
+log records stereo, no pre-emphasis). ASSUMED (standard commercial
+pressing): ADR=1, copy-permit bit 0. Derivation note: a transcription
+error in the research pass (track 2 as 0x5FE9) was caught by
+recomputing from the toc string — 24537 = 0x5FD9; the toc string is
+the authority.
+
+### `readdiscinfo_blank_bdr.bin` (34 bytes)
+Blank BD-R, HL-DT-ST BD-RE BH16NS40 1.00, media ID JVC-AM/S6L.
+Provenance: complete dvd+rw-mediainfo log,
+github.com/kneutron/ansitest `burnUDFsystem2DVD+R` lines 58-89
+("Mounted Media: 41h, BD-R SRM / Disc status: blank / Number of
+Sessions: 1 / Next Track: 1 / Number of Tracks: 1 / State of Last
+Session: empty"). Byte map per dvd+rw-tools 7.1 `dvd+rw-mediainfo.cpp`
+lines 863-887: status = b2&3, last-session = (b2>>2)&3, sessions =
+b9<<8|b4, next track = b10<<8|b5, tracks = b11<<8|b6. Erasable clear
+(BD-R is write-once; note dvd+rw-mediainfo prints no "Erasable:" line
+— it consumes b2&0x10 only as a READ FORMAT CAPACITIES gate, so an
+"Erasable:" line in a found log means cdrecord -minfo, not this tool).
+Bytes 7-33 zero: DID_V/DBC_V/DAC_V clear, and the CD ATIP lead-in/out
+MSF fields (16-23) are not applicable to BD — zeroed, unattested.
+Corroborates `schemas/examples/mos.metadata.v1.blank_bdr.json`, whose
+disc_info values match this capture field-for-field.
+
+### `getconfig_aacs_wh16ns40.bin` (20 bytes)
+AACS feature (0x010D) for HL-DT-ST BD-RE WH16NS40, revision 1.05.
+Provenance: MakeMKV drive-info dump in blog.ssanj.net 2023-10-02
+(verified via its source mirror raw.githubusercontent.com/ssanj/
+babyloncandle-docker): "Bus encryption flags: 17", "Highest AACS
+version: 78". ATTESTED: payload byte 0 = 0x17 (per the libaacs/
+UDFclient bit map: RDC|WBE|BEC|BNG — the dump prints no 0x prefix;
+hex is the reading consistent with every observed LG value) and
+payload byte 3 = 78. UNATTESTED scaffold: header current profile
+(0x0000 — dump context had no disc proven), feature-header byte 2
+(version/persistent/current bits), nonce block count, AGID count
+(all zeroed). Mapping caveat: MakeMKV's "Highest AACS version" line
+plausibly reads the 0x010D byte but could be MKB-derived — two
+same-model/same-firmware BU40N dumps show 77 vs 81
+(automatic-ripping-machine#1558, jlesage/docker-makemkv#248), so the
+value is drive/disc STATE, not a firmware constant, whichever source
+MakeMKV prints. A hardware capture of the raw descriptor next to a
+MakeMKV dump from the same drive settles it (falsification matrix).

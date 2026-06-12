@@ -182,6 +182,61 @@ TEST(config_honors_data_length_shorter_than_buffer)
     return 0;
 }
 
+TEST(toc_parses_real_pony_cd_single)
+{
+    /* Real commercial pressing: Ginuwine "Pony" CD single (1996), 4
+       tracks — MusicBrainz disc TX6lKZ481BHv1ZW6pd6007j6OY4-,
+       AccurateRip-confirmed (whipper-team/whipper PR #382 rip log).
+       LBAs derived from the log's attested toc string
+       1+4+86497+150+24687+47627+68002 (MB offset = LBA + 150); ADR=1
+       and copy-bit=0 are the standard-pressing assumption (fixtures
+       README). Mirrors fixtures/readtoc_f0_audio_cd_single.bin. */
+    static const uint8_t t[] = {
+        0x00,0x2A, 0x01,0x04,
+        0x00,0x10, 0x01, 0x00,  0x00,0x00,0x00,0x00,
+        0x00,0x10, 0x02, 0x00,  0x00,0x00,0x5F,0xD9,
+        0x00,0x10, 0x03, 0x00,  0x00,0x00,0xB9,0x75,
+        0x00,0x10, 0x04, 0x00,  0x00,0x01,0x09,0x0C,
+        0x00,0x10, 0xAA, 0x00,  0x00,0x01,0x51,0x4B,
+    };
+    mos_toc toc;
+    EXPECT(mos_internal_toc_parse(t, sizeof t, &toc));
+    EXPECT_EQ(toc.first_track, 1);
+    EXPECT_EQ(toc.last_track, 4);
+    EXPECT_EQ(toc.track_count, 4);
+    EXPECT(toc.have_leadout);
+    EXPECT_EQ(toc.leadout_lba, 86347u);
+    EXPECT_EQ(toc.tracks[0].start_lba, 0u);
+    EXPECT_EQ(toc.tracks[1].start_lba, 24537u);
+    EXPECT_EQ(toc.tracks[2].start_lba, 47477u);
+    EXPECT_EQ(toc.tracks[3].start_lba, 67852u);
+    for (int i = 0; i < 4; i++) {
+        EXPECT_EQ(toc.tracks[i].adr, 1);
+        EXPECT(!(toc.tracks[i].control & 0x4));      /* audio */
+    }
+    return 0;
+}
+
+TEST(aacs_caps_from_real_wh16ns40_capture)
+{
+    /* MakeMKV drive dump, HL-DT-ST BD-RE WH16NS40 1.05: "Bus
+       encryption flags: 17" (= 0x17 per the libaacs bit map:
+       RDC|WBE|BEC|BNG), "Highest AACS version: 78". Scaffold bytes
+       (profile, feature-header byte 2, nonce/AGID counts) are
+       unattested — see the fixtures README entry. Mirrors
+       fixtures/getconfig_aacs_wh16ns40.bin. */
+    static const uint8_t cfg[] = {
+        0,0,0,16,  0,0, 0x00,0x00,
+        0x01,0x0D, 0x00, 0x04,  0x17, 0x00, 0x00, 78,
+    };
+    mos_drive_caps c;
+    mos_internal_aacs_caps_from_config(cfg, sizeof cfg, &c);
+    EXPECT(c.aacs);
+    EXPECT(c.bus_encryption);          /* 0x17 & 0x02 */
+    EXPECT_EQ(c.aacs_version, 78);
+    return 0;
+}
+
 TEST(toc_parses_realistic_audio_cd)
 {
     /* 3-track audio CD + lead-out, MMC format-0 shape. Header Data
@@ -640,6 +695,8 @@ TEST(config_find_feature_absent_or_hostile_is_false)
 
 void register_config_tests(void)
 {
+    RUN(toc_parses_real_pony_cd_single);
+    RUN(aacs_caps_from_real_wh16ns40_capture);
     RUN(aacs_caps_decode_and_fail_closed);
     RUN(config_find_feature_returns_match_with_payload);
     RUN(config_find_feature_absent_or_hostile_is_false);
