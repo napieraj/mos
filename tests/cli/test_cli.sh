@@ -332,15 +332,19 @@ assert_contains    "watch sans --json: envelope present" "$OUT" '"schema":"mos.e
 assert_single_line "watch sans --json: one NDJSON line"  "$OUT"
 
 # Test 25a: bare `mos` is an entry point, not a status query (retired
-# implicit-status default, 2026-06-12): exit 64, NOTHING on stdout.
-# stderr carries the drive table + hint (drives attached) or the
-# no-drives line + usage (none) — non-empty either way, so these pins
-# hold on both a driveless CI runner and a developer's Mac.
+# implicit-status default, 2026-06-12) — and does NO device work (the
+# table-at-entry shape was revised out the same day: its state column
+# rode the GESN exclusive lock, wrong for an intent-free invocation).
+# Exit 64, NOTHING on stdout, hint + usage on stderr — identical on a
+# driveless CI runner and a developer's Mac, so pin the usage shape
+# and the absence of the table's header row.
 run_mos
 assert_ec     "bare mos exits 64 (entry point)"  "64" "$EC"
 assert_equals "bare mos stdout is empty"         ""   "$OUT"
 ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
-[ -n "$ERR" ] || { echo "FAIL: bare mos stderr is empty (expected table+hint or usage)"; fail=$((fail+1)); }
+assert_contains     "bare mos stderr carries usage"        "$ERR" "Subcommands:"
+assert_contains     "bare mos hint points at status/list"  "$ERR" "no subcommand"
+assert_not_contains "bare mos prints no drive table"       "$ERR" "Vendor"
 
 # Test 25b: positional registry-id selector and its dispatch boundary
 # (the xnu floor 2^32+256 = 4294967552; pure-pinned in

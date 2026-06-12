@@ -172,21 +172,20 @@ int main(int argc, char **argv)
 
     /* Bare `mos` is an entry point, not an implicit status (the
        single-drive default was a carryover from the one-word-stdout
-       era; retired 2026-06-12). Drive table + hint to stderr, EX_USAGE. */
+       era; retired 2026-06-12) — and not a probe either: the drive
+       table's state column rides the not-ready GESN branch, which
+       takes the exclusive lock, and an intent-free invocation must
+       not touch hardware (same-day revision of the table-at-entry
+       shape). Usage + hint, EX_USAGE; the table is one deliberate
+       `mos list` away. */
     if (argc == 1) {
-        static list_row rows[MOS_CLI_LIST_CAP];
-        int n = 0;
-        int total = collect_and_query(rows, &n);
-        if (total > 0) {
-            fprintf(stderr, "%s: no subcommand; %d drive%s present:\n",
-                    progname, total, total == 1 ? "" : "s");
-            emit_list_table(stderr, rows, n, false);
-            fprintf(stderr, "\nTry `%s status%s` or `%s --help`.\n",
-                    progname, total == 1 ? "" : " <index>", progname);
-        } else {
-            fprintf(stderr, "%s: no optical drives attached.\n\n", progname);
-            print_usage(stderr);
-        }
+        /* %1$s: POSIX numbered conversions — one progname argument,
+           reused; mixing numbered and unnumbered in one format is UB,
+           so every conversion here must stay numbered. */
+        fprintf(stderr,
+                "%1$s: no subcommand (state is `%1$s status`; drives, `%1$s list`).\n\n",
+                progname);
+        print_usage(stderr);
         return EX_USAGE;
     }
 
