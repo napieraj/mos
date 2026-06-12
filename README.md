@@ -119,23 +119,26 @@ $ mos watch
 
 ### Shell integration
 
-The core pattern — block until READY, dispatch by media class — is a
-few lines, not a script:
+The core pattern — act on every disc that turns readable, on any
+drive, hot-plug included — is one pipeline. No polling, no `sleep`:
 
 ```sh
-while :; do
-    out=$(mos status --json) || { sleep 2; continue; }
-    [ "$(printf '%s' "$out" | jq -r .state)" = "ready" ] && break
-    sleep 2
+mos watch | jq --unbuffered -r '
+    select(.event != "error" and .state == "ready")
+    | "\(.bsd) \(.media_class // "unknown")"' |
+while read -r dev class; do
+    case "$class" in
+        cd)     cdparanoia -B -d "$dev" ;;
+        dvd|bd) makemkvcon ... ;;
+    esac
 done
-case "$(printf '%s' "$out" | jq -r .media_class)" in
-    cd)     cdparanoia -B ;;
-    dvd|bd) makemkvcon ... ;;
-esac
 ```
 
-For long-running monitoring use `mos watch` instead — one event per
-transition, no process spawn per poll. Everything else composes from
+One event per transition drives the loop: inserting a disc fires it
+once, swapping discs fires `media_changed`, a drive plugged in
+mid-run joins the stream live, and an ejected drive doesn't end it.
+For a one-shot answer, `mos status <drive> --json` is the same
+contract in a single document. Everything else composes from
 tools that already exist: tray control is `drutil tray eject` /
 `drutil tray close`, mount control is `diskutil mount` / `diskutil
 unmount`, CD audio is `cdparanoia`, DVD/BD rip is `makemkvcon`,
