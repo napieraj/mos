@@ -197,13 +197,7 @@ static void query_row(const mos_device_info_t *info, list_row *row)
     const char *v = mos_state_result_vendor(r);
     const char *p = mos_state_result_product(r);
     const char *rv = mos_state_result_revision(r);
-    /* Store RAW bytes — escaping is per-surface display armor, applied
-       at emit time (mos_safe_ascii in the table emitter,
-       mos_cli_json_str's byte escapes in the JSON emitter). One stored
-       form, byte-identical across list/status/watch JSON; the prior
-       store-sanitized scheme made list --json carry display-escaped
-       text where status/watch carried bytes (E1,
-       doc/research/2026-06-11-review-triage.md). */
+    /* RAW bytes; escaping is per-surface, at emit time (E1). */
     if (v)  snprintf(row->vendor,   sizeof row->vendor,   "%s", v);
     if (p)  snprintf(row->product,  sizeof row->product,  "%s", p);
     if (rv) snprintf(row->revision, sizeof row->revision, "%s", rv);
@@ -227,9 +221,7 @@ void emit_list_table(FILE *f, const list_row *rows, int n,
     size_t ncols = with_volume ? MAXC : MAXC - 1;
     /* index strings need storage */
     char idx[MOS_CLI_LIST_CAP][12];
-    /* Rows store RAW identity; the terminal is where escaping is
-       owed, so render \xNN forms here (capacity math shared with the
-       status human emitter via MOS_CLI_ESC_CAP). */
+    /* Rows are raw; the terminal is where \xNN escaping is owed. */
     char v_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];
     char p_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
     char r_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];

@@ -92,26 +92,16 @@ uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path)
     return id;
 }
 
-/* Strip trailing spaces. When the drive conforms to SPC they are
-   wire padding (ASCII data fields are left-aligned, space-filled at
-   the end) — but the closed DR layer between us and the wire means we
-   name the OPERATION, not the provenance. Idempotent with the
-   kernel's own StripWhiteSpace; defensive against DR not preserving
-   that trim. Leading and interior spaces are in-charset DATA and
-   stay — byte-exactness is what makes
-   pre/post-flash identity comparison trustworthy (E1 resolution,
-   doc/research/2026-06-11-review-triage.md). */
+/* Strip trailing spaces (SPC wire padding; the closed DR layer may or
+   may not have trimmed). Leading/interior spaces are data and stay. */
 static void mos_internal_dr_strip_trailing_spaces(char *s)
 {
     size_t n = strlen(s);
     while (n > 0 && s[n - 1] == ' ') s[--n] = 0;
 }
 
-/* The ONE extraction of the three identity strings from an Info
-   dictionary — every reader (snapshot builder, open-time identity for
-   a service) funnels through here so the extraction gate (the
-   trailing strip above) has a single home. Buffers keep the SPC-4
-   field widths; bounding per mos_internal_dr_copy_string. */
+/* The ONE extraction of the three identity strings — every reader
+   funnels through here. Buffers keep the SPC-4 field widths. */
 static void mos_internal_dr_copy_identity_from_info(CFDictionaryRef info,
                                                     char *vendor, size_t vcap,
                                                     char *product, size_t pcap,

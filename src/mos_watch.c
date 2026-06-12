@@ -336,12 +336,9 @@ static const mos_watch_ops_t apple_watch_slot_ops = {
     .wall_ms = watch_wall_ms,
 };
 
-/* Add one device to an all-watch from a DR snapshot record. Dedupe by
-   registry_id BEFORE touching slot storage: a duplicate DR Appeared
-   (open-time snapshot overlap, bus rescan) must not pre-fill an
-   inactive w->slots[] entry the pure layer never adopts. The slot's
-   ctx storage is then claimed via the same first-free scan add() uses
-   (the single-thread contract makes the two scans agree). */
+/* Add one device from a DR snapshot. Dedupe by registry_id BEFORE
+   touching slot storage; the slot is claimed by the same first-free
+   scan add() uses (single-thread contract keeps the scans agreeing). */
 static void watch_all_add_device(mos_watch_t *w,
                                  const mos_internal_dr_snapshot *snap,
                                  bool mid_stream)

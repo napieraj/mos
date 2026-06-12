@@ -2115,23 +2115,21 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
           the strong signal; both ids must be non-zero (0 = identity
           unavailable, never inferred from).
 
-       2. Profile-class change with NO usable identity — some USB-ATAPI bridges
-          never expose a media_id (both 0). There a changed *non-zero* current
-          profile (e.g. CD-ROM 0x08 → DVD-ROM 0x10) is the only evidence a swap
-          happened, so we use last_profile as the fallback fingerprint. This
-          still cannot see a same-class swap (DVD-R → DVD-R) on such bridges —
-          no signal exists there — but it catches cross-class swaps that would
-          otherwise be silent. */
+       2. Profile change with NO usable identity — some USB-ATAPI bridges
+          never expose a media_id (both 0). ANY non-zero profile change
+          fires (cross-class 0x08→0x10 and same-class 0x10→0x11 alike): a
+          different profile with no identity means a different disc. A
+          same-PROFILE swap (DVD-R → DVD-R) is invisible here. */
     bool id_changed =
         r.media_id != 0 && w->last_media_id != 0 &&
         r.media_id != w->last_media_id;
-    bool profile_class_changed_without_id =
+    bool profile_changed_without_id =
         r.media_id == 0 && w->last_media_id == 0 &&
         r.current_profile != 0 && w->last_profile != 0 &&
         r.current_profile != w->last_profile;
 
     if (r.state == MOS_STATE_READY && w->last_state == MOS_STATE_READY &&
-        (id_changed || profile_class_changed_without_id)) {
+        (id_changed || profile_changed_without_id)) {
         fill_event_base(w, &d.event);
         d.event.kind       = MOS_EVENT_MEDIA_CHANGED;
         d.event.prev_state = w->last_state;   /* READY → READY */
@@ -2691,12 +2689,9 @@ static const mos_watch_ops_t apple_watch_slot_ops = {
     .wall_ms = watch_wall_ms,
 };
 
-/* Add one device to an all-watch from a DR snapshot record. Dedupe by
-   registry_id BEFORE touching slot storage: a duplicate DR Appeared
-   (open-time snapshot overlap, bus rescan) must not pre-fill an
-   inactive w->slots[] entry the pure layer never adopts. The slot's
-   ctx storage is then claimed via the same first-free scan add() uses
-   (the single-thread contract makes the two scans agree). */
+/* Add one device from a DR snapshot. Dedupe by registry_id BEFORE
+   touching slot storage; the slot is claimed by the same first-free
+   scan add() uses (single-thread contract keeps the scans agreeing). */
 static void watch_all_add_device(mos_watch_t *w,
                                  const mos_internal_dr_snapshot *snap,
                                  bool mid_stream)
@@ -3756,26 +3751,16 @@ uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path)
     return id;
 }
 
-/* Strip trailing spaces. When the drive conforms to SPC they are
-   wire padding (ASCII data fields are left-aligned, space-filled at
-   the end) — but the closed DR layer between us and the wire means we
-   name the OPERATION, not the provenance. Idempotent with the
-   kernel's own StripWhiteSpace; defensive against DR not preserving
-   that trim. Leading and interior spaces are in-charset DATA and
-   stay — byte-exactness is what makes
-   pre/post-flash identity comparison trustworthy (E1 resolution,
-   doc/research/2026-06-11-review-triage.md). */
+/* Strip trailing spaces (SPC wire padding; the closed DR layer may or
+   may not have trimmed). Leading/interior spaces are data and stay. */
 static void mos_internal_dr_strip_trailing_spaces(char *s)
 {
     size_t n = strlen(s);
     while (n > 0 && s[n - 1] == ' ') s[--n] = 0;
 }
 
-/* The ONE extraction of the three identity strings from an Info
-   dictionary — every reader (snapshot builder, open-time identity for
-   a service) funnels through here so the extraction gate (the
-   trailing strip above) has a single home. Buffers keep the SPC-4
-   field widths; bounding per mos_internal_dr_copy_string. */
+/* The ONE extraction of the three identity strings — every reader
+   funnels through here. Buffers keep the SPC-4 field widths. */
 static void mos_internal_dr_copy_identity_from_info(CFDictionaryRef info,
                                                     char *vendor, size_t vcap,
                                                     char *product, size_t pcap,

@@ -31,19 +31,15 @@ stderr — no first-drive guessing.
 Human views and JSON share every enum string verbatim
 (`empty_or_open`, `bd_rom`) — a terminal report and a jq query can
 never disagree. Identity is the same three fields on every surface
-(`vendor` / `product` / `revision`, never joined into one line):
-JSON carries the bytes as delivered by the platform device directory
-(string-escaped only, no content sanitization; trailing spaces
-stripped), terminal views render the same bytes with non-printable
-content escaped as `\xNN`. Note the delivery boundary: identity comes
-from DiscRecording's directory — INQUIRY-shaped, but not wire
-INQUIRY — and the kernel captures it once at device attach, so a
-firmware flash refreshes it only through re-enumeration. Verifying a
-flash? Confirm `registry_id` changed too: an unchanged id means
-you're reading the pre-flash cache. The `bsd` field carries the full
-device node (`/dev/disk4`) in both surfaces: pasteable, pipeable,
-and always a valid drive argument when non-null (an empty drive has
-none).
+(`vendor` / `product` / `revision`): JSON carries the delivered bytes
+(string-escaped only), terminal views escape non-printables as
+`\xNN`. Identity comes from the platform's device directory —
+INQUIRY-shaped, not wire INQUIRY — and is captured once at device
+attach; when verifying a firmware flash, confirm `registry_id`
+changed too, or you're reading the pre-flash cache. The `bsd` field
+carries the full device node (`/dev/disk4`) in both surfaces:
+pasteable, pipeable, and always a valid drive argument when non-null
+(an empty drive has none).
 
 ### Status (default)
 

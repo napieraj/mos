@@ -35,11 +35,8 @@ static void emit_human(const mos_state_result *r, int index1)
     if (mos_cli_profile_present(profile)) {
         const char *pn = mos_profile_name(profile);
         const char *pc = mos_profile_class(profile);
-        /* Token order is coarse → precise (class, name, raw hex) so the
-           minimum-viable reading comes first and the verbose code lands
-           last in parens. Joining is safe here because every token is
-           space-free — the rule that forbids joining identity fields
-           (see the Vendor/Product/Rev rows below). */
+        /* Coarse → precise; joining is safe only because every token
+           is space-free (identity fields are not — see below). */
         if (pn && pc)
             snprintf(prof_buf, sizeof prof_buf, "%s  %s  (0x%04x)",
                      pc, pn, profile);
@@ -80,16 +77,9 @@ static void emit_human(const mos_state_result *r, int index1)
        most hostile content but provably cannot be RELIED on for ESC
        (C0 controls survive every encoding in the chain). The human
        layout engine prints verbatim (layout only, by contract), so
-       escape HERE — \xNN per mos_safe_ascii, the same rule the JSON
-       path applies to these same strings (capacity math shared with
-       the list table emitter via MOS_CLI_ESC_CAP).
-
-       Three rows, never one joined line: product may contain interior
-       spaces, so a space-joined "Drive" line has unrecoverable field
-       boundaries and impersonates a verbatim drive string that exists
-       nowhere (E1 companion decision,
-       doc/research/2026-06-11-review-triage.md). Labels match the
-       list table's columns. */
+       escape HERE — \xNN per mos_safe_ascii. Three rows, never one
+       joined line: product may contain interior spaces, so a joined
+       line has unrecoverable field boundaries. */
     char v_esc[MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];
     char p_esc[MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
     char rv_esc[MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];
