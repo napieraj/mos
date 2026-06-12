@@ -12,7 +12,6 @@ uint64_t    opt_registry = 0;     /* 0 = unset; >= 2^32+256 when set */
 bool        flag_list   = false;
 bool        flag_json   = false;
 bool        flag_watch  = false;
-bool        flag_all    = false;  /* watch-all: `watch --all` */
 bool        flag_probe  = false;  /* probe subcommand (MOS_CLI_PROBE builds) */
 bool        flag_dump   = false;  /* probe --dump one-shot DR capture */
 

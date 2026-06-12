@@ -313,15 +313,16 @@ run_mos status disk99 --json
 assert_ec       "positional bsd: exit 66"          "66"   "$EC"
 assert_contains "positional bsd: mos.error.v1"     "$OUT" '"schema": "mos.error.v1"'
 
-# Test 24: --all is watch-only and selector-exclusive (DR pivot 2b).
+# Test 24: --all is retired (watch defaults to the bus; a selector
+# narrows). The flag is an unknown option everywhere now.
 run_mos --all
-assert_ec "--all without watch exits 64" "64" "$EC"
+assert_ec "retired --all is an unknown option (64)" "64" "$EC"
 run_mos watch --all --index 2
-assert_ec "--all + selector exits 64" "64" "$EC"
+assert_ec "watch + retired --all exits 64" "64" "$EC"
 run_mos status --all
-assert_ec "status --all exits 64" "64" "$EC"
+assert_ec "status + retired --all exits 64" "64" "$EC"
 run_mos watch 2 --all
-assert_ec "--all + positional selector exits 64" "64" "$EC"
+assert_ec "positional + retired --all exits 64" "64" "$EC"
 
 # Test 25: watch is NDJSON end to end — the error envelope is emitted
 # on stdout in compact single-line form even WITHOUT --json.
@@ -360,7 +361,7 @@ case "$ERR" in
     run_mos probe --watch
     assert_ec "probe + retired --watch exits 64" "64" "$EC"
     run_mos probe --all
-    assert_ec "probe + --all exits 64" "64" "$EC"
+    assert_ec "probe + retired --all exits 64" "64" "$EC"
 
     # Test 29: stream-mode selector errors. A malformed BSD form is a
     # usage error (64, pure parse); a well-formed but absent drive

@@ -24,7 +24,6 @@ extern uint64_t    opt_registry;  /* 0 = unset; set only positionally */
 extern bool        flag_list;
 extern bool        flag_json;
 extern bool        flag_watch;
-extern bool        flag_all;
 extern bool        flag_probe;    /* probe subcommand (MOS_CLI_PROBE builds) */
 extern bool        flag_dump;     /* probe --dump one-shot DR capture */
 extern const char *progname;

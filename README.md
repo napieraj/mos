@@ -104,7 +104,12 @@ $ mos list
 ### Watch
 
 NDJSON unconditionally — one `mos.event.v1` per line, errors included;
-`--json` is a no-op here. An insert looks like:
+`--json` is a no-op here. With no drive given, `watch` streams the
+whole bus: every drive, hot-plug arrivals as `device_appeared`,
+per-drive `device_removed` with the stream continuing — zero drives
+attached is a valid empty stream that waits. A drive selector narrows
+to one drive (and the stream then ends on its removal). An insert
+looks like:
 
 ```
 $ mos watch 1

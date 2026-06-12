@@ -42,7 +42,9 @@ void print_usage(FILE *f)
         "Subcommands:\n"
         "  status [drive]    Report drive state (default when only flags are given).\n"
         "  list              List all drives with their states.\n"
-        "  watch  [drive]    Stream state events (NDJSON) until SIGINT.\n"
+        "  watch  [drive]    Stream state events (NDJSON) until SIGINT;\n"
+        "                    all drives unless a drive narrows it (hot-plug\n"
+        "                    joins; removal is per-drive, stream continues).\n"
 #ifdef MOS_CLI_PROBE
         "  probe  <drive>    Diagnostic: stream raw IOKit/DiscRecording\n"
         "                    notification events (NDJSON, mos.probe.v0)\n"
@@ -63,9 +65,6 @@ void print_usage(FILE *f)
         "  -i, --index N     1-based drive index (the Index column in\n"
         "                    'mos list'); explicit form of the positional\n"
         "      --bsd NAME    BSD form; explicit form of the positional\n"
-        "      --all         With watch: stream events for EVERY drive\n"
-        "                    (hot-plug joins as device_appeared; removal\n"
-        "                    is per-drive, the stream continues)\n"
 #ifdef MOS_CLI_PROBE
         "      --dump        With probe: one-shot DR dictionary capture\n"
         "                    (text + XML plists; takes no drive argument)\n"
@@ -104,7 +103,6 @@ static void print_version(void)
 enum {
     OPT_BSD = 1000,
     OPT_VERSION,
-    OPT_ALL,
 #ifdef MOS_CLI_PROBE
     OPT_DUMP,
 #endif
@@ -113,7 +111,6 @@ enum {
 static const struct option long_options[] = {
     { "index",   required_argument, 0, 'i' },
     { "bsd",     required_argument, 0, OPT_BSD },
-    { "all",     no_argument,       0, OPT_ALL },
 #ifdef MOS_CLI_PROBE
     /* Compiled out with the probe so an OFF build rejects --dump as an
        unknown option (usage + 64) instead of half-recognizing it. */
@@ -272,7 +269,6 @@ int main(int argc, char **argv)
             case OPT_BSD:
                 opt_bsd = optarg;
                 break;
-            case OPT_ALL: flag_all = true; break;
 #ifdef MOS_CLI_PROBE
             case OPT_DUMP: flag_dump = true; break;
 #endif
@@ -355,26 +351,11 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 
-    /* --all is watch-only (sit on the bus) and takes the whole bus —
-       a drive selector contradicts it. */
-    if (flag_all && !flag_watch) {
-        fprintf(stderr, "%s: --all requires the watch subcommand\n",
-                progname);
-        return EX_USAGE;
-    }
-    if (flag_all && (opt_index || opt_bsd || opt_registry)) {
-        fprintf(stderr, "%s: --all watches every drive; a selector "
-                        "(--index/--bsd/positional) contradicts it\n",
-                progname);
-        return EX_USAGE;
-    }
-
     /* (list + selector is rejected above, where the positional
        subject also lands — one guard, one message.) */
 
 #ifdef MOS_CLI_PROBE
-    /* (probe + --all is already rejected above: --all requires watch.
-       Verb-vs-verb contradictions are unrepresentable since verbs come
+    /* (Verb-vs-verb contradictions are unrepresentable since verbs come
        only from the one-word dispatch — flags-as-commands retired
        2026-06-12.) */
     if (flag_dump && !flag_probe) {
