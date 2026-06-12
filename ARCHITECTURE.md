@@ -289,7 +289,7 @@ before believing a profile value means anything about current state.
 ### API since v0.4: mos_query_disc_info)
 
 10-byte CDB, data-in 34 bytes. Not issued on the
-default state path; reserved for the v0.4 typed APIs (a planned
+default state path; shipped as the v0.4 typed API (the
 `mos_disc_info` accessor) to surface session/track-count enrichment.
 Does **not** affect state classification.
 
@@ -419,7 +419,7 @@ reached only when TUR is not ready.
 5. GetConfiguration  (enrichment only, READY only, never changes state)
       populate current_profile
 
-6. (v0.4 typed APIs, not yet implemented) ReadDiscInformation
+6. (v0.4 typed API: mos_query_disc_info) ReadDiscInformation
       populate disc_status enum
 ```
 

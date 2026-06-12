@@ -384,10 +384,10 @@ userspace against an arbitrary `/dev/sr*` node, has to validate
 inline.
 
 mos's IOKit matching path filters by IOSCSIPeripheralDeviceType=5
-already, so v0.2 doesn't strictly need this check. But v0.3's typed
-APIs that operate on a `mos_handle_t` constructed from a BSD name
+already, so v0.2 doesn't strictly need this check. But typed APIs
+(v0.4) that operate on a `mos_handle_t` constructed from a BSD name
 (via `mos_open_by_bsd_name`) effectively receive an arbitrary
-device path from the caller; an inline INQUIRY-type check inside
+bsd_name from the caller; an inline INQUIRY-type check inside
 `mos_handle_init` would catch the "user passed `disk2` thinking it
 was their optical drive but it's actually a USB stick" case before
 any command issue. Recording here so the v0.3 work surfaces it

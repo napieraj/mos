@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/napieraj/mos/schemas/mos.error.v1.json",
   "title": "mos.error.v1",
-  "description": "Failure envelope for any mos one-shot operation that produced no observation. Routes to stdout (not stderr) so a single `mos --json | jq` pipeline can read both success and failure envelopes; stderr carries the human-readable diagnostic in parallel. The bsd_name field is conditional — present only when a handle was open at the time of failure (partial-failure path), absent when the failure preceded handle acquisition (pure-open-failure path).",
+  "description": "Failure envelope for any mos one-shot operation that produced no observation. Routes to stdout (not stderr) so a single `mos --json | jq` pipeline can read both success and failure envelopes; stderr carries the human-readable diagnostic in parallel. The bsd field is conditional — present only when a handle was open at the time of failure (partial-failure path), absent when the failure preceded handle acquisition (pure-open-failure path).",
   "type": "object",
   "required": ["schema", "exit_code", "error"],
   "additionalProperties": false,
@@ -13,11 +13,11 @@
     "bsd": {
       "type": "string",
       "pattern": "^/dev/disk[0-9]+$",
-      "description": "BSD name of the drive a handle was open against when the failure occurred. Absent when the failure occurred before handle acquisition (e.g. drive not present at all)."
+      "description": "Whole-disk dev node (/dev/diskN) of the drive a handle was open against when the failure occurred. Absent when the failure occurred before handle acquisition (e.g. drive not present at all)."
     },
     "exit_code": {
       "type": "integer",
-      "enum": [64, 66, 69, 70, 71, 74, 75, 77],
+      "enum": [64, 66, 69, 70, 71, 74, 75],
       "description": "sysexits.h exit code that the process will return. Mirrors the kernel-visible exit and is intended for consumers that read JSON without also gating on $?."
     },
     "error": {

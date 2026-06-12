@@ -58,7 +58,7 @@
 static void mos_internal_dr_copy_string(CFTypeRef value,
                                         char *dst, size_t cap)
 {
-    if (cap == 0) return;
+    if (!dst || cap == 0) return;
     dst[0] = 0;
     if (!value || CFGetTypeID(value) != CFStringGetTypeID()) return;
 
@@ -114,9 +114,9 @@ static void mos_internal_dr_copy_identity_from_info(CFDictionaryRef info,
     mos_internal_dr_copy_string(
         CFDictionaryGetValue(info, kDRDeviceFirmwareRevisionKey),
         revision, rcap);
-    if (vcap) mos_internal_dr_strip_trailing_spaces(vendor);
-    if (pcap) mos_internal_dr_strip_trailing_spaces(product);
-    if (rcap) mos_internal_dr_strip_trailing_spaces(revision);
+    if (vendor && vcap) mos_internal_dr_strip_trailing_spaces(vendor);
+    if (product && pcap) mos_internal_dr_strip_trailing_spaces(product);
+    if (revision && rcap) mos_internal_dr_strip_trailing_spaces(revision);
 }
 
 /* Fill identity + registry id from one device's Info dictionary. */
@@ -227,9 +227,9 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                                                char *product, size_t pcap,
                                                char *revision, size_t rcap)
 {
-    if (vcap) vendor[0] = 0;
-    if (pcap) product[0] = 0;
-    if (rcap) revision[0] = 0;
+    if (vendor && vcap) vendor[0] = 0;
+    if (product && pcap) product[0] = 0;
+    if (revision && rcap) revision[0] = 0;
     if (svc == IO_OBJECT_NULL) return false;
 
     io_string_t path;

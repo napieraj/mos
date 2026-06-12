@@ -11,11 +11,8 @@
  * them elsewhere — a second copy drifts the first time only one is updated.
  *
  * We define our own constants rather than using Apple's kSCSITaskStatus_*
- * enums from SCSITask.h because the Apple set is incomplete: it omits
- * RESERVATION_CONFLICT, TASK_SET_FULL, and ACA_ACTIVE, which our state
- * machine treats uniformly as "drive contended." Having our own set lets
- * the contention classifier (and its test) work from one consistent
- * vocabulary.
+ * enums from SCSITask.h so the contention classifier (and its test) stays
+ * SDK-free and compiles headless. Values match SAM-2 and Apple's enums.
  */
 
 #ifndef MOS_SCSI_STATUS_H

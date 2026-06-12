@@ -102,10 +102,13 @@ static uint64_t mono_ms_since_start(void) {
 }
 
 static void format_rfc3339_utc(char *out, size_t cap) {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    struct tm tm_utc;
-    gmtime_r(&ts.tv_sec, &tm_utc);
+    struct timespec ts = {0};
+    struct tm tm_utc = {0};
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0 ||
+        gmtime_r(&ts.tv_sec, &tm_utc) == NULL) {
+        snprintf(out, cap, "1970-01-01T00:00:00.000Z");
+        return;
+    }
     snprintf(out, cap, "%04d-%02d-%02dT%02d:%02d:%02d.%03ldZ",
              tm_utc.tm_year + 1900,
              tm_utc.tm_mon + 1,

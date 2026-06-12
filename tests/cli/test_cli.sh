@@ -176,8 +176,9 @@ assert_not_contains "no legacy schema_version field" "$OUT" '"schema_version"'
 assert_not_contains "no flat error_message field"    "$OUT" '"error_message"'
 # Failure envelope must NOT include "state" — disjointness rule.
 assert_not_contains "failure envelope has no state"  "$OUT" '"state"'
-# Field name is bsd_name, not bare "bsd".
-assert_not_contains "envelope: no bare bsd key"      "$OUT" '"bsd":'
+# Pure-open-failure path: no handle was open, so the conditional
+# "bsd" field must be absent from this envelope.
+assert_not_contains "open-failure envelope omits bsd" "$OUT" '"bsd":'
 
 # Test 6: --index and --bsd are mutually exclusive (EX_USAGE 64).
 run_mos --index 1 --bsd disk0

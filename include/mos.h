@@ -3,8 +3,9 @@
  *
  * Pure-C public surface for querying macOS optical drive state via
  * MMCDeviceInterface. Raw SCSITaskDeviceInterface access is exposed
- * only through mos_raw_cdb() for diagnostics; it is not on the
- * default state-query path. See ARCHITECTURE.md §3 for why.
+ * through mos_raw_cdb(); the default state path issues one raw CDB
+ * (GESN) on its not-ready branch, briefly taking the exclusive lock
+ * — safe by the nub invariant. See ARCHITECTURE.md §3/§5.5.
  *
  * Design goals:
  *   - Trivially embeddable in non-macOS-specific C/C++ projects.
@@ -272,8 +273,9 @@ mos_handle_t *mos_open_device(const mos_device_info_t *info,
 int64_t mos_handle_bsd_unit(const mos_handle_t *h);
 
 /*
- * Query drive state. Uses MMC convenience methods by default (no exclusive
- * access required). `out` is REQUIRED — NULL returns MOS_ERR_INVALID_ARG
+ * Query drive state. Uses MMC convenience methods, plus one raw GESN
+ * on the not-ready branch (briefly takes the exclusive lock; see
+ * ARCHITECTURE.md §5.5 for why that cannot collide with a mount). `out` is REQUIRED — NULL returns MOS_ERR_INVALID_ARG
  * (unlike the optional err_out parameters elsewhere). On success returns
  * MOS_OK and points *out at a handle-owned result; on failure returns a
  * negative code with *out set to NULL. Read it through the
@@ -498,7 +500,8 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
        join time); (registry_id, stream_open_ms) stays per-session
        unique because a replug re-mints the registry_id.
      - Up to 16 concurrently watched drives; arrivals beyond that are
-       ignored until a slot frees.
+       dropped for that plug session (no rescan when a slot frees — a
+       replug re-announces the drive).
    mos_watch_bsd_unit() returns -1 on an all-watch (no single unit).
    Threading/run-loop contract is identical to the single-target opens. */
 mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
@@ -573,7 +576,7 @@ int mos_error_sysexit(mos_error e);
 /* Retry hint for consuming adapters: true for errors that
    typically clear on retry within seconds (BUSY, TIMEOUT,
    EXCLUSIVE_ACCESS); false for errors that won't clear without
-   external action (INVALID_ARG, NO_DEVICE, DRIVER_REJECTED,
+   external action (INVALID_ARG, NO_DEVICE, DRIVER_REJECTED, IO,
    UNSUPPORTED, OOM). MOS_OK returns false (no retry needed). */
 bool mos_error_is_recoverable(mos_error e);
 

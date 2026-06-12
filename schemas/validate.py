@@ -55,6 +55,9 @@ def check_state_enum_drift(here: Path) -> int:
     state_schema = enum_at(here / "mos.state.v1.json", "state")
     event_state  = enum_at(here / "mos.event.v1.json", "state")
     event_prev   = enum_at(here / "mos.event.v1.json", "prev_state")
+    list_state   = set(json.loads((here / "mos.list.v1.json").read_text())
+                       ["properties"]["drives"]["items"]
+                       ["properties"]["state"]["enum"])
 
     print("\nState-enum drift (C string table vs schema enums):")
     failures = 0
@@ -68,6 +71,15 @@ def check_state_enum_drift(here: Path) -> int:
             failures += 1
         else:
             print(f"  ok   {label} matches the C string table")
+    # mos.list.v1 rows carry the same enum plus the list-only "error"
+    # row marker (a failing drive's row; emitted by query_row).
+    if list_state != c_states | {"error"}:
+        print("  FAIL mos.list.v1.drives[].state != mos_state_description() + 'error':")
+        print(f"    only in C+error: {sorted((c_states | {'error'}) - list_state)}")
+        print(f"    only in schema:  {sorted(list_state - (c_states | {'error'}))}")
+        failures += 1
+    else:
+        print("  ok   mos.list.v1.drives[].state matches (C states + 'error' row marker)")
     if not failures:
         print(f"  ok   all enums match {sorted(c_states)}")
     return failures

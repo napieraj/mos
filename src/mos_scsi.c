@@ -186,10 +186,6 @@ int64_t mos_handle_bsd_unit(const mos_handle_t *h)
     return h ? h->bsd_unit : -1;
 }
 
-uint64_t mos_internal_device_info_registry_id(const mos_device_info_t *i) {
-    return i ? i->registry_id : 0;
-}
-
 io_service_t mos_internal_handle_get_service(mos_handle_t *h) {
     /* No retain taken — caller must IOObjectRetain before mos_close(h).
        Lifecycle contract in mos_internal.h. */
@@ -310,7 +306,7 @@ static bool mos_internal_collect_cb(const mos_device_info_t *info, void *ctx)
 {
     mos_internal_id_collect *c = (mos_internal_id_collect *)ctx;
     if (c->count >= MOS_ENUM_CAP) return false;
-    uint64_t id = mos_internal_device_info_registry_id(info);
+    uint64_t id = mos_device_info_registry_id(info);
     if (id != 0) {
         c->ids[c->count++] = id;
     }

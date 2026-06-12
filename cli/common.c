@@ -219,6 +219,7 @@ void emit_list_table(FILE *f, const list_row *rows, int n,
     static const bool ra_nv[MAXC - 1] = { true, false, false, false, false, false };
 
     size_t ncols = with_volume ? MAXC : MAXC - 1;
+    if (n > MOS_CLI_LIST_CAP) n = MOS_CLI_LIST_CAP;
     /* index strings need storage */
     char idx[MOS_CLI_LIST_CAP][12];
     /* Rows are raw; the terminal is where \xNN escaping is owed. */
@@ -249,6 +250,7 @@ void emit_list_table(FILE *f, const list_row *rows, int n,
 void emit_list_json(const list_row *rows, int n)
 {
     fputs("{\n  \"schema\": \"mos.list.v1\",\n  \"drives\": [\n", stdout);
+    if (n > MOS_CLI_LIST_CAP) n = MOS_CLI_LIST_CAP;
     for (int r = 0; r < n; r++) {
         fprintf(stdout, "%s    {\"index\": %d, \"state\": ",
                 r ? ",\n" : "", r + 1);

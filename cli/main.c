@@ -85,7 +85,8 @@ void print_usage(FILE *f)
         "States: open, empty, loading, ready, busy, formatting,\n"
         "        media_unreadable, device_fault, empty_or_open, unknown\n"
         "Exit:   sysexits.h codes — 0 on observed state, 64 usage, 66 no\n"
-        "        device, 69 unavailable, 71 OS err, 74 I/O, 75 temp-fail.\n",
+        "        device, 69 unavailable, 70 internal, 71 OS err, 74 I/O,\n"
+        "        75 temp-fail.\n",
         f);
 }
 

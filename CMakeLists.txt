@@ -27,9 +27,10 @@ option(MOS_NON_APPLE_STUB
 if(NOT APPLE)
     # The library's full surface is macOS-only — mos_core uses IOKit's
     # SCSITaskLib and MMCDeviceInterface, which have no equivalent on
-    # Linux or Windows. However, the pure layer (src/mos_pure.c,
-    # mos_pure.c, mos_sense.c, mos_strings.c, mos_state_core.c,
-    # mos_watch_core.c) is C with no Apple framework dependencies, and
+    # Linux or Windows. However, the pure layer (mos_pure.c,
+    # mos_sense.c, mos_strings.c, mos_state_core.c, mos_watch_core.c,
+    # mos_config.c, mos_discinfo.c, mos_result.c in src/) is C with no
+    # Apple framework dependencies, and
     # the unit test suite (tests/test_*.c) links only against the pure
     # layer. Both build cleanly on Linux and serve as a developer
     # workflow surface for contributors without macOS access.

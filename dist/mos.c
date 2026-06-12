@@ -55,11 +55,8 @@
  * them elsewhere — a second copy drifts the first time only one is updated.
  *
  * We define our own constants rather than using Apple's kSCSITaskStatus_*
- * enums from SCSITask.h because the Apple set is incomplete: it omits
- * RESERVATION_CONFLICT, TASK_SET_FULL, and ACA_ACTIVE, which our state
- * machine treats uniformly as "drive contended." Having our own set lets
- * the contention classifier (and its test) work from one consistent
- * vocabulary.
+ * enums from SCSITask.h so the contention classifier (and its test) stays
+ * SDK-free and compiles headless. Values match SAM-2 and Apple's enums.
  */
 
 
@@ -721,11 +718,6 @@ mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profil
  * surface. Returns MOS_ERR_UNSUPPORTED until the RT=0 issuance is written and
  * HW-validated. See mos_scsi.c for the walker seam. */
 mos_error mos_internal_mmc_get_features       (mos_handle_t *h);
-
-/* Internal-only accessor for the registry entry ID captured during
-   enumeration. Used by mos_open_by_index to reopen by stable ID rather than
-   racing on BSD-name re-resolution. */
-uint64_t mos_internal_device_info_registry_id(const mos_device_info_t *i);
 
 /* Open a drive by its IORegistry entry ID — the identity-stable
    primitive: the kernel resolves IORegistryEntryIDMatching atomically,
@@ -2238,6 +2230,7 @@ mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
        is 16, an index sort would be ceremony). Returning on the first
        EMIT keeps per-call work bounded; the next call re-enters at the
        lowest id, so same-tick events drain in id order. */
+    _Static_assert(MOS_WATCH_ALL_CAP <= 64, "visited bitmask is 64-wide");
     uint64_t visited = 0; /* bitmask of slots already pumped this call */
     for (;;) {
         int best = -1;
@@ -3717,7 +3710,7 @@ bool mos_bsd_dev_node(int64_t unit, char *out, size_t out_cap)
 static void mos_internal_dr_copy_string(CFTypeRef value,
                                         char *dst, size_t cap)
 {
-    if (cap == 0) return;
+    if (!dst || cap == 0) return;
     dst[0] = 0;
     if (!value || CFGetTypeID(value) != CFStringGetTypeID()) return;
 
@@ -3773,9 +3766,9 @@ static void mos_internal_dr_copy_identity_from_info(CFDictionaryRef info,
     mos_internal_dr_copy_string(
         CFDictionaryGetValue(info, kDRDeviceFirmwareRevisionKey),
         revision, rcap);
-    if (vcap) mos_internal_dr_strip_trailing_spaces(vendor);
-    if (pcap) mos_internal_dr_strip_trailing_spaces(product);
-    if (rcap) mos_internal_dr_strip_trailing_spaces(revision);
+    if (vendor && vcap) mos_internal_dr_strip_trailing_spaces(vendor);
+    if (product && pcap) mos_internal_dr_strip_trailing_spaces(product);
+    if (revision && rcap) mos_internal_dr_strip_trailing_spaces(revision);
 }
 
 /* Fill identity + registry id from one device's Info dictionary. */
@@ -3886,9 +3879,9 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                                                char *product, size_t pcap,
                                                char *revision, size_t rcap)
 {
-    if (vcap) vendor[0] = 0;
-    if (pcap) product[0] = 0;
-    if (rcap) revision[0] = 0;
+    if (vendor && vcap) vendor[0] = 0;
+    if (product && pcap) product[0] = 0;
+    if (revision && rcap) revision[0] = 0;
     if (svc == IO_OBJECT_NULL) return false;
 
     io_string_t path;
@@ -4105,10 +4098,6 @@ int64_t mos_handle_bsd_unit(const mos_handle_t *h)
     return h ? h->bsd_unit : -1;
 }
 
-uint64_t mos_internal_device_info_registry_id(const mos_device_info_t *i) {
-    return i ? i->registry_id : 0;
-}
-
 io_service_t mos_internal_handle_get_service(mos_handle_t *h) {
     /* No retain taken — caller must IOObjectRetain before mos_close(h).
        Lifecycle contract in mos_internal.h. */
@@ -4229,7 +4218,7 @@ static bool mos_internal_collect_cb(const mos_device_info_t *info, void *ctx)
 {
     mos_internal_id_collect *c = (mos_internal_id_collect *)ctx;
     if (c->count >= MOS_ENUM_CAP) return false;
-    uint64_t id = mos_internal_device_info_registry_id(info);
+    uint64_t id = mos_device_info_registry_id(info);
     if (id != 0) {
         c->ids[c->count++] = id;
     }

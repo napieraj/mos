@@ -551,6 +551,7 @@ mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
        is 16, an index sort would be ceremony). Returning on the first
        EMIT keeps per-call work bounded; the next call re-enters at the
        lowest id, so same-tick events drain in id order. */
+    _Static_assert(MOS_WATCH_ALL_CAP <= 64, "visited bitmask is 64-wide");
     uint64_t visited = 0; /* bitmask of slots already pumped this call */
     for (;;) {
         int best = -1;
