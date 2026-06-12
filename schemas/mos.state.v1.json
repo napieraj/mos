@@ -59,6 +59,11 @@
       ],
       "description": "Coarse media class derived from current_profile by mos_profile_class() \u2014 the closed set of optical families. Present only when the profile has a class: absent for 0x0000 (no media/profile) and for classless profiles (magneto-optical, legacy removable). This is the first identical-drives disambiguator; volume_name joins it in the v0.4 media object (doc/research/2026-06-10-media-info-design.md)."
     },
+    "volume_name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Mounted volume's name (DiskArbitration VolumeName via mos_query_volume() \u2014 one synchronous description read, gated on the media nub). Present only when the volume is mounted AND labeled; key absence means unmounted or unlabeled, never null. The second identical-drives disambiguator after media_class (the original list ask \u2014 doc/research/2026-06-10-media-info-design.md, stage 1). Volume names are disc-controlled bytes, emitted byte-faithfully under JSON string escaping; terminal quoting is the consumer's job."
+    },
     "vendor": {
       "type": "string",
       "description": "INQUIRY-derived vendor string. Sanitized \u2014 control bytes and high bytes are escaped as \\u00XX before emission. Field present only when non-empty."

@@ -5,13 +5,14 @@
 #include <sysexits.h>
 
 static void emit_human(const mos_state_result *r, int index1,
-                       bool invoked_by_index, bool invoked_by_registry)
+                       bool invoked_by_index, bool invoked_by_registry,
+                       const char *volume_name)
 {
     /* Five-tier order (doc/research/2026-06-10-cli-design.md): answer,
        evidence, media, addressing, identity. Suppression mirrors the
        JSON contract (pairs the schema suppresses are not in the array);
        structural addressing/identity rows show "-" via NULL instead. */
-    mos_cli_human_pair pairs[10];
+    mos_cli_human_pair pairs[11];
     size_t n = 0;
 
     /* Addressing header first: Index, Registry, BSD. The selector the
@@ -78,6 +79,16 @@ static void emit_human(const mos_state_result *r, int index1,
         pairs[n++] = (mos_cli_human_pair){ "Profile", prof_buf };
     }
 
+    /* Volume name: the second identical-drives disambiguator (media
+       class above is the first). Disc-controlled bytes — escaped here
+       like the identity rows below. Suppressed (no row) when
+       unmounted, mirroring the JSON suppression. */
+    char vol_esc[MOS_CLI_ESC_CAP(256)];
+    if (volume_name && volume_name[0]) {
+        (void)mos_safe_ascii(volume_name, vol_esc, sizeof vol_esc);
+        pairs[n++] = (mos_cli_human_pair){ "Volume", vol_esc };
+    }
+
     const char *v  = mos_state_result_vendor(r);
     const char *p  = mos_state_result_product(r);
     const char *rv = mos_state_result_revision(r);
@@ -102,7 +113,8 @@ static void emit_human(const mos_state_result *r, int index1,
     (void)mos_cli_human_block(stdout, pairs, n);
 }
 
-static void emit_json(const mos_state_result *r, int index1)
+static void emit_json(const mos_state_result *r, int index1,
+                      const char *volume_name)
 {
     uint16_t    profile      = mos_state_result_current_profile(r);
     const char *state        = mos_state_description(mos_state_result_state(r));
@@ -149,6 +161,14 @@ static void emit_json(const mos_state_result *r, int index1)
             fputs(",\n  \"media_class\": ", stdout);
             mos_cli_json_str(stdout, media_class);
         }
+    }
+
+    /* Mounted-volume name (DA one-shot, mos_query_volume). Same
+       suppression convention as vendor/product: present only when
+       non-empty — key absence means unmounted or unlabeled. */
+    if (volume_name && volume_name[0]) {
+        fputs(",\n  \"volume_name\": ", stdout);
+        mos_cli_json_str(stdout, volume_name);
     }
 
     if (vendor && *vendor) {
@@ -249,8 +269,16 @@ int run_query(void)
        point into h's internal buffers (see mos.h — "valid only until the
        next mos_query_state() call or mos_close()"). Freeing the handle
        first would leave r dangling. */
-    if (flag_json) emit_json(r, index1);
-    else           emit_human(r, index1, opt_index > 0, opt_registry != 0);
+    /* Volume label (stage 1): one DA description read, gated inside
+       the library on the media nub. Failure or unmounted just means
+       no field — never affects state reporting. */
+    char volume[256] = "";
+    bool mounted = false;
+    (void)mos_query_volume(h, &mounted, volume, sizeof volume, NULL, 0);
+
+    if (flag_json) emit_json(r, index1, mounted ? volume : NULL);
+    else           emit_human(r, index1, opt_index > 0, opt_registry != 0,
+                              mounted ? volume : NULL);
 
     /* Exit 0 on any state including unknown — state is stdout data, not
        exit status. unknown means "drive reachable, classification

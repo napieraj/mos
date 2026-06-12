@@ -68,6 +68,10 @@ typedef struct {
     char     vendor[MOS_CLI_VENDOR_CAP];
     char     product[MOS_CLI_PRODUCT_CAP];
     char     revision[MOS_CLI_REVISION_CAP];
+    /* Mounted volume name, RAW disc-controlled bytes ("" = unmounted/
+       unlabeled); JSON emits byte-faithfully, the table escapes and
+       truncates at emit. */
+    char     volume[256];
     uint64_t registry_id;
 } list_row;
 
