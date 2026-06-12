@@ -292,6 +292,16 @@ mos_handle_t *mos_open_by_bsd_name(const char *want, mos_error *err_out)
     return mos_internal_open_by_registry_id(id, err_out);
 }
 
+mos_handle_t *mos_open_by_registry_id(uint64_t registry_id,
+                                      mos_error *err_out)
+{
+    if (registry_id == 0) {
+        if (err_out) *err_out = MOS_ERR_INVALID_ARG;
+        return NULL;
+    }
+    return mos_internal_open_by_registry_id(registry_id, err_out);
+}
+
 /* Collects registry IDs (not BSD names) for by-index reopen: BSD names can
    shift on hot-plug / IOMedia reattach between the enumerate and reopen
    passes (a TOCTOU race), whereas a registry entry ID is stable for the

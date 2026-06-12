@@ -201,6 +201,14 @@ int64_t mos_internal_parse_bsd_unit(const char *name);
    matching rule for any future BSD-name event filtering. */
 bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit);
 
+/* xnu mints IORegistry entry IDs from a never-reused monotone counter
+   starting at 2^32+256; CLI indexes are 1..MOS_CLI_LIST_CAP. The two
+   all-digit selector spaces are disjoint by kernel construction, so a
+   parsed value classifies deterministically. Pinned by
+   tests/test_bsd_name.c. */
+#define MOS_REGISTRY_ID_FLOOR ((1ULL << 32) + 256)
+bool mos_internal_value_is_registry_id(uint64_t v);
+
 /* ---- GET CONFIGURATION feature walk (mos_config.c) --------------- *
  *
  * One decoded MMC feature descriptor. `data` borrows into the caller's
@@ -1137,6 +1145,11 @@ bool mos_internal_gesn_media_door_open(const uint8_t *resp, size_t len,
     /* Media Status byte (descriptor byte 1 = response byte 5): bit0 DoorOpen. */
     *door_open = (resp[5] & 0x01) != 0;
     return true;
+}
+
+bool mos_internal_value_is_registry_id(uint64_t v)
+{
+    return v >= MOS_REGISTRY_ID_FLOOR;
 }
 
 /* ==== src/mos_config.c ==== */
@@ -3208,6 +3221,21 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
                                             transition_poll_ms, err_out);
 }
 
+mos_watch_t *mos_watch_open_by_registry_id(uint64_t registry_id,
+                                           uint32_t stable_poll_ms,
+                                           uint32_t transition_poll_ms,
+                                           mos_error *err_out)
+{
+    mos_error err = MOS_OK;
+    mos_handle_t *h = mos_open_by_registry_id(registry_id, &err);
+    if (!h) {
+        if (err_out) *err_out = (err != MOS_OK) ? err : MOS_ERR_IO;
+        return NULL;
+    }
+    return watch_open_from_validated_handle(h, stable_poll_ms,
+                                            transition_poll_ms, err_out);
+}
+
 mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
                                 uint32_t transition_poll_ms,
                                 mos_error *err_out)
@@ -4209,6 +4237,16 @@ mos_handle_t *mos_open_by_bsd_name(const char *want, mos_error *err_out)
         return NULL;
     }
     return mos_internal_open_by_registry_id(id, err_out);
+}
+
+mos_handle_t *mos_open_by_registry_id(uint64_t registry_id,
+                                      mos_error *err_out)
+{
+    if (registry_id == 0) {
+        if (err_out) *err_out = MOS_ERR_INVALID_ARG;
+        return NULL;
+    }
+    return mos_internal_open_by_registry_id(registry_id, err_out);
 }
 
 /* Collects registry IDs (not BSD names) for by-index reopen: BSD names can

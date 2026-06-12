@@ -23,8 +23,10 @@ mos [subcommand] [drive] [options]
 ```
 
 The drive subject is positional after a subcommand, like
-`diskutil info disk4`: an Index from `mos list` (all digits) or a BSD
-form (`disk4`, `rdisk4`, `/dev/disk4`). With one drive attached it may
+`diskutil info disk4`: an Index from `mos list`, a `registry_id`
+(pasteable from any JSON output — the two digit forms cannot collide,
+xnu starts registry IDs above 2^32), or a BSD form (`disk4`, `rdisk4`,
+`/dev/disk4`). With one drive attached it may
 be omitted (`mos status`); with several, `mos status` without a
 subject exits 64 and prints the drive table to stderr — no first-drive
 guessing. Bare `mos` is an entry point, not a status query: it prints

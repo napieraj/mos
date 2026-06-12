@@ -5,7 +5,7 @@
 #include <sysexits.h>
 
 static void emit_human(const mos_state_result *r, int index1,
-                       bool invoked_by_index)
+                       bool invoked_by_index, bool invoked_by_registry)
 {
     /* Five-tier order (doc/research/2026-06-10-cli-design.md): answer,
        evidence, media, addressing, identity. Suppression mirrors the
@@ -29,11 +29,14 @@ static void emit_human(const mos_state_result *r, int index1,
 
     char reg_buf[24];
     uint64_t reg = mos_state_result_registry_id(r);
-    if (reg) {
-        snprintf(reg_buf, sizeof reg_buf, "%llu", (unsigned long long)reg);
-        pairs[n++] = (mos_cli_human_pair){ "Registry", reg_buf };
-    } else {
-        pairs[n++] = (mos_cli_human_pair){ "Registry", NULL };
+    if (!invoked_by_registry) {
+        if (reg) {
+            snprintf(reg_buf, sizeof reg_buf, "%llu",
+                     (unsigned long long)reg);
+            pairs[n++] = (mos_cli_human_pair){ "Registry", reg_buf };
+        } else {
+            pairs[n++] = (mos_cli_human_pair){ "Registry", NULL };
+        }
     }
 
     char bsd_buf[24];
@@ -190,6 +193,9 @@ int run_query(void)
     } else if (opt_index) {
         index1 = opt_index;
         h = mos_open_by_index(opt_index, &err);
+    } else if (opt_registry) {
+        /* index1 stays 0; resolved from the result's registry_id below. */
+        h = mos_open_by_registry_id(opt_registry, &err);
     } else {
         /* No selector: fine with exactly one drive; with several this
            is EX_USAGE — no first-burner magic (CLI design 2026-06-10).
@@ -244,7 +250,7 @@ int run_query(void)
        next mos_query_state() call or mos_close()"). Freeing the handle
        first would leave r dangling. */
     if (flag_json) emit_json(r, index1);
-    else           emit_human(r, index1, opt_index > 0);
+    else           emit_human(r, index1, opt_index > 0, opt_registry != 0);
 
     /* Exit 0 on any state including unknown — state is stdout data, not
        exit status. unknown means "drive reachable, classification

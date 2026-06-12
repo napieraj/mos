@@ -253,3 +253,8 @@ bool mos_internal_gesn_media_door_open(const uint8_t *resp, size_t len,
     *door_open = (resp[5] & 0x01) != 0;
     return true;
 }
+
+bool mos_internal_value_is_registry_id(uint64_t v)
+{
+    return v >= MOS_REGISTRY_ID_FLOOR;
+}

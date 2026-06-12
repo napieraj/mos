@@ -210,6 +210,9 @@ int run_watch(void)
         w = mos_watch_open_by_bsd_name(opt_bsd, stable_ms, transition_ms, &err);
     } else if (opt_index) {
         w = mos_watch_open_by_index(opt_index, stable_ms, transition_ms, &err);
+    } else if (opt_registry) {
+        w = mos_watch_open_by_registry_id(opt_registry, stable_ms,
+                                          transition_ms, &err);
     } else {
         /* No selector: same contract as status (usage text; CLI design
            2026-06-10, "Multi-drive default") — implied only when

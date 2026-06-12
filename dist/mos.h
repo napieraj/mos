@@ -227,8 +227,8 @@ void mos_enumerate_devices(mos_enumerate_cb cb, void *ctx);
 int64_t mos_device_info_bsd_unit(const mos_device_info_t *);
 
 /* The drive service's IORegistry entry ID for an enumeration entry —
-   the attachment identity; the value `--registry-id` will select by
-   and the one mos.state.v1/mos.event.v1 carry. 0 if unavailable. */
+   the attachment identity mos_open_by_registry_id selects by and the
+   one mos.state.v1/mos.event.v1 carry. 0 if unavailable. */
 uint64_t mos_device_info_registry_id(const mos_device_info_t *);
 
 /* Render a whole-disk unit to its canonical BSD name ("diskN") in buf.
@@ -248,6 +248,14 @@ bool mos_bsd_name_format(int64_t unit, char *buf, size_t cap);
  */
 mos_handle_t *mos_open_by_index(int one_based, mos_error *err_out);
 mos_handle_t *mos_open_by_bsd_name(const char *bsd_name, mos_error *err_out);
+
+/* Open by IORegistry entry ID — the attachment identity every result
+   and event carries as registry_id (xnu mints real IDs >= 2^32+256,
+   never reused). Selects "this exact attachment": after a replug or
+   firmware flash the old ID yields MOS_ERR_NO_DEVICE — itself the
+   confirmation that attachment is gone. */
+mos_handle_t *mos_open_by_registry_id(uint64_t registry_id,
+                                      mos_error *err_out);
 
 /*
  * Open the drive an enumeration callback is currently visiting. Call
@@ -469,6 +477,11 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
                                      uint32_t stable_poll_ms,
                                      uint32_t transition_poll_ms,
                                      mos_error *err_out);
+
+mos_watch_t *mos_watch_open_by_registry_id(uint64_t registry_id,
+                                           uint32_t stable_poll_ms,
+                                           uint32_t transition_poll_ms,
+                                           mos_error *err_out);
 
 /* Open a watch on EVERY optical drive — sit on the bus. The stream
    multiplexes per-drive events, demuxed by registry_id (and bsd when

@@ -20,6 +20,7 @@
 /* Parsed-option state, set by cli/main.c before dispatch. */
 extern int         opt_index;     /* 0 = unset; 1-based when set */
 extern const char *opt_bsd;
+extern uint64_t    opt_registry;  /* 0 = unset; set only positionally */
 extern bool        flag_list;
 extern bool        flag_json;
 extern bool        flag_watch;

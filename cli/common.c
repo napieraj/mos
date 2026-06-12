@@ -8,6 +8,7 @@
 
 int         opt_index   = 0;     /* 0 = unset; 1-based when set */
 const char *opt_bsd     = NULL;
+uint64_t    opt_registry = 0;     /* 0 = unset; >= 2^32+256 when set */
 bool        flag_list   = false;
 bool        flag_json   = false;
 bool        flag_watch  = false;

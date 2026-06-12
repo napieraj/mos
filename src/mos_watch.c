@@ -862,6 +862,21 @@ mos_watch_t *mos_watch_open_by_index(int one_based,
                                             transition_poll_ms, err_out);
 }
 
+mos_watch_t *mos_watch_open_by_registry_id(uint64_t registry_id,
+                                           uint32_t stable_poll_ms,
+                                           uint32_t transition_poll_ms,
+                                           mos_error *err_out)
+{
+    mos_error err = MOS_OK;
+    mos_handle_t *h = mos_open_by_registry_id(registry_id, &err);
+    if (!h) {
+        if (err_out) *err_out = (err != MOS_OK) ? err : MOS_ERR_IO;
+        return NULL;
+    }
+    return watch_open_from_validated_handle(h, stable_poll_ms,
+                                            transition_poll_ms, err_out);
+}
+
 mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
                                 uint32_t transition_poll_ms,
                                 mos_error *err_out)

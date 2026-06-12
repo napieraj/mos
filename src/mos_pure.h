@@ -132,6 +132,14 @@ int64_t mos_internal_parse_bsd_unit(const char *name);
    matching rule for any future BSD-name event filtering. */
 bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit);
 
+/* xnu mints IORegistry entry IDs from a never-reused monotone counter
+   starting at 2^32+256; CLI indexes are 1..MOS_CLI_LIST_CAP. The two
+   all-digit selector spaces are disjoint by kernel construction, so a
+   parsed value classifies deterministically. Pinned by
+   tests/test_bsd_name.c. */
+#define MOS_REGISTRY_ID_FLOOR ((1ULL << 32) + 256)
+bool mos_internal_value_is_registry_id(uint64_t v);
+
 /* ---- GET CONFIGURATION feature walk (mos_config.c) --------------- *
  *
  * One decoded MMC feature descriptor. `data` borrows into the caller's

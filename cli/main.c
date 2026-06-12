@@ -2,6 +2,7 @@
  * command over cli/common; adding a verb = a new cli/<verb>.c + a
  * dispatch line below. */
 #include "common.h"
+#include "mos_pure.h"   /* mos_internal_value_is_registry_id (selector floor) */
 
 #include <errno.h>
 #include <getopt.h>
@@ -298,11 +299,11 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Positional drive subject (doc/research/2026-06-10-cli-design.md):
-       one bare argument; SYNTACTIC disambiguation — all digits = index,
-       anything else = a bsd form (the library parse accepts disk4 /
-       rdisk4 / /dev/diskN). --registry-id (future) stays flag-only: its
-       large decimals would collide with the index grammar. */
+    /* Positional drive subject: one bare argument, SYNTACTIC dispatch —
+       non-digit = a bsd form (disk4 / rdisk4 / /dev/diskN); all digits
+       split on the xnu registry-ID floor (mos_pure.h): at/above
+       2^32+256 = registry id, below = drutil-style index. Disjoint by
+       kernel construction, so no fallback chain. */
     if (optind < argc) {
         const char *subject = argv[optind];
         if (optind + 1 < argc) {
@@ -322,14 +323,27 @@ int main(int argc, char **argv)
         for (const char *p = subject; *p; p++)
             if (*p < '0' || *p > '9') { all_digits = false; break; }
         if (all_digits) {
-            int v = parse_index(subject);
-            if (v < 0) {
-                fprintf(stderr, "%s: invalid drive index: ", progname);
+            errno = 0;
+            unsigned long long big = strtoull(subject, NULL, 10);
+            if (errno == ERANGE) {
+                fprintf(stderr, "%s: drive selector out of range: ",
+                        progname);
                 mos_cli_safe_ascii(stderr, subject);
                 fputc('\n', stderr);
                 return EX_USAGE;
             }
-            opt_index = v;
+            if (mos_internal_value_is_registry_id(big)) {
+                opt_registry = (uint64_t)big;
+            } else {
+                int v = parse_index(subject);
+                if (v < 0) {
+                    fprintf(stderr, "%s: invalid drive index: ", progname);
+                    mos_cli_safe_ascii(stderr, subject);
+                    fputc('\n', stderr);
+                    return EX_USAGE;
+                }
+                opt_index = v;
+            }
         } else {
             opt_bsd = subject;
         }
@@ -338,7 +352,7 @@ int main(int argc, char **argv)
 
     /* list enumerates everything — a positional subject alongside it is
        the same contradiction as the flag forms below. */
-    if (flag_list && (opt_index > 0 || opt_bsd != NULL)) {
+    if (flag_list && (opt_index > 0 || opt_bsd != NULL || opt_registry)) {
         fprintf(stderr,
                 "%s: list takes no drive argument (it enumerates all)\n",
                 progname);
@@ -364,7 +378,7 @@ int main(int argc, char **argv)
                         "subcommand)\n", progname);
         return EX_USAGE;
     }
-    if (flag_all && (opt_index || opt_bsd)) {
+    if (flag_all && (opt_index || opt_bsd || opt_registry)) {
         fprintf(stderr, "%s: --all watches every drive; a selector "
                         "(--index/--bsd/positional) contradicts it\n",
                 progname);
@@ -388,7 +402,7 @@ int main(int argc, char **argv)
                 progname);
         return EX_USAGE;
     }
-    if (flag_dump && (opt_index || opt_bsd)) {
+    if (flag_dump && (opt_index || opt_bsd || opt_registry)) {
         fprintf(stderr, "%s: probe --dump captures every DiscRecording "
                         "device; a drive argument contradicts it\n",
                 progname);
