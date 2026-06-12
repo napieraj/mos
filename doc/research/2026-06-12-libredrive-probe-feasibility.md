@@ -1,122 +1,181 @@
-# LibreDrive status probe: Phase A feasibility (June 2026)
+# LibreDrive detection in `mos`: research report (June 2026)
 
-Phase A of the "explore the real probe" track (plan: explore a real
-LibreDrive-status probe). Question: can `mos` faithfully replicate the way
-`makemkvcon` determines LibreDrive status — for the user's `HL-DT-ST BD-RE
-WH16NS60` (MediaTek **MT1959** family, `ROADMAP.md:287`) — using a
-**read-only** command recoverable from public sources? Method: web research
-against MakeMKV's own documentation, the public reverse-engineering corpus
-(coastermelt, mtk-odd-emulator, cyrozap's notes), and the disc-dumping
-community. No `src/` work; this file is the Phase A deliverable and gate.
+Full-session research report. **Question (user):** how does `makemkvcon`
+determine whether LibreDrive is enabled, and can `mos` use the same method to
+surface a `libredrive` flag — specifically for the user's `HL-DT-ST BD-RE
+WH16NS60` (MediaTek **MT1959** family, `ROADMAP.md:287`)? **Track:** the user
+chose to explore a real probe, then scoped it to Phase A (research only).
+**Method:** parallel codebase exploration of `mos`'s device-info and command
+infrastructure, plus web research against MakeMKV's own documentation, the
+public reverse-engineering corpus (coastermelt, mtk-odd-emulator, cyrozap's
+notes), and the disc-dumping community. No `src/`, schema, or ADR changes;
+this file is the deliverable.
 
-Confidence per claim: HIGH = primary source (MakeMKV's own docs / a fetched
-repo) quoted; MEDIUM = secondary / community / user reports.
+Confidence per claim: HIGH = primary source (MakeMKV's own docs, a fetched
+repo, or the `mos` tree) quoted; MEDIUM = secondary / community / user reports.
 
 ## Verdict
 
-**Not publicly recoverable as a faithful read-only status probe. Phase A
-gate → STOP.** Three independent walls, any one sufficient:
+**Replicating makemkvcon's method is not feasible from public sources, and
+would violate `mos` scope/safety doctrine even if it were. Track closed at
+Phase A.** Three independent walls on recoverability, any one sufficient:
 
-1. **The decision logic is proprietary and unreleased.** Whether a drive is
-   `Enabled` / `Possible` / unsupported is computed by MakeMKV's `LibDriveIO`
-   interpreting `SDF.bin`. `SDF.bin` carries per-firmware blobs *and a master
-   blob that "exports an API to uniquely fingerprint a drive firmware
-   version"* — i.e. the identification logic itself is a closed data blob.
-   `LibDriveIO` source has never been released (stated unreleased in MakeMKV's
-   own 2019 write-up; still unreleased through the November-2025 `SDF.bin`
-   update). There is no public table mapping drive/firmware to status to
-   reimplement. (HIGH)
+1. The status decision logic is proprietary and unreleased (MakeMKV's
+   `LibDriveIO` + `SDF.bin`).
+2. There is no clean read-only "status" command; the substrate is the
+   vendor debug / code-injection interface, undocumented for MT1959.
+3. "Enabled" is inseparable from the RAM-microcode upload that `mos`
+   excludes on scope and safety grounds.
 
-2. **No clean read-only "status" command exists; the substrate is the
-   code-injection interface.** Platform/firmware identity on these controllers
-   is read through vendor-specific debug opcodes (the MediaTek `0xF2`-series
-   RAM peek/poke; `0xF1` cache read) — the *same* interface used to write RAM
-   and inject microcode. Reading the platform is not a benign INQUIRY-style
-   verb; it means driving the controller's debug command set. (HIGH for the
-   opcode family's existence; MEDIUM that MT1959 status specifically is read
-   this way)
+The only honest alternative is a **static identity heuristic** (a guess about
+silicon family from the vendor/product strings `mos` already reads), which is
+*not* makemkvcon's method and must not be labelled as detection. Adopting it
+is a product decision, not a research conclusion.
 
-3. **"Enabled" is a runtime fact inseparable from the excluded step.**
-   MakeMKV's own words: when the firmware version is supported, `LibDriveIO`
-   *"uploads a small firmware extension into drive volatile memory… the
-   firmware extension stays only in drive RAM and drive firmware is not
-   changed."* `Enabled` reflects that RAM upload having succeeded — which is
-   exactly the microcode-access step `mos` excludes on scope and safety
-   grounds. A status flag that means "the upload would/did work" cannot be
-   produced without performing (or precisely modelling) the upload. (HIGH)
+---
 
-## Evidence
+## Part 1 — How makemkvcon actually determines LibreDrive status
 
-### How makemkvcon actually determines status
+LibreDrive status is **not** an MMC/T10 fact. It is produced by talking to the
+optical drive's **controller silicon** over vendor-specific commands:
+
 - LibreDrive is implemented in `LibDriveIO`, *"a simple interpreter that
   translates requested actions into a set of firmware-specific SCSI commands
-  based on data blobs called SDF,"* with `SDF.bin` as the master file of
-  per-firmware blobs plus the fingerprinting master blob. (HIGH — MakeMKV
-  "What is LibreDrive")
-- On open, the library fingerprints the firmware, and if supported uploads a
-  RAM-only firmware extension exposing the unrestricted read interface; flash
-  is untouched. The info-pane fields (drive platform e.g. `MT1959`, hardware
-  support, firmware support) come from this probe and are shown without
-  flashing. (HIGH for the mechanism; MEDIUM that the platform read is fully
-  non-writing)
-- Status strings observed: `Enabled`; `Possible (patched firmware
-  available)` / "possible, not yet enabled"; unsupported. `Enabled` = RAM
-  microcode loaded; `Possible` = silicon supported but stock firmware locks
-  the microcode-access commands. (MEDIUM — forum/user reports)
+  based on data blobs called SDF,"* with `SDF.bin` the master file of
+  per-firmware blobs plus a master blob that *"exports an API to uniquely
+  fingerprint a drive firmware version."* (HIGH — MakeMKV "What is LibreDrive")
+- On open, the library fingerprints the firmware; if the version is supported
+  it *uploads a small firmware extension into the drive's volatile RAM* that
+  exposes the unrestricted read interface — *"the firmware extension stays
+  only in drive RAM and drive firmware is not changed in any way."* (HIGH)
+- The info-pane fields (drive platform e.g. `MT1959`, hardware support,
+  firmware support) come from this probe and display without flashing.
+  (HIGH for the mechanism; MEDIUM that the platform read is fully non-writing)
+- Status strings: `Enabled`; `Possible (patched firmware available)` /
+  "possible, not yet enabled"; unsupported. `Enabled` = RAM microcode loaded;
+  `Possible` = silicon supported but stock firmware locks the
+  microcode-access commands. (MEDIUM — forum/user reports)
 
-### The public RE substrate (what *is* available, and its limits)
-- **coastermelt** (scanlime) reverse-engineered the Samsung SE-506CB /
-  **MT1939**: ARM core, ~4 MB RAM, memory access and code execution via
-  vendor SCSI commands. (MEDIUM — PoC‖GTFO 7:3 + repo)
-- **mtk-odd-emulator** (JayFoxRox) targets the older **MT1329E** (Xbox-era
-  Samsung SDG-605B) and documents `0xF2`-series debug opcodes —
-  `0xF202` bank select, `0xF203` RAM read, `0xF204` flash *write*, `0xF205`
-  RAM retrieval (example CDB `F2 05 00 07 BF 00 00 00 00 60`). These are
-  **generation-specific** and are the MT1329E set, **not** a documented
-  MT1959 status command. (HIGH that this is what the repo documents; the gap
-  to MT1959 is the point)
-- `0xF1` "read cache" is a known custom opcode on MT1939/MT1959 used by
-  disc-dumping tools (DIC/Redump) for lead-out reads — read-only, but it
-  reads *disc data*, not platform/firmware status. (MEDIUM)
-- cyrozap's `optical-disc-drive-re` is an index of the above; it contains no
-  opcodes or status-detection sequence of its own. (HIGH — fetched)
+So the "method" is: fingerprint the controller firmware via a proprietary
+blob, attempt the RAM-only microcode upload, and report the outcome. The
+transport is partly public; the *meaning* is closed.
 
-So a read-only memory primitive against a MediaTek controller is publicly
-*demonstrated to exist*, but (a) it is undocumented for the MT1959
-specifically, (b) it is the debug/code-injection interface rather than a
-spec or convenience verb, and (c) turning bytes read at some address into
-`Enabled/Possible/No` requires the closed `SDF.bin` fingerprint logic from
-wall 1. The transport is partially public; the meaning is not.
+## Part 2 — How `mos` models device info and commands today
 
-## Why this also fails the scope and safety tests (independent of recoverability)
-- Even a perfect public spec would not clear `ROADMAP.md:214,314` (AACS /
-  LibreDrive microcode explicitly out) or `AGENTS.md` layer 1 (one raw CDB)
-  / layer 2 (no SPC/vendor ambition). The override ADR was Phase B's job and
-  is moot now.
-- The read primitive *is* the entry to the microcode-access interface; there
-  is no clean severance between "ask the status" and "drive the injection
-  substrate." Reproducing it would put `mos` in the business of operating a
-  drive's vendor debug interface — outside both its command-surface doctrine
-  and its read-only/defensive posture.
+What a `libredrive` flag would have to thread through, and what command
+infrastructure exists (HIGH — `mos` tree).
 
-## The only honest fallback (not detection)
+**Device identity** comes from DiscRecording, not INQUIRY (the open-time
+INQUIRY retired in the 2026-06-10 DR pivot): `src/mos_dr.c:103-120` pulls
+vendor / product / firmware-revision from `DRDeviceCopyInfo` into fixed-width
+slots on the handle (`vendor_str[9]`, `product_str[17]`, `revision_str[5]` in
+`src/mos_internal.h`). These surface through `mos_state_result`
+(`src/mos_pure.h`) via `mos_state_result_vendor/_product/_revision()`
+(`include/mos.h`). This is how `mos` would know a drive is "an LG model" —
+the vendor/product strings (e.g. `HL-DT-ST` / `BD-RE WH16NS60`), as raw bytes,
+escaped only at the emit surface.
+
+**No boolean device flags exist today.** The public surface is state enums,
+numeric IDs (registry/bsd), MMC profile codes, and identity strings. A new
+`bool libredrive` would be a first-of-kind: append to `mos_state_result`
+(`src/mos_pure.h`), add a `mos_state_result_libredrive()` accessor
+(`include/mos.h`), populate at query time, thread into the CLI row and
+emitters (`cli/common.c` `query_row` + table/JSON emit, `cli/common.h`
+`list_row`), and — because the published JSON schemas are closed
+(`additionalProperties:false`, per the JSON-schema ADR) — land it under a new
+schema name (`mos.state.v2`) with positive + negative fixtures and the
+`schemas/validate.py` guard, not as an additive v1 field.
+
+**Command infrastructure.** `mos` authors exactly **one** raw CDB in the whole
+tree: GESN `0x4A`, built at `src/mos_scsi.c:465` and dispatched through
+`mos_raw_cdb()` at `src/mos_scsi.c:677`, which is the only caller of
+`ObtainExclusiveAccess` and releases the lock per call (acquire-on-call /
+release-on-return). Everything else (TUR, GET CONFIGURATION, READ DISC
+INFORMATION) goes through `MMCDeviceInterface` convenience methods that take
+no lock. Sense is parsed in the pure layer (`src/mos_sense.c`); the nub gate
+(`src/mos_state_core.c`, proven exhaustively in
+`tests/audit/nub_invariant_check.c`) decides when the lock is safe to take.
+A LibreDrive probe would be a **second raw CDB** — the heaviest possible
+addition to this surface.
+
+## Part 3 — Scope and safety constraints any probe must meet
+
+From `AGENTS.md` scope doctrine and `ROADMAP.md` (HIGH — `mos` tree):
+
+- **Out of scope, stated twice.** `ROADMAP.md:214` ("Out: firmware flashing,
+  AACS/LibreDrive microcode…") and `ROADMAP.md:314` ("AACS handshake / BD+ /
+  key extraction (MakeMKV territory)").
+- **Layer 1 — one raw CDB.** A second raw verb requires (a) a documented
+  showing no convenience method carries the info, and (b) a full
+  nub-collision analysis (the GESN template), because raw means exclusive
+  access.
+- **Layer 2 — no SPC/vendor ambition.** The verification oracle is Apple's
+  optical kext, never general SCSI; vendor commands are out.
+- **Layer 3 — privilege footprint.** `SCSITaskUserClient` console grant only:
+  no root, no entitlement, no block-device I/O.
+- **Precedent.** A public PVD parser was shipped and struck the same day
+  (2026-06-10) precisely because its only consumers were "tools already deep
+  in makemkvcon territory."
+
+A doctrine-overriding ADR was Phase B's job; it is moot given the Part 4
+verdict.
+
+## Part 4 — Phase A feasibility: the three walls
+
+1. **The decision logic is proprietary and unreleased.** Whether a drive is
+   `Enabled` / `Possible` / unsupported is computed by `LibDriveIO`
+   interpreting `SDF.bin`, whose master blob *is* the firmware-fingerprint
+   logic. `LibDriveIO` source has never been released (stated unreleased in
+   MakeMKV's 2019 writeup; still unreleased through the November-2025
+   `SDF.bin` update). No public drive/firmware→status table exists to
+   reimplement. (HIGH)
+
+2. **No clean read-only status command — the substrate is the injection
+   interface.** Platform/firmware identity on these controllers is read via
+   vendor debug opcodes (the MediaTek `0xF2`-series RAM peek/poke; `0xF1`
+   cache read) — the *same* interface used to write RAM and inject microcode.
+   The public RE corpus documents these only for older silicon:
+   **mtk-odd-emulator** covers the **MT1329E** (Xbox-era Samsung SDG-605B) with
+   `0xF202` bank-select / `0xF203` RAM-read / `0xF204` flash-write / `0xF205`
+   RAM-retrieve (example CDB `F2 05 00 07 BF 00 00 00 00 60`);
+   **coastermelt** covers the **MT1939** (ARM core, ~4 MB RAM, memory access +
+   code execution over vendor SCSI). Neither documents an **MT1959** status
+   command, and `0xF1` reads *disc data*, not platform/firmware status.
+   cyrozap's `optical-disc-drive-re` is an index of these with no opcodes of
+   its own. (HIGH that this is what the repos document; MEDIUM on the MT1959 gap)
+
+3. **"Enabled" is inseparable from the excluded step.** Per MakeMKV's own
+   words, `Enabled` reflects the RAM-microcode upload having succeeded — the
+   exact microcode-access step `mos` excludes. A flag meaning "the upload
+   would/did work" cannot be produced without performing or precisely
+   modelling the upload. (HIGH)
+
+Net: a read-only memory primitive against a MediaTek controller is publicly
+*demonstrated to exist*, but it is undocumented for MT1959, it is the
+debug/code-injection interface rather than a spec verb, and turning bytes into
+`Enabled/Possible/No` requires the closed `SDF.bin` logic from wall 1. The
+transport is partly public; the meaning is not.
+
+## Part 5 — The only honest fallback (not detection)
+
 If a flag is still wanted, the sole defensible option is a **static identity
-heuristic**, clearly named as such (e.g. a `libredrive_platform: likely`
-derived from the vendor/product strings `mos` already reads, matched against
-the known MediaTek-MT19xx LG/rebadge family that `ROADMAP.md:287-289`
-enumerates). This is a *guess about silicon family*, not makemkvcon's
-runtime status: it cannot distinguish stock vs patched firmware, cannot tell
-`Enabled` from `Possible`, and is exactly the device-string special-casing
-the scope doctrine warns against (cf. the struck PVD parser, 2026-06-10). It
-should not be labelled `libredrive` without that qualifier, and adopting it
+heuristic**, clearly named as such — e.g. `libredrive_platform: likely`
+derived from the vendor/product strings `mos` already reads (Part 2), matched
+against the known MediaTek-MT19xx LG/rebadge family that `ROADMAP.md:287-289`
+enumerates (BH14/16NS\*, WH16NS\*, BU/BP slim & USB, ASUS/Buffalo/Dell/HP/
+Verbatim/Vinpower rebadges). This is a *guess about silicon family*, not
+makemkvcon's runtime status: it cannot distinguish stock vs patched firmware,
+cannot tell `Enabled` from `Possible`, and is exactly the device-string
+special-casing the scope doctrine warns against (cf. the struck PVD parser).
+It must not be labelled `libredrive` without that qualifier, and adopting it
 is a product decision, not a research conclusion.
 
 ## Recommendation
-Close the "explore the real probe" track here: the faithful method is not
+
+Close the "explore the real probe" track here. The faithful method is not
 recoverable from public sources and would violate scope/safety even if it
-were. Carry the `Verdict` and the fallback note to the user; do not proceed
-to Phase B/C. If the user wants a flag anyway, scope it as the labelled
-identity heuristic above, decided on its own merits.
+were; do not proceed to Phase B/C. If the user wants a flag anyway, scope it
+as the labelled identity heuristic above and decide it on its own merits.
 
 ## Sources
 - MakeMKV, "What is LibreDrive?" — https://forum.makemkv.com/forum/viewtopic.php?t=18856
@@ -126,3 +185,4 @@ identity heuristic above, decided on its own merits.
 - JayFoxRox, mtk-odd-emulator — https://github.com/JayFoxRox/mtk-odd-emulator
 - scanlime, coastermelt; PoC‖GTFO 7:3 — https://mcfp.felk.cvut.cz/publicDatasets/pocorgtfo/contents/articles/07-03.pdf
 - LibDriveIO source-status / SDF.bin discussion — https://forum.makemkv.com/forum/viewtopic.php?t=24312
+- `mos` tree: `src/mos_dr.c`, `src/mos_internal.h`, `src/mos_pure.h`, `include/mos.h`, `src/mos_scsi.c`, `src/mos_state_core.c`, `cli/common.c`, `AGENTS.md`, `ROADMAP.md`
