@@ -20,6 +20,13 @@ on:
 permissions:
   contents: read
 
+# One run per ref: a superseded push cancels the in-flight run. CI
+# correctness never depends on run ordering; this is queue hygiene
+# and (pre-public it was) minute hygiene — macOS billed at 10x.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     name: Build and test (macos-latest)
@@ -27,6 +34,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
 
       - name: Toolchain versions
         run: |
@@ -296,6 +305,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
 
       - name: Configure with sanitizers
         # -O1 keeps inlining sane for stack traces while still exercising
@@ -327,6 +338,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
       - name: brew style
         run: brew style homebrew/mos.rb || true
         # `|| true` until the first tag is pushed and url/sha256 are filled.
@@ -339,6 +352,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0 (Node 24)
         with:
@@ -377,6 +392,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
       - name: build and run nub invariant checker
         run: |
           set -e
@@ -406,6 +423,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
 
       - name: Build pure tests under -O2 -Werror
         run: |
@@ -467,6 +486,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
 
       - name: Compile macOS adapter TUs with stricter -Werror
         run: |
@@ -499,6 +520,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
       - name: Grep live docs for known-stale markers
         run: sh scripts/doc-staleness.sh
 
@@ -514,6 +537,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
 
       - name: Build and run fuzz_pure (smoke)
         env:
@@ -548,6 +573,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
 
       - name: Configure + build + run (ASan/UBSan)
         env:
