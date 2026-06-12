@@ -97,7 +97,7 @@
                 "null"
               ],
               "minimum": 0,
-              "description": "Lead-out start LBA, or null when the TOC carried no lead-out descriptor \u2014 which means NO IDENTITY: do not dedup on a lead-out-less TOC."
+              "description": "Lead-out start LBA, or null when the TOC carried no lead-out descriptor \u2014 which means NO IDENTITY: do not dedup on a lead-out-less TOC. On non-CD media the whole TOC is drive-FABRICATED per spec (MMC-5 table 483 for DVD; Mt. Fuji INF-TA-1010 for BD): one data track at LBA 0 plus this lead-out. On overwritable media (DVD+RW/BD-RE) some firmwares report formatted capacity rather than written extent here \u2014 do not treat it as a precise recorded-data size; READ DISC INFORMATION is the size authority."
             },
             "tracks": {
               "type": "array",

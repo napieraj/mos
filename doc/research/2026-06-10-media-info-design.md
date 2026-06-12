@@ -440,3 +440,28 @@ note above). So M-DISC is handled by construction today: state,
 profile, class, TOC, disc_info, and the mounted volume name all
 behave as for any BD-R. A hardware falsification pass should include
 one finalized M-DISC alongside the pressed/UHD/audio matrix rows.
+
+**TOC-on-DVD/BD verified (2026-06-12, same session):** challenged in
+review ("does TOC even look like that on anything non-CD?") and
+checked against canonical sources rather than this doc's own claims.
+Confirmed: the single-synthesized-track shape is NORMATIVE, not a
+drive courtesy. MMC-5 table 483 ("Fabrication of TOC Form 0 for
+Single Session DVD") mandates track 1 @ LBA 0 plus an AAh lead-out
+for DVD; the Mt. Fuji companion (INF-TA-1010, the spec vendors
+actually implement) carries an explicit "Detail of BD media
+fabricated READ TOC response" section, so BD fabrication is normative
+too (section title verified; the table itself is member-gated).
+Corroborated: QEMU's cdrom_read_toc synthesizes identically for
+CD/DVD; udev's cdrom_id issues READ TOC unconditionally on every
+medium; libcdio-devel (T. Schmitt) treats the lead-out as a size
+query on DVD and BD alike. Two wrinkles for consumers, now in the
+schema prose: (1) on overwritable media (DVD+RW/BD-RE) some
+firmwares report formatted capacity rather than written extent in
+the fabricated lead-out — not a precise data-size source (libburn
+prefers READ DISC/TRACK INFORMATION for sizes); (2) blank CD-R/RW
+rejects format 0 by spec, blank DVD/BD recordables are
+drive-dependent — toc:null on blanks is expected output, not a bug.
+No UHD-specific READ TOC failures found (MakeMKV-forum failures are
+AACS sector reads, not TOC). The identity rule is unchanged and
+exactly right: never key on a synthesized TOC; mos_toc_have_leadout
+gates identity use.
