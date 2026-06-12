@@ -116,6 +116,51 @@ $ mos watch
 {"schema":"mos.event.v1","event":"state_changed",...,"bsd":"/dev/disk4","state":"ready",...}
 ```
 
+### Metadata (disc identity)
+
+```
+$ mos metadata 1
+     BSD:  /dev/disk4
+  Volume:  ARRIVAL_4K_UHD
+    Path:  /Volumes/ARRIVAL_4K_UHD
+ Profile:  bd  bd_rom  (0x0040)
+    Disc:  complete, 1 session, 1 track
+     TOC:  tracks 1-1, lead-out LBA 12219392
+```
+
+`mos metadata --json` emits one `mos.metadata.v1` document. Its `disc`
+object is the fingerprint subtree: a fixed, closed key set
+(profile/class/TOC/disc-info/volume-name, each required and nullable)
+whose canonical serialization consumers hash for dedup — third-party
+ids (MusicBrainz, AccurateRip, dvdid) are pure functions of these
+fields, computed consumer-side. Unreadable facts emit `null`; partial
+readability is the normal regime, not an error. The volume name/path
+are mount-sourced only (one synchronous DiskArbitration description
+read): a present-but-unmounted disc reads `null` by design — sector
+reads are the consumer's privilege and parsing burden.
+
+### Drive (static facts)
+
+```
+$ mos drive 1
+     BSD:  /dev/disk4
+Registry:  4295032831
+  Vendor:  HL-DT-ST
+ Product:  BD-RE WH16NS60
+     Rev:  1.00
+  Serial:  -
+    AACS:  version 68, bus encryption yes
+```
+
+`mos drive --json` emits `mos.drive.v1`: identity (open-time directory
+data, zero commands), `serial` (null in stage 1 — pending the VPD-0x80
+convenience-reachability check on hardware), and spec-grounded AACS
+capabilities from one GET CONFIGURATION feature walk. `bus_encryption`
+is the drive-reported support bit; the cryptographically signed BEC
+flag lives in the AACS drive certificate, which mos does not fetch.
+There is deliberately no `libredrive` field: that status is a MakeMKV
+database property, not a drive property.
+
 ### Shell integration
 
 The core pattern — act on every disc that turns readable, on any

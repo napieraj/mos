@@ -83,16 +83,21 @@ from that arc:
   `DRDeviceCopyStatus` media-info dict, the same dictionary the
   status-changed notification delivers (`doc/dr-field-mapping.md`,
   bsd_unit row) — not a registry walk.
-- **Media info (open, lands in v0.4).** ReadDiscInformation shipped as
-  `mos_query_disc_info()`; what remains is stage 1 of
-  `doc/research/2026-06-10-media-info-design.md`: two subject-pure
-  documents — `mos metadata --json` → `mos.metadata.v1` (disc only;
-  TOC as required-nullable fingerprint subtree) and `mos drive
-  --json` → `mos.drive.v1` (identity, firmware, INQUIRY serial,
-  spec-grounded AACS/bus-encryption capabilities) — plus the
-  mounted-volume name. Stage 2 (UDF names, CD-TEXT, capacity blocks)
-  stays deferred with named falsifiers. Third-party ids
-  (MusicBrainz/AccurateRip/dvdid/BDMV) are permanently consumer-side.
+- **Media info: stage 1 LANDED 2026-06-12** (design doc + same-day
+  addendum). Shipped: `mos_query_toc()` (fail-closed format-0000b
+  decode), `mos_query_drive_caps()` (RT=0 walk → AACS
+  presence/version + drive-reported bus-encryption bit, provenance
+  recorded in the addendum), `mos_query_volume()` over the narrowly
+  re-admitted one-shot DiskArbitration lookup (AGENTS.md append),
+  `mos metadata` → `mos.metadata.v1`, `mos drive` → `mos.drive.v1`
+  (serial present-and-null pending the VPD-0x80 falsifier),
+  `volume_name` in mos.state.v1 and the list surfaces, and the
+  `identity` reservation retired. All of it fixture/fake-verified
+  headless; the standing hardware gate applies before any tag. Stage
+  2 (UDF names, CD-TEXT, capacity blocks, BG format status, book
+  type) stays deferred with named falsifiers banked in the design
+  addendum. Third-party ids (MusicBrainz/AccurateRip/dvdid/BDMV)
+  are permanently consumer-side.
 - **Division of labour (standing doctrine).** DR's status dict exposes
   coarse signals as a passive, GESN-fed snapshot that is "not
   guaranteed current." mos does not collapse its state engine into
