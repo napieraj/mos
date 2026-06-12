@@ -100,6 +100,18 @@ in `AGENTS.md`. The chain of files is the audit trail.
   (both destined for CONTRIBUTING.md), and five comment-only
   execution phases gated on tests + `dist/` regen.
 
+- `2026-06-12-libredrive-probe-feasibility.md` — Phase A feasibility
+  check on replicating makemkvcon's LibreDrive status in `mos`. Verdict:
+  not publicly recoverable as a faithful read-only probe — the status
+  logic lives in MakeMKV's closed, unreleased `LibDriveIO`/`SDF.bin`
+  (the firmware fingerprint is itself a proprietary blob); the only
+  public substrate is the generation-specific MediaTek `0xF2`-series
+  RAM debug/code-injection interface, undocumented for MT1959; and
+  "Enabled" is inseparable from the RAM-microcode upload `mos` excludes.
+  Independently fails ROADMAP.md:214,314 and the one-raw-CDB doctrine.
+  Records the only honest fallback (a clearly-labelled identity-family
+  heuristic, which is a guess, not detection). Track closed at Phase A.
+
 (An entry for a `2026-04-26-doctrine-review.md` note previously
 appeared in this index; that file was never committed and the entry
 was removed 2026-06-10.)
