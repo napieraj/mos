@@ -321,6 +321,42 @@ TEST(adapter_da_volume_lookup_modalities)
     return 0;
 }
 
+TEST(adapter_query_volume_gates_on_nub)
+{
+    char name[256], path[1024];
+    bool mounted = true;
+
+    /* Media absent (bsd_unit -1): MOS_OK, unmounted, DA never asked —
+       the fake would have answered (da_volume set) if consulted. */
+    mos_fake_reset();
+    mos_fake_set_bsd_unit(-1);
+    mos_fake_set_da_volume("SHOULD_NOT_SURFACE", "/Volumes/NO");
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+    EXPECT_EQ(MOS_OK, mos_query_volume(h, &mounted, name, sizeof name,
+                                       path, sizeof path));
+    EXPECT(!mounted && name[0] == 0 && path[0] == 0);
+    mos_close(h);
+
+    /* Nub present and mounted: fields surface through the public API. */
+    mos_fake_set_bsd_unit(4);
+    h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+    EXPECT_EQ(MOS_OK, mos_query_volume(h, &mounted, name, sizeof name,
+                                       path, sizeof path));
+    EXPECT(mounted);
+    EXPECT(strcmp(name, "SHOULD_NOT_SURFACE") == 0);
+    EXPECT(strcmp(path, "/Volumes/NO") == 0);
+
+    EXPECT_EQ(MOS_ERR_INVALID_ARG,
+              mos_query_volume(NULL, &mounted, name, sizeof name,
+                               path, sizeof path));
+    mos_close(h);
+    return 0;
+}
+
 int main(void)
 {
     printf("adapter one-shot (headless, link-seam fake):\n");
@@ -333,6 +369,7 @@ int main(void)
     RUN(adapter_disc_info_replays_fixtures);
     RUN(adapter_toc_round_trip_and_fail_closed);
     RUN(adapter_da_volume_lookup_modalities);
+    RUN(adapter_query_volume_gates_on_nub);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);
     return mos_tests_failed ? 1 : 0;

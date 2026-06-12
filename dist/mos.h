@@ -369,6 +369,28 @@ uint8_t  mos_toc_track_adr(const mos_toc *t, size_t i);
 uint8_t  mos_toc_track_control(const mos_toc *t, size_t i);
 uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i);
 
+/* ---- Mounted volume (v0.4, DiskArbitration-sourced) ------------------ */
+
+/*
+ * Mounted-volume name and mount path for the drive's current media —
+ * what the FILESYSTEM layer says, complementing the SCSI-derived facts
+ * above. One synchronous DiskArbitration description read; no
+ * callbacks, no commands to the drive, no elevation. Gated on the
+ * whole-disk IOMedia node existing: media absent or no nub means DA is
+ * never consulted and *mounted is false. UNMOUNTED IS NOT AN ERROR —
+ * it is the common case for UDF video discs — so the result is MOS_OK
+ * with *mounted=false and empty buffers; only a NULL handle returns
+ * MOS_ERR_INVALID_ARG. Buffers are optional (NULL/0 skips that field)
+ * and always NUL-terminated; name may be "" even when mounted (a
+ * volume can lack a label). Recommended caps: name 256, path 1024 —
+ * a mount path that exceeds the cap reports unmounted rather than a
+ * truncated path. Volume names are disc-controlled bytes: escape them
+ * before terminals or structured output.
+ */
+mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
+                           char *name_buf, size_t name_cap,
+                           char *path_buf, size_t path_cap);
+
 /*
  * Diagnostic: issue a raw CDB against the drive. Requires exclusive
  * access; returns MOS_ERR_BUSY or MOS_ERR_EXCLUSIVE_ACCESS if the drive

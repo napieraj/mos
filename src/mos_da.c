@@ -69,3 +69,25 @@ bool mos_internal_da_volume(const char *bsd_name,
     CFRelease(session);
     return mounted;
 }
+
+/* Public wrapper (contract in mos.h): the nub gate lives HERE, so no
+   caller can consult DA for a drive the kernel says holds no media. */
+mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
+                           char *name_buf, size_t name_cap,
+                           char *path_buf, size_t path_cap)
+{
+    if (mounted) *mounted = false;
+    if (name_buf && name_cap) name_buf[0] = 0;
+    if (path_buf && path_cap) path_buf[0] = 0;
+    if (!h) return MOS_ERR_INVALID_ARG;
+
+    if (h->bsd_unit < 0) return MOS_OK;     /* no IOMedia node: unmounted */
+
+    char bsd[24];
+    if (!mos_bsd_name_format(h->bsd_unit, bsd, sizeof bsd)) return MOS_OK;
+
+    bool m = mos_internal_da_volume(bsd, name_buf, name_cap,
+                                    path_buf, path_cap);
+    if (mounted) *mounted = m;
+    return MOS_OK;
+}
