@@ -251,7 +251,7 @@ typedef struct {
     uint32_t start_lba;
 } mos_toc_entry;
 
-typedef struct {
+typedef struct mos_toc {   /* tagged: mos.h forward-declares it opaquely */
     uint8_t       first_track;
     uint8_t       last_track;
     uint8_t       track_count;
@@ -287,6 +287,13 @@ size_t mos_internal_trusted_len(size_t allocated, size_t transferred,
 
 bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
                                       size_t *cursor, mos_config_feature *out);
+
+/* First feature matching `feature_code`, via the walker (same trust
+   bounds). False when absent or the walk fails closed. The v0.4 drive
+   verb reads AACS (0x010D) presence/version through this. */
+bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
+                                      uint16_t feature_code,
+                                      mos_config_feature *out);
 
 /* Current Profile from a GET CONFIGURATION response; false ("no
    profile") unless the reply's own Data Length covers the field, so a
@@ -650,6 +657,9 @@ struct mos_handle {
     /* Handle-owned disc-information result (mos_query_disc_info).
        Overwritten each query; plain values, no borrowed pointers. */
     struct mos_disc_info      disc_info;
+
+    /* Handle-owned TOC result (mos_query_toc). Same terms. */
+    struct mos_toc            toc;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
@@ -1249,6 +1259,23 @@ bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
     return true;
 }
 
+/* Find one feature by code: the walker applied until a match. Same
+   trust bounds by construction; first match wins (MMC lists each
+   feature at most once — a duplicate from a hostile device yields the
+   earlier copy, never a re-scan). */
+bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
+                                      uint16_t feature_code,
+                                      mos_config_feature *out)
+{
+    if (!out) return false;
+    size_t cursor = 8;                            /* skip the feature header */
+    mos_config_feature f;
+    while (mos_internal_config_next_feature(buf, len, &cursor, &f)) {
+        if (f.feature_code == feature_code) { *out = f; return true; }
+    }
+    return false;
+}
+
 /* Current Profile = feature-header bytes 6-7, gated on the header's own
    Data Length (bytes 0-3, counting bytes that FOLLOW it): the profile
    field exists only when the drive claims >= 4 following bytes. The gate
@@ -1510,6 +1537,49 @@ uint16_t mos_disc_info_last_track_last_session(const mos_disc_info *d)
 uint8_t mos_disc_info_last_session_state(const mos_disc_info *d)
 {
     return d ? d->last_session_state : 0;
+}
+
+/* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
+ * NULL- and range-tolerant like every accessor above; the entry index
+ * is bounded by track_count, which the fail-closed parser proved
+ * covers exactly first..last. */
+
+uint8_t mos_toc_first_track(const mos_toc *t) { return t ? t->first_track : 0; }
+uint8_t mos_toc_last_track(const mos_toc *t)  { return t ? t->last_track  : 0; }
+
+size_t mos_toc_track_count(const mos_toc *t)
+{
+    return t ? (size_t)t->track_count : 0;
+}
+
+bool mos_toc_have_leadout(const mos_toc *t)
+{
+    return t ? t->have_leadout : false;
+}
+
+uint32_t mos_toc_leadout_lba(const mos_toc *t)
+{
+    return (t && t->have_leadout) ? t->leadout_lba : 0;
+}
+
+uint8_t mos_toc_track_number(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].track : 0;
+}
+
+uint8_t mos_toc_track_adr(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].adr : 0;
+}
+
+uint8_t mos_toc_track_control(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].control : 0;
+}
+
+uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].start_lba : 0;
 }
 
 /* ==== src/mos_state_core.c ==== */
@@ -4575,6 +4645,37 @@ mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out)
         return MOS_ERR_IO;   /* truncated/short reply — refused whole */
     }
     *out = &h->disc_info;
+    return MOS_OK;
+}
+
+mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Format 0000b worst case: 4-byte header + 100 descriptors
+       (99 tracks + lead-out) x 8. The convenience method reports no
+       realized count, so sizeof buf is the trusted length (O-4); the
+       reply's own TOC Data Length only ever shrinks the parse. MSF=0
+       (LBA), starting track 0 (= from first). Non-exclusive: no lock. */
+    uint8_t         buf[4 + 100 * 8] = {0};
+    SCSITaskStatus  st               = 0;
+    SCSI_Sense_Data sd               = {0};
+
+    IOReturn rc = (*h->mmc)->ReadTableOfContents(
+        h->mmc, 0 /*LBA*/, 0x00 /*format*/, 0 /*from first track*/,
+        buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_toc_parse(buf, sizeof(buf), &h->toc)) {
+        return MOS_ERR_IO;   /* incoherent/hostile TOC — refused whole */
+    }
+    *out = &h->toc;
     return MOS_OK;
 }
 

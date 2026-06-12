@@ -61,6 +61,8 @@ void mos_fake_set_getconfig_reply(uint32_t task_status,
                                   const uint8_t *bytes, size_t len);
 void mos_fake_set_readdiscinfo_reply(uint32_t task_status,
                                      const uint8_t *bytes, size_t len);
+void mos_fake_set_toc_reply(uint32_t task_status,
+                            const uint8_t *bytes, size_t len);
 
 /* Raw-CDB path (the GESN tray probe). Script the ExecuteTaskSync
    outcome: reply bytes copied into the task's data buffer, the task
@@ -91,6 +93,7 @@ typedef enum {
     MOS_FAKE_METHOD_GETCONFIG    = 1,
     MOS_FAKE_METHOD_READDISCINFO = 2,
     MOS_FAKE_METHOD_EXECUTE      = 3,  /* ExecuteTaskSync (raw GESN) */
+    MOS_FAKE_METHOD_READTOC      = 4,  /* ReadTableOfContents */
 } mos_fake_method;
 void mos_fake_set_method_ioreturn(mos_fake_method m, uint32_t io_return);
 

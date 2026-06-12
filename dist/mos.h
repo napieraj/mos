@@ -336,6 +336,39 @@ uint8_t         mos_disc_info_last_session_state(const mos_disc_info *d);
    tokens, same contract as mos_state_description(). */
 const char     *mos_disc_status_description(mos_disc_status s);
 
+/* ---- Table of contents (v0.4 typed API) ------------------------------ */
+
+/* Result of a TOC query. Opaque, handle-owned, read through the
+   accessors; valid until the next mos_query_toc() call or mos_close(). */
+typedef struct mos_toc mos_toc;
+
+/*
+ * Query READ TOC/PMA/ATIP format 0000b (LBA) — the normalized table of
+ * contents, the disc-identity primitive. Issued on demand through the
+ * non-exclusive ReadTableOfContents convenience method; never part of
+ * the state path. FAIL-CLOSED end to end: a hostile or incoherent TOC
+ * (out-of-range, duplicate, or non-ascending tracks; a header span the
+ * descriptor list doesn't cover) returns MOS_ERR_IO with *out NULL —
+ * identity from a half-parsed TOC would be a falsely-stable
+ * fingerprint. A TOC without a lead-out parses; identity consumers
+ * must require mos_toc_have_leadout(). Same media preconditions as
+ * mos_query_disc_info(). `out` REQUIRED (NULL → MOS_ERR_INVALID_ARG).
+ */
+mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out);
+
+/* Accessors. NULL-tolerant: a NULL object reads as 0 / false. Track
+   entries are indexed 0..mos_toc_track_count()-1; out-of-range reads
+   as 0. control bit 2 set = data track (MMC Q-channel control). */
+uint8_t  mos_toc_first_track(const mos_toc *t);
+uint8_t  mos_toc_last_track(const mos_toc *t);
+size_t   mos_toc_track_count(const mos_toc *t);
+bool     mos_toc_have_leadout(const mos_toc *t);
+uint32_t mos_toc_leadout_lba(const mos_toc *t);
+uint8_t  mos_toc_track_number(const mos_toc *t, size_t i);
+uint8_t  mos_toc_track_adr(const mos_toc *t, size_t i);
+uint8_t  mos_toc_track_control(const mos_toc *t, size_t i);
+uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i);
+
 /*
  * Diagnostic: issue a raw CDB against the drive. Requires exclusive
  * access; returns MOS_ERR_BUSY or MOS_ERR_EXCLUSIVE_ACCESS if the drive

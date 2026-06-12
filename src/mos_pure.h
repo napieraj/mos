@@ -182,7 +182,7 @@ typedef struct {
     uint32_t start_lba;
 } mos_toc_entry;
 
-typedef struct {
+typedef struct mos_toc {   /* tagged: mos.h forward-declares it opaquely */
     uint8_t       first_track;
     uint8_t       last_track;
     uint8_t       track_count;

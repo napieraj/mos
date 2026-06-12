@@ -631,6 +631,37 @@ mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out)
     return MOS_OK;
 }
 
+mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Format 0000b worst case: 4-byte header + 100 descriptors
+       (99 tracks + lead-out) x 8. The convenience method reports no
+       realized count, so sizeof buf is the trusted length (O-4); the
+       reply's own TOC Data Length only ever shrinks the parse. MSF=0
+       (LBA), starting track 0 (= from first). Non-exclusive: no lock. */
+    uint8_t         buf[4 + 100 * 8] = {0};
+    SCSITaskStatus  st               = 0;
+    SCSI_Sense_Data sd               = {0};
+
+    IOReturn rc = (*h->mmc)->ReadTableOfContents(
+        h->mmc, 0 /*LBA*/, 0x00 /*format*/, 0 /*from first track*/,
+        buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_toc_parse(buf, sizeof(buf), &h->toc)) {
+        return MOS_ERR_IO;   /* incoherent/hostile TOC — refused whole */
+    }
+    *out = &h->toc;
+    return MOS_OK;
+}
+
 /*
  * mos_internal_mmc_get_features — STUB (v0.4, hardware-gated).
  *

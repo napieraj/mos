@@ -52,6 +52,9 @@ struct mos_handle {
     /* Handle-owned disc-information result (mos_query_disc_info).
        Overwritten each query; plain values, no borrowed pointers. */
     struct mos_disc_info      disc_info;
+
+    /* Handle-owned TOC result (mos_query_toc). Same terms. */
+    struct mos_toc            toc;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on

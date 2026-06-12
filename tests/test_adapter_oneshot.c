@@ -242,6 +242,52 @@ TEST(adapter_disc_info_replays_fixtures)
     return 0;
 }
 
+TEST(adapter_toc_round_trip_and_fail_closed)
+{
+    /* Synthetic two-track audio TOC, format 0000b: header (len=26,
+       first=1, last=2), tracks 1 (lba 0) and 2 (lba 18000), lead-out
+       0xAA (lba 210895). Same shape the pure parser's fixtures pin. */
+    static const uint8_t toc[] = {
+        0x00, 0x1A, 0x01, 0x02,
+        0x00, 0x10, 0x01, 0x00,  0x00, 0x00, 0x00, 0x00,
+        0x00, 0x10, 0x02, 0x00,  0x00, 0x00, 0x46, 0x50,
+        0x00, 0x10, 0xAA, 0x00,  0x00, 0x03, 0x37, 0xCF,
+    };
+    mos_fake_reset();
+    mos_fake_set_toc_reply(0x00, toc, sizeof toc);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    const mos_toc *t = NULL;
+    EXPECT_EQ(MOS_OK, mos_query_toc(h, &t));
+    EXPECT_EQ(1, mos_toc_first_track(t));
+    EXPECT_EQ(2, mos_toc_last_track(t));
+    EXPECT_EQ(2, (int)mos_toc_track_count(t));
+    EXPECT(mos_toc_have_leadout(t));
+    EXPECT_EQ(210895u, mos_toc_leadout_lba(t));
+    EXPECT_EQ(18000u, mos_toc_track_start_lba(t, 1));
+    EXPECT(!(mos_toc_track_control(t, 0) & 0x4));   /* audio */
+
+    /* Hostile: non-ascending tracks refuse the whole TOC (*out NULL). */
+    static const uint8_t bad[] = {
+        0x00, 0x12, 0x01, 0x02,
+        0x00, 0x10, 0x02, 0x00,  0x00, 0x00, 0x00, 0x00,
+        0x00, 0x10, 0x01, 0x00,  0x00, 0x00, 0x46, 0x50,
+    };
+    mos_fake_set_toc_reply(0x00, bad, sizeof bad);
+    EXPECT_EQ(MOS_ERR_IO, mos_query_toc(h, &t));
+    EXPECT(t == NULL);
+
+    /* Transport injection maps the IOReturn, not MOS_ERR_IO. */
+    mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_READTOC, 0xE00002D6u);
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_query_toc(h, &t));
+
+    mos_close(h);
+    return 0;
+}
+
 int main(void)
 {
     printf("adapter one-shot (headless, link-seam fake):\n");
@@ -252,6 +298,7 @@ int main(void)
     RUN(adapter_becoming_ready_is_loading);
     RUN(adapter_lock_denied_falls_back_to_sense);
     RUN(adapter_disc_info_replays_fixtures);
+    RUN(adapter_toc_round_trip_and_fail_closed);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);
     return mos_tests_failed ? 1 : 0;

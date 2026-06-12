@@ -175,3 +175,46 @@ uint8_t mos_disc_info_last_session_state(const mos_disc_info *d)
 {
     return d ? d->last_session_state : 0;
 }
+
+/* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
+ * NULL- and range-tolerant like every accessor above; the entry index
+ * is bounded by track_count, which the fail-closed parser proved
+ * covers exactly first..last. */
+
+uint8_t mos_toc_first_track(const mos_toc *t) { return t ? t->first_track : 0; }
+uint8_t mos_toc_last_track(const mos_toc *t)  { return t ? t->last_track  : 0; }
+
+size_t mos_toc_track_count(const mos_toc *t)
+{
+    return t ? (size_t)t->track_count : 0;
+}
+
+bool mos_toc_have_leadout(const mos_toc *t)
+{
+    return t ? t->have_leadout : false;
+}
+
+uint32_t mos_toc_leadout_lba(const mos_toc *t)
+{
+    return (t && t->have_leadout) ? t->leadout_lba : 0;
+}
+
+uint8_t mos_toc_track_number(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].track : 0;
+}
+
+uint8_t mos_toc_track_adr(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].adr : 0;
+}
+
+uint8_t mos_toc_track_control(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].control : 0;
+}
+
+uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].start_lba : 0;
+}
