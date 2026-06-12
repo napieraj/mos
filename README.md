@@ -45,11 +45,10 @@ pasteable, pipeable, and always a valid drive argument when non-null
 
 ```
 $ mos status 1
+Registry:  4295032831
+     BSD:  /dev/disk4
    State:  ready
  Profile:  bd  bd_rom  (0x0040)
-   Index:  1
-     BSD:  /dev/disk4
-Registry:  4295032831
   Vendor:  HL-DT-ST
  Product:  BD-RE WH16NS60
      Rev:  1.00
@@ -77,10 +76,9 @@ no guessing:
 
 ```
 $ mos status 1
-   State:  open
-   Index:  1
-     BSD:  -
 Registry:  4295032831
+     BSD:  -
+   State:  open
   Vendor:  HL-DT-ST
  Product:  BD-RE WH16NS60
      Rev:  1.00

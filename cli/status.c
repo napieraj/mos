@@ -4,7 +4,8 @@
 #include <string.h>
 #include <sysexits.h>
 
-static void emit_human(const mos_state_result *r, int index1)
+static void emit_human(const mos_state_result *r, int index1,
+                       bool invoked_by_index)
 {
     /* Five-tier order (doc/research/2026-06-10-cli-design.md): answer,
        evidence, media, addressing, identity. Suppression mirrors the
@@ -12,6 +13,33 @@ static void emit_human(const mos_state_result *r, int index1)
        structural addressing/identity rows show "-" via NULL instead. */
     mos_cli_human_pair pairs[10];
     size_t n = 0;
+
+    /* Addressing header first: Index, Registry, BSD. The selector the
+       caller invoked with is dropped (they typed it); BSD always stays
+       — it is the pasteable, downstream-useful handle. */
+    char idx_buf[12];
+    if (!invoked_by_index) {
+        if (index1 > 0) {
+            snprintf(idx_buf, sizeof idx_buf, "%d", index1);
+            pairs[n++] = (mos_cli_human_pair){ "Index", idx_buf };
+        } else {
+            pairs[n++] = (mos_cli_human_pair){ "Index", NULL };
+        }
+    }
+
+    char reg_buf[24];
+    uint64_t reg = mos_state_result_registry_id(r);
+    if (reg) {
+        snprintf(reg_buf, sizeof reg_buf, "%llu", (unsigned long long)reg);
+        pairs[n++] = (mos_cli_human_pair){ "Registry", reg_buf };
+    } else {
+        pairs[n++] = (mos_cli_human_pair){ "Registry", NULL };
+    }
+
+    char bsd_buf[24];
+    bool have_bsd = mos_bsd_dev_node(mos_state_result_bsd_unit(r),
+                                           bsd_buf, sizeof bsd_buf);
+    pairs[n++] = (mos_cli_human_pair){ "BSD", have_bsd ? bsd_buf : NULL };
 
     const char *state = mos_state_description(mos_state_result_state(r));
     pairs[n++] = (mos_cli_human_pair){ "State", state };
@@ -45,28 +73,6 @@ static void emit_human(const mos_state_result *r, int index1)
         else
             snprintf(prof_buf, sizeof prof_buf, "0x%04x", profile);
         pairs[n++] = (mos_cli_human_pair){ "Profile", prof_buf };
-    }
-
-    char idx_buf[12];
-    if (index1 > 0) {
-        snprintf(idx_buf, sizeof idx_buf, "%d", index1);
-        pairs[n++] = (mos_cli_human_pair){ "Index", idx_buf };
-    } else {
-        pairs[n++] = (mos_cli_human_pair){ "Index", NULL };
-    }
-
-    char bsd_buf[24];
-    bool have_bsd = mos_bsd_dev_node(mos_state_result_bsd_unit(r),
-                                           bsd_buf, sizeof bsd_buf);
-    pairs[n++] = (mos_cli_human_pair){ "BSD", have_bsd ? bsd_buf : NULL };
-
-    char reg_buf[24];
-    uint64_t reg = mos_state_result_registry_id(r);
-    if (reg) {
-        snprintf(reg_buf, sizeof reg_buf, "%llu", (unsigned long long)reg);
-        pairs[n++] = (mos_cli_human_pair){ "Registry", reg_buf };
-    } else {
-        pairs[n++] = (mos_cli_human_pair){ "Registry", NULL };
     }
 
     const char *v  = mos_state_result_vendor(r);
@@ -238,7 +244,7 @@ int run_query(void)
        next mos_query_state() call or mos_close()"). Freeing the handle
        first would leave r dangling. */
     if (flag_json) emit_json(r, index1);
-    else           emit_human(r, index1);
+    else           emit_human(r, index1, opt_index > 0);
 
     /* Exit 0 on any state including unknown — state is stdout data, not
        exit status. unknown means "drive reachable, classification
