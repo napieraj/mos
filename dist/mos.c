@@ -704,6 +704,17 @@ uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name);
    the snapshot builder and the watch doorbell's per-device filter. */
 uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path);
 
+/* Bounded CFTypeRef-string -> C-buffer copy (mos_dr.c); "" on
+   non-string, oversize, or conversion failure. Always terminates. */
+void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap);
+
+/* One-shot DiskArbitration mounted-volume lookup (mos_da.c). True only
+   when mounted; gate calls on bsd_unit present. No callbacks, no run
+   loop — see the narrow re-admission terms at the top of mos_da.c. */
+bool mos_internal_da_volume(const char *bsd_name,
+                            char *name_buf, size_t name_cap,
+                            char *path_buf, size_t path_cap);
+
 /* Extract one device's snapshot (registry id, bsd unit, identity) from
    a DRDeviceRef passed as CFTypeRef (mos_internal.h stays free of
    DiscRecording types). False when the device's registry path doesn't
@@ -3811,9 +3822,10 @@ bool mos_bsd_dev_node(int64_t unit, char *out, size_t out_cap)
    identity fields whose real domain is ≤16 bytes, an absurdly long
    value is hostile data and empty is the right answer. dst is always
    NUL-terminated. Non-string values (a hostile or surprising
-   dictionary) also yield "". */
-static void mos_internal_dr_copy_string(CFTypeRef value,
-                                        char *dst, size_t cap)
+   dictionary) also yield "". Shared with the DA volume lookup
+   (mos_da.c), which reads volume-controlled strings under the same
+   trust terms (decl in mos_internal.h). */
+void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap)
 {
     if (!dst || cap == 0) return;
     dst[0] = 0;

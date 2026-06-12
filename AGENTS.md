@@ -294,6 +294,26 @@ story completely: no target links it. Command surface, privilege
 footprint, and the one-raw-CDB rule are all unchanged by the
 consolidation.
 
+### Addendum: DA re-admitted for exactly one synchronous call
+### (2026-06-12, narrows — does not reverse — the entry above)
+
+The 2026-06-11 retirement was about DA's CALLBACK modality: the
+watch's wake legs and the probe's falsification control arm. Those do
+not return. What re-linked DiskArbitration is the metadata path's
+mounted-volume lookup (`mos_internal_da_volume`, mos_da.c): a one-shot
+`DADiskCopyDescription` read — no session scheduling, no run loop, no
+callbacks, no commands to the drive — gated on the media nub existing
+(bsd_unit present; no IOMedia node means nothing is mounted and DA is
+never consulted). Why DA and not an alternative: the mounted volume's
+name/path belong to the filesystem layer, which mos refuses to read
+from sectors (scope doctrine layer 3); DA is the platform's published
+answer for "what does the mount layer say about this disk", and the
+description read takes no entitlements, no TCC, no elevation. If a
+future need looks like DA callbacks again, that is a new argument to
+make here — this entry authorizes only the synchronous description
+read. Command surface, privilege footprint, and the one-raw-CDB rule
+remain unchanged.
+
 ## Naming standard: the BSD vocabulary (Apple-canonical, 2026-06-10)
 
 Three concepts, three names, no synonyms:

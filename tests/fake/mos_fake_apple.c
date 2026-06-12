@@ -30,6 +30,7 @@
 #include <IOKit/scsi/SCSITaskLib.h>
 #include <IOKit/scsi/SCSICmds_REQUEST_SENSE_Defs.h>
 #include <DiscRecording/DRCoreDevice.h>
+#include <DiskArbitration/DiskArbitration.h>
 
 #include <string.h>
 #include <stdio.h>
@@ -78,6 +79,9 @@ static struct {
     uint32_t cfg_status;        uint8_t cfg[64];  size_t cfg_len;
     uint32_t rdi_status;        uint8_t rdi[64];  size_t rdi_len;
     uint32_t toc_status;        uint8_t toc[804]; size_t toc_len;
+    bool     da_present;        /* DADiskCopyDescription returns a dict   */
+    char     da_name[256];      /* VolumeName; "" = key absent            */
+    char     da_path[1024];     /* VolumePath; "" = key absent (unmounted)*/
 
     /* Raw-CDB script (the GESN tray probe path). */
     uint32_t method_rc[5];      /* per-method IOReturn injection (N2);
@@ -168,6 +172,15 @@ void mos_fake_set_toc_reply(uint32_t task_status,
     g.toc_status = task_status;
     g.toc_len = (len > sizeof g.toc) ? sizeof g.toc : len;
     if (bytes && g.toc_len) memcpy(g.toc, bytes, g.toc_len);
+}
+
+void mos_fake_set_da_volume(const char *name, const char *path)
+{
+    g.da_present = true;
+    g.da_name[0] = 0;
+    g.da_path[0] = 0;
+    if (name) strlcpy(g.da_name, name, sizeof g.da_name);
+    if (path) strlcpy(g.da_path, path, sizeof g.da_path);
 }
 
 void mos_fake_set_raw_reply(uint32_t task_status,
@@ -671,4 +684,54 @@ DRDeviceRef DRDeviceCopyDeviceForIORegistryEntryPath(CFStringRef path)
     (void)path;
     if (!g.present) return NULL;
     return (DRDeviceRef)CFRetain(FAKE_DEV);
+}
+
+/* ---- DiskArbitration: the one-shot volume lookup (mos_da.c) --------- *
+ *
+ * Same seam rule as IOKit/DR: the fake supplies the DA symbols, real
+ * CoreFoundation does the object lifetimes — session and disk are real
+ * CF objects (so the adapter's CFRelease discipline is exercised for
+ * real), and the description is a real dictionary carrying a real
+ * CFURL, the type mos_da.c must check for. Reset state (da_present
+ * false) models "DA knows no such disk": DADiskCopyDescription NULL. */
+
+const CFStringRef kDADiskDescriptionVolumeNameKey = CFSTR("DAVolumeName");
+const CFStringRef kDADiskDescriptionVolumePathKey = CFSTR("DAVolumePath");
+
+DASessionRef DASessionCreate(CFAllocatorRef allocator)
+{
+    return (DASessionRef)CFStringCreateWithCString(
+        allocator, "fake-da-session", kCFStringEncodingUTF8);
+}
+
+DADiskRef DADiskCreateFromBSDName(CFAllocatorRef allocator,
+                                  DASessionRef session, const char *name)
+{
+    (void)session;
+    if (!name || !name[0]) return NULL;
+    return (DADiskRef)CFStringCreateWithCString(
+        allocator, name, kCFStringEncodingUTF8);
+}
+
+CFDictionaryRef DADiskCopyDescription(DADiskRef disk)
+{
+    if (!disk || !g.da_present) return NULL;
+
+    CFMutableDictionaryRef d = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 2,
+        &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (g.da_name[0]) {
+        CFStringRef v = CFStringCreateWithCString(
+            kCFAllocatorDefault, g.da_name, kCFStringEncodingUTF8);
+        if (v) { CFDictionarySetValue(d, kDADiskDescriptionVolumeNameKey, v);
+                 CFRelease(v); }
+    }
+    if (g.da_path[0]) {
+        CFURLRef u = CFURLCreateFromFileSystemRepresentation(
+            kCFAllocatorDefault, (const UInt8 *)g.da_path,
+            (CFIndex)strlen(g.da_path), true);
+        if (u) { CFDictionarySetValue(d, kDADiskDescriptionVolumePathKey, u);
+                 CFRelease(u); }
+    }
+    return d;
 }

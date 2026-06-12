@@ -54,9 +54,10 @@
    identity fields whose real domain is ≤16 bytes, an absurdly long
    value is hostile data and empty is the right answer. dst is always
    NUL-terminated. Non-string values (a hostile or surprising
-   dictionary) also yield "". */
-static void mos_internal_dr_copy_string(CFTypeRef value,
-                                        char *dst, size_t cap)
+   dictionary) also yield "". Shared with the DA volume lookup
+   (mos_da.c), which reads volume-controlled strings under the same
+   trust terms (decl in mos_internal.h). */
+void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap)
 {
     if (!dst || cap == 0) return;
     dst[0] = 0;

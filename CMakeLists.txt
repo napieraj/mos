@@ -173,6 +173,7 @@ if(APPLE)
 
 add_library(mos_core STATIC
     src/mos_scsi.c
+    src/mos_da.c
     src/mos_state.c
     src/mos_watch.c
     src/mos_dr.c
@@ -198,15 +199,19 @@ set_target_properties(mos_core PROPERTIES
 find_library(IOKIT_FRAMEWORK          IOKit          REQUIRED)
 find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
 find_library(DISCRECORDING_FRAMEWORK  DiscRecording  REQUIRED)
+find_library(DISKARBITRATION_FRAMEWORK DiskArbitration REQUIRED)
 
-# DiskArbitration left the library link line in DR pivot Phase 2a (the
-# watch's DA wake retired) and the project entirely with the probe
-# consolidation (2026-06-11, ROADMAP append): no target links DA.
+# DiskArbitration's callback roles (watch wake, probe control arm) left
+# in the DR pivot / probe consolidation and do not return; it relinked
+# 2026-06-12 for exactly one synchronous call — the mounted-volume
+# lookup in mos_da.c (narrow re-admission terms at the top of that
+# file; AGENTS.md append of the same date).
 target_link_libraries(mos_core
     PUBLIC  mos_pure
             ${IOKIT_FRAMEWORK}
             ${COREFOUNDATION_FRAMEWORK}
             ${DISCRECORDING_FRAMEWORK}
+            ${DISKARBITRATION_FRAMEWORK}
     PRIVATE mos_warnings
 )
 
@@ -368,6 +373,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         src/mos_scsi.c
         src/mos_state.c
         src/mos_dr.c
+        src/mos_da.c
     )
     target_include_directories(mos_adapter_oneshot_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -396,6 +402,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         src/mos_scsi.c
         src/mos_state.c
         src/mos_dr.c
+        src/mos_da.c
         src/mos_watch.c
     )
     target_include_directories(mos_adapter_watch_tests PRIVATE

@@ -64,6 +64,12 @@ void mos_fake_set_readdiscinfo_reply(uint32_t task_status,
 void mos_fake_set_toc_reply(uint32_t task_status,
                             const uint8_t *bytes, size_t len);
 
+/* DiskArbitration scenario: make DADiskCopyDescription return a
+   description with VolumeName `name` and (when `path` non-NULL/non-"")
+   VolumePath `path`. NULL path models present-but-unmounted. Cleared
+   by mos_fake_reset() (no description at all). */
+void mos_fake_set_da_volume(const char *name, const char *path);
+
 /* Raw-CDB path (the GESN tray probe). Script the ExecuteTaskSync
    outcome: reply bytes copied into the task's data buffer, the task
    status, the sense (NULL = all-zero), and the realized byte count.

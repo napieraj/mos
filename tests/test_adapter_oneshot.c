@@ -12,6 +12,7 @@
 
 #include "mos.h"
 #include "mos_fake_apple.h"
+#include "../src/mos_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -288,6 +289,38 @@ TEST(adapter_toc_round_trip_and_fail_closed)
     return 0;
 }
 
+TEST(adapter_da_volume_lookup_modalities)
+{
+    char name[256], path[1024];
+
+    /* Unknown disk: no description, not mounted. */
+    mos_fake_reset();
+    EXPECT(!mos_internal_da_volume("disk4", name, sizeof name,
+                                   path, sizeof path));
+    EXPECT(name[0] == 0 && path[0] == 0);
+
+    /* Mounted with a name. */
+    mos_fake_set_da_volume("ARRIVAL_4K_UHD", "/Volumes/ARRIVAL_4K_UHD");
+    EXPECT(mos_internal_da_volume("disk4", name, sizeof name,
+                                  path, sizeof path));
+    EXPECT(strcmp(name, "ARRIVAL_4K_UHD") == 0);
+    EXPECT(strcmp(path, "/Volumes/ARRIVAL_4K_UHD") == 0);
+
+    /* Present but unmounted (description without VolumePath):
+       false, both empty — DA describes unmounted media too. */
+    mos_fake_set_da_volume("GHOST", NULL);
+    EXPECT(!mos_internal_da_volume("disk4", name, sizeof name,
+                                   path, sizeof path));
+    EXPECT(name[0] == 0 && path[0] == 0);
+
+    /* Hostile/degenerate args stay in bounds and report unmounted. */
+    EXPECT(!mos_internal_da_volume(NULL, name, sizeof name,
+                                   path, sizeof path));
+    EXPECT(!mos_internal_da_volume("", name, sizeof name,
+                                   path, sizeof path));
+    return 0;
+}
+
 int main(void)
 {
     printf("adapter one-shot (headless, link-seam fake):\n");
@@ -299,6 +332,7 @@ int main(void)
     RUN(adapter_lock_denied_falls_back_to_sense);
     RUN(adapter_disc_info_replays_fixtures);
     RUN(adapter_toc_round_trip_and_fail_closed);
+    RUN(adapter_da_volume_lookup_modalities);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);
     return mos_tests_failed ? 1 : 0;
