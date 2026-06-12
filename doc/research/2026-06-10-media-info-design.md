@@ -426,3 +426,17 @@ README examples reflect this — the flagship `mos.metadata.v1` example
 is an unmounted UHD BD; the mounted examples are a DVD-video volume,
 an audio CD (macOS's generic "Audio CD" label), and data discs, which
 genuinely mount. The historical sketch above is left as written.
+
+**M-DISC (2026-06-12, same session):** added as the fixture-pinned
+archival example (`mos.metadata.v1.mdisc_archive`,
+`mos.state.v1.mdisc_archive_mounted`) — deliberately: the volume
+surface is not exclusively ripping-adjacent, and archival burns are
+the canonical mounted-data case. Handling claim: at the MMC level
+M-DISC is profile-transparent — the BD flavor reports standard BD-R
+SRM (0x0041, already in the profile/class tables), and the
+M-DISC-ness lives in disc-structure manufacturer/media-ID fields mos
+does not read (READ DISC STRUCTURE is stage-2 banked, book-type
+note above). So M-DISC is handled by construction today: state,
+profile, class, TOC, disc_info, and the mounted volume name all
+behave as for any BD-R. A hardware falsification pass should include
+one finalized M-DISC alongside the pressed/UHD/audio matrix rows.

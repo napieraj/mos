@@ -141,7 +141,9 @@ reads are the consumer's privilege and parsing burden. That null is
 the NORMAL reading for BD/UHD video: those discs typically do not
 mount on macOS (the rip workload's common case), so their identity
 rides on profile/TOC/disc-info while `volume_name` carries
-DVD-video, audio-CD ("Audio CD"), and data-disc labels.
+DVD-video, audio-CD ("Audio CD"), and data/archival labels — a
+finalized M-DISC backup mounts like any data volume and is the
+fixture-pinned archival example (`mos.metadata.v1.mdisc_archive`).
 
 ### Drive (static facts)
 
