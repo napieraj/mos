@@ -146,7 +146,27 @@ def check_cli_enum_drift(here: Path) -> int:
                    (("mos.state.v1.media_class",
                      enum_at(here / "mos.state.v1.json", "media_class")),
                     ("mos.event.v1.media_class",
-                     enum_at(here / "mos.event.v1.json", "media_class")))))
+                     enum_at(here / "mos.event.v1.json", "media_class")),
+                    ("mos.metadata.v1.disc.class",
+                     enum_at(here / "mos.metadata.v1.json",
+                             "disc", "class") - {None}))))
+
+    # switch_returns' case-arm regex cannot see this function's
+    # `case MOS_DISC_OTHER: default:` fallback arm, so harvest every
+    # string return in the function body instead (the function is a
+    # pure string table, same shape as mos_profile_class).
+    def fn_returns(path: Path, func: str) -> set:
+        src = path.read_text()
+        m = re.search(re.escape(func) + r'\b.*?\{(.*?)\n\}', src, re.DOTALL)
+        return set(re.findall(r'return\s+"([a-z_]+)"', m.group(1))) if m else set()
+
+    c_disc_status = fn_returns(root / "src" / "mos_strings.c",
+                               "mos_disc_status_description")
+    checks.append(("disc_status", c_disc_status,
+                   "src/mos_strings.c mos_disc_status_description()",
+                   (("mos.metadata.v1.disc.disc_info.status",
+                     enum_at(here / "mos.metadata.v1.json",
+                             "disc", "disc_info", "status")),)))
 
     print("\nCLI-enum drift (C emit tables vs schema enums):")
     failures = 0

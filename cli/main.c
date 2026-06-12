@@ -45,6 +45,8 @@ void print_usage(FILE *f)
         "  watch  [drive]    Stream state events (NDJSON) until SIGINT;\n"
         "                    all drives unless a drive narrows it (hot-plug\n"
         "                    joins; removal is per-drive, stream continues).\n"
+        "  metadata [drive]  Disc identity record (profile, TOC, disc\n"
+        "                    info, mounted volume) — mos.metadata.v1.\n"
 #ifdef MOS_CLI_PROBE
         "  probe  <drive>    Diagnostic: stream raw IOKit/DiscRecording\n"
         "                    notification events (NDJSON, mos.probe.v0)\n"
@@ -202,6 +204,8 @@ int main(int argc, char **argv)
             flag_list = true;
         } else if (strcmp(cmd, "watch") == 0) {
             flag_watch = true;
+        } else if (strcmp(cmd, "metadata") == 0) {
+            flag_metadata = true;
         } else if (strcmp(cmd, "probe") == 0) {
 #ifdef MOS_CLI_PROBE
             flag_probe = true;
@@ -230,7 +234,7 @@ int main(int argc, char **argv)
         } else {
             fprintf(stderr, "%s: unknown subcommand: ", progname);
             mos_cli_safe_ascii(stderr, cmd);
-            fputs("\nRecognized: status, list, watch"
+            fputs("\nRecognized: status, list, watch, metadata"
 #ifdef MOS_CLI_PROBE
                   ", probe"
 #endif
@@ -388,6 +392,7 @@ int main(int argc, char **argv)
     if (flag_probe) return run_probe();
 #endif
     if (flag_list)  return run_list();
+    if (flag_metadata) return run_metadata();
     if (flag_watch) return run_watch();
     return run_query();
 }

@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/napieraj/mos/schemas/mos.metadata.v1.json",
+  "title": "mos.metadata.v1",
+  "description": "Disc-identity record emitted by `mos metadata --json` (design: doc/research/2026-06-10-media-info-design.md). The `disc` object is THE FINGERPRINT SUBTREE: consumers hash its canonical serialization (or a class-appropriate subset, e.g. disc.toc alone for audio CDs; match policy is theirs). Identity fields are REQUIRED AND NULLABLE, never optional \u2014 a fixed key set keeps the canonical form trivial. null means the fact was unreadable or inapplicable at capture; partial readability is the normal regime, not an error. Hard failures (drive unopenable, state query failed) emit mos.error.v1 instead.",
+  "type": "object",
+  "required": [
+    "schema",
+    "bsd",
+    "captured_at",
+    "volume_path",
+    "disc"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "mos.metadata.v1",
+      "description": "Schema identifier. Per-document versioned \u2014 consumers dispatch on this field."
+    },
+    "bsd": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^/dev/disk[0-9]+$",
+      "description": "Whole-disk dev node, or null when no IOMedia child exists (media absent). Addressing/capture context, NOT part of the fingerprint subtree."
+    },
+    "captured_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+      "description": "Wall-clock capture time, RFC 3339 UTC with millisecond precision (same rendering as mos.probe.v0 ts). Capture context, not identity."
+    },
+    "volume_path": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Mount point of the disc's volume (DiskArbitration VolumePath), or null when not mounted. Unmounted is the COMMON case for UDF video discs. Mount-point bytes are environment-controlled; consumers quoting them own their own escaping."
+    },
+    "disc": {
+      "type": "object",
+      "description": "The fingerprint subtree. Fixed key set (additionalProperties: false + all keys required): a v1 consumer hashing the canonical serialization never sees a key this schema does not name.",
+      "required": [
+        "profile",
+        "class",
+        "toc",
+        "disc_info",
+        "volume_name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^0x[0-9a-f]{4}$",
+          "description": "MMC current-profile code (lowercase 0xNNNN), or null when no profile was reported (drive not READY \u2014 the state core populates the profile only on READY to avoid stale-profile leakage; see mos.state.v1)."
+        },
+        "class": {
+          "enum": [
+            "cd",
+            "dvd",
+            "bd",
+            "hd_dvd",
+            null
+          ],
+          "description": "Coarse media class derived from profile by mos_profile_class(); null when profile is null or classless. Same closed set as mos.state.v1 media_class (drift-guarded in validate.py)."
+        },
+        "toc": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "READ TOC/PMA/ATIP format 0000b decode (LBA addressing), or null when the disc/drive did not answer or the reply failed the fail-closed parse (out-of-range, duplicate, or non-ascending tracks; header/descriptor mismatch \u2014 see mos_internal_toc_parse). For CDs this is THE identity primitive (MusicBrainz/CDDB ids are pure functions of these fields, computed consumer-side). A synthesized single-track DVD/BD TOC is emitted faithfully but is identity-useless \u2014 never key on it (research doc).",
+          "required": [
+            "first_track",
+            "last_track",
+            "leadout_lba",
+            "tracks"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "first_track": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 99
+            },
+            "last_track": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 99
+            },
+            "leadout_lba": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "description": "Lead-out start LBA, or null when the TOC carried no lead-out descriptor \u2014 which means NO IDENTITY: do not dedup on a lead-out-less TOC."
+            },
+            "tracks": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 99,
+              "items": {
+                "type": "object",
+                "required": [
+                  "track",
+                  "adr",
+                  "control",
+                  "data",
+                  "start_lba"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "track": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 99
+                  },
+                  "adr": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 15
+                  },
+                  "control": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 15
+                  },
+                  "data": {
+                    "type": "boolean",
+                    "description": "Q-channel control bit 2 (data track). Derived from control; carried explicitly so consumers need no bit arithmetic."
+                  },
+                  "start_lba": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "disc_info": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "READ DISC INFORMATION (0x51) decode, or null when the drive/disc did not answer (pressed DVD-ROM/BD-ROM units that reject 0x51 are normal). status 'other' is the NORMAL regime for random-access recordable media (DVD-RAM, BD-RE) \u2014 not an anomaly.",
+          "required": [
+            "status",
+            "erasable",
+            "sessions",
+            "tracks"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "blank",
+                "appendable",
+                "complete",
+                "other"
+              ],
+              "description": "Disc status (byte 2 bits 1:0) via mos_disc_status_description() \u2014 drift-guarded in validate.py."
+            },
+            "erasable": {
+              "type": "boolean"
+            },
+            "sessions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tracks": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Last track number in the last session \u2014 the track count under MMC's from-1 numbering."
+            }
+          }
+        },
+        "volume_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Mounted volume's name (DiskArbitration VolumeName), or null when not mounted or unlabeled. MOUNT-SOURCED ONLY: present-but-unmounted discs read null by design \u2014 sector-derived names are the consumer's to obtain and parse (scope doctrine). Volume names are disc-controlled bytes, emitted byte-faithfully under JSON string escaping; terminal quoting is the consumer's job."
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "title": "class is null when profile is null",
+      "description": "class is a pure function of profile; a class without a profile would be fabricated data.",
+      "properties": {
+        "disc": {
+          "if": {
+            "properties": {
+              "profile": {
+                "const": null
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "class": {
+                "const": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "title": "volume_name requires a mount",
+      "description": "volume_name is DA-sourced and DA carries a name only for mounted volumes; a name with volume_path null would claim a source that cannot have produced it.",
+      "if": {
+        "properties": {
+          "volume_path": {
+            "const": null
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "disc": {
+            "properties": {
+              "volume_name": {
+                "const": null
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

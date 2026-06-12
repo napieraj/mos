@@ -416,6 +416,24 @@ case "$ERR" in
     ;;
 esac
 
+# Test 19 (metadata verb): selector errors carry the same mos.error.v1
+# contract as status — the verb's success path needs a drive, but the
+# error envelope and exit-code surface are pinned here.
+run_mos metadata --json --index 99
+assert_ec       "metadata no-drive JSON exit 66"     "66"   "$EC"
+assert_contains "metadata error envelope schema"     "$OUT" '"schema": "mos.error.v1"'
+assert_contains "metadata error code no_device"      "$OUT" '"code": "no_device"'
+
+# metadata is a recognized verb: it must NOT trip the unknown-subcommand
+# or reserved-name diagnostics.
+run_mos metadata --json --index 99
+case "$ERR" in
+    *"unknown subcommand"*|*"reserved for the v0.4"*)
+        fail=$((fail + 1))
+        printf 'fail: metadata hit the unknown/reserved diagnostic\n' ;;
+    *)  pass=$((pass + 1)) ;;
+esac
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 rm -f /tmp/mos_cli_stderr
 [ "$fail" -eq 0 ] || exit 1
