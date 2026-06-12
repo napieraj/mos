@@ -134,7 +134,16 @@ object is the fingerprint subtree: a fixed, closed key set
 whose canonical serialization consumers hash for dedup — third-party
 ids (MusicBrainz, AccurateRip, dvdid) are pure functions of these
 fields, computed consumer-side. Unreadable facts emit `null`; partial
-readability is the normal regime, not an error. The volume name/path
+readability is the normal regime, not an error.
+
+For archival flows (M-DISC and friends) the `disc_info` row answers
+fresh-vs-burned directly, because READ DISC INFORMATION reads disc
+structure, not the filesystem: `blank` = unburned, ready to write;
+`appendable` = open session; `complete` plus a mounted Volume =
+burned and readable; `complete` with Volume null = burned but the
+filesystem did not mount — possibly damaged (when even the TOC won't
+read, `mos status` reports `media_unreadable`). `erasable`
+distinguishes wipe-and-reuse media (RW/RE) from one-shot (R/M-DISC). The volume name/path
 are mount-sourced only (one synchronous DiskArbitration description
 read): a present-but-unmounted disc reads `null` by design — sector
 reads are the consumer's privilege and parsing burden. That null is
