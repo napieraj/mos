@@ -6,7 +6,7 @@
 #include <string.h>
 #include <sysexits.h>
 
-/* ---- Signal handling (--watch) ----------------------------------------- *
+/* ---- Signal handling (watch) ------------------------------------------- *
  *
  * SIGINT during a watch loop should terminate cleanly: stop pumping,
  * close the watch handle, exit 0. A volatile sig_atomic_t flag is the

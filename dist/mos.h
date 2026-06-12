@@ -564,7 +564,7 @@ const char *mos_profile_name(uint16_t profile_code);
    or NULL when no class applies (0x0000 no-profile, MO, legacy
    removable, unknown codes). The class is derived from the MMC profile
    number ranges, so it costs nothing beyond the GET CONFIGURATION the
-   state query already performs — this is what lets `--list`-style
+   state query already performs — this is what lets `mos list`-style
    output distinguish "the BD in drive A" from "the DVD in drive B" on
    identical hardware. Finer disambiguation (volume name) is the v0.4
    media-info work; see doc/research/2026-06-10-media-info-design.md. */

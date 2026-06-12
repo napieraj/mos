@@ -63,8 +63,6 @@ void print_usage(FILE *f)
         "  -i, --index N     1-based drive index (the Index column in\n"
         "                    'mos list'); explicit form of the positional\n"
         "      --bsd NAME    BSD form; explicit form of the positional\n"
-        "  -l, --list        List drives and exit\n"
-        "  -w, --watch       Stream state events (NDJSON) until SIGINT\n"
         "      --all         With watch: stream events for EVERY drive\n"
         "                    (hot-plug joins as device_appeared; removal\n"
         "                    is per-drive, the stream continues)\n"
@@ -78,7 +76,7 @@ void print_usage(FILE *f)
         "  -h, --help        Show this help\n"
         "      --version     Show version\n"
         "\n"
-        "Environment (--watch only; integer ms, 0..3600000, 0 = library\n"
+        "Environment (watch only; integer ms, 0..3600000, 0 = library\n"
         "default; out-of-range or non-numeric warn on stderr, use default):\n"
         "  MOS_WATCH_STABLE_MS      poll period in stable states (default 2000)\n"
         "  MOS_WATCH_TRANSITION_MS  poll period in transitional states (default 200)\n"
@@ -115,8 +113,6 @@ enum {
 static const struct option long_options[] = {
     { "index",   required_argument, 0, 'i' },
     { "bsd",     required_argument, 0, OPT_BSD },
-    { "list",    no_argument,       0, 'l' },
-    { "watch",   no_argument,       0, 'w' },
     { "all",     no_argument,       0, OPT_ALL },
 #ifdef MOS_CLI_PROBE
     /* Compiled out with the probe so an OFF build rejects --dump as an
@@ -170,7 +166,7 @@ int main(int argc, char **argv)
        disposition). Default SIGPIPE kills the process on a closed
        downstream pipe; ignoring it makes writes return EPIPE instead, which
        the watch emitters detect (fflush + ferror) and turn into a clean
-       EX_OK exit. Installed for all subcommands, not just --watch: even
+       EX_OK exit. Installed for all subcommands, not just watch: even
        `mos --json | head -c0` can race SIGPIPE between printf and flush.
        Invariant: the emit paths must keep honoring fflush return values —
        discarding them reintroduces the kill-on-pipe-close bug. signal()
@@ -201,15 +197,11 @@ int main(int argc, char **argv)
        when argv[1] is a bare word (flag-first invocations reach getopt
        unchanged). The five v0.4 names are reserved so a premature use gets
        a clearer diagnostic than "unknown subcommand". */
-    bool had_status_subcommand = false;
     if (argc >= 2 && argv[1][0] != '-' && argv[1][0] != '\0') {
         const char *cmd = argv[1];
 
         if (strcmp(cmd, "status") == 0) {
-            /* implicit-status default; no flag to set, but track the
-               explicit subcommand so we can reject `mos status --list`
-               and `mos status --watch` as contradictory. */
-            had_status_subcommand = true;
+            /* implicit-status default; nothing to set. */
         } else if (strcmp(cmd, "list") == 0) {
             flag_list = true;
         } else if (strcmp(cmd, "watch") == 0) {
@@ -264,7 +256,7 @@ int main(int argc, char **argv)
     }
 
     int c;
-    while ((c = getopt_long(argc, argv, "i:ljwh", long_options, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "i:jh", long_options, NULL)) != -1) {
         switch (c) {
             case 'i': {
                 int v = parse_index(optarg);
@@ -280,8 +272,6 @@ int main(int argc, char **argv)
             case OPT_BSD:
                 opt_bsd = optarg;
                 break;
-            case 'l': flag_list  = true;  break;
-            case 'w': flag_watch = true;  break;
             case OPT_ALL: flag_all = true; break;
 #ifdef MOS_CLI_PROBE
             case OPT_DUMP: flag_dump = true; break;
@@ -365,17 +355,11 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 
-    if (flag_list && flag_watch) {
-        fprintf(stderr, "%s: --list and --watch are mutually exclusive\n",
-                progname);
-        return EX_USAGE;
-    }
-
     /* --all is watch-only (sit on the bus) and takes the whole bus —
        a drive selector contradicts it. */
     if (flag_all && !flag_watch) {
-        fprintf(stderr, "%s: --all requires --watch (or the watch "
-                        "subcommand)\n", progname);
+        fprintf(stderr, "%s: --all requires the watch subcommand\n",
+                progname);
         return EX_USAGE;
     }
     if (flag_all && (opt_index || opt_bsd || opt_registry)) {
@@ -385,18 +369,14 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 
-    /* (--list + selector is rejected above, where the positional
+    /* (list + selector is rejected above, where the positional
        subject also lands — one guard, one message.) */
 
 #ifdef MOS_CLI_PROBE
-    /* probe is its own dispatch — the one-shot/list/watch flags
-       contradict it. (probe + --all is already rejected above:
-       --all requires --watch, and probe + --watch lands here.) */
-    if (flag_probe && (flag_list || flag_watch)) {
-        fprintf(stderr, "%s: probe cannot be combined with %s\n",
-                progname, flag_list ? "--list" : "--watch");
-        return EX_USAGE;
-    }
+    /* (probe + --all is already rejected above: --all requires watch.
+       Verb-vs-verb contradictions are unrepresentable since verbs come
+       only from the one-word dispatch — flags-as-commands retired
+       2026-06-12.) */
     if (flag_dump && !flag_probe) {
         fprintf(stderr, "%s: --dump requires the probe subcommand\n",
                 progname);
@@ -423,13 +403,6 @@ int main(int argc, char **argv)
     /* probe's event stream is NDJSON unconditionally; --json is a
        no-op there, same documented rule as watch. */
 #endif
-
-    if (had_status_subcommand && (flag_list || flag_watch)) {
-        fprintf(stderr,
-                "%s: 'status' subcommand cannot be combined with %s\n",
-                progname, flag_list ? "--list" : "--watch");
-        return EX_USAGE;
-    }
 
 #ifdef MOS_CLI_PROBE
     if (flag_probe) return run_probe();

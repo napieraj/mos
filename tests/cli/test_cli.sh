@@ -115,12 +115,12 @@ run_mos --version
 assert_ec       "version exit code"      "0" "$EC"
 assert_contains "version output shape"   "$OUT" "0."
 
-# Test 2: --help exits 0 and prints the Options block, including --watch
-# (new in v0.3).
+# Test 2: --help exits 0 and prints the Options block and the watch
+# subcommand.
 run_mos --help
 assert_ec       "help exit code"          "0" "$EC"
 assert_contains "help mentions Options"   "$OUT" "Options:"
-assert_contains "help advertises --watch" "$OUT" "watch"
+assert_contains "help advertises the watch subcommand" "$OUT" "watch"
 
 # Test 3: unknown flag exits 64 (EX_USAGE per sysexits.h). Pins that
 # getopt-level errors are distinguishable from query failures (which
@@ -184,9 +184,12 @@ assert_not_contains "open-failure envelope omits bsd" "$OUT" '"bsd":'
 run_mos --index 1 --bsd disk0
 assert_ec "index+bsd mutual exclusion exits 64" "64" "$EC"
 
-# Test 7: --list and --watch are mutually exclusive (new in v0.3).
-run_mos --list --watch
-assert_ec "list+watch mutual exclusion exits 64" "64" "$EC"
+# Test 7: the retired verb flags (flags-as-commands, retired
+# 2026-06-12) are plain unknown options now — verbs are subcommands.
+run_mos --list
+assert_ec "retired --list is an unknown option (64)" "64" "$EC"
+run_mos --watch
+assert_ec "retired --watch is an unknown option (64)" "64" "$EC"
 
 # Test 8: --json=value is rejected with EX_USAGE 64. In v0.3 the --json
 # flag takes no argument — schemas carry their own version. Legacy
@@ -198,9 +201,9 @@ assert_ec "--json=anything rejected with EX_USAGE" "64" "$EC"
 ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
 assert_contains "--json=v2 diagnostic mentions mos.state.v1" "$ERR" "mos.state.v1"
 
-# Test 9: --list with --json emits a mos.list.v1 envelope. The drives
+# Test 9: list --json emits a mos.list.v1 envelope. The drives
 # array may be empty on a CI runner without optical drives.
-run_mos --list --json
+run_mos list --json
 assert_ec       "list --json exit 0"           "0"    "$EC"
 assert_contains "list JSON has mos.list.v1"    "$OUT" '"schema": "mos.list.v1"'
 assert_contains "list JSON has drives array"   "$OUT" '"drives":'
@@ -214,26 +217,26 @@ run_mos --bsd disk99 --json
 assert_ec       "bad --bsd JSON exit 66"          "66"   "$EC"
 assert_contains "bad --bsd JSON has mos.error.v1" "$OUT" '"schema": "mos.error.v1"'
 
-# Test 11: --watch against a non-resolving --bsd exits 66 with a
+# Test 11: watch against a non-resolving --bsd exits 66 with a
 # mos.error.v1 envelope. Exercises the watch-open-failure path
 # (mos_watch_open_by_bsd_name returns NULL, run_watch routes through
-# emit_unknown_and_fail). This is the only --watch path testable
+# emit_unknown_and_fail). This is the only watch path testable
 # without IOKit; the full event-stream behavior is exercised by the
 # pure watch_core unit tests and the hardware integration matrix.
-run_mos --watch --bsd disk99 --json
-assert_ec          "bad --bsd --watch exit 66"           "66"   "$EC"
+run_mos watch --bsd disk99 --json
+assert_ec          "bad --bsd watch exit 66"           "66"   "$EC"
 # Watch-mode JSON is NDJSON: the error envelope is COMPACT (no spaces
 # after colons) and single-line, unlike the pretty one-shot envelope.
-assert_contains    "bad --bsd --watch has mos.error.v1"  "$OUT" '"schema":"mos.error.v1"'
-assert_contains    "bad --bsd --watch has no_device"     "$OUT" '"code":"no_device"'
-assert_single_line "bad --bsd --watch envelope is one NDJSON line" "$OUT"
+assert_contains    "bad --bsd watch has mos.error.v1"  "$OUT" '"schema":"mos.error.v1"'
+assert_contains    "bad --bsd watch has no_device"     "$OUT" '"code":"no_device"'
+assert_single_line "bad --bsd watch envelope is one NDJSON line" "$OUT"
 
-# Test 12: --watch against a non-existent index exits 66 with the same
+# Test 12: watch against a non-existent index exits 66 with the same
 # envelope (separate open path).
-run_mos --watch --index 99 --json
-assert_ec          "bad --index --watch exit 66"          "66"   "$EC"
-assert_contains    "bad --index --watch has mos.error.v1" "$OUT" '"schema":"mos.error.v1"'
-assert_single_line "bad --index --watch envelope is one NDJSON line" "$OUT"
+run_mos watch --index 99 --json
+assert_ec          "bad --index watch exit 66"          "66"   "$EC"
+assert_contains    "bad --index watch has mos.error.v1" "$OUT" '"schema":"mos.error.v1"'
+assert_single_line "bad --index watch envelope is one NDJSON line" "$OUT"
 
 # Test 13: subcommand 'status' is an alias for the implicit-status form.
 # On a CI runner with no drive, both forms produce the same v0.3
@@ -242,26 +245,25 @@ run_mos status --json --index 99
 assert_ec       "status subcommand exit 66"          "66"   "$EC"
 assert_contains "status subcommand has mos.error.v1" "$OUT" '"schema": "mos.error.v1"'
 
-# Test 14: subcommand 'list' is an alias for --list. The drives array
-# may be empty on a CI runner.
+# Test 14: 'list' subcommand under the dispatch path (the canonical
+# and only form). The drives array may be empty on a CI runner.
 run_mos list --json
 assert_ec       "list subcommand exit 0"          "0"    "$EC"
 assert_contains "list subcommand has mos.list.v1" "$OUT" '"schema": "mos.list.v1"'
 
-# Test 15: subcommand 'watch' is an alias for --watch; same
+# Test 15: 'watch' subcommand with the selector flags; same
 # watch-open-failure surface as Test 11.
 run_mos watch --bsd disk99 --json
 assert_ec          "watch subcommand bad --bsd exit 66"           "66" "$EC"
 assert_contains    "watch subcommand bad --bsd has mos.error.v1"  "$OUT" '"schema":"mos.error.v1"'
 assert_single_line "watch subcommand envelope is one NDJSON line" "$OUT"
 
-# Test 16: 'status' subcommand combined with --list or --watch is
-# rejected as contradictory (EX_USAGE 64). Each form separately is
-# valid; combining them is not.
+# Test 16: the retired verb flags stay unknown options after an
+# explicit subcommand too — verb-vs-verb states are unrepresentable.
 run_mos status --list
-assert_ec "status + --list rejected with EX_USAGE" "64" "$EC"
+assert_ec "status + retired --list is unknown option (64)" "64" "$EC"
 run_mos status --watch
-assert_ec "status + --watch rejected with EX_USAGE" "64" "$EC"
+assert_ec "status + retired --watch is unknown option (64)" "64" "$EC"
 
 # Test 17: unknown subcommand exits 64 with a diagnostic listing
 # recognized and reserved names.
@@ -282,24 +284,14 @@ for reserved in capacity identity tray speed features; do
     assert_contains "reserved '$reserved' diagnostic names v0.4" "$ERR" "v0.4"
 done
 
-# Test 19: --list is mutually exclusive with --index/--bsd. List is
+# Test 19: list is mutually exclusive with --index/--bsd. List is
 # "enumerate ALL drives"; selectors target a single drive. Combining
 # them is contradictory and must be rejected at the argument-parsing
 # layer with EX_USAGE rather than silently picking one to honor.
-#
-# Four cases: --list and `list` subcommand, each crossed with --index
-# and --bsd. All four must exit 64. (R3 v0.3.1-dev review flagged
-# that the contract test was missing for these — the rejection logic
-# was in the code, but only the --list+--watch combination was
-# pinned.)
-run_mos --list --index 1
-assert_ec "list + --index rejected with EX_USAGE" "64" "$EC"
-run_mos --list --bsd disk4
-assert_ec "list + --bsd rejected with EX_USAGE"   "64" "$EC"
 run_mos list --index 1
-assert_ec "list subcommand + --index rejected with EX_USAGE" "64" "$EC"
+assert_ec "list + --index rejected with EX_USAGE" "64" "$EC"
 run_mos list --bsd disk4
-assert_ec "list subcommand + --bsd rejected with EX_USAGE"   "64" "$EC"
+assert_ec "list + --bsd rejected with EX_USAGE"   "64" "$EC"
 
 # Test 20: positional drive subject (CLI design 2026-06-10). All-digits
 # parses as an index: `mos status 99` matches the --index 99 contract.
@@ -324,7 +316,7 @@ assert_contains "positional bsd: mos.error.v1"     "$OUT" '"schema": "mos.error.
 # Test 24: --all is watch-only and selector-exclusive (DR pivot 2b).
 run_mos --all
 assert_ec "--all without watch exits 64" "64" "$EC"
-run_mos --watch --all --index 2
+run_mos watch --all --index 2
 assert_ec "--all + selector exits 64" "64" "$EC"
 run_mos status --all
 assert_ec "status --all exits 64" "64" "$EC"
@@ -361,11 +353,12 @@ case "$ERR" in
     run_mos --dump
     assert_ec "--dump without probe exits 64" "64" "$EC"
 
-    # Test 28: probe contradicts the other dispatches (64 each).
+    # Test 28: retired verb flags are unknown options after probe (64
+    # each); verb-vs-verb states are unrepresentable post-retirement.
     run_mos probe --list
-    assert_ec "probe + --list exits 64" "64" "$EC"
+    assert_ec "probe + retired --list exits 64" "64" "$EC"
     run_mos probe --watch
-    assert_ec "probe + --watch exits 64" "64" "$EC"
+    assert_ec "probe + retired --watch exits 64" "64" "$EC"
     run_mos probe --all
     assert_ec "probe + --all exits 64" "64" "$EC"
 

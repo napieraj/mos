@@ -12,7 +12,7 @@ uint64_t    opt_registry = 0;     /* 0 = unset; >= 2^32+256 when set */
 bool        flag_list   = false;
 bool        flag_json   = false;
 bool        flag_watch  = false;
-bool        flag_all    = false;  /* watch-all: --watch --all */
+bool        flag_all    = false;  /* watch-all: `watch --all` */
 bool        flag_probe  = false;  /* probe subcommand (MOS_CLI_PROBE builds) */
 bool        flag_dump   = false;  /* probe --dump one-shot DR capture */
 
@@ -99,7 +99,7 @@ int emit_unknown_and_fail(const char *context, mos_error err,
            NDJSON — one object per line — and a multi-line error envelope
            breaks any line-framed consumer at exactly the moment it's
            reporting a failure (third review, finding 1; the open-failure
-           path is reachable today via `--json --watch --bsd <absent>`,
+           path is reachable today via `watch --bsd <absent>`,
            the mid-stream pump-failure path is defensively unreachable
            but rendered correctly anyway). One-shot mode keeps the
            pretty-printed envelope. Same bytes-as-JSON either way: only
