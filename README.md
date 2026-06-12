@@ -221,7 +221,7 @@ release flow is documented in `CONTRIBUTING.md`.
 
 ```sh
 git clone https://github.com/napieraj/mos
-cd mac-optical-state
+cd mos
 make build      # release build of library + CLI (thin wrapper over cmake)
 make test       # pure-data unit tests — no drive or hardware needed
 ./build/bin/mos list
