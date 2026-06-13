@@ -328,3 +328,34 @@ Three concepts, three names, no synonyms:
 Banned synonyms: bsd_path, bsd_number, "device path". CLI-layer
 identifiers carry the `mos_cli_` prefix uniformly (io, human, all of
 cli/).
+
+### Addendum: the volume vocabulary, and why "name"/"path" do not
+### collide with the BSD ladder (2026-06-13)
+
+Two concepts, both Apple-canonical, both from DiskArbitration (not
+IOKit):
+- **volume_name** — the filesystem label (Apple:
+  kDADiskDescriptionVolumeNameKey). JSON field `volume_name`; metadata
+  `Volume` row; list folds it into the `Volume` column.
+- **volume_path** — the mount point "/Volumes/…" (Apple:
+  kDADiskDescriptionVolumePathKey). JSON field `volume_path`; metadata
+  `Path` row; list folds it into the same cell as `name (path)`.
+
+The surface tension (raised once volume_path became list/JSON
+first-class, this branch): bsd_name is a *name* and the dev node is a
+*path*, so "name"/"path" now look like one axis shared with
+volume_name/volume_path. They are not the same axis. bsd_unit → bsd_name
+→ dev node is ONE identity in three renderings — a ladder; the dev-node
+path form is the field `bsd` (still NOT `bsd_path`: banned, and the dev
+node is the bottom rung of the ladder, not half of a name/path pair).
+volume_name and volume_path are TWO INDEPENDENT facts — a label and a
+mount point that diverge under macOS disambiguation/sanitization
+(`ARRIVAL` vs `/Volumes/ARRIVAL 1`), not two renderings of one thing.
+
+What keeps them apart is already in place: the `bsd_`/`volume_` prefixes,
+the distinct Apple key namespaces (kIOBSD* vs kDADiskDescription*), and
+the emitted key set itself — `bsd`, `volume_name`, `volume_path`, with no
+`bsd_name` field anywhere in the wire format to collide with
+`volume_name`. The resolution is therefore documentation, not a rename:
+renaming `bsd` → `bsd_path` for visual symmetry reintroduces a banned
+synonym AND falsely asserts the dev node is one of a name/path pair.
