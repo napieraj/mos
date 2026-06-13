@@ -53,6 +53,12 @@
               "null"
             ]
           },
+          "volume_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "bsd": {
             "anyOf": [
               {

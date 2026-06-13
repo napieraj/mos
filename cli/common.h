@@ -51,6 +51,26 @@ static inline bool mos_cli_profile_present(uint16_t profile)
     return profile != 0x0000;
 }
 
+/* The list "Volume" cell, RAW (the caller escapes at emit). The two DA
+   facts — volume label and mount path — fold into one column as "name
+   (path)" so list stays one row per drive while metadata keeps them on
+   separate lines. Both present => "name (path)"; mounted-but-unlabeled
+   (path, empty name) => "path"; unmounted (no path) => the label if any,
+   else empty (rendered "-"). name/path are bounded so a hostile or merely
+   long label/path cannot wreck the table; the JSON carries the faithful
+   form. */
+static inline void mos_cli_list_volume_cell(const char *name,
+                                            const char *path,
+                                            char *out, size_t cap)
+{
+    if (!out || !cap) return;
+    const char *n = name ? name : "";
+    const char *p = path ? path : "";
+    if (n[0] && p[0])      snprintf(out, cap, "%.24s (%.64s)", n, p);
+    else if (p[0])         snprintf(out, cap, "%.64s", p);
+    else                   snprintf(out, cap, "%.24s", n);
+}
+
 /* Enumeration collection + per-drive query rows (the list command and
    the multi-drive EX_USAGE mini-list share these). */
 #define MOS_CLI_LIST_CAP 64
@@ -74,6 +94,10 @@ typedef struct {
        unlabeled); JSON emits byte-faithfully, the table escapes and
        truncates at emit. */
     char     volume[256];
+    /* Mount path, system-supplied ("" = unmounted). JSON emits it
+       byte-faithfully as volume_path; the table folds it into the one
+       Volume cell as "name (path)". */
+    char     volume_path[1024];
     uint64_t registry_id;
 } list_row;
 

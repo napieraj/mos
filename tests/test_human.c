@@ -16,6 +16,7 @@
  */
 #include "test_harness.h"
 #include "../cli/human.h"
+#include "../cli/common.h"
 #include "mos.h"
 
 #include <stdio.h>
@@ -137,6 +138,29 @@ TEST(human_table_list_golden)
     return 0;
 }
 
+TEST(list_volume_cell_folds_name_and_path)
+{
+    char c[96];
+    /* Both present: "name (path)" — the one-row list form (metadata
+       keeps them on separate Volume/Path lines). */
+    mos_cli_list_volume_cell("ARRIVAL", "/Volumes/ARRIVAL", c, sizeof c);
+    EXPECT_STREQ("ARRIVAL (/Volumes/ARRIVAL)", c);
+    /* Disambiguation: label and mount-point basename diverge, and the
+       cell shows it rather than hiding it behind the bare label. */
+    mos_cli_list_volume_cell("ARRIVAL", "/Volumes/ARRIVAL 1", c, sizeof c);
+    EXPECT_STREQ("ARRIVAL (/Volumes/ARRIVAL 1)", c);
+    /* Mounted but unlabeled (empty name): path alone, no empty parens. */
+    mos_cli_list_volume_cell("", "/Volumes/disk4s1", c, sizeof c);
+    EXPECT_STREQ("/Volumes/disk4s1", c);
+    /* Unmounted: nothing — caller renders this as "-". */
+    mos_cli_list_volume_cell("", "", c, sizeof c);
+    EXPECT_STREQ("", c);
+    /* NULLs are treated as empty (defensive; populate_row always fills). */
+    mos_cli_list_volume_cell(NULL, NULL, c, sizeof c);
+    EXPECT_STREQ("", c);
+    return 0;
+}
+
 TEST(human_table_no_trailing_whitespace_any_line)
 {
     static const char *const headers[] = { "Index", "State" };
@@ -182,6 +206,7 @@ void register_human_tests(void)
     RUN(human_block_empty_or_open_sense_and_dashes);
     RUN(human_block_error_evidence_cluster);
     RUN(human_table_list_golden);
+    RUN(list_volume_cell_folds_name_and_path);
     RUN(human_table_no_trailing_whitespace_any_line);
     RUN(human_bsd_dev_node_contract);
 }
