@@ -471,9 +471,14 @@ jobs:
     # macOS adapter TUs compiled with stricter -Werror flags than the
     # default CMake mos_warnings interface. As of v0.4.0-dev the list
     # is: src/mos_scsi.c, src/mos_watch.c, src/mos_state.c, src/mos_dr.c, src/mos_da.c,
-    # and the cli/ sources (cli/probe.c compiled with -DMOS_CLI_PROBE,
-    # the ON preprocessor path; the OFF path is compiled by the
-    # build-and-test job's MOS_CLI_PROBE=OFF leg).
+    # and the ADAPTER-FACING cli/ sources (cli/probe.c compiled with
+    # -DMOS_CLI_PROBE, the ON preprocessor path; the OFF path is compiled
+    # by the build-and-test job's MOS_CLI_PROBE=OFF leg). The pure-API
+    # CLI verbs (cli/metadata.c, cli/drive.c, cli/features.c) are
+    # deliberately NOT here: they reach the adapter only through the
+    # public mos.h API and contain no Apple SDK types, so this leg's
+    # SDK-signature -Werror classes cannot fire in them; they build under
+    # the default -Wall -Wextra in the build-and-test job.
     # The extra
     # flags target classes of bug that Linux CI can never see because
     # they involve Apple SDK signatures:

@@ -377,9 +377,15 @@ uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i);
  * above. One synchronous DiskArbitration description read; no
  * callbacks, no commands to the drive, no elevation. Gated on the
  * whole-disk IOMedia node existing: media absent or no nub means DA is
- * never consulted and *mounted is false. UNMOUNTED IS NOT AN ERROR —
- * it is the common case for UDF video discs — so the result is MOS_OK
- * with *mounted=false and empty buffers; only a NULL handle returns
+ * never consulted and *mounted is false. That nub is the handle's
+ * OPEN-TIME bsd_unit (same open-time-capture semantics as
+ * mos_state_result_bsd_unit above), NOT refreshed per query — so a
+ * handle opened on an empty drive reports unmounted for its whole life
+ * even after media is inserted and a later query returns READY. Re-open
+ * the handle (or use the watch API) for a freshly-inserted disc's
+ * volume. UNMOUNTED IS NOT AN ERROR — it is also the common case for
+ * UDF video discs — so the result is MOS_OK with *mounted=false and
+ * empty buffers; only a NULL handle returns
  * MOS_ERR_INVALID_ARG. Buffers are optional (NULL/0 skips that field)
  * and always NUL-terminated; name may be "" even when mounted (a
  * volume can lack a label). Recommended caps: name 256, path 1024 —
