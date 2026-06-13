@@ -577,3 +577,34 @@ single-purpose M-DISC flag.
 - Fixture path: a real READ DISC STRUCTURE DI capture (or a reversed
   verbatim log) becomes the committed fixture; the BD DI offsets are
   the parse target.
+
+## READ DISC STRUCTURE shipped — disc_structure identity (2026-06-13)
+
+Implemented the M-DISC resolution above as a general field, per the
+"surface everything the command returns" steer (not tunnel-visioned on
+the M-DISC angle). `mos_query_disc_id` issues READ DISC STRUCTURE via
+the Apple `ReadDiscStructure` convenience method (SDK-verified
+signature: MEDIA_TYPE/ADDRESS/LAYER_NUMBER/FORMAT + buffer; the generic
+MMC-5 wrapper, not the DVD-only `ReadDVDStructure`), BD media type,
+format 0x00 (Disc Information). The pure decoder (mos_discstruct.c)
+extracts the four confirmed ASCII/enumerable DI fields — Disc Type
+Identifier (offset 8: BDR/BDW/BDO), Disc Manufacturer ID (100), Media
+Type ID (106), Product Revision (111) — and deliberately skips the
+physical write-parameter region (11..99), whose sub-field packing was
+not multiply-confirmed.
+
+Security posture (the device controls both length and bytes): the
+identity fields are read at CONSTANT offsets inside the FIRST DI unit
+only — no walking a device-controlled chain, so no payload value ever
+becomes a read offset; the one device length (Disc Structure Data
+Length) can only SHRINK the trusted region via the dual-length clamp;
+no payload byte is dereferenced as a pointer; and the adapter uses a
+single fixed zero-init buffer (no two-phase read-the-length-then-
+reallocate). Gated by 3M-iteration exact-allocation ASan/UBSan fuzzing
+(fuzz_pure phase 8) plus inline hostile-buffer tests.
+
+Surfaced in mos.metadata.v1 as a nullable `disc_structure` sub-object
+(mirrors disc_info), gated on a BD profile in the verb. Classification
+stays consumer-side (MILLEN => M-DISC), per the doctrine. DVD-side
+manufacturer ID (formats 0x0E/0x11, scattered offsets, no clean
+MILLEN/MR1 pair) remains deferred until a real M-DISC DVD capture.

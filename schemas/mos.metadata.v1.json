@@ -45,7 +45,8 @@
         "class",
         "toc",
         "disc_info",
-        "volume_name"
+        "volume_name",
+        "disc_structure"
       ],
       "additionalProperties": false,
       "properties": {
@@ -176,6 +177,50 @@
               "type": "integer",
               "minimum": 0,
               "description": "Last track number in the last session \u2014 the track count under MMC's from-1 numbering."
+            }
+          }
+        },
+        "disc_structure": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Disc identity from the Blu-ray Disc Information (DI) structure, read via READ DISC STRUCTURE (0xAD, BD media type, format 0x00) through the ReadDiscStructure convenience method; null for non-BD media (the DI is Blu-ray-only) or when the drive did not return a DI. These are the REGISTERED manufacturer/media-code fields a drive reads to choose its write strategy. mos surfaces them faithfully and does NOT classify: e.g. manufacturer_id 'MILLEN' + media_type_id 'MR1' is Millenniata M-DISC BD, but the MILLEN->M-DISC mapping is the consumer's (same division as MusicBrainz ids). Fields are disc-controlled ASCII, fixed-width with trailing spaces stripped; required-and-nullable (a field empty on the disc reads null).",
+          "required": [
+            "disc_type",
+            "manufacturer_id",
+            "media_type_id",
+            "revision"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "disc_type": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Disc Type Identifier (DI offset 8): 'BDR' (BD-R), 'BDW' (BD-RE), 'BDO' (BD-ROM) \u2014 the recordable class read from the disc's own structure, independent of the MMC profile."
+            },
+            "manufacturer_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Disc Manufacturer ID (DI offset 100, 6 bytes) \u2014 the registered mastering/recording manufacturer, e.g. 'MILLEN', 'CMCMAG', 'VERBAT', 'RITEK'."
+            },
+            "media_type_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Media Type ID (DI offset 106, 3 bytes), e.g. 'MR1', 'CN2'."
+            },
+            "revision": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Product Revision Number (DI offset 111, 1 byte), e.g. '0'."
             }
           }
         },

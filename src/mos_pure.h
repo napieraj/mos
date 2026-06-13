@@ -293,6 +293,36 @@ struct mos_disc_info {
 bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
                                   mos_disc_info *out);
 
+/* ---- READ DISC STRUCTURE / BD Disc Information decode (mos_discstruct.c) -- *
+ *
+ * The disc's REGISTERED identity from a Blu-ray Disc Information (DI)
+ * reply (READ DISC STRUCTURE 0xAD, BD media type, format 0x00): the
+ * Disc Manufacturer ID, Media Type ID, and Product Revision. Fixed-
+ * width ASCII fields read at CONSTANT offsets inside the first DI unit;
+ * no device-supplied value is ever used as an offset or length (the
+ * only device length, the structure-data-length header, can only shrink
+ * the trusted region), and no payload byte is dereferenced — bytes are
+ * copied verbatim into these fixed buffers and the CLI layer escapes
+ * them, same as INQUIRY identity. Classification (e.g. manufacturer
+ * "MILLEN" => M-DISC) is the consumer's, not mos's. Strings are NUL-
+ * terminated with fixed-width space padding stripped; "" when the DI is
+ * absent. New fields append at the END (ABI-safe; accessors are the
+ * contract). */
+struct mos_disc_id {
+    char disc_type[4];      /* DI+8,   3 bytes + NUL: "BDR"/"BDW"/"BDO" */
+    char manufacturer[7];   /* DI+100, 6 bytes + NUL */
+    char media_type[4];     /* DI+106, 3 bytes + NUL */
+    char revision[2];       /* DI+111, 1 byte  + NUL */
+};
+
+/* Parse a BD DI reply into *out. True only when the 'DI' signature is
+ * present AND the trusted region (min of `len` and the reply's declared
+ * length) reaches the product-revision byte; false (and *out emptied)
+ * otherwise. Pure, fixed-offset, no-OOB — fuzz/ASan-gated by
+ * tests/fuzz_pure.c and tests/test_discstruct.c. */
+bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
+                                   struct mos_disc_id *out);
+
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
  * True for the four SAM-5 status values that mean "drive contended,

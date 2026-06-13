@@ -58,6 +58,9 @@ struct mos_handle {
 
     /* Handle-owned drive-caps result (mos_query_drive_caps). Same terms. */
     struct mos_drive_caps     caps;
+
+    /* Handle-owned disc-id result (mos_query_disc_id). Same terms. */
+    struct mos_disc_id        disc_id;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on

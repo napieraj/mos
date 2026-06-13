@@ -29,7 +29,7 @@ if(NOT APPLE)
     # SCSITaskLib and MMCDeviceInterface, which have no equivalent on
     # Linux or Windows. However, the pure layer (mos_pure.c,
     # mos_sense.c, mos_strings.c, mos_state_core.c, mos_watch_core.c,
-    # mos_config.c, mos_discinfo.c, mos_result.c in src/) is C with no
+    # mos_config.c, mos_discinfo.c, mos_discstruct.c, mos_result.c in src/) is C with no
     # Apple framework dependencies, and
     # the unit test suite (tests/test_*.c) links only against the pure
     # layer. Both build cleanly on Linux and serve as a developer
@@ -145,6 +145,7 @@ add_library(mos_pure STATIC
     src/mos_watch_core.c
     src/mos_config.c
     src/mos_discinfo.c
+    src/mos_discstruct.c
     src/mos_result.c
 )
 
@@ -287,6 +288,7 @@ if(MOS_BUILD_TESTS)
         tests/test_human.c
         tests/test_config.c
         tests/test_discinfo.c
+        tests/test_discstruct.c
         tests/test_result.c
     )
     # Tests link against mos_pure only — by design (plus cli/human.c,

@@ -1,19 +1,18 @@
 {
   "schema": "mos.metadata.v1",
   "bsd": "/dev/disk4",
-  "captured_at": "2026-06-12T19:48:00.123Z",
+  "captured_at": "2026-06-13T02:50:00.000Z",
   "volume_path": null,
   "disc": {
     "profile": "0x0041",
     "class": "bd",
     "toc": null,
-    "disc_info": {
-      "status": "blank",
-      "erasable": false,
-      "sessions": 1,
-      "tracks": 1
+    "disc_info": null,
+    "disc_structure": {
+      "disc_type": "BDR",
+      "manufacturer_id": "MILLEN",
+      "media_type_id": "MR1"
     },
-    "disc_structure": null,
     "volume_name": null
   }
 }

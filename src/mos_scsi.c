@@ -735,6 +735,48 @@ mos_error mos_enumerate_features(mos_handle_t *h,
     return MOS_OK;
 }
 
+mos_error mos_query_disc_id(mos_handle_t *h, const mos_disc_id **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* One-shot read of the full BD Disc Information into a fixed,
+       zero-init buffer (BD DI maxes ~3588 bytes; 4096 covers it). We
+       deliberately do NOT do dvd+rw-mediainfo's two-phase
+       read-the-length-then-reallocate dance: a single fixed buffer
+       means no device-reported length ever drives an allocation or a
+       second transfer. sizeof buf is the trusted length handed to the
+       pure decoder (O-4); the reply's own Disc Structure Data Length
+       can only SHRINK the parse, never extend it, and an under-filled
+       reply leaves zeros that fail the 'DI' gate. MEDIA_TYPE=1 (BD),
+       FORMAT=0x00 (Disc Information), ADDRESS/LAYER 0. Non-exclusive
+       convenience call: no lock. */
+    uint8_t         buf[4096] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x01,             /* MEDIA_TYPE = Blu-ray            */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x00,             /* FORMAT = Disc Information (DI)    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_bd_disc_id_parse(buf, sizeof(buf), &h->disc_id)) {
+        return MOS_ERR_IO;   /* not a DI reply (non-BD, or refused) */
+    }
+    *out = &h->disc_id;
+    return MOS_OK;
+}
+
 /* Open-time directory identity, exposed for the drive verb: zero
    commands, same borrowed-string terms as the state result's copies
    (which point into these same buffers). */

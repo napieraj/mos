@@ -199,3 +199,19 @@ spec-mandated synthesis, not tool-side invention). The lead-out at
 11826176 equals the disc's formatted capacity, not a written extent —
 live corroboration of the overwritable-media lead-out wrinkle in the
 mos.metadata.v1 leadout_lba prose.
+
+### `readdiscstruct_bd_di_mdisc.bin` (116 bytes)
+Blu-ray Disc Information (DI) structure for an M-DISC BD-R — READ DISC
+STRUCTURE (0xAD), BD media type, format 0x00. A spec-shaped single DI
+unit carrying the values attested by the xorriso M-DISC capture
+(cdwrite list msg14517, "Media product: MILLEN/MR1/0"): Disc Type
+Identifier "BDR" at DI offset 8, Disc Manufacturer ID "MILLEN" at 100,
+Media Type ID "MR1" at 106, Product Revision '0' at 111. Offsets
+cross-verified across dvd+rw-mediainfo.cpp (di+4+100/+106), dvdisaster
+scsi-layer.c (buf[4+8] disc-type, 100/106), and libburn mmc.c
+(mmc_set_product_id 100/106/111). The physical write-parameter region
+(DI offsets 11..99) is zeroed and deliberately not decoded. Consumed by
+`test_discstruct.c :: discstruct_decodes_mdisc_bd_r`; the hostile-length
+and non-DI cases are inline in that file, and the fixed-offset/
+dual-length no-OOB property is fuzz/ASan-gated (tests/fuzz_pure.c
+phase 8, MILLEN-shaped and wild buffers, exact-size allocations).

@@ -445,6 +445,46 @@ TEST(adapter_feature_enumeration_order_and_stop)
     return 0;
 }
 
+TEST(adapter_disc_id_decodes_and_fails_closed)
+{
+    /* One-DI-unit BD reply: disc type BDR, MILLEN/MR1, rev 0. */
+    static const uint8_t di[116] = {
+        0x00, 114, 0x00, 0x00,  'D','I', 0x00,0x00,
+        [12]='B',[13]='D',[14]='R',
+        [104]='M',[105]='I',[106]='L',[107]='L',[108]='E',[109]='N',
+        [110]='M',[111]='R',[112]='1',
+        [115]='0',
+    };
+    mos_fake_reset();
+    mos_fake_set_disc_structure_reply(0x00, di, sizeof di);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    const mos_disc_id *id = NULL;
+    EXPECT_EQ(MOS_OK, mos_query_disc_id(h, &id));
+    EXPECT(strcmp(mos_disc_id_disc_type(id), "BDR") == 0);
+    EXPECT(strcmp(mos_disc_id_manufacturer(id), "MILLEN") == 0);
+    EXPECT(strcmp(mos_disc_id_media_type(id), "MR1") == 0);
+    EXPECT(strcmp(mos_disc_id_revision(id), "0") == 0);
+
+    /* Non-BD media (or any reply without a 'DI' structure): GOOD status
+       but the decode refuses -> MOS_ERR_IO, *out NULL. */
+    static const uint8_t notdi[116] = { 0x00, 114, 0,0, 'X','X' };
+    mos_fake_set_disc_structure_reply(0x00, notdi, sizeof notdi);
+    EXPECT_EQ(MOS_ERR_IO, mos_query_disc_id(h, &id));
+    EXPECT(id == NULL);
+
+    /* Transport injection maps the IOReturn. */
+    mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_READDISCSTRUCT, 0xE00002D6u);
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_query_disc_id(h, &id));
+
+    EXPECT_EQ(MOS_ERR_INVALID_ARG, mos_query_disc_id(h, NULL));
+    mos_close(h);
+    return 0;
+}
+
 int main(void)
 {
     printf("adapter one-shot (headless, link-seam fake):\n");
@@ -459,6 +499,7 @@ int main(void)
     RUN(adapter_da_volume_lookup_modalities);
     RUN(adapter_query_volume_gates_on_nub);
     RUN(adapter_drive_caps_roundtrip_and_absent);
+    RUN(adapter_disc_id_decodes_and_fails_closed);
     RUN(adapter_feature_enumeration_order_and_stop);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);

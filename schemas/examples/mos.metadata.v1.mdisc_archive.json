@@ -7,12 +7,31 @@
     "profile": "0x0041",
     "class": "bd",
     "toc": {
-      "first_track": 1, "last_track": 1, "leadout_lba": 11826176,
+      "first_track": 1,
+      "last_track": 1,
+      "leadout_lba": 11826176,
       "tracks": [
-        {"track": 1, "adr": 1, "control": 4, "data": true, "start_lba": 0}
+        {
+          "track": 1,
+          "adr": 1,
+          "control": 4,
+          "data": true,
+          "start_lba": 0
+        }
       ]
     },
-    "disc_info": {"status": "complete", "erasable": false, "sessions": 1, "tracks": 1},
+    "disc_info": {
+      "status": "complete",
+      "erasable": false,
+      "sessions": 1,
+      "tracks": 1
+    },
+    "disc_structure": {
+      "disc_type": "BDR",
+      "manufacturer_id": "MILLEN",
+      "media_type_id": "MR1",
+      "revision": "0"
+    },
     "volume_name": "FAMILY_ARCHIVE_2026"
   }
 }

@@ -257,3 +257,28 @@ uint8_t mos_feature_info_version(const mos_feature_info_t *f)
 {
     return f ? f->version : 0;
 }
+
+/* ---- mos_disc_id accessors (mos_query_disc_id) ---------------------- *
+ * Borrowed strings into the handle-owned result; "" reads as NULL so the
+ * emitters suppress empty fields uniformly. Disc-controlled bytes — the
+ * CLI layer escapes them. */
+
+const char *mos_disc_id_disc_type(const mos_disc_id *d)
+{
+    return (d && d->disc_type[0]) ? d->disc_type : NULL;
+}
+
+const char *mos_disc_id_manufacturer(const mos_disc_id *d)
+{
+    return (d && d->manufacturer[0]) ? d->manufacturer : NULL;
+}
+
+const char *mos_disc_id_media_type(const mos_disc_id *d)
+{
+    return (d && d->media_type[0]) ? d->media_type : NULL;
+}
+
+const char *mos_disc_id_revision(const mos_disc_id *d)
+{
+    return (d && d->revision[0]) ? d->revision : NULL;
+}

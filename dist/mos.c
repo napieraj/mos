@@ -366,6 +366,36 @@ struct mos_disc_info {
 bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
                                   mos_disc_info *out);
 
+/* ---- READ DISC STRUCTURE / BD Disc Information decode (mos_discstruct.c) -- *
+ *
+ * The disc's REGISTERED identity from a Blu-ray Disc Information (DI)
+ * reply (READ DISC STRUCTURE 0xAD, BD media type, format 0x00): the
+ * Disc Manufacturer ID, Media Type ID, and Product Revision. Fixed-
+ * width ASCII fields read at CONSTANT offsets inside the first DI unit;
+ * no device-supplied value is ever used as an offset or length (the
+ * only device length, the structure-data-length header, can only shrink
+ * the trusted region), and no payload byte is dereferenced — bytes are
+ * copied verbatim into these fixed buffers and the CLI layer escapes
+ * them, same as INQUIRY identity. Classification (e.g. manufacturer
+ * "MILLEN" => M-DISC) is the consumer's, not mos's. Strings are NUL-
+ * terminated with fixed-width space padding stripped; "" when the DI is
+ * absent. New fields append at the END (ABI-safe; accessors are the
+ * contract). */
+struct mos_disc_id {
+    char disc_type[4];      /* DI+8,   3 bytes + NUL: "BDR"/"BDW"/"BDO" */
+    char manufacturer[7];   /* DI+100, 6 bytes + NUL */
+    char media_type[4];     /* DI+106, 3 bytes + NUL */
+    char revision[2];       /* DI+111, 1 byte  + NUL */
+};
+
+/* Parse a BD DI reply into *out. True only when the 'DI' signature is
+ * present AND the trusted region (min of `len` and the reply's declared
+ * length) reaches the product-revision byte; false (and *out emptied)
+ * otherwise. Pure, fixed-offset, no-OOB — fuzz/ASan-gated by
+ * tests/fuzz_pure.c and tests/test_discstruct.c. */
+bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
+                                   struct mos_disc_id *out);
+
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
  * True for the four SAM-5 status values that mean "drive contended,
@@ -697,6 +727,9 @@ struct mos_handle {
 
     /* Handle-owned drive-caps result (mos_query_drive_caps). Same terms. */
     struct mos_drive_caps     caps;
+
+    /* Handle-owned disc-id result (mos_query_disc_id). Same terms. */
+    struct mos_disc_id        disc_id;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
@@ -1421,6 +1454,95 @@ bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
     out->last_track_last_session  = (uint16_t)(((uint16_t)buf[11] << 8) | buf[6]);
     return true;
 }
+/* ==== src/mos_discstruct.c ==== */
+/*
+ * mos_discstruct.c — pure, bounds-safe decode of a READ DISC STRUCTURE
+ * (MMC-5 0xAD) Blu-ray Disc Information (DI) reply: the disc's
+ * registered Disc Manufacturer ID + Media Type ID.
+ *
+ * No IOKit. The IOKit shell issues READ DISC STRUCTURE (BD media type,
+ * format 0x00) via the ReadDiscStructure convenience method into a
+ * fixed, zero-initialized buffer and hands that buffer plus its size
+ * here. Every length and string byte is device/disc-reported and
+ * therefore hostile; this file keeps the declared length from steering
+ * a read outside [buf, buf+len), and copies the ID bytes verbatim into
+ * fixed buffers (the CLI layer escapes them at emit, same as INQUIRY).
+ *
+ * Layout (response buffer):
+ *   [0..1] Disc Structure Data Length (BE) — bytes available AFTER this
+ *          field; the response occupies 2 + value bytes.
+ *   [2..3] reserved
+ *   [4..]  the Disc Information (DI), a sequence of 112-byte DI units.
+ *          The first unit carries the identity:
+ *            [4+0..1]   "DI" signature
+ *            [4+8..10]  Disc Type Identifier (3 bytes) "BDR"/"BDW"/"BDO"
+ *            [4+100..105] Disc Manufacturer ID (6 bytes)  e.g. "MILLEN"
+ *            [4+106..108] Media Type ID        (3 bytes)  e.g. "MR1"
+ *            [4+111]      Product Revision Number (1 byte) e.g. '0'
+ *
+ * The DI offsets (8 / 100 / 106 / 111) are MMC-5 / BDA-registered and
+ * were cross-verified against dvd+rw-mediainfo.cpp (di+4+100, di+4+106),
+ * dvdisaster scsi-layer.c (buf[4+8] disc-type, 100/106), and libburn
+ * mmc.c (mmc_set_product_id 100, 106, 111). The physical write-parameter
+ * region (offsets 11..99) is deliberately NOT decoded — no consumer
+ * value, and its sub-field packing is not multiply-confirmed. For
+ * Millenniata
+ * M-DISC BD-R the registered values are manufacturer "MILLEN", media
+ * type "MR1" — but classification (MILLEN => M-DISC) is the CONSUMER's,
+ * not mos's: this decode surfaces the registered ID bytes faithfully
+ * and stops there (scope doctrine; same division as MusicBrainz ids).
+ *
+ * No-OOB property gated headless under ASan/UBSan by
+ * tests/test_discstruct.c.
+ */
+
+
+#define DI_HDR       4u                  /* 2-byte length + 2 reserved   */
+#define DI_SIG_HI    (DI_HDR + 0u)       /* 'D'                          */
+#define DI_SIG_LO    (DI_HDR + 1u)       /* 'I'                          */
+#define DI_DISCTYPE  (DI_HDR + 8u)       /* 3 bytes: BDR/BDW/BDO         */
+#define DI_MANUF     (DI_HDR + 100u)     /* 6 bytes                      */
+#define DI_MEDIA     (DI_HDR + 106u)     /* 3 bytes                      */
+#define DI_REVISION  (DI_HDR + 111u)     /* 1 byte                       */
+#define DI_MIN_LEN   (DI_REVISION + 1u)  /* must reach the revision byte */
+
+/* Copy a fixed-width DI field verbatim, NUL-terminate, then strip
+   trailing spaces (the field is space-padded — same convention as the
+   INQUIRY identity copies). `dst` holds n+1 bytes. */
+static void mos_internal_di_copy(const uint8_t *src, size_t n, char *dst)
+{
+    size_t i;
+    for (i = 0; i < n; i++) dst[i] = (char)src[i];
+    dst[i] = '\0';
+    while (i > 0 && dst[i - 1] == ' ') dst[--i] = '\0';
+}
+
+bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
+                                   struct mos_disc_id *out)
+{
+    if (!out) return false;
+    *out = (struct mos_disc_id){0};
+    if (!buf) return false;
+
+    /* Need the fixed identity region present per BOTH the buffer and the
+       reply's own declared length. Declared length only ever shrinks the
+       trusted region (computed wide so the +2 cannot wrap). */
+    if (len < DI_MIN_LEN) return false;
+    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    size_t end = (len < declared) ? len : declared;
+    if (end < DI_MIN_LEN) return false;
+
+    /* The DI signature gates the whole decode: a reply that is not a DI
+       structure (wrong media type, drive returned something else) is
+       refused rather than read as identity. */
+    if (buf[DI_SIG_HI] != 'D' || buf[DI_SIG_LO] != 'I') return false;
+
+    mos_internal_di_copy(&buf[DI_DISCTYPE], 3, out->disc_type);
+    mos_internal_di_copy(&buf[DI_MANUF],    6, out->manufacturer);
+    mos_internal_di_copy(&buf[DI_MEDIA],    3, out->media_type);
+    mos_internal_di_copy(&buf[DI_REVISION], 1, out->revision);
+    return true;
+}
 
 /* ==== src/mos_result.c ==== */
 /*
@@ -1680,6 +1802,31 @@ bool mos_feature_info_persistent(const mos_feature_info_t *f)
 uint8_t mos_feature_info_version(const mos_feature_info_t *f)
 {
     return f ? f->version : 0;
+}
+
+/* ---- mos_disc_id accessors (mos_query_disc_id) ---------------------- *
+ * Borrowed strings into the handle-owned result; "" reads as NULL so the
+ * emitters suppress empty fields uniformly. Disc-controlled bytes — the
+ * CLI layer escapes them. */
+
+const char *mos_disc_id_disc_type(const mos_disc_id *d)
+{
+    return (d && d->disc_type[0]) ? d->disc_type : NULL;
+}
+
+const char *mos_disc_id_manufacturer(const mos_disc_id *d)
+{
+    return (d && d->manufacturer[0]) ? d->manufacturer : NULL;
+}
+
+const char *mos_disc_id_media_type(const mos_disc_id *d)
+{
+    return (d && d->media_type[0]) ? d->media_type : NULL;
+}
+
+const char *mos_disc_id_revision(const mos_disc_id *d)
+{
+    return (d && d->revision[0]) ? d->revision : NULL;
 }
 
 /* ==== src/mos_state_core.c ==== */
@@ -4850,6 +4997,48 @@ mos_error mos_enumerate_features(mos_handle_t *h,
         };
         if (!cb(&info, ctx)) break;     /* caller stop, not an error */
     }
+    return MOS_OK;
+}
+
+mos_error mos_query_disc_id(mos_handle_t *h, const mos_disc_id **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* One-shot read of the full BD Disc Information into a fixed,
+       zero-init buffer (BD DI maxes ~3588 bytes; 4096 covers it). We
+       deliberately do NOT do dvd+rw-mediainfo's two-phase
+       read-the-length-then-reallocate dance: a single fixed buffer
+       means no device-reported length ever drives an allocation or a
+       second transfer. sizeof buf is the trusted length handed to the
+       pure decoder (O-4); the reply's own Disc Structure Data Length
+       can only SHRINK the parse, never extend it, and an under-filled
+       reply leaves zeros that fail the 'DI' gate. MEDIA_TYPE=1 (BD),
+       FORMAT=0x00 (Disc Information), ADDRESS/LAYER 0. Non-exclusive
+       convenience call: no lock. */
+    uint8_t         buf[4096] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x01,             /* MEDIA_TYPE = Blu-ray            */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x00,             /* FORMAT = Disc Information (DI)    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_bd_disc_id_parse(buf, sizeof(buf), &h->disc_id)) {
+        return MOS_ERR_IO;   /* not a DI reply (non-BD, or refused) */
+    }
+    *out = &h->disc_id;
     return MOS_OK;
 }
 

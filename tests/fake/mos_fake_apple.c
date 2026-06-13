@@ -79,12 +79,13 @@ static struct {
     uint32_t cfg_status;        uint8_t cfg[64];  size_t cfg_len;
     uint32_t rdi_status;        uint8_t rdi[64];  size_t rdi_len;
     uint32_t toc_status;        uint8_t toc[804]; size_t toc_len;
+    uint32_t ds_status;         uint8_t ds[4096]; size_t ds_len;
     bool     da_present;        /* DADiskCopyDescription returns a dict   */
     char     da_name[256];      /* VolumeName; "" = key absent            */
     char     da_path[1024];     /* VolumePath; "" = key absent (unmounted)*/
 
     /* Raw-CDB script (the GESN tray probe path). */
-    uint32_t method_rc[5];      /* per-method IOReturn injection (N2);
+    uint32_t method_rc[6];      /* per-method IOReturn injection (N2);
                                    indexed by mos_fake_method, 0 = success */
     bool     plugin_fail;
     bool     exclusive_denied;
@@ -174,6 +175,14 @@ void mos_fake_set_toc_reply(uint32_t task_status,
     if (bytes && g.toc_len) memcpy(g.toc, bytes, g.toc_len);
 }
 
+void mos_fake_set_disc_structure_reply(uint32_t task_status,
+                                       const uint8_t *bytes, size_t len)
+{
+    g.ds_status = task_status;
+    g.ds_len = (len > sizeof g.ds) ? sizeof g.ds : len;
+    if (bytes && g.ds_len) memcpy(g.ds, bytes, g.ds_len);
+}
+
 void mos_fake_set_da_volume(const char *name, const char *path)
 {
     g.da_present = true;
@@ -202,7 +211,7 @@ void mos_fake_set_plugin_fail(bool fail) { g.plugin_fail = fail; }
 
 void mos_fake_set_method_ioreturn(mos_fake_method m, uint32_t io_return)
 {
-    if ((unsigned)m < 5u) g.method_rc[m] = io_return;
+    if ((unsigned)m < 6u) g.method_rc[m] = io_return;
 }
 
 size_t mos_fake_last_cdb(uint8_t out[16])
@@ -342,6 +351,14 @@ static IOReturn mmc_ReadTableOfContents(void *self, SCSICmdField1Bit MSF,
                                         SCSICmdField2Byte bufferSize,
                                         SCSITaskStatus *taskStatus,
                                         SCSI_Sense_Data *senseDataBuffer);
+static IOReturn mmc_ReadDiscStructure(void *self, SCSICmdField4Bit MEDIA_TYPE,
+                                      SCSICmdField4Byte ADDRESS,
+                                      SCSICmdField1Byte LAYER_NUMBER,
+                                      SCSICmdField1Byte FORMAT,
+                                      void *buffer,
+                                      SCSICmdField2Byte bufferSize,
+                                      SCSITaskStatus *taskStatus,
+                                      SCSI_Sense_Data *senseDataBuffer);
 static SCSITaskDeviceInterface **mmc_GetSCSITaskDeviceInterface(void *self);
 
 static IOReturn std_ObtainExclusiveAccess(void *self);
@@ -385,6 +402,7 @@ static void ensure_vtbls(void)
     g_mmc_vtbl.GetConfiguration          = mmc_GetConfiguration;
     g_mmc_vtbl.ReadDiscInformation       = mmc_ReadDiscInformation;
     g_mmc_vtbl.ReadTableOfContents       = mmc_ReadTableOfContents;
+    g_mmc_vtbl.ReadDiscStructure         = mmc_ReadDiscStructure;
     g_mmc_vtbl.GetSCSITaskDeviceInterface = mmc_GetSCSITaskDeviceInterface;
 
     g_std_vtbl.AddRef                 = com_AddRef;
@@ -501,6 +519,29 @@ static IOReturn mmc_ReadTableOfContents(void *self, SCSICmdField1Bit MSF,
         if (n) memcpy(buffer, g.toc, n);
     }
     if (taskStatus) *taskStatus = (SCSITaskStatus)g.toc_status;
+    return kIOReturnSuccess;
+}
+
+static IOReturn mmc_ReadDiscStructure(void *self, SCSICmdField4Bit MEDIA_TYPE,
+                                      SCSICmdField4Byte ADDRESS,
+                                      SCSICmdField1Byte LAYER_NUMBER,
+                                      SCSICmdField1Byte FORMAT,
+                                      void *buffer,
+                                      SCSICmdField2Byte bufferSize,
+                                      SCSITaskStatus *taskStatus,
+                                      SCSI_Sense_Data *senseDataBuffer)
+{
+    (void)self; (void)MEDIA_TYPE; (void)ADDRESS; (void)LAYER_NUMBER;
+    (void)FORMAT; (void)senseDataBuffer;
+    if (g.method_rc[MOS_FAKE_METHOD_READDISCSTRUCT]) {
+        return (IOReturn)g.method_rc[MOS_FAKE_METHOD_READDISCSTRUCT];
+    }
+    if (buffer && bufferSize) {
+        size_t n = (g.ds_len < (size_t)bufferSize) ? g.ds_len : (size_t)bufferSize;
+        memset(buffer, 0, bufferSize);
+        if (n) memcpy(buffer, g.ds, n);
+    }
+    if (taskStatus) *taskStatus = (SCSITaskStatus)g.ds_status;
     return kIOReturnSuccess;
 }
 

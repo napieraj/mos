@@ -430,6 +430,37 @@ const char *mos_handle_product(const mos_handle_t *h);
 const char *mos_handle_revision(const mos_handle_t *h);
 uint64_t    mos_handle_registry_id(const mos_handle_t *h);
 
+/* ---- Disc identity from disc structure (v0.4 typed API) -------------- */
+
+/* Result of a disc-structure identity query. Opaque, handle-owned;
+   valid until the next mos_query_disc_id() call or mos_close(). */
+typedef struct mos_disc_id mos_disc_id;
+
+/*
+ * Query the disc's REGISTERED identity from a Blu-ray Disc Information
+ * (DI) structure: READ DISC STRUCTURE (BD media type, format 0x00)
+ * through the non-exclusive ReadDiscStructure convenience method. This
+ * is the manufacturer/media-code data a drive reads to pick its write
+ * strategy — including, for Millenniata M-DISC BD, the registered
+ * manufacturer "MILLEN" / media type "MR1". BD-ONLY: the DI structure
+ * is Blu-ray; on CD/DVD media this returns MOS_ERR_IO (no DI), so
+ * callers gate on a BD profile. mos surfaces the registered ID bytes
+ * faithfully and does NOT classify them (MILLEN => M-DISC is the
+ * consumer's call, same division as MusicBrainz ids). `out` REQUIRED
+ * (NULL => MOS_ERR_INVALID_ARG); on success *out is valid until the
+ * next query or mos_close().
+ */
+mos_error mos_query_disc_id(mos_handle_t *h, const mos_disc_id **out);
+
+/* Accessors. NULL/absent reads as NULL. All four are disc-controlled
+   ASCII (fixed-width, trailing spaces stripped); escape before display.
+   disc_type is "BDR" (BD-R) / "BDW" (BD-RE) / "BDO" (BD-ROM) read from
+   the disc's own structure, independent of the MMC profile. */
+const char *mos_disc_id_disc_type(const mos_disc_id *d);
+const char *mos_disc_id_manufacturer(const mos_disc_id *d);
+const char *mos_disc_id_media_type(const mos_disc_id *d);
+const char *mos_disc_id_revision(const mos_disc_id *d);
+
 /* ---- Feature enumeration (v0.4 typed API) ----------------------------- */
 
 /* One MMC feature descriptor's header facts. Opaque; valid only inside

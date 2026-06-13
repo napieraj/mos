@@ -40,6 +40,7 @@ typedef struct {
     uint16_t             profile;        /* 0x0000 = none (suppressed)  */
     const mos_disc_info *di;             /* NULL = unavailable          */
     const mos_toc       *toc;            /* NULL = unavailable          */
+    const mos_disc_id   *did;            /* NULL = non-BD or unavailable  */
     bool                 mounted;
     char                 volume_name[256];
     char                 volume_path[1024];
@@ -111,6 +112,25 @@ static void emit_json(const metadata_doc *d)
         fputs("null", stdout);
     }
 
+    fputs(",\n    \"disc_structure\": ", stdout);
+    if (d->did) {
+        const char *dt = mos_disc_id_disc_type(d->did);
+        const char *mf = mos_disc_id_manufacturer(d->did);
+        const char *mt = mos_disc_id_media_type(d->did);
+        const char *rv = mos_disc_id_revision(d->did);
+        fputs("{\n      \"disc_type\": ", stdout);
+        if (dt) mos_cli_json_str(stdout, dt); else fputs("null", stdout);
+        fputs(",\n      \"manufacturer_id\": ", stdout);
+        if (mf) mos_cli_json_str(stdout, mf); else fputs("null", stdout);
+        fputs(",\n      \"media_type_id\": ", stdout);
+        if (mt) mos_cli_json_str(stdout, mt); else fputs("null", stdout);
+        fputs(",\n      \"revision\": ", stdout);
+        if (rv) mos_cli_json_str(stdout, rv); else fputs("null", stdout);
+        fputs("\n    }", stdout);
+    } else {
+        fputs("null", stdout);
+    }
+
     fputs(",\n    \"volume_name\": ", stdout);
     if (d->mounted && d->volume_name[0])
         mos_cli_json_str(stdout, d->volume_name);
@@ -175,6 +195,25 @@ static void emit_human(const metadata_doc *d)
                  mos_disc_info_last_track_last_session(d->di) == 1 ? "" : "s");
     }
     pairs[n++] = (mos_cli_human_pair){ "Disc", d->di ? di_buf : NULL };
+
+    /* Media identity from disc structure (BD DI): disc type + the
+       registered manufacturer/media code. Disc-controlled ASCII, so
+       escape before the layout engine prints it verbatim. */
+    char media_buf[64];
+    char media_esc[MOS_CLI_ESC_CAP(64)];
+    media_esc[0] = 0;
+    if (d->did) {
+        const char *dt = mos_disc_id_disc_type(d->did);
+        const char *mf = mos_disc_id_manufacturer(d->did);
+        const char *mt = mos_disc_id_media_type(d->did);
+        const char *rv = mos_disc_id_revision(d->did);
+        snprintf(media_buf, sizeof media_buf, "%s%s%s/%s%s%s",
+                 dt ? dt : "", dt ? "  " : "",
+                 mf ? mf : "?", mt ? mt : "?",
+                 rv ? " rev " : "", rv ? rv : "");
+        (void)mos_safe_ascii(media_buf, media_esc, sizeof media_esc);
+    }
+    pairs[n++] = (mos_cli_human_pair){ "Media", d->did ? media_esc : NULL };
 
     char toc_buf[64];
     if (d->toc) {
@@ -243,6 +282,14 @@ int run_metadata(void)
     if (mos_query_disc_info(h, &di) == MOS_OK) d.di = di;
     const mos_toc *toc = NULL;
     if (mos_query_toc(h, &toc) == MOS_OK) d.toc = toc;
+    /* Disc structure (BD DI) is Blu-ray-only — gate on the profile class
+       so a CD/DVD does not eat a guaranteed-failing command. */
+    const char *pcls = mos_cli_profile_present(d.profile)
+                           ? mos_profile_class(d.profile) : NULL;
+    if (pcls && strcmp(pcls, "bd") == 0) {
+        const mos_disc_id *did = NULL;
+        if (mos_query_disc_id(h, &did) == MOS_OK) d.did = did;
+    }
     (void)mos_query_volume(h, &d.mounted,
                            d.volume_name, sizeof d.volume_name,
                            d.volume_path, sizeof d.volume_path);

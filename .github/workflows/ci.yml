@@ -401,7 +401,7 @@ jobs:
              tests/audit/nub_invariant_check.c \
              src/mos_pure.c src/mos_sense.c src/mos_strings.c \
              src/mos_state_core.c src/mos_watch_core.c \
-             src/mos_config.c src/mos_discinfo.c src/mos_result.c \
+             src/mos_config.c src/mos_discinfo.c src/mos_discstruct.c src/mos_result.c \
              -o /tmp/nub
           MOS_NUB_STATUS_SET=1 /tmp/nub
 
@@ -440,13 +440,13 @@ jobs:
              -I include -I src -I tests \
              src/mos_pure.c src/mos_sense.c src/mos_strings.c \
              src/mos_state_core.c src/mos_watch_core.c \
-             src/mos_config.c src/mos_discinfo.c src/mos_result.c \
+             src/mos_config.c src/mos_discinfo.c src/mos_discstruct.c src/mos_result.c \
              cli/human.c \
              tests/test_main.c tests/test_sense.c tests/test_bsd_name.c \
              tests/test_scsi_status.c tests/test_ioreturn.c \
              tests/test_state_core.c tests/test_watch_core.c \
              tests/test_render.c tests/test_human.c \
-             tests/test_config.c tests/test_discinfo.c tests/test_result.c \
+             tests/test_config.c tests/test_discinfo.c tests/test_discstruct.c tests/test_result.c \
              -o /tmp/strict/mos_tests_strict
           /tmp/strict/mos_tests_strict
 

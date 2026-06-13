@@ -155,6 +155,15 @@ DVD-video, audio-CD ("Audio CD"), and data/archival labels — a
 finalized M-DISC backup mounts like any data volume and is the
 fixture-pinned archival example (`mos.metadata.v1.mdisc_archive`).
 
+For Blu-ray media `disc.disc_structure` adds the disc's REGISTERED
+identity from READ DISC STRUCTURE — disc type (`BDR`/`BDW`/`BDO`),
+manufacturer ID, media-type ID, revision. This names the actual disc
+maker (`CMCMAG`, `VERBAT`, `RITEK`…) and, for Millenniata M-DISC,
+reports manufacturer `MILLEN` / media type `MR1`. mos surfaces the
+registered bytes faithfully; classifying `MILLEN` as M-DISC is the
+consumer's call (same division as the third-party ids). The field is
+null on CD/DVD, where the DI structure does not exist.
+
 ### Drive (static facts)
 
 ```
