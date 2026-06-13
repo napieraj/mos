@@ -244,7 +244,7 @@ int main(int argc, char **argv)
                getopt's view. A missing/flag-shaped action is left NULL and
                diagnosed by mos_cli_run_tray. */
             if (argc >= 3 && argv[2][0] != '-' && argv[2][0] != '\0')
-                tray_action = argv[2];
+                opt_tray_action = argv[2];
         } else if (strcmp(cmd, "probe") == 0) {
 #ifdef MOS_CLI_PROBE
             flag_probe = true;
@@ -293,10 +293,10 @@ int main(int argc, char **argv)
         argc--;
         argv++;
 
-        /* tray's action word now sits at argv[1] (the string tray_action
+        /* tray's action word now sits at argv[1] (the string opt_tray_action
            still points to — only pointers moved). Shift again so getopt
            sees only --force/--persistent and the drive selector. */
-        if (flag_tray && tray_action) {
+        if (flag_tray && opt_tray_action) {
             argv[1] = argv[0];
             argc--;
             argv++;

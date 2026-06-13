@@ -9,6 +9,7 @@
 int         opt_index   = 0;     /* 0 = unset; 1-based when set */
 const char *opt_bsd     = NULL;
 uint64_t    opt_registry = 0;     /* 0 = unset; >= 2^32+256 when set */
+const char *opt_tray_action = NULL; /* tray sub-verb; NULL = missing */
 bool        flag_list   = false;
 bool        flag_json   = false;
 bool        flag_watch  = false;
@@ -16,7 +17,6 @@ bool        flag_metadata = false;
 bool        flag_drive = false;
 bool        flag_features = false;
 bool        flag_tray   = false;  /* tray subcommand (control verbs) */
-const char *tray_action = NULL;   /* eject|close|lock|unlock; NULL = missing */
 bool        flag_force  = false;  /* tray eject --force */
 bool        flag_persistent = false; /* tray lock/unlock --persistent */
 bool        flag_probe  = false;  /* probe subcommand (MOS_CLI_PROBE builds) */

@@ -115,19 +115,19 @@ static void emit_human(const tray_doc *d)
    a misapplied modifier. */
 static bool parse_action(tray_act *act)
 {
-    if (!tray_action) {
+    if (!opt_tray_action) {
         fprintf(stderr,
                 "%s: tray requires an action: eject | close | lock | unlock\n",
                 progname);
         return false;
     }
-    if      (strcmp(tray_action, "eject")  == 0) *act = ACT_EJECT;
-    else if (strcmp(tray_action, "close")  == 0) *act = ACT_CLOSE;
-    else if (strcmp(tray_action, "lock")   == 0) *act = ACT_LOCK;
-    else if (strcmp(tray_action, "unlock") == 0) *act = ACT_UNLOCK;
+    if      (strcmp(opt_tray_action, "eject")  == 0) *act = ACT_EJECT;
+    else if (strcmp(opt_tray_action, "close")  == 0) *act = ACT_CLOSE;
+    else if (strcmp(opt_tray_action, "lock")   == 0) *act = ACT_LOCK;
+    else if (strcmp(opt_tray_action, "unlock") == 0) *act = ACT_UNLOCK;
     else {
         fprintf(stderr, "%s: unknown tray action: ", progname);
-        mos_cli_safe_ascii(stderr, tray_action);
+        mos_cli_safe_ascii(stderr, opt_tray_action);
         fputs("\nRecognized: eject, close, lock, unlock.\n", stderr);
         return false;
     }

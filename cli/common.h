@@ -21,6 +21,9 @@
 extern int         opt_index;     /* 0 = unset; 1-based when set */
 extern const char *opt_bsd;
 extern uint64_t    opt_registry;  /* 0 = unset; set only positionally */
+extern const char *opt_tray_action; /* tray sub-verb: eject|close|lock|unlock;
+                                       NULL = missing. A parsed argv value, so
+                                       opt_ (not flag_); positional only. */
 extern bool        flag_list;
 extern bool        flag_json;
 extern bool        flag_watch;
@@ -28,7 +31,6 @@ extern bool        flag_metadata;
 extern bool        flag_drive;
 extern bool        flag_features;
 extern bool        flag_tray;     /* tray subcommand (control verbs) */
-extern const char *tray_action;   /* eject|close|lock|unlock; NULL = missing */
 extern bool        flag_force;     /* tray eject --force (unlock-then-eject) */
 extern bool        flag_persistent;/* tray lock/unlock --persistent */
 extern bool        flag_probe;    /* probe subcommand (MOS_CLI_PROBE builds) */
