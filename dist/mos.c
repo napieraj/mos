@@ -4638,7 +4638,7 @@ const char *mos_error_description(mos_error e)
         case MOS_ERR_BUSY:              return "drive reports busy";
         case MOS_ERR_TIMEOUT:           return "timed out";
         case MOS_ERR_IO:                return "IOKit error";
-        case MOS_ERR_UNSUPPORTED:       return "not implemented in this build";
+        case MOS_ERR_UNSUPPORTED:       return "operation unsupported by this drive, driver, or build";
         case MOS_ERR_OOM:               return "out of memory";
         default:                        return "unknown error";
     }
@@ -6243,7 +6243,7 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
     p->descriptor_count = rd_cnt;
     p->max_read_kbps    = rd_max;
     p->max_write_kbps   = wr_max;
-    p->have             = (rd_cnt > 0 || wr_cnt > 0);
+    p->have             = (rd_cnt > 0);   /* read read is the gate (see above) */
     *out = p;
     return MOS_OK;
 }
