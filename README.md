@@ -131,12 +131,13 @@ $ mos watch
 ### Metadata (disc identity)
 
 ```
-$ mos metadata 1            # pressed DVD video — these genuinely mount
+$ mos metadata 1            # pressed dual-layer DVD-Video (CSS) — these genuinely mount
      BSD:  /dev/disk4
   Volume:  ARRIVAL
     Path:  /Volumes/ARRIVAL
  Profile:  dvd  dvd_rom  (0x0010)
     Disc:  -
+   Media:  dvd_rom, 2 layers, protected
      TOC:  tracks 1-1, lead-out LBA 3824640
 ```
 
@@ -197,6 +198,40 @@ bit is clear). For a single-track pressed DVD/BD `track_size` is
 effectively the disc capacity; on a blank/appendable recordable
 `next_writable` is the append point.
 
+The `disc` subtree for that dual-layer DVD-Video (abridged to the new
+objects — `mos metadata 1 --json`):
+
+```jsonc
+"disc_structure": {
+  "disc_type": null, "manufacturer_id": null,        // BD DI fields: null on DVD
+  "media_type_id": null, "revision": null,
+  "physical": {                                      // READ DISC STRUCTURE fmt 0x00
+    "book_type": 0, "book_type_name": "dvd_rom",
+    "num_layers": 2, "track_path": "otp",            // dual layer, opposite
+    "start_sector": 196608, "end_sector": 3842048,
+    "end_sector_l0": 2050047,                        // the layer break
+    "bca": false, "disc_size": 0, "max_rate": 15,
+    "part_version": 1, "layer_type": 1,
+    "linear_density": 0, "track_density": 0
+  },
+  "copyright": {                                     // READ DISC STRUCTURE fmt 0x01
+    "protection": 1, "protection_name": "css_cppm", "region": 2
+  }
+},
+"track_info": {                                      // READ TRACK INFORMATION 0x52
+  "track_number": 1, "session_number": 1,
+  "track_mode": 4, "data_mode": 1,
+  "blank": false, "damage": false,
+  "track_start": 0, "free_blocks": 0,
+  "track_size": 2298496,                             // ≈ disc capacity (single track)
+  "next_writable": null,                             // NWA_V clear (finalized)
+  "last_recorded": 2298495
+}
+```
+
+A blank BD-R instead shows `track_info.blank: true` with `next_writable`
+set to the append point and `free_blocks` to the writable remainder.
+
 ### Drive (static facts)
 
 ```
@@ -209,6 +244,8 @@ Revision:  1.00
   Serial:  -
     AACS:  version 68, bus encryption yes
   Speeds:  read 10560, write 8310 kB/s (max)
+    Mech:  tray, buffer 4096 KB
+ErrRecov:  retry 20, PER
 ```
 
 `mos drive --json` emits `mos.drive.v1`: identity (open-time directory
@@ -231,6 +268,21 @@ size — the mechanical facts GET CONFIGURATION cannot report.
 (AWRE/ARRE/PER/DCR + read-retry count). Both are read-only: mos reports
 the configuration, it never issues the MODE SELECT that recovery tools
 use to tune it. Each is null when its page is unavailable.
+
+The three new drive objects (`mos drive 1 --json`, abridged):
+
+```jsonc
+"speeds": {                     // GET PERFORMANCE 0xAC (media-dependent, null with no media)
+  "descriptor_count": 4, "max_read_kbps": 10560, "max_write_kbps": 8310
+},
+"mechanical": {                 // MODE SENSE page 0x2A
+  "loading_mechanism": "tray", "can_eject": true,
+  "lock_supported": true, "locked": false, "buffer_kb": 4096
+},
+"error_recovery": {             // MODE SENSE page 0x01 (read-only; no MODE SELECT)
+  "awre": true, "arre": true, "per": false, "dcr": false, "read_retry_count": 20
+}
+```
 
 ### Features (medium writability)
 
