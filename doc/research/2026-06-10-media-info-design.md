@@ -517,3 +517,63 @@ SOMETHING carries it. Still-open gaps from this batch: the M-DISC
 line found; Schmitt asserts "DVD+R or BD-R" but unverified), and an
 **appendable** BD-R RDI (no verbatim capture surfaced — the only
 candidate was a fetch-blocked Launchpad snippet).
+
+## M-DISC: surfaceable, as a registered manufacturer ID (2026-06-13)
+
+Closes the open M-DISC-reachability question from the batch-2 entry.
+Three converging sources (dvd+rw-mediainfo.cpp verified locally,
+dvdisaster scsi-layer.c, and the Blu-ray Disc Association licensee
+registry) settle it.
+
+**Where M-DISC lives.** Not in any read mos does today, and not as a
+flag bit. It is the disc's **Disc Manufacturer ID + Media Type ID**,
+read via **READ DISC STRUCTURE (0xAD)**, BD media type, format 0x00
+(Disc Information / DI): manufacturer ID = 6 bytes at DI offset +100,
+media type ID = 3 bytes at +106 (verified at dvd+rw-mediainfo.cpp
+L352, `Media ID: %6.6s/%-3.3s` from `di+4+100`/`di+4+106`). For
+Millenniata M-DISC BD-R these are the REGISTERED values **`MILLEN`** /
+**`MR1`** (BDA licensee list; full media code `MILLEN-MR1-000`) —
+exactly the `MILLEN/MR1/0` xorriso printed from the verified capture.
+
+**It is the disc that self-identifies, not the drive.** There is NO
+drive-side "M-DISC write capable" advertisement in any standard MMC
+read — no GET CONFIGURATION feature, no mode page (verified: dvd+rw-
+tools, cdrtools, k3b all treat M-DISC as ordinary recordable media and
+none contain an mdisc/millenniata string). The drive selects its
+higher write strategy FROM the media ID it reads, not from a
+capability bit it exposes. This resolves the "the capability must
+present itself somewhere" intuition: it presents as DISC identity
+(manufacturer ID), never as drive capability.
+
+**Detection is a string match, not a bit.** `manufacturer_id ==
+"MILLEN" && media_type_id == "MR1"`. Even dvdisaster does not
+special-case it — M-DISC awareness is a layer the consumer adds.
+
+**Doctrine fit — surface the ID, not an `mdisc` boolean.** The
+correct shape under the scope doctrine is for mos to emit the
+**registered manufacturer/media-type ID fields** (a faithful read of
+a spec-defined structure) and leave the `MILLEN -> M-DISC`
+interpretation consumer-side — the same division as MusicBrainz ids
+and the LibreDrive status (mos emits bytes it read; consumers
+interpret). A hardcoded `mdisc: true` that string-matches MILLEN
+inside mos is the vendor-string special-casing the doctrine forbids.
+Bonus: the manufacturer ID is useful well beyond M-DISC — it names
+the actual disc maker (CMCMAG, RITEK, VERBAT, MILLEN...), a real
+quality/dedup signal, which is why surfacing the general field beats a
+single-purpose M-DISC flag.
+
+**Cost / gating for a stage-2 increment.**
+- Command: 0xAD READ DISC STRUCTURE. This entry's design doc table
+  already notes a `ReadDVDStructure` convenience method exists, so the
+  likely cost is a layer-1 convenience call, NOT a raw CDB — SDK-verify
+  the exact MMCDeviceInterface selector before building; if absent, it
+  needs the AGENTS raw-verb showing.
+- BD path is clean (registered MILLEN/MR1 at fixed DI offsets).
+- DVD M-DISC is NOT clean: no BD-style DI unit, the manufacturer ID is
+  scattered across format-specific offsets (DVD-dash media-ID format
+  0x0E at +17/+25; DVD-plus ADIP format 0x11 at +23/+31), and M-DISC
+  DVD lacks the tidy MILLEN/MR1 pair. BD-first; DVD deferred until a
+  real M-DISC DVD capture pins it.
+- Fixture path: a real READ DISC STRUCTURE DI capture (or a reversed
+  verbatim log) becomes the committed fixture; the BD DI offsets are
+  the parse target.
