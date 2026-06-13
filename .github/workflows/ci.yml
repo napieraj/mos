@@ -285,7 +285,7 @@ jobs:
              tests/test_ioreturn.c \
              tests/test_state_core.c tests/test_watch_core.c \
              tests/test_render.c tests/test_human.c \
-             tests/test_config.c tests/test_discinfo.c \
+             tests/test_config.c tests/test_discinfo.c tests/test_discstruct.c \
              tests/test_result.c \
              /tmp/amalgamated.o \
              -framework IOKit -framework CoreFoundation \
