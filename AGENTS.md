@@ -314,6 +314,43 @@ make here — this entry authorizes only the synchronous description
 read. Command surface, privilege footprint, and the one-raw-CDB rule
 remain unchanged.
 
+### Addendum: read-only MODE SENSE of optical pages admitted
+### (2026-06-13, narrows layer 2's "no mode pages")
+
+Layer 2 above reads "No SPC ambition. No mode pages, no log pages, no
+reservations…". The state-enrichment work (doc/research/2026-06-13-disc-tools-state-survey.md,
+maintainer-approved) admits **two read-only MODE SENSE reads**, and this
+entry records why the carve-out does not reopen the ambition the clause
+forecloses.
+
+What is admitted: `ModeSense10` (the `MMCDeviceInterface` convenience
+method — `ARCHITECTURE.md:834` lists it alongside the other non-exclusive
+wrappers) of exactly two **optical-specific** pages:
+- **page 0x2A** (CD/DVD/BD Capabilities & Mechanical Status) — loading-
+  mechanism type, lock support, the live media-locked bit, and buffer
+  size: state GET CONFIGURATION and GESN structurally cannot carry; and
+- **page 0x01** (Read/Write Error Recovery) — the drive's read error-
+  recovery configuration (AWRE/ARRE/PER/DCR, read-retry count), read-only.
+
+Why this is not the drift the clause guards against. (a) The verification
+oracle is unchanged — both pages are decoded against MMC, the optical
+spec, exactly as the existing decoders are; this is not SAM/SPC "in the
+abstract." (b) It is convenience-method, not raw — no `ObtainExclusiveAccess`,
+no §5.5 exposure, the one-raw-CDB count stays at one (GESN). (c) It is
+the layer-1 preferred form: a kernel-authored read, not a CDB mos builds.
+
+What remains foreclosed, and is the load-bearing half of the clause: **no
+MODE SELECT** (mos reports configuration, it never tunes the drive — the
+mutation dvdisaster/sdparm perform stays out); no SPC-generic pages
+(power, caching, control-mode, informational-exceptions — nothing whose
+subject is "a SCSI device" rather than "an optical drive"); no log pages
+(LOG SENSE counters remain hardware-capture-first, not a design input);
+no reservations. The intent of "no SPC ambition" — that mos classifies
+only what the optical decision/identity tree needs and never grows a
+general SCSI introspection surface — is intact. If a future page request
+is not optical-specific and read-only, it is a fresh argument to make
+here, not covered by this entry.
+
 ## Naming standard: the BSD vocabulary (Apple-canonical, 2026-06-10)
 
 Three concepts, three names, no synonyms:
