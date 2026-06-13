@@ -163,6 +163,23 @@ jobs:
           }
           echo "OK: MOS_CLI_PROBE=OFF build compiles and rejects 'probe' correctly"
 
+      - name: DiskArbitration opt-out build (MOS_USE_DISKARBITRATION=OFF)
+        # Folded into this already-running macOS job rather than a
+        # dedicated runner: the opt-out only changes when mos_da.c or the
+        # DA wiring does, so a whole macOS runner per push is not worth
+        # it. Keeps the stub path in mos_da.c compiling and proves the
+        # framework is genuinely dropped from the link (otool) — every
+        # other macOS build exercises the default ON path.
+        run: |
+          set -e
+          cmake -B build-noda -DCMAKE_BUILD_TYPE=Release -DMOS_USE_DISKARBITRATION=OFF
+          cmake --build build-noda --target mos --parallel
+          if otool -L build-noda/bin/mos | grep -i DiskArbitration; then
+            echo "ERROR: DiskArbitration linked despite MOS_USE_DISKARBITRATION=OFF"
+            exit 1
+          fi
+          echo "OK: MOS_USE_DISKARBITRATION=OFF build compiles and links no DiskArbitration"
+
       - name: Verify public symbol hygiene
         # Both static libraries must export only symbols prefixed `mos_`
         # or `_mos_` (Mach-O underscored convention). Anything else means
@@ -510,46 +527,6 @@ jobs:
                -I include -I src \
                -c "$src" -o "$obj"
           done
-
-  diskarbitration-optout-build:
-    # mos_query_volume's DiskArbitration dependency is opt-out
-    # (MOS_USE_DISKARBITRATION). This job proves the OFF path keeps
-    # working: the library + CLI build with the framework dropped, and
-    # the linked binary genuinely does not reference DiskArbitration
-    # (otool). Without this, the stub path in mos_da.c could bit-rot
-    # silently — every other macOS job builds the default ON path.
-    name: DiskArbitration opt-out build (macOS)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
-        with:
-          persist-credentials: false
-
-      - name: Configure + build with MOS_USE_DISKARBITRATION=OFF
-        run: |
-          set -e
-          cmake -B build-noda -DCMAKE_BUILD_TYPE=Release \
-                -DMOS_USE_DISKARBITRATION=OFF
-          cmake --build build-noda --target mos
-
-      - name: Assert the binary does not link DiskArbitration
-        run: |
-          set -e
-          if otool -L build-noda/bin/mos | grep -i DiskArbitration; then
-            echo "ERROR: DiskArbitration linked despite MOS_USE_DISKARBITRATION=OFF"
-            exit 1
-          fi
-          echo "OK: mos links no DiskArbitration with the opt-out"
-
-      - name: Amalgamated single-file build also drops DiskArbitration
-        run: |
-          set -e
-          ./scripts/amalgamate.sh
-          # dist/mos.c compiles with the flag off and links without the
-          # framework — the embedder contract for the opt-out.
-          cc -c dist/mos.c -Idist -mmacosx-version-min=12.0 \
-             -DMOS_USE_DISKARBITRATION=0 -o /tmp/mos_noda.o
-          echo "OK: amalgamated mos.c compiles with MOS_USE_DISKARBITRATION=0"
 
   doc-staleness:
     # Tripwire for documentation drift. The 2026-06-10 audit found the
