@@ -198,6 +198,17 @@ int main(int argc, char **argv)
         mos_fake_set_raw_reply(0x02 /*CHECK CONDITION*/, NULL, 0, 0, sense);
         return mos_cli_run_tray();
     }
+    if (strcmp(verb, "tray") == 0 && strcmp(scn, "refused_other") == 0) {
+        /* A drive without Persistent Prevent rejecting 0x03 with 5/24/00 —
+           exercises the now-populated sense object on a non-lock refusal. */
+        mos_fake_reset();
+        tray_action   = "lock";
+        flag_persistent = true;
+        uint8_t sense[18] = {0};
+        sense[0] = 0x70; sense[2] = 0x05; sense[12] = 0x24; sense[13] = 0x00;
+        mos_fake_set_raw_reply(0x02 /*CHECK CONDITION*/, NULL, 0, 0, sense);
+        return run_tray();
+    }
 
     fprintf(stderr, "unknown verb/scenario: %s %s\n", verb, scn);
     return 2;

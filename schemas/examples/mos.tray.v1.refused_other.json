@@ -1,0 +1,10 @@
+{
+  "schema": "mos.tray.v1",
+  "bsd_node": null,
+  "registry_id": 4295021843,
+  "action": "lock",
+  "force": null,
+  "persistent": true,
+  "outcome": "refused_other",
+  "sense": { "key": 5, "asc": 36, "ascq": 0 }
+}

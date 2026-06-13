@@ -87,7 +87,8 @@ mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
     return MOS_OK;
 }
 
-mos_error mos_tray_eject(mos_handle_t *h, bool force, mos_tray_outcome *out)
+mos_error mos_tray_eject(mos_handle_t *h, bool force,
+                         mos_tray_outcome *out, uint8_t sense[3])
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
 
@@ -100,31 +101,34 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force, mos_tray_outcome *out)
        Folding both under one exclusive hold would need a second
        ObtainExclusiveAccess call site (§3) — out of scope. force does not
        clear a Persistent Prevent lock and need not: an initiator eject
-       succeeds under it by spec (04-349r1 §6.18.3.2). */
+       succeeds under it by spec (04-349r1 §6.18.3.2). The pre-step ALLOW's
+       sense is discarded (NULL); the returned sense reflects the eject. */
     if (force) {
         mos_tray_outcome ignored = MOS_TRAY_DONE;
         (void)mos_internal_tray_cmd(h, cdb_unlock, &ignored, NULL);
     }
-    return mos_internal_tray_cmd(h, cdb_eject, out, NULL);
+    return mos_internal_tray_cmd(h, cdb_eject, out, sense);
 }
 
-mos_error mos_tray_close(mos_handle_t *h, mos_tray_outcome *out)
+mos_error mos_tray_close(mos_handle_t *h, mos_tray_outcome *out, uint8_t sense[3])
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
-    return mos_internal_tray_cmd(h, cdb_close, out, NULL);
+    return mos_internal_tray_cmd(h, cdb_close, out, sense);
 }
 
-mos_error mos_tray_lock(mos_handle_t *h, bool persistent, mos_tray_outcome *out)
+mos_error mos_tray_lock(mos_handle_t *h, bool persistent,
+                        mos_tray_outcome *out, uint8_t sense[3])
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
     return mos_internal_tray_cmd(h, persistent ? cdb_lock_persist : cdb_lock,
-                                 out, NULL);
+                                 out, sense);
 }
 
-mos_error mos_tray_unlock(mos_handle_t *h, bool persistent, mos_tray_outcome *out)
+mos_error mos_tray_unlock(mos_handle_t *h, bool persistent,
+                          mos_tray_outcome *out, uint8_t sense[3])
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
     return mos_internal_tray_cmd(h,
                                  persistent ? cdb_unlock_persist : cdb_unlock,
-                                 out, NULL);
+                                 out, sense);
 }

@@ -507,17 +507,17 @@ static int pin_tray_cdb(mos_handle_t *h, mos_error (*call)(mos_handle_t *,
 /* Thin adapters so pin_tray_cdb can take a uniform (handle, outcome*)
    signature for the close/lock/unlock variants. */
 static mos_error call_close(mos_handle_t *h, mos_tray_outcome *o)
-{ return mos_tray_close(h, o); }
+{ return mos_tray_close(h, o, NULL); }
 static mos_error call_lock(mos_handle_t *h, mos_tray_outcome *o)
-{ return mos_tray_lock(h, false, o); }
+{ return mos_tray_lock(h, false, o, NULL); }
 static mos_error call_lock_p(mos_handle_t *h, mos_tray_outcome *o)
-{ return mos_tray_lock(h, true, o); }
+{ return mos_tray_lock(h, true, o, NULL); }
 static mos_error call_unlock(mos_handle_t *h, mos_tray_outcome *o)
-{ return mos_tray_unlock(h, false, o); }
+{ return mos_tray_unlock(h, false, o, NULL); }
 static mos_error call_unlock_p(mos_handle_t *h, mos_tray_outcome *o)
-{ return mos_tray_unlock(h, true, o); }
+{ return mos_tray_unlock(h, true, o, NULL); }
 static mos_error call_eject(mos_handle_t *h, mos_tray_outcome *o)
-{ return mos_tray_eject(h, false, o); }
+{ return mos_tray_eject(h, false, o, NULL); }
 
 TEST(adapter_tray_cdbs_pinned_byte_for_byte)
 {
@@ -555,7 +555,7 @@ TEST(adapter_tray_eject_force_is_unlock_then_eject)
 
     mos_fake_set_raw_reply(0x00 /*GOOD*/, NULL, 0, 0, NULL);
     mos_tray_outcome out = (mos_tray_outcome)-1;
-    EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/true, &out));
+    EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/true, &out, NULL));
     EXPECT_EQ(MOS_TRAY_DONE, out);
     /* Two CDBs, each its own acquire/release — net balance 0, and the LAST
        authored CDB is the eject (the ALLOW preceded it). */
@@ -582,9 +582,39 @@ TEST(adapter_tray_locked_eject_classifies_refused_locked)
     mos_fake_set_raw_reply(0x02 /*CHECK CONDITION*/, NULL, 0, 0, sense);
 
     mos_tray_outcome out = (mos_tray_outcome)-1;
-    EXPECT_EQ(MOS_OK, mos_tray_eject(h, false, &out));   /* answered = MOS_OK */
+    uint8_t triple[3] = { 0xFF, 0xFF, 0xFF };
+    EXPECT_EQ(MOS_OK, mos_tray_eject(h, false, &out, triple)); /* answered = MOS_OK */
     EXPECT_EQ(MOS_TRAY_REFUSED_LOCKED, out);
+    /* The sense out-param carries the real triple back (Plan A). */
+    EXPECT_EQ(0x05, triple[0]);
+    EXPECT_EQ(0x53, triple[1]);
+    EXPECT_EQ(0x02, triple[2]);
     EXPECT_EQ(0, mos_fake_lock_balance());
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_tray_refused_other_carries_its_sense)
+{
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    /* A drive without Persistent Prevent rejects 0x03 with 5/24/00
+       ILLEGAL REQUEST / INVALID FIELD IN CDB — refused_other, and the
+       sense triple must reach the caller (the gap Plan A closed). */
+    uint8_t sense[18] = {0};
+    sense[0] = 0x70; sense[2] = 0x05; sense[12] = 0x24; sense[13] = 0x00;
+    mos_fake_set_raw_reply(0x02 /*CHECK CONDITION*/, NULL, 0, 0, sense);
+
+    mos_tray_outcome out = (mos_tray_outcome)-1;
+    uint8_t triple[3] = {0};
+    EXPECT_EQ(MOS_OK, mos_tray_lock(h, /*persistent=*/true, &out, triple));
+    EXPECT_EQ(MOS_TRAY_REFUSED_OTHER, out);
+    EXPECT_EQ(0x05, triple[0]);
+    EXPECT_EQ(0x24, triple[1]);
+    EXPECT_EQ(0x00, triple[2]);
     mos_close(h);
     return 0;
 }
@@ -600,9 +630,14 @@ TEST(adapter_tray_exclusive_denied_is_negative_error)
        verb is a transport failure (negative), not an answered refusal. */
     mos_fake_set_exclusive_denied(true);
     mos_tray_outcome out = MOS_TRAY_DONE;
-    mos_error e = mos_tray_lock(h, false, &out);
+    uint8_t triple[3] = { 0xFF, 0xFF, 0xFF };
+    mos_error e = mos_tray_lock(h, false, &out, triple);
     EXPECT(e != MOS_OK);
     EXPECT_EQ(MOS_ERR_EXCLUSIVE_ACCESS, e);
+    /* Transport failure zeroes the sense out-param (no command answered). */
+    EXPECT_EQ(0, triple[0]);
+    EXPECT_EQ(0, triple[1]);
+    EXPECT_EQ(0, triple[2]);
     EXPECT_EQ(0, mos_fake_lock_balance());
     mos_close(h);
     return 0;
@@ -627,6 +662,7 @@ int main(void)
     RUN(adapter_tray_cdbs_pinned_byte_for_byte);
     RUN(adapter_tray_eject_force_is_unlock_then_eject);
     RUN(adapter_tray_locked_eject_classifies_refused_locked);
+    RUN(adapter_tray_refused_other_carries_its_sense);
     RUN(adapter_tray_exclusive_denied_is_negative_error);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);

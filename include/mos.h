@@ -715,7 +715,12 @@ mos_error mos_enumerate_features(mos_handle_t *h,
  * mos_tray_unlock on the same host. The lock is therefore FIRE-AND-FORGET:
  * mos holds nothing for the lock window and there is no held-session variant.
  *
- * `out` is REQUIRED (the outcome is the whole point of the call).
+ * `out` is REQUIRED (the outcome is the whole point of the call). `sense` is
+ * OPTIONAL (NULL to ignore): on MOS_OK it receives the {key, asc, ascq} the
+ * drive returned — meaningful on a refusal (REFUSED_LOCKED is always 5/53/02;
+ * REFUSED_OTHER is whatever the drive reported, e.g. 5/24/00 for an
+ * unsupported Persistent Prevent), all-zero on DONE. Zeroed on a transport
+ * failure (negative return). Same shape as mos_raw_cdb's sense out-param.
  */
 
 /* Eject the tray / unload the medium (START STOP UNIT 0x1B, LoEj=1 START=0).
@@ -725,11 +730,14 @@ mos_error mos_enumerate_features(mos_handle_t *h,
    force does NOT clear a Persistent Prevent lock, and need not: an
    initiator-issued eject succeeds under Persistent Prevent by spec
    (04-349r1 §6.18.3.2). Without force, a basic-locked drive answers
-   REFUSED_LOCKED — a reported fact. */
-mos_error mos_tray_eject (mos_handle_t *h, bool force,      mos_tray_outcome *out);
+   REFUSED_LOCKED — a reported fact. (`sense` reflects the eject, not the
+   pre-step ALLOW.) */
+mos_error mos_tray_eject (mos_handle_t *h, bool force,
+                          mos_tray_outcome *out, uint8_t sense[3]);
 
 /* Close / load the tray (START STOP UNIT 0x1B, LoEj=1 START=1). */
-mos_error mos_tray_close (mos_handle_t *h,                  mos_tray_outcome *out);
+mos_error mos_tray_close (mos_handle_t *h,
+                          mos_tray_outcome *out, uint8_t sense[3]);
 
 /* Prevent medium removal (PREVENT ALLOW MEDIUM REMOVAL 0x1E). persistent
    selects the PERSISTENT bit: false sets the basic Prevent state (byte4
@@ -738,7 +746,8 @@ mos_error mos_tray_close (mos_handle_t *h,                  mos_tray_outcome *ou
    the operator button is converted to a GESN EjectRequest event instead of
    ejecting, while an initiator eject still succeeds. A drive that does not
    implement Persistent Prevent answers REFUSED_OTHER (5/24/00). */
-mos_error mos_tray_lock  (mos_handle_t *h, bool persistent, mos_tray_outcome *out);
+mos_error mos_tray_lock  (mos_handle_t *h, bool persistent,
+                          mos_tray_outcome *out, uint8_t sense[3]);
 
 /* Allow medium removal (PREVENT ALLOW MEDIUM REMOVAL 0x1E). persistent must
    MATCH the lock being released — the two prevent states are independent
@@ -746,7 +755,8 @@ mos_error mos_tray_lock  (mos_handle_t *h, bool persistent, mos_tray_outcome *ou
    0x02 (clears Persistent Prevent). A 0x00 does NOT clear a persistent lock.
    (This symmetric `persistent` parameter refines the v0.4 design sketch,
    which predated confirming the two states are independent.) */
-mos_error mos_tray_unlock(mos_handle_t *h, bool persistent, mos_tray_outcome *out);
+mos_error mos_tray_unlock(mos_handle_t *h, bool persistent,
+                          mos_tray_outcome *out, uint8_t sense[3]);
 
 /* Stable lower_snake_case token for an outcome: "done" / "refused_locked" /
    "refused_other". Same contract as mos_state_description (never NULL). */

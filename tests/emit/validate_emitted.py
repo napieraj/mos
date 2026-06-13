@@ -39,6 +39,7 @@ SCENARIOS = [
     ("tray",     "eject_done",      "mos.tray.v1"),
     ("tray",     "lock_persistent", "mos.tray.v1"),
     ("tray",     "refused_locked",  "mos.tray.v1"),
+    ("tray",     "refused_other",   "mos.tray.v1"),
 ]
 
 

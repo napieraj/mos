@@ -179,16 +179,18 @@ int mos_cli_run_tray(void)
     d.persistent  = flag_persistent;
     d.outcome     = MOS_TRAY_DONE;
 
-    /* CLI stays on the public API (mos_tray_*), which exposes outcome only —
-       the v0.4 design's deliberate "smallest thing" (no raw-sense accessor
-       until a consumer needs the bytes). outcome is the contract. */
+    /* The public verbs carry the drive's sense triple back via the optional
+       out-param: all-zero on DONE, the real {key,asc,ascq} on any refusal
+       (5/53/02 for refused_locked, whatever the drive reported for
+       refused_other — e.g. 5/24/00 for unsupported Persistent Prevent). */
+    uint8_t sense[3] = {0};
     mos_error op;
     switch (act) {
-        case ACT_EJECT:  op = mos_tray_eject(h, flag_force, &d.outcome); break;
-        case ACT_CLOSE:  op = mos_tray_close(h, &d.outcome); break;
-        case ACT_LOCK:   op = mos_tray_lock(h, flag_persistent, &d.outcome); break;
+        case ACT_EJECT:  op = mos_tray_eject(h, flag_force, &d.outcome, sense); break;
+        case ACT_CLOSE:  op = mos_tray_close(h, &d.outcome, sense); break;
+        case ACT_LOCK:   op = mos_tray_lock(h, flag_persistent, &d.outcome, sense); break;
         case ACT_UNLOCK: default:
-                         op = mos_tray_unlock(h, flag_persistent, &d.outcome); break;
+                         op = mos_tray_unlock(h, flag_persistent, &d.outcome, sense); break;
     }
 
     if (op != MOS_OK) {
@@ -200,14 +202,7 @@ int mos_cli_run_tray(void)
                                      bsd_buf[0] ? bsd_buf : NULL);
     }
 
-    /* Surface the sense triple on a refusal. REFUSED_LOCKED is exactly
-       5/53/02 by construction (the classifier); REFUSED_OTHER carries
-       whatever the drive returned, which the public API does not expose —
-       report the locked triple for the known case and zeros otherwise. The
-       JSON sense object is informational; a consumer keys on `outcome`. */
-    if (d.outcome == MOS_TRAY_REFUSED_LOCKED) {
-        d.sk = 0x05; d.asc = 0x53; d.ascq = 0x02;
-    }
+    d.sk = sense[0]; d.asc = sense[1]; d.ascq = sense[2];
 
     if (flag_json) emit_json(&d);
     else           emit_human(&d);

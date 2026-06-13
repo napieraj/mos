@@ -317,7 +317,10 @@ $ mos tray unlock 1             # release a lock (add --persistent to
 
 `mos tray <action> --json` emits one `mos.tray.v1` document with the
 `outcome`: `done`, `refused_locked` (an eject hit a lock — a reported
-fact, not a failure; the process still exits 0), or `refused_other`.
+fact, not a failure; the process still exits 0), or `refused_other`. A
+refusal carries the drive's SCSI `sense` triple so a non-lock rejection
+(e.g. a drive without Persistent Prevent answering `5/24/00`) is
+diagnosable, not just opaque.
 Mechanism facts only: mos issues the command and reports what happened,
 and **does not unmount for you** (the deliberate contrast with `drutil
 tray eject`'s unmount-then-eject policy — the orchestrator owns that
