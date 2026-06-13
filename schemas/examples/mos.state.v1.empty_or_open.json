@@ -1,7 +1,7 @@
 {
   "schema": "mos.state.v1",
   "state": "empty_or_open",
-  "bsd": null,
+  "bsd_node": null,
   "current_profile": "0x0000",
   "sense": {
     "key": "0x02",

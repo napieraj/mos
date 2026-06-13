@@ -16,6 +16,7 @@
  */
 #include "test_harness.h"
 #include "../cli/human.h"
+#include "../cli/common.h"
 #include "mos.h"
 
 #include <stdio.h>
@@ -119,7 +120,7 @@ TEST(human_table_list_golden)
        cells as "-", per-column widths from data, no trailing
        whitespace. */
     static const char *const headers[] =
-        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Rev" };
+        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Revision" };
     static const char *const cells[] = {
         "1", "ready",         "ARRIVAL_4K", "/dev/disk4", "HL-DT-ST", "BD-RE WH16NS60", "1.00",
         "2", "empty_or_open", NULL,         NULL,         "PIONEER",  "BD-RW BDR-XS07", "1.01",
@@ -129,11 +130,34 @@ TEST(human_table_list_golden)
     bool ok; char *out = capture_table(headers, cells, 3, 7, ra, &ok);
     EXPECT_EQ(true, ok);
     EXPECT_STREQ(
-        " Index  State          Volume      BSD         Vendor    Product         Rev\n"
+        " Index  State          Volume      BSD         Vendor    Product         Revision\n"
         "     1  ready          ARRIVAL_4K  /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00\n"
         "     2  empty_or_open  -           -           PIONEER   BD-RW BDR-XS07  1.01\n"
         "     3  error          -           /dev/disk6  ASUS      BW-16D1HT       3.10\n", out);
     free(out);
+    return 0;
+}
+
+TEST(list_volume_cell_folds_name_and_path)
+{
+    char c[96];
+    /* Both present: "name (path)" — the one-row list form (metadata
+       keeps them on separate Volume/Path lines). */
+    mos_cli_list_volume_cell("ARRIVAL", "/Volumes/ARRIVAL", c, sizeof c);
+    EXPECT_STREQ("ARRIVAL (/Volumes/ARRIVAL)", c);
+    /* Disambiguation: label and mount-point basename diverge, and the
+       cell shows it rather than hiding it behind the bare label. */
+    mos_cli_list_volume_cell("ARRIVAL", "/Volumes/ARRIVAL 1", c, sizeof c);
+    EXPECT_STREQ("ARRIVAL (/Volumes/ARRIVAL 1)", c);
+    /* Mounted but unlabeled (empty name): path alone, no empty parens. */
+    mos_cli_list_volume_cell("", "/Volumes/disk4s1", c, sizeof c);
+    EXPECT_STREQ("/Volumes/disk4s1", c);
+    /* Unmounted: nothing — caller renders this as "-". */
+    mos_cli_list_volume_cell("", "", c, sizeof c);
+    EXPECT_STREQ("", c);
+    /* NULLs are treated as empty (defensive; populate_row always fills). */
+    mos_cli_list_volume_cell(NULL, NULL, c, sizeof c);
+    EXPECT_STREQ("", c);
     return 0;
 }
 
@@ -182,6 +206,7 @@ void register_human_tests(void)
     RUN(human_block_empty_or_open_sense_and_dashes);
     RUN(human_block_error_evidence_cluster);
     RUN(human_table_list_golden);
+    RUN(list_volume_cell_folds_name_and_path);
     RUN(human_table_no_trailing_whitespace_any_line);
     RUN(human_bsd_dev_node_contract);
 }

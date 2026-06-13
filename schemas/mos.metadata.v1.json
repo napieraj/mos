@@ -6,7 +6,7 @@
   "type": "object",
   "required": [
     "schema",
-    "bsd",
+    "bsd_node",
     "captured_at",
     "volume_path",
     "disc"
@@ -17,7 +17,7 @@
       "const": "mos.metadata.v1",
       "description": "Schema identifier. Per-document versioned \u2014 consumers dispatch on this field."
     },
-    "bsd": {
+    "bsd_node": {
       "type": [
         "string",
         "null"

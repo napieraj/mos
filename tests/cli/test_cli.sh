@@ -177,8 +177,8 @@ assert_not_contains "no flat error_message field"    "$OUT" '"error_message"'
 # Failure envelope must NOT include "state" — disjointness rule.
 assert_not_contains "failure envelope has no state"  "$OUT" '"state"'
 # Pure-open-failure path: no handle was open, so the conditional
-# "bsd" field must be absent from this envelope.
-assert_not_contains "open-failure envelope omits bsd" "$OUT" '"bsd":'
+# "bsd_node" field must be absent from this envelope.
+assert_not_contains "open-failure envelope omits bsd_node" "$OUT" '"bsd_node":'
 
 # Test 6: --index and --bsd are mutually exclusive (EX_USAGE 64).
 run_mos --index 1 --bsd disk0

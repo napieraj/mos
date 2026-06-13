@@ -1,6 +1,6 @@
 {
   "schema": "mos.error.v1",
-  "bsd": "/dev/disk4",
+  "bsd_node": "/dev/disk4",
   "exit_code": 75,
   "error": {
     "code": "timeout",

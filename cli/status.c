@@ -108,7 +108,7 @@ static void emit_human(const mos_state_result *r, int index1,
     (void)mos_safe_ascii(rv, rv_esc, sizeof rv_esc);
     pairs[n++] = (mos_cli_human_pair){ "Vendor",  v  ? v_esc  : NULL };
     pairs[n++] = (mos_cli_human_pair){ "Product", p  ? p_esc  : NULL };
-    pairs[n++] = (mos_cli_human_pair){ "Rev",     rv ? rv_esc : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Revision",     rv ? rv_esc : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }
@@ -129,7 +129,7 @@ static void emit_json(const mos_state_result *r, int index1,
 
     fputs("  \"schema\": \"mos.state.v1\",\n", stdout);
     fputs("  \"state\": ",            stdout); mos_cli_json_str(stdout, state);
-    fputs(",\n  \"bsd\": ",           stdout); mos_cli_bsd_dev_node(stdout, mos_state_result_bsd_unit(r));
+    fputs(",\n  \"bsd_node\": ",           stdout); mos_cli_bsd_dev_node(stdout, mos_state_result_bsd_unit(r));
     fprintf(stdout, ",\n  \"registry_id\": %llu",
             (unsigned long long)mos_state_result_registry_id(r));
     fprintf(stdout, ",\n  \"index\": %d", index1 > 0 ? index1 : 0);

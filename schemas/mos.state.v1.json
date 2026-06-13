@@ -7,7 +7,7 @@
   "required": [
     "schema",
     "state",
-    "bsd",
+    "bsd_node",
     "current_profile",
     "registry_id",
     "index"
@@ -33,7 +33,7 @@
       ],
       "description": "Classified drive state from the v0.3 decision tree (see src/mos_state_core.c). This enum is an OPEN set within mos.state.v1: future versions may add values, which is forward-compatible, not a schema-name-breaking change. Consumers MUST treat any value they do not recognize as unclassifiable (handle like 'unknown'). The list is enumerated here so fixtures catch typos, not to assert closure."
     },
-    "bsd": {
+    "bsd_node": {
       "type": [
         "string",
         "null"

@@ -113,7 +113,7 @@ int emit_unknown_and_fail(const char *context, mos_error err,
         fprintf(stdout, "{%s", nl);
         fprintf(stdout, "%s\"schema\":%s\"mos.error.v1\",%s", i2, sp, nl);
         if (dev_node && *dev_node) {
-            fprintf(stdout, "%s\"bsd\":%s", i2, sp);
+            fprintf(stdout, "%s\"bsd_node\":%s", i2, sp);
             mos_cli_json_str(stdout, dev_node);
             fprintf(stdout, ",%s", nl);
         }
@@ -176,7 +176,7 @@ static void query_row(const mos_device_info_t *info, list_row *row)
     memset(row, 0, sizeof *row);
     row->registry_id = mos_device_info_registry_id(info);
     (void)mos_bsd_dev_node(mos_device_info_bsd_unit(info),
-                           row->bsd, sizeof row->bsd);
+                           row->bsd_node, sizeof row->bsd_node);
 
     mos_error err = MOS_OK;
     mos_handle_t *h = mos_open_device(info, &err);
@@ -194,7 +194,7 @@ static void query_row(const mos_device_info_t *info, list_row *row)
        the open re-validated identity, and media may have (un)loaded
        between snapshot and probe. */
     (void)mos_bsd_dev_node(mos_state_result_bsd_unit(r),
-                                 row->bsd, sizeof row->bsd);
+                                 row->bsd_node, sizeof row->bsd_node);
     if (mos_state_result_registry_id(r))
         row->registry_id = mos_state_result_registry_id(r);
     const char *v = mos_state_result_vendor(r);
@@ -206,7 +206,7 @@ static void query_row(const mos_device_info_t *info, list_row *row)
     if (rv) snprintf(row->revision, sizeof row->revision, "%s", rv);
     bool mounted = false;
     (void)mos_query_volume(h, &mounted, row->volume, sizeof row->volume,
-                           NULL, 0);
+                           row->volume_path, sizeof row->volume_path);
     mos_close(h);
 }
 
@@ -218,9 +218,9 @@ void emit_list_table(FILE *f, const list_row *rows, int n,
 {
     enum { MAXC = 7 };
     const char *headers_v[MAXC] =
-        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Rev" };
+        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Revision" };
     const char *headers_nv[MAXC - 1] =
-        { "Index", "State", "BSD", "Vendor", "Product", "Rev" };
+        { "Index", "State", "BSD", "Vendor", "Product", "Revision" };
     static const bool ra_v[MAXC]      = { true, false, false, false, false, false, false };
     static const bool ra_nv[MAXC - 1] = { true, false, false, false, false, false };
 
@@ -232,25 +232,29 @@ void emit_list_table(FILE *f, const list_row *rows, int n,
     char v_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];
     char p_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
     char r_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];
-    /* Volume column shows at most 24 raw bytes — a hostile or merely
-       long label must not wreck the table; the JSON is the faithful
-       form. */
-    char vol_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(25)];
+    /* Volume column folds label and mount path into "name (path)"
+       (mos_cli_list_volume_cell), each part bounded so a hostile or
+       merely long value can't wreck the table; the JSON is the faithful
+       form. Worst case: 24 (name) + " (" + 64 (path) + ")" + NUL. */
+    char vol_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(96)];
     const char *cells[MOS_CLI_LIST_CAP * MAXC];
     for (int r = 0; r < n; r++) {
         snprintf(idx[r], sizeof idx[r], "%d", r + 1);
         (void)mos_safe_ascii(rows[r].vendor,   v_esc[r], sizeof v_esc[r]);
         (void)mos_safe_ascii(rows[r].product,  p_esc[r], sizeof p_esc[r]);
         (void)mos_safe_ascii(rows[r].revision, r_esc[r], sizeof r_esc[r]);
-        char vol_short[25];
-        snprintf(vol_short, sizeof vol_short, "%s", rows[r].volume);
-        (void)mos_safe_ascii(vol_short, vol_esc[r], sizeof vol_esc[r]);
+        char vol_cell[96];
+        mos_cli_list_volume_cell(rows[r].volume, rows[r].volume_path,
+                                 vol_cell, sizeof vol_cell);
+        (void)mos_safe_ascii(vol_cell, vol_esc[r], sizeof vol_esc[r]);
         size_t c = 0;
         cells[r * ncols + c++] = idx[r];
         cells[r * ncols + c++] = rows[r].state;
         if (with_volume)
-            cells[r * ncols + c++] = rows[r].volume[0] ? vol_esc[r] : NULL;
-        cells[r * ncols + c++] = rows[r].bsd[0] ? rows[r].bsd : NULL;
+            cells[r * ncols + c++] =
+                (rows[r].volume[0] || rows[r].volume_path[0]) ? vol_esc[r]
+                                                              : NULL;
+        cells[r * ncols + c++] = rows[r].bsd_node[0] ? rows[r].bsd_node : NULL;
         cells[r * ncols + c++] = rows[r].vendor[0]   ? v_esc[r] : NULL;
         cells[r * ncols + c++] = rows[r].product[0]  ? p_esc[r] : NULL;
         cells[r * ncols + c++] = rows[r].revision[0] ? r_esc[r] : NULL;
@@ -271,8 +275,11 @@ void emit_list_json(const list_row *rows, int n)
         fputs(", \"volume_name\": ", stdout);
         if (rows[r].volume[0]) mos_cli_json_str(stdout, rows[r].volume);
         else                   fputs("null", stdout);
-        fputs(", \"bsd\": ", stdout);
-        if (rows[r].bsd[0]) mos_cli_json_str(stdout, rows[r].bsd);
+        fputs(", \"volume_path\": ", stdout);
+        if (rows[r].volume_path[0]) mos_cli_json_str(stdout, rows[r].volume_path);
+        else                        fputs("null", stdout);
+        fputs(", \"bsd_node\": ", stdout);
+        if (rows[r].bsd_node[0]) mos_cli_json_str(stdout, rows[r].bsd_node);
         else                fputs("null", stdout);
         fprintf(stdout, ", \"registry_id\": %llu",
                 (unsigned long long)rows[r].registry_id);
