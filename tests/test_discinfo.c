@@ -199,6 +199,34 @@ TEST(discinfo_status_description_tokens)
     return 0;
 }
 
+TEST(discinfo_complete_bdre_decodes_erasable)
+{
+    /* BD-RE, Pioneer BDR-209D 1.51, media CMCMAG/CN2 — reversed from a
+       verbatim (<pre>-preserved) dvd+rw-mediainfo dump in the
+       cdwrite@debian list, msg14498: "Disc status: complete / Number
+       of Sessions: 1 / State of Last Session: complete / Number of
+       Tracks: 1". The erasable bit is set per the 43h BD-RE rewritable
+       profile, NOT from the log — dvd+rw-mediainfo prints no Erasable
+       line (it consumes byte-2 bit 4 only as a READ FORMAT CAPACITIES
+       gate, source L901). first_track_last_session is likewise
+       inferred (the tool suppresses "Next Track" once complete). The
+       attested fields are status / sessions / last-session / tracks.
+       Mirrors fixtures/readdiscinfo_complete_bdre.bin; the first
+       erasable=true fixture. */
+    static const uint8_t rdi[34] = {
+        0x00,0x20, 0x1E, 0x01, 0x01, 0x01, 0x01, 0x00,
+        /* bytes 8..33 zero */
+    };
+    mos_disc_info di;
+    EXPECT(mos_internal_disc_info_parse(rdi, sizeof rdi, &di));
+    EXPECT_EQ(di.status, MOS_DISC_COMPLETE);
+    EXPECT_EQ(di.last_session_state, 3);            /* complete */
+    EXPECT(di.erasable);                             /* BD-RE is rewritable */
+    EXPECT_EQ(di.number_of_sessions, 1);
+    EXPECT_EQ(di.last_track_last_session, 1);
+    return 0;
+}
+
 void register_discinfo_tests(void)
 {
     RUN(discinfo_accessors_read_fixture_fields);
@@ -206,6 +234,7 @@ void register_discinfo_tests(void)
     RUN(discinfo_status_description_tokens);
     RUN(discinfo_blank_cdr_decodes_blank);
     RUN(discinfo_blank_bdr_decodes_blank);
+    RUN(discinfo_complete_bdre_decodes_erasable);
     RUN(discinfo_complete_cdrom_decodes_complete);
     RUN(discinfo_status_is_byte2_low_two_bits);
     RUN(discinfo_combines_session_count_msb_lsb);

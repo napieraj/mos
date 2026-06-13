@@ -465,3 +465,55 @@ No UHD-specific READ TOC failures found (MakeMKV-forum failures are
 AACS sector reads, not TOC). The identity rule is unchanged and
 exactly right: never key on a synthesized TOC; mos_toc_have_leadout
 gates identity use.
+
+## Log-derived fixture batch 2 + provenance correction (2026-06-13)
+
+Second Phase-A0 pass (forum/list captures the first agent couldn't
+reach; user supplied the page text). Three outcomes — one correction,
+one new fixture, one piece of by-construction evidence.
+
+**Correction — "Highest AACS version" is not the descriptor byte.**
+The batch-1 fixture `getconfig_aacs_wh16ns40.bin` listed payload
+byte 3 = 78 as ATTESTED, sourced from MakeMKV's "Highest AACS
+version: 78" line. That is wrong provenance: forum t=6685 demonstrates
+the number is a MakeMKV-local statistic (the highest saved MKB-dump
+file — delete one and the displayed value drops), and moderator
+Woodstock states it is "rather than being read from the drive"
+(t=14372, t=17356). The two identical-BU40N dumps showing 77 vs 81
+corroborate (MKB history differs, hardware does not). The DESIGN is
+unaffected — descriptor byte 3 IS the AACS Version per libaacs/
+UDFclient, and `mos_query_drive_caps` decodes that byte correctly —
+but no MakeMKV dump attests it, so the fixture's byte 3 is now marked
+illustrative scaffold and the load-bearing assertion is bus_encryption
+(byte 0 = 0x17, the one attested descriptor byte). Fixtures README and
+the mirroring test corrected the same day. The raw-descriptor-vs-dump
+capture stays on the falsification matrix; its job is now to pin
+byte 3, which nothing in the wild does.
+
+**New fixture — first erasable=true RDI.** `readdiscinfo_complete_bdre.bin`
+from a verbatim BDR-209D dump (status complete, 1 session, 1 track;
+erasable inferred from the 43h BD-RE rewritable profile, since
+dvd+rw-mediainfo never prints the bit). Its `FABRICATED TOC` block is
+the drive's real READ TOC reply (confirmed against
+dvd+rw-mediainfo.cpp L1048) and shows the lead-out at the disc's
+formatted capacity, not a written extent — live corroboration of the
+overwritable-media lead-out wrinkle already in the leadout_lba prose.
+
+**M-DISC by-construction claim — now evidenced.** A verified xorriso
+capture (cdwrite list, msg14517) of an M-DISC BD-R in an HL-DT-ST
+WH16NS40: `Media product: MILLEN/MR1/0 , Millenniata Inc.`,
+`Media current: BD-R sequential recording`, `Media status: is blank`,
+12219392 writable blocks. This confirms what the design doc asserted
+from spec: M-DISC BD presents as ordinary BD-R SRM (profile 41h) at
+the MMC command layer — state, profile, class, disc-info, and the
+fabricated TOC all behave as for any BD-R. The M-DISC-ness lives in
+the `MILLEN/MR1` manufacturer/media ID (disc-structure data), not in
+the profile or disc-info mos already reads. Whether that ID — or a
+drive-side M-DISC write capability — is reachable through an MMC read
+mos could honestly surface is under active research (see the
+stage-2 M-DISC question); xorriso prints the ID from a real read, so
+SOMETHING carries it. Still-open gaps from this batch: the M-DISC
+**DVD** profile (11h DVD-R vs 1Bh DVD+R — no captured Mounted Media
+line found; Schmitt asserts "DVD+R or BD-R" but unverified), and an
+**appendable** BD-R RDI (no verbatim capture surfaced — the only
+candidate was a fetch-blocked Launchpad snippet).

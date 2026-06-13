@@ -220,10 +220,16 @@ TEST(toc_parses_real_pony_cd_single)
 TEST(aacs_caps_from_real_wh16ns40_capture)
 {
     /* MakeMKV drive dump, HL-DT-ST BD-RE WH16NS40 1.05: "Bus
-       encryption flags: 17" (= 0x17 per the libaacs bit map:
-       RDC|WBE|BEC|BNG), "Highest AACS version: 78". Scaffold bytes
-       (profile, feature-header byte 2, nonce/AGID counts) are
-       unattested — see the fixtures README entry. Mirrors
+       encryption flags: 17" — the ONE attested descriptor byte
+       (payload byte 0 = 0x17 per the libaacs bit map: RDC|WBE|BEC|BNG).
+       The descriptor's AACS-version byte (payload byte 3) is NOT
+       attested by this dump: MakeMKV's "Highest AACS version" line is
+       a MakeMKV-local statistic (the highest saved MKB-dump file —
+       deleting one lowers the number, forum t=6685), not the 0x010D
+       byte. Byte 3 here (and profile, header byte 2, nonce/AGID counts)
+       is illustrative scaffold — see the fixtures README entry. The
+       load-bearing assertion is bus_encryption; the version assertion
+       only proves byte-3 extraction works. Mirrors
        fixtures/getconfig_aacs_wh16ns40.bin. */
     static const uint8_t cfg[] = {
         0,0,0,16,  0,0, 0x00,0x00,
@@ -231,9 +237,9 @@ TEST(aacs_caps_from_real_wh16ns40_capture)
     };
     mos_drive_caps c;
     mos_internal_aacs_caps_from_config(cfg, sizeof cfg, &c);
-    EXPECT(c.aacs);
-    EXPECT(c.bus_encryption);          /* 0x17 & 0x02 */
-    EXPECT_EQ(c.aacs_version, 78);
+    EXPECT(c.aacs);                    /* feature 0x010D present       */
+    EXPECT(c.bus_encryption);          /* 0x17 & 0x02 — attested       */
+    EXPECT_EQ(c.aacs_version, 78);     /* scaffold byte; extraction only */
     return 0;
 }
 

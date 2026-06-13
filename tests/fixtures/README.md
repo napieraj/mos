@@ -99,10 +99,10 @@ If you have an optical drive and want to add realism:
    `mos_raw_cdb` is public and works today; the `mos_capture` convenience
    wrapper does not exist yet.
 
-## Log-derived captures (2026-06-12, media-info stage 1)
+## Log-derived captures (2026-06-12/13, media-info stage 1)
 
-Three fixtures reversed from PUBLISHED tool output through the tools'
-source code — the methodology the disc-status ground-truth table above
+Fixtures reversed from PUBLISHED tool output through the tools' source
+code — the methodology the disc-status ground-truth table above
 established, applied to the new v0.4 commands. Tier: device capture
 (realism), with the attested-vs-scaffold split recorded per fixture.
 
@@ -110,6 +110,7 @@ established, applied to the new v0.4 commands. Tier: device capture
 |------|---------|--------|-------------|
 | `readtoc_f0_audio_cd_single.bin` | READ TOC/PMA/ATIP 0x43 fmt 0000b | real 4-track audio CD single | `test_config.c :: toc_parses_real_pony_cd_single` |
 | `readdiscinfo_blank_bdr.bin` | READ DISC INFORMATION 0x51 | blank BD-R (BH16NS40 / JVC-AM/S6L) | `test_discinfo.c :: discinfo_blank_bdr_decodes_blank` |
+| `readdiscinfo_complete_bdre.bin` | READ DISC INFORMATION 0x51 | complete BD-RE (BDR-209D / CMCMAG-CN2), first erasable=true | `test_discinfo.c :: discinfo_complete_bdre_decodes_erasable` |
 | `getconfig_aacs_wh16ns40.bin` | GET CONFIGURATION 0x46 (RT=0) | WH16NS40 1.05 AACS feature | `test_config.c :: aacs_caps_from_real_wh16ns40_capture` |
 
 ### `readtoc_f0_audio_cd_single.bin` (44 bytes)
@@ -150,16 +151,51 @@ AACS feature (0x010D) for HL-DT-ST BD-RE WH16NS40, revision 1.05.
 Provenance: MakeMKV drive-info dump in blog.ssanj.net 2023-10-02
 (verified via its source mirror raw.githubusercontent.com/ssanj/
 babyloncandle-docker): "Bus encryption flags: 17", "Highest AACS
-version: 78". ATTESTED: payload byte 0 = 0x17 (per the libaacs/
-UDFclient bit map: RDC|WBE|BEC|BNG — the dump prints no 0x prefix;
-hex is the reading consistent with every observed LG value) and
-payload byte 3 = 78. UNATTESTED scaffold: header current profile
-(0x0000 — dump context had no disc proven), feature-header byte 2
-(version/persistent/current bits), nonce block count, AGID count
-(all zeroed). Mapping caveat: MakeMKV's "Highest AACS version" line
-plausibly reads the 0x010D byte but could be MKB-derived — two
-same-model/same-firmware BU40N dumps show 77 vs 81
-(automatic-ripping-machine#1558, jlesage/docker-makemkv#248), so the
-value is drive/disc STATE, not a firmware constant, whichever source
-MakeMKV prints. A hardware capture of the raw descriptor next to a
-MakeMKV dump from the same drive settles it (falsification matrix).
+version: 78". ATTESTED (one byte): payload byte 0 = 0x17 (per the
+libaacs/UDFclient bit map: RDC|WBE|BEC|BNG — the dump prints no 0x
+prefix; hex is the reading consistent with every observed LG value).
+This is the only descriptor byte the dump pins, and bus_encryption
+(byte 0 bit 1) is what the mirroring test asserts as load-bearing.
+
+NOT ATTESTED — payload byte 3 (AACS version) is illustrative scaffold.
+The value 78 is carried over from the dump's "Highest AACS version"
+line, but provenance-corrected (2026-06-13 research): that line is a
+MakeMKV-LOCAL statistic — the highest-numbered saved MKB-dump file in
+MakeMKV's data dir — NOT a read of the 0x010D descriptor. Forum t=6685
+shows it empirically (deleting MKB_v28_*.tgz drops the displayed value
+to the next saved file); moderator Woodstock confirms it is "rather
+than being read from the drive" (t=14372, t=17356). The earlier
+77-vs-81 split on two identical BU40N drives
+(automatic-ripping-machine#1558, jlesage/docker-makemkv#248) is
+consistent: the number tracks MakeMKV's MKB history, not firmware or
+descriptor state. So the drive's true descriptor byte 3 is unknown
+from any MakeMKV dump — a raw GET CONFIGURATION capture next to a dump
+from the same drive is the only thing that pins it (falsification
+matrix). Also unattested scaffold: header current profile (0x0000),
+feature-header byte 2, nonce block count, AGID count (all zeroed).
+
+### `readdiscinfo_complete_bdre.bin` (34 bytes)
+BD-RE, Pioneer BDR-209D firmware 1.51, media ID CMCMAG/CN2.
+Provenance: verbatim (`<pre>`-preserved, column-aligned)
+dvd+rw-mediainfo dump in the cdwrite@debian list, mail-archive
+msg14498 — "Mounted Media: 43h, BD-RE / Disc status: complete /
+Number of Sessions: 1 / State of Last Session: complete / Number of
+Tracks: 1". Byte map per dvd+rw-mediainfo.cpp (same lines as the
+blank BD-R above). ATTESTED: status (complete), sessions (1),
+last-session state (complete), tracks (1). INFERRED, not log-attested:
+the erasable bit (byte 2 bit 4) is set because 43h BD-RE is a
+rewritable profile — dvd+rw-mediainfo prints no "Erasable:" line (it
+consumes that bit only as a READ FORMAT CAPACITIES gate, source L901),
+so the bit's value is spec-derived from the medium type, and is the
+one field a hardware capture would confirm. first_track_last_session
+is likewise inferred (the tool suppresses "Next Track" once complete).
+The first erasable=true fixture.
+
+Corroborating datum from the same capture (not committed as a fixture):
+the `FABRICATED TOC:` block — `Track#1 : 14@0`, `Track#AA : 14@11826176`
+— is the drive's real READ TOC 0x43 reply (dvd+rw-mediainfo.cpp L1048
+issues the command; "FABRICATED" is the tool's label for the
+spec-mandated synthesis, not tool-side invention). The lead-out at
+11826176 equals the disc's formatted capacity, not a written extent —
+live corroboration of the overwritable-media lead-out wrinkle in the
+mos.metadata.v1 leadout_lba prose.
