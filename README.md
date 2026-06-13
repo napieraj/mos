@@ -54,7 +54,7 @@ Registry:  4295032831
  Profile:  bd  bd_rom  (0x0040)
   Vendor:  HL-DT-ST
  Product:  BD-RE WH16NS60
-     Rev:  1.00
+Revision:  1.00
 ```
 
 ```
@@ -84,7 +84,7 @@ Registry:  4295032831
    State:  open
   Vendor:  HL-DT-ST
  Product:  BD-RE WH16NS60
-     Rev:  1.00
+Revision:  1.00
 ```
 
 ### List
@@ -95,7 +95,7 @@ overview):
 
 ```
 $ mos list
- Index  State  Volume                      BSD         Vendor    Product         Rev
+ Index  State  Volume                      BSD         Vendor    Product         Revision
      1  ready  ARRIVAL (/Volumes/ARRIVAL)  /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00
      2  open   -                           -           PIONEER   BD-RW BDR-XS07  1.01
 ```
@@ -183,7 +183,7 @@ $ mos drive 1
 Registry:  4295032831
   Vendor:  HL-DT-ST
  Product:  BD-RE WH16NS60
-     Rev:  1.00
+Revision:  1.00
   Serial:  -
     AACS:  version 68, bus encryption yes
 ```

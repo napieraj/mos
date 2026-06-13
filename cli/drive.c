@@ -83,7 +83,7 @@ static void emit_human(const drive_doc *d)
     (void)mos_safe_ascii(d->revision, r_esc, sizeof r_esc);
     pairs[n++] = (mos_cli_human_pair){ "Vendor",  d->vendor   ? v_esc : NULL };
     pairs[n++] = (mos_cli_human_pair){ "Product", d->product  ? p_esc : NULL };
-    pairs[n++] = (mos_cli_human_pair){ "Rev",     d->revision ? r_esc : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Revision",     d->revision ? r_esc : NULL };
     pairs[n++] = (mos_cli_human_pair){ "Serial",  NULL };
 
     char aacs_buf[48];

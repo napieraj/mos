@@ -108,7 +108,7 @@ static void emit_human(const mos_state_result *r, int index1,
     (void)mos_safe_ascii(rv, rv_esc, sizeof rv_esc);
     pairs[n++] = (mos_cli_human_pair){ "Vendor",  v  ? v_esc  : NULL };
     pairs[n++] = (mos_cli_human_pair){ "Product", p  ? p_esc  : NULL };
-    pairs[n++] = (mos_cli_human_pair){ "Rev",     rv ? rv_esc : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Revision",     rv ? rv_esc : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }

@@ -120,7 +120,7 @@ TEST(human_table_list_golden)
        cells as "-", per-column widths from data, no trailing
        whitespace. */
     static const char *const headers[] =
-        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Rev" };
+        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Revision" };
     static const char *const cells[] = {
         "1", "ready",         "ARRIVAL_4K", "/dev/disk4", "HL-DT-ST", "BD-RE WH16NS60", "1.00",
         "2", "empty_or_open", NULL,         NULL,         "PIONEER",  "BD-RW BDR-XS07", "1.01",
@@ -130,7 +130,7 @@ TEST(human_table_list_golden)
     bool ok; char *out = capture_table(headers, cells, 3, 7, ra, &ok);
     EXPECT_EQ(true, ok);
     EXPECT_STREQ(
-        " Index  State          Volume      BSD         Vendor    Product         Rev\n"
+        " Index  State          Volume      BSD         Vendor    Product         Revision\n"
         "     1  ready          ARRIVAL_4K  /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00\n"
         "     2  empty_or_open  -           -           PIONEER   BD-RW BDR-XS07  1.01\n"
         "     3  error          -           /dev/disk6  ASUS      BW-16D1HT       3.10\n", out);

@@ -218,9 +218,9 @@ void emit_list_table(FILE *f, const list_row *rows, int n,
 {
     enum { MAXC = 7 };
     const char *headers_v[MAXC] =
-        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Rev" };
+        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Revision" };
     const char *headers_nv[MAXC - 1] =
-        { "Index", "State", "BSD", "Vendor", "Product", "Rev" };
+        { "Index", "State", "BSD", "Vendor", "Product", "Revision" };
     static const bool ra_v[MAXC]      = { true, false, false, false, false, false, false };
     static const bool ra_nv[MAXC - 1] = { true, false, false, false, false, false };
 
