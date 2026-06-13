@@ -442,6 +442,63 @@ uint32_t mos_track_info_last_recorded(const mos_track_info *t)
     return t ? t->last_recorded : 0;
 }
 
+/* ---- mos_capacity accessors (mos_query_capacity) ------------------- *
+ * Plain values, NULL-tolerant. The two halves are independently
+ * present: have_media_size gates media_bytes/block_bytes/media_blocks
+ * (the kernel IOMedia size), have_recordable gates the READ TRACK
+ * INFORMATION view, and within it next_writable is meaningful only when
+ * nwa_valid. media_blocks is derived, never stored. */
+
+bool mos_capacity_have_media_size(const mos_capacity *c)
+{
+    /* A whole-disk node with a real size has media_bytes > 0; a 0 size
+       is the "no whole-disk node" sentinel (blank/absent media). */
+    return c ? (c->media_bytes != 0) : false;
+}
+
+uint64_t mos_capacity_media_bytes(const mos_capacity *c)
+{
+    return c ? c->media_bytes : 0;
+}
+
+uint32_t mos_capacity_block_bytes(const mos_capacity *c)
+{
+    return c ? c->block_bytes : 0;
+}
+
+uint64_t mos_capacity_media_blocks(const mos_capacity *c)
+{
+    /* Derived: bytes / natural block size. 0 when either is absent
+       (no division by a zero block size). */
+    if (!c || c->media_bytes == 0 || c->block_bytes == 0) return 0;
+    return c->media_bytes / c->block_bytes;
+}
+
+bool mos_capacity_have_recordable(const mos_capacity *c)
+{
+    return c ? c->have_recordable : false;
+}
+
+bool mos_capacity_nwa_valid(const mos_capacity *c)
+{
+    return c ? c->nwa_valid : false;
+}
+
+uint32_t mos_capacity_free_blocks(const mos_capacity *c)
+{
+    return c ? c->free_blocks : 0;
+}
+
+uint32_t mos_capacity_next_writable(const mos_capacity *c)
+{
+    return c ? c->next_writable : 0;
+}
+
+uint32_t mos_capacity_track_size(const mos_capacity *c)
+{
+    return c ? c->track_size : 0;
+}
+
 /* ---- mos_drive_perf accessors (mos_query_drive_perf) ---------------- *
  * Plain values, NULL-tolerant. Speeds meaningful only when have. */
 

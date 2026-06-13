@@ -243,6 +243,7 @@ add_executable(mos
     cli/drive.c
     cli/features.c
     cli/tray.c
+    cli/capacity.c
     cli/list.c
     cli/watch.c
     cli/human.c
@@ -446,6 +447,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         cli/drive.c
         cli/features.c
         cli/tray.c
+        cli/capacity.c
     )
     target_include_directories(mos_emit_fixtures PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include

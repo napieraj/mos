@@ -31,6 +31,7 @@ extern bool        flag_metadata;
 extern bool        flag_drive;
 extern bool        flag_features;
 extern bool        flag_tray;     /* tray subcommand (control verbs) */
+extern bool        flag_capacity; /* capacity subcommand (mos.capacity.v1) */
 extern bool        flag_force;     /* tray eject --force (unlock-then-eject) */
 extern bool        flag_persistent;/* tray lock/unlock --persistent */
 extern bool        flag_probe;    /* probe subcommand (MOS_CLI_PROBE builds) */
@@ -133,6 +134,7 @@ int mos_cli_run_metadata(void); /* disc identity (mos.metadata.v1) */
 int mos_cli_run_drive(void);    /* drive facts (mos.drive.v1) */
 int mos_cli_run_features(void); /* MMC feature list (mos.features.v1) */
 int mos_cli_run_tray(void);     /* tray control verbs (mos.tray.v1) */
+int mos_cli_run_capacity(void); /* disc capacity (mos.capacity.v1) */
 int mos_cli_run_list(void);
 int mos_cli_run_watch(void);
 int mos_cli_run_probe(void);   /* defined only in MOS_CLI_PROBE builds

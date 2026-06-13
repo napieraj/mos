@@ -336,6 +336,28 @@ real hardware yet — `mos tray` is built to T10 04-349r1 + Apple's kext
 source and is on the v0.4 hardware-falsification path; see
 `doc/research/2026-06-13-tray-control-feasibility.md`.)
 
+### Capacity
+
+`mos capacity --json` emits one `mos.capacity.v1` document — how big is
+the loaded disc — **without issuing a capacity command**. The whole-disk
+byte size (`media_bytes` / `block_bytes` / derived `media_blocks`) is the
+kernel's own attach-time READ CAPACITY result, read off the IOMedia node
+as a registry property: no SCSI command, no exclusive access, so it works
+on a **mounted** disc where a raw READ CAPACITY would return busy. The
+`recordable` object is the append-state view from READ TRACK INFORMATION
+(the same non-exclusive read `mos metadata`'s `track_info` uses) —
+`free_blocks`, `next_writable` (the append point, null on a closed/pressed
+track), and `track_size`.
+
+The two halves are independently nullable: a pressed disc reports
+`media_bytes` but a closed `recordable` (no append point); a blank
+recordable reports no `media_bytes` (there is no whole-disk node until it
+is recorded) but a `recordable` with a valid `next_writable`; an empty
+drive, neither. The maximum *formattable* capacity of a blank disc (READ
+FORMAT CAPACITIES) is deliberately not reported — mos is a state reporter
+feeding rippers, not a burn planner; see
+`doc/research/2026-06-13-read-capacity-feasibility.md`.
+
 ### Shell integration
 
 The core pattern — act on every disc that turns readable, on any

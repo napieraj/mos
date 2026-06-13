@@ -585,6 +585,57 @@ uint32_t mos_track_info_free_blocks(const mos_track_info *t);
 uint32_t mos_track_info_track_size(const mos_track_info *t);
 uint32_t mos_track_info_last_recorded(const mos_track_info *t);
 
+/* ---- Disc capacity (v0.4 typed API) ---------------------------------- */
+
+/* Result of a capacity query. Opaque, handle-owned; valid until the next
+   mos_query_capacity() call or mos_close(). */
+typedef struct mos_capacity mos_capacity;
+
+/*
+ * Assemble the disc's capacity WITHOUT issuing a capacity command. Two
+ * sources, both already available to an open handle:
+ *   - the whole-disk IOMedia node's kernel-cached byte size and natural
+ *     block size (kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey) — the
+ *     result of the kernel's own attach-time READ CAPACITY, a registry
+ *     property read with NO SCSI command and NO exclusive access, so it
+ *     works on MOUNTED media (where a raw READ CAPACITY would return
+ *     BUSY); captured at open alongside the rest of the whole-disk
+ *     identity (open-time semantics — see the held-handle note above);
+ *     and
+ *   - the recordable / append-state view (free blocks, next writable
+ *     address, first-track size) from READ TRACK INFORMATION, the same
+ *     non-exclusive convenience read mos_query_track_info uses, issued
+ *     fresh here (best-effort: a drive that rejects it simply leaves the
+ *     recordable view absent).
+ * The IOMedia size is absent on blank or absent media (no whole-disk
+ * node); the recordable view is absent on a pressed disc with no
+ * readable track. So a result can carry the media size, the recordable
+ * view, both, or neither — each independently nullable. No raw CDB is
+ * authored (the one-raw-CDB doctrine is untouched); design + the
+ * READ FORMAT CAPACITIES deferral:
+ * doc/research/2026-06-13-read-capacity-feasibility.md. `out` REQUIRED
+ * (NULL => MOS_ERR_INVALID_ARG); on success *out is valid until the next
+ * query or mos_close().
+ */
+mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out);
+
+/* Accessors. NULL-tolerant (NULL reads as 0/false). media_bytes /
+   block_bytes are 0 when the whole-disk IOMedia node carries no size
+   (blank/absent media); media_blocks is then 0. The recordable view
+   (free_blocks / next_writable / track_size) is meaningful only when
+   have_recordable is true, and next_writable only when nwa_valid. */
+bool     mos_capacity_have_media_size(const mos_capacity *c);
+uint64_t mos_capacity_media_bytes(const mos_capacity *c);
+uint32_t mos_capacity_block_bytes(const mos_capacity *c);
+/* Whole-disk size in natural blocks (media_bytes / block_bytes), or 0
+   when either is absent — derived, never a separately-reported field. */
+uint64_t mos_capacity_media_blocks(const mos_capacity *c);
+bool     mos_capacity_have_recordable(const mos_capacity *c);
+bool     mos_capacity_nwa_valid(const mos_capacity *c);
+uint32_t mos_capacity_free_blocks(const mos_capacity *c);
+uint32_t mos_capacity_next_writable(const mos_capacity *c);
+uint32_t mos_capacity_track_size(const mos_capacity *c);
+
 /* ---- Drive speeds (v0.4 typed API) ----------------------------------- */
 
 /* Result of a drive-speed query. Opaque, handle-owned; valid until the

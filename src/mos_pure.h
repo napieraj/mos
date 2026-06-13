@@ -405,6 +405,35 @@ struct mos_track_info {
 bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
                                    struct mos_track_info *out);
 
+/* ---- Disc capacity (assembled, no command) ------------------------- *
+ *
+ * Unlike every struct above, mos_capacity has NO pure decoder: there is
+ * no capacity reply to parse. The IOKit shell assembles it from two
+ * sources it already holds (doc/research/2026-06-13-read-capacity-
+ * feasibility.md):
+ *   - the whole-disk IOMedia node's kernel-cached byte size and natural
+ *     block size (kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey) — the
+ *     result of the kernel's own attach-time READ CAPACITY, a registry
+ *     property read with no SCSI command and no exclusive access (so it
+ *     works on MOUNTED media, where a raw READ CAPACITY would BUSY); and
+ *   - the recordable / append-state view from READ TRACK INFORMATION
+ *     (mos_track_info), the same non-exclusive convenience read.
+ * media_bytes / block_bytes are 0 when the whole-disk node carries no
+ * size (blank or absent media — there is no node until the disc is
+ * formatted/recorded); have_recordable is false when READ TRACK
+ * INFORMATION did not answer (e.g. an empty drive). New fields append at
+ * the END. */
+struct mos_capacity {
+    uint64_t media_bytes;     /* kIOMediaSizeKey; 0 == no whole-disk size  */
+    uint32_t block_bytes;     /* kIOMediaPreferredBlockSizeKey; 0 == none  */
+    bool     have_recordable; /* READ TRACK INFORMATION answered           */
+    bool     nwa_valid;       /* next_writable meaningful (TI reply bit)    */
+    uint32_t free_blocks;     /* recordable free space (blocks)            */
+    uint32_t next_writable;   /* append point (valid iff nwa_valid)        */
+    uint32_t track_size;      /* first-track size (blocks); pressed-disc
+                                 capacity for single-track media           */
+};
+
 /* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *
  *
  * The drive's read/write performance from GET PERFORMANCE (0xAC, Type

@@ -1,0 +1,12 @@
+{
+  "schema": "mos.capacity.v1",
+  "bsd_node": null,
+  "media_bytes": null,
+  "block_bytes": null,
+  "media_blocks": null,
+  "recordable": {
+    "free_blocks": 11826176,
+    "next_writable": 0,
+    "track_size": 11826176
+  }
+}
