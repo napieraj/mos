@@ -1,16 +1,20 @@
 {
   "schema": "mos.drive.v1",
-  "bsd_node": null,
   "registry_id": 4295021843,
   "vendor": "PIONEER",
   "product": "BD-RW BDR-XS07",
   "revision": "1.01",
+  "serial": null,
   "capabilities": {
     "aacs": false,
     "aacs_version": null,
     "bus_encryption": null
   },
-  "speeds": null,
+  "speeds": {
+    "descriptor_count": 4,
+    "max_read_kbps": 10560
+  },
   "mechanical": null,
-  "error_recovery": null
+  "error_recovery": null,
+  "bsd_node": null
 }

@@ -116,6 +116,23 @@ in `AGENTS.md`. The chain of files is the audit trail.
   identity-family heuristic, which is a guess, not detection). Track
   closed at Phase A.
 
+- `2026-06-13-disc-tools-state-survey.md` — Ecosystem cross-reference
+  (libcdio, MediaInfo, dvd+rw-mediainfo, ddrescue, redumper,
+  xorriso/libburn, dvdisaster, cdrdao, sg3_utils, cdrom_id, drutil):
+  what each surfaces as drive/disc state, by what mechanism, and the
+  candidate enrichment paths tiered against the scope doctrine. Two
+  load-bearing corrections: CONFIRMS MediaInfo is file-only (the
+  "TOC from kernel cache" claim is libcdio's `kIOCDMediaTOCKey`,
+  CD-only, full-TOC/MSF shape), and OVERRIDES a sub-agent claim that
+  `GetPerformance`/`ReadTrackInformation` lack convenience wrappers
+  (they do not — `ARCHITECTURE.md:834`), which moves capacity/speeds/
+  mechanical-state from raw-CDB to convenience-method scope. Ranked
+  recommendation: extend READ DISC STRUCTURE (DVD physical/copyright/
+  mfr-ID), then capacity/NWA via `ReadTrackInformation`. Records
+  redumper as proof the macOS raw path works on console privilege
+  (mos's one-raw-CDB rule is self-imposed scope) and libburn's macOS
+  MMC path as dead (disabled behind `GET_SCSI_FIXED`).
+
 (An entry for a `2026-04-26-doctrine-review.md` note previously
 appeared in this index; that file was never committed and the entry
 was removed 2026-06-10.)

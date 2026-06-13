@@ -282,3 +282,239 @@ const char *mos_disc_id_revision(const mos_disc_id *d)
 {
     return (d && d->revision[0]) ? d->revision : NULL;
 }
+
+/* ---- mos_physical_structure accessors (mos_query_physical_structure) - *
+ * Plain values, NULL-tolerant. Physical fields read 0/false unless
+ * have_physical; copyright fields unless have_copyright — the emitters
+ * gate on the have_* accessors. */
+
+bool mos_physical_structure_have_physical(const mos_physical_structure *d)
+{
+    return d ? d->have_physical : false;
+}
+
+uint8_t mos_physical_structure_book_type(const mos_physical_structure *d)
+{
+    return d ? d->book_type : 0;
+}
+
+uint8_t mos_physical_structure_part_version(const mos_physical_structure *d)
+{
+    return d ? d->part_version : 0;
+}
+
+uint8_t mos_physical_structure_disc_size(const mos_physical_structure *d)
+{
+    return d ? d->disc_size : 0;
+}
+
+uint8_t mos_physical_structure_max_rate(const mos_physical_structure *d)
+{
+    return d ? d->max_rate : 0;
+}
+
+uint8_t mos_physical_structure_layer_type(const mos_physical_structure *d)
+{
+    return d ? d->layer_type : 0;
+}
+
+uint8_t mos_physical_structure_track_path(const mos_physical_structure *d)
+{
+    return d ? d->track_path : 0;
+}
+
+uint8_t mos_physical_structure_num_layers(const mos_physical_structure *d)
+{
+    return d ? d->num_layers : 0;
+}
+
+uint8_t mos_physical_structure_linear_density(const mos_physical_structure *d)
+{
+    return d ? d->linear_density : 0;
+}
+
+uint8_t mos_physical_structure_track_density(const mos_physical_structure *d)
+{
+    return d ? d->track_density : 0;
+}
+
+bool mos_physical_structure_bca(const mos_physical_structure *d)
+{
+    return d ? d->bca : false;
+}
+
+uint32_t mos_physical_structure_start_sector(const mos_physical_structure *d)
+{
+    return d ? d->start_sector : 0;
+}
+
+uint32_t mos_physical_structure_end_sector(const mos_physical_structure *d)
+{
+    return d ? d->end_sector : 0;
+}
+
+uint32_t mos_physical_structure_end_sector_l0(const mos_physical_structure *d)
+{
+    return d ? d->end_sector_l0 : 0;
+}
+
+bool mos_physical_structure_have_copyright(const mos_physical_structure *d)
+{
+    return d ? d->have_copyright : false;
+}
+
+uint8_t mos_physical_structure_protection(const mos_physical_structure *d)
+{
+    return d ? d->protection : 0;
+}
+
+uint8_t mos_physical_structure_region(const mos_physical_structure *d)
+{
+    return d ? d->region : 0;
+}
+
+/* ---- mos_track_info accessors (mos_query_track_info) ---------------- *
+ * Plain values, NULL-tolerant. next_writable/last_recorded are valid
+ * only when nwa_valid/lra_valid — the emitter gates on those. */
+
+uint16_t mos_track_info_track_number(const mos_track_info *t)
+{
+    return t ? t->track_number : 0;
+}
+
+uint16_t mos_track_info_session_number(const mos_track_info *t)
+{
+    return t ? t->session_number : 0;
+}
+
+uint8_t mos_track_info_track_mode(const mos_track_info *t)
+{
+    return t ? t->track_mode : 0;
+}
+
+uint8_t mos_track_info_data_mode(const mos_track_info *t)
+{
+    return t ? t->data_mode : 0;
+}
+
+bool mos_track_info_blank(const mos_track_info *t)
+{
+    return t ? t->blank : false;
+}
+
+bool mos_track_info_damage(const mos_track_info *t)
+{
+    return t ? t->damage : false;
+}
+
+bool mos_track_info_nwa_valid(const mos_track_info *t)
+{
+    return t ? t->nwa_valid : false;
+}
+
+bool mos_track_info_lra_valid(const mos_track_info *t)
+{
+    return t ? t->lra_valid : false;
+}
+
+uint32_t mos_track_info_track_start(const mos_track_info *t)
+{
+    return t ? t->track_start : 0;
+}
+
+uint32_t mos_track_info_next_writable(const mos_track_info *t)
+{
+    return t ? t->next_writable : 0;
+}
+
+uint32_t mos_track_info_free_blocks(const mos_track_info *t)
+{
+    return t ? t->free_blocks : 0;
+}
+
+uint32_t mos_track_info_track_size(const mos_track_info *t)
+{
+    return t ? t->track_size : 0;
+}
+
+uint32_t mos_track_info_last_recorded(const mos_track_info *t)
+{
+    return t ? t->last_recorded : 0;
+}
+
+/* ---- mos_drive_perf accessors (mos_query_drive_perf) ---------------- *
+ * Plain values, NULL-tolerant. Speeds meaningful only when have. */
+
+bool mos_drive_perf_have(const mos_drive_perf *p)
+{
+    return p ? p->have : false;
+}
+
+uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p)
+{
+    return p ? p->descriptor_count : 0;
+}
+
+uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p)
+{
+    return p ? p->max_read_kbps : 0;
+}
+
+uint32_t mos_drive_perf_max_write_kbps(const mos_drive_perf *p)
+{
+    return p ? p->max_write_kbps : 0;
+}
+
+/* ---- mos_mode_caps accessors (mos_query_mode_caps) ----------------- */
+
+uint8_t mos_mode_caps_loading_mechanism(const mos_mode_caps *m)
+{
+    return m ? m->loading_mechanism : 0;
+}
+
+bool mos_mode_caps_can_eject(const mos_mode_caps *m)
+{
+    return m ? m->can_eject : false;
+}
+
+bool mos_mode_caps_lock_supported(const mos_mode_caps *m)
+{
+    return m ? m->lock_supported : false;
+}
+
+bool mos_mode_caps_locked(const mos_mode_caps *m)
+{
+    return m ? m->locked : false;
+}
+
+uint16_t mos_mode_caps_buffer_kb(const mos_mode_caps *m)
+{
+    return m ? m->buffer_kb : 0;
+}
+
+/* ---- mos_error_recovery accessors (mos_query_error_recovery) -------- */
+
+bool mos_error_recovery_awre(const mos_error_recovery *e)
+{
+    return e ? e->awre : false;
+}
+
+bool mos_error_recovery_arre(const mos_error_recovery *e)
+{
+    return e ? e->arre : false;
+}
+
+bool mos_error_recovery_per(const mos_error_recovery *e)
+{
+    return e ? e->per : false;
+}
+
+bool mos_error_recovery_dcr(const mos_error_recovery *e)
+{
+    return e ? e->dcr : false;
+}
+
+uint8_t mos_error_recovery_read_retry_count(const mos_error_recovery *e)
+{
+    return e ? e->read_retry_count : 0;
+}

@@ -11,5 +11,8 @@
     "aacs_version": 68,
     "bus_encryption": false,
     "libredrive": true
-  }
+  },
+  "speeds": null,
+  "mechanical": null,
+  "error_recovery": null
 }

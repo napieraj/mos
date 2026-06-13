@@ -323,6 +323,147 @@ struct mos_disc_id {
 bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
                                    struct mos_disc_id *out);
 
+/* ---- READ DISC STRUCTURE / physical structure decode (mos_physstruct.c) --- *
+ *
+ * Physical Format Information (READ DISC STRUCTURE 0xAD, DVD/HD-DVD media
+ * type, format 0x00) and Copyright Management Information (format 0x01).
+ * "Physical structure" rather than "DVD": the media-type-0 reply carries
+ * HD-DVD book types (0x4..0x6) as well as DVD ones. The physical fields
+ * are geometry the disc reports (book type, layer layout, data-area
+ * sector boundaries — end_sector_l0 is the layer break); the copyright
+ * fields are the protection-system type and the region mask. All read at
+ * CONSTANT offsets inside a fixed buffer; the only device length (the
+ * structure-data-length header) can only shrink the trusted region.
+ * Classification (book_type => media name, cpst => "CSS-protected") is
+ * the consumer's. The two halves share one struct: have_physical /
+ * have_copyright say which the adapter merged in. New fields append at
+ * the END (ABI-safe; accessors are the contract). */
+struct mos_physical_structure {
+    bool     have_physical;     /* format 0x00 was parsed */
+    uint8_t  book_type;         /* base[0] 7:4  (0 DVD-ROM, 2 DVD-R, ...) */
+    uint8_t  part_version;      /* base[0] 3:0  */
+    uint8_t  disc_size;         /* base[1] 7:4  (0 120mm, 1 80mm) */
+    uint8_t  max_rate;          /* base[1] 3:0  */
+    uint8_t  layer_type;        /* base[2] 3:0  */
+    uint8_t  track_path;        /* base[2] bit4 (0 ptp, 1 otp) */
+    uint8_t  num_layers;        /* base[2] 6:5 + 1 (1 or 2 layers) */
+    uint8_t  linear_density;    /* base[3] 7:4  */
+    uint8_t  track_density;     /* base[3] 3:0  */
+    bool     bca;               /* base[16] bit7 */
+    uint32_t start_sector;      /* base[5..7]   24-bit PSN of data area */
+    uint32_t end_sector;        /* base[9..11]  24-bit end PSN */
+    uint32_t end_sector_l0;     /* base[13..15] 24-bit layer-0 end (break) */
+
+    bool     have_copyright;    /* format 0x01 was parsed */
+    uint8_t  protection;        /* CPST: 0 none, 1 CSS/CPPM, 2 CPRM, 3 AACS */
+    uint8_t  region;            /* RMI region-management mask */
+};
+
+/* Parse the Physical Format Information (format 0x00) / Copyright
+ * Management Information (format 0x01) halves into *out. Each sets its
+ * own have_* flag and fills its own fields; the adapter zero-inits the
+ * struct once and calls both. True only when the trusted region (min of
+ * `len` and the reply's declared length) reaches the last needed byte.
+ * Pure, fixed-offset, no-OOB — fuzz/ASan-gated. */
+bool mos_internal_physical_format_parse(const uint8_t *buf, size_t len,
+                                        struct mos_physical_structure *out);
+bool mos_internal_copyright_mgmt_parse(const uint8_t *buf, size_t len,
+                                       struct mos_physical_structure *out);
+
+/* ---- READ TRACK INFORMATION decode (mos_trackinfo.c) --------------- *
+ *
+ * The capacity / append-state surface of one track from READ TRACK
+ * INFORMATION (0x52): track start, next writable address, free blocks,
+ * track size, last recorded address, plus the track/data mode and
+ * blank/damage bits. next_writable and last_recorded are meaningful only
+ * when nwa_valid / lra_valid (the reply's own validity bits) are set.
+ * Read at CONSTANT offsets; the only device length (the Track
+ * Information Length header) can only shrink the trusted region. New
+ * fields append at the END. */
+struct mos_track_info {
+    uint16_t track_number;     /* byte 2 (+ byte 32 MSB on long replies) */
+    uint16_t session_number;   /* byte 3 (+ byte 33 MSB) */
+    uint8_t  track_mode;       /* byte 5 bits 3:0 (Q-channel control) */
+    uint8_t  data_mode;        /* byte 6 bits 3:0 */
+    bool     blank;            /* byte 6 bit 6 */
+    bool     damage;           /* byte 5 bit 5 */
+    bool     nwa_valid;        /* byte 7 bit 0 */
+    bool     lra_valid;        /* byte 7 bit 1 */
+    uint32_t track_start;      /* bytes 8..11  */
+    uint32_t next_writable;    /* bytes 12..15 (valid iff nwa_valid) */
+    uint32_t free_blocks;      /* bytes 16..19 */
+    uint32_t track_size;       /* bytes 24..27 */
+    uint32_t last_recorded;    /* bytes 28..31 (valid iff lra_valid) */
+};
+
+/* Parse a Track Information Block into *out. True only when the trusted
+ * region (min of `len` and the reply's declared length) reaches the Last
+ * Recorded Address (byte 31). Pure, fixed-offset, no-OOB — fuzz/ASan-
+ * gated. */
+bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
+                                   struct mos_track_info *out);
+
+/* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *
+ *
+ * The drive's read/write performance from GET PERFORMANCE (0xAC, Type
+ * 00h Performance Data — the type the Apple convenience method exposes),
+ * summarized: max read and max write performance (kB/s) and the
+ * descriptor count. The read/write split is the CDB WRITE bit, so the
+ * adapter issues the command twice and fills this struct from the two
+ * replies. have is false when neither direction returned a descriptor
+ * (media-dependent — data, not error). Spec-derived layout (no in-repo
+ * capture yet); a real capture is a falsifier per the hardware ADR. New
+ * fields append at the END. */
+struct mos_drive_perf {
+    bool     have;              /* >= 1 descriptor in either direction */
+    uint16_t descriptor_count;  /* from the read-direction reply       */
+    uint32_t max_read_kbps;     /* max performance, WRITE=0 reply       */
+    uint32_t max_write_kbps;    /* max performance, WRITE=1 reply       */
+};
+
+/* Decode one Performance Data reply: the max performance (kB/s) across
+ * its Nominal Performance Descriptors and the descriptor count. True
+ * when the 8-byte header is present and coherent (list may be empty).
+ * Pure, fixed-offset, no-OOB — fuzz/ASan-gated. The adapter assembles
+ * the struct above from two calls (WRITE=0 / WRITE=1). */
+bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
+                                  uint32_t *max_kbps, uint16_t *count);
+
+/* ---- MODE SENSE(10) page decode (mos_modepage.c) ------------------- *
+ *
+ * Two read-only optical-specific pages (AGENTS 2026-06-13 addendum):
+ * page 0x2A (mechanical: loading mechanism, eject/lock support, the live
+ * locked bit, buffer size) and page 0x01 (read error-recovery config).
+ * Decoded by a bounded page walker; the only device lengths (mode data
+ * length, block descriptor length, per-page length) can only shrink the
+ * trusted region, and the walk strictly advances. New fields append at
+ * the END. */
+struct mos_mode_caps {
+    bool     have;              /* page 0x2A was present */
+    uint8_t  loading_mechanism; /* page[6] 7:5 (0 caddy,1 tray,2 popup,...) */
+    bool     can_eject;         /* page[6] bit 3 */
+    bool     lock_supported;    /* page[6] bit 1 */
+    bool     locked;            /* page[6] bit 2 (live state) */
+    uint16_t buffer_kb;         /* page[12..13] BE, KB */
+};
+
+struct mos_error_recovery {
+    bool    have;               /* page 0x01 was present */
+    bool    awre;               /* page[2] bit 7: auto write reallocation */
+    bool    arre;               /* page[2] bit 6: auto read reallocation */
+    bool    per;                /* page[2] bit 2: post error */
+    bool    dcr;                /* page[2] bit 0: disable correction */
+    uint8_t read_retry_count;   /* page[3] */
+};
+
+/* Parse MODE SENSE(10) for page 0x2A / 0x01 into *out. True only when the
+ * page is present and long enough for the fields read. Pure, bounded,
+ * no-OOB — fuzz/ASan-gated. */
+bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
+                                  struct mos_mode_caps *out);
+bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
+                                       struct mos_error_recovery *out);
+
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
  * True for the four SAM-5 status values that mean "drive contended,

@@ -41,6 +41,8 @@ typedef struct {
     const mos_disc_info *di;             /* NULL = unavailable          */
     const mos_toc       *toc;            /* NULL = unavailable          */
     const mos_disc_id   *did;            /* NULL = non-BD or unavailable  */
+    const mos_physical_structure *ps;    /* NULL = non-DVD/HD-DVD or unavail */
+    const mos_track_info *ti;            /* NULL = unavailable          */
     bool                 mounted;
     char                 volume_name[256];
     char                 volume_path[1024];
@@ -112,12 +114,15 @@ static void emit_json(const metadata_doc *d)
         fputs("null", stdout);
     }
 
+    /* disc_structure carries BOTH the BD DI identity (did) and the
+       DVD/HD-DVD physical/copyright structure (ps). It is non-null when
+       either half answered; each half emits null when absent. */
     fputs(",\n    \"disc_structure\": ", stdout);
-    if (d->did) {
-        const char *dt = mos_disc_id_disc_type(d->did);
-        const char *mf = mos_disc_id_manufacturer(d->did);
-        const char *mt = mos_disc_id_media_type(d->did);
-        const char *rv = mos_disc_id_revision(d->did);
+    if (d->did || d->ps) {
+        const char *dt = d->did ? mos_disc_id_disc_type(d->did)   : NULL;
+        const char *mf = d->did ? mos_disc_id_manufacturer(d->did): NULL;
+        const char *mt = d->did ? mos_disc_id_media_type(d->did)  : NULL;
+        const char *rv = d->did ? mos_disc_id_revision(d->did)    : NULL;
         fputs("{\n      \"disc_type\": ", stdout);
         if (dt) mos_cli_json_str(stdout, dt); else fputs("null", stdout);
         fputs(",\n      \"manufacturer_id\": ", stdout);
@@ -126,6 +131,80 @@ static void emit_json(const metadata_doc *d)
         if (mt) mos_cli_json_str(stdout, mt); else fputs("null", stdout);
         fputs(",\n      \"revision\": ", stdout);
         if (rv) mos_cli_json_str(stdout, rv); else fputs("null", stdout);
+
+        fputs(",\n      \"physical\": ", stdout);
+        if (d->ps && mos_physical_structure_have_physical(d->ps)) {
+            const char *bt = mos_book_type_name(
+                                 mos_physical_structure_book_type(d->ps));
+            fprintf(stdout, "{\n        \"book_type\": %u, \"book_type_name\": ",
+                    mos_physical_structure_book_type(d->ps));
+            if (bt) mos_cli_json_str(stdout, bt); else fputs("null", stdout);
+            fprintf(stdout,
+                    ",\n        \"part_version\": %u, \"disc_size\": %u, "
+                    "\"max_rate\": %u, \"num_layers\": %u,\n        "
+                    "\"track_path\": \"%s\", \"layer_type\": %u, "
+                    "\"linear_density\": %u, \"track_density\": %u,\n        "
+                    "\"bca\": %s, \"start_sector\": %u, \"end_sector\": %u, "
+                    "\"end_sector_l0\": %u\n      }",
+                    mos_physical_structure_part_version(d->ps),
+                    mos_physical_structure_disc_size(d->ps),
+                    mos_physical_structure_max_rate(d->ps),
+                    mos_physical_structure_num_layers(d->ps),
+                    mos_track_path_name(mos_physical_structure_track_path(d->ps)),
+                    mos_physical_structure_layer_type(d->ps),
+                    mos_physical_structure_linear_density(d->ps),
+                    mos_physical_structure_track_density(d->ps),
+                    mos_physical_structure_bca(d->ps) ? "true" : "false",
+                    mos_physical_structure_start_sector(d->ps),
+                    mos_physical_structure_end_sector(d->ps),
+                    mos_physical_structure_end_sector_l0(d->ps));
+        } else {
+            fputs("null", stdout);
+        }
+
+        fputs(",\n      \"copyright\": ", stdout);
+        if (d->ps && mos_physical_structure_have_copyright(d->ps)) {
+            const char *pn = mos_protection_name(
+                                 mos_physical_structure_protection(d->ps));
+            fprintf(stdout, "{\"protection\": %u, \"protection_name\": ",
+                    mos_physical_structure_protection(d->ps));
+            if (pn) mos_cli_json_str(stdout, pn); else fputs("null", stdout);
+            fprintf(stdout, ", \"region\": %u}",
+                    mos_physical_structure_region(d->ps));
+        } else {
+            fputs("null", stdout);
+        }
+        fputs("\n    }", stdout);
+    } else {
+        fputs("null", stdout);
+    }
+
+    fputs(",\n    \"track_info\": ", stdout);
+    if (d->ti) {
+        fprintf(stdout,
+                "{\n      \"track_number\": %u, \"session_number\": %u, "
+                "\"track_mode\": %u, \"data_mode\": %u,\n      "
+                "\"blank\": %s, \"damage\": %s, \"track_start\": %u,\n      "
+                "\"next_writable\": ",
+                mos_track_info_track_number(d->ti),
+                mos_track_info_session_number(d->ti),
+                mos_track_info_track_mode(d->ti),
+                mos_track_info_data_mode(d->ti),
+                mos_track_info_blank(d->ti) ? "true" : "false",
+                mos_track_info_damage(d->ti) ? "true" : "false",
+                mos_track_info_track_start(d->ti));
+        if (mos_track_info_nwa_valid(d->ti))
+            fprintf(stdout, "%u", mos_track_info_next_writable(d->ti));
+        else
+            fputs("null", stdout);
+        fprintf(stdout, ", \"free_blocks\": %u, \"track_size\": %u,\n      "
+                "\"last_recorded\": ",
+                mos_track_info_free_blocks(d->ti),
+                mos_track_info_track_size(d->ti));
+        if (mos_track_info_lra_valid(d->ti))
+            fprintf(stdout, "%u", mos_track_info_last_recorded(d->ti));
+        else
+            fputs("null", stdout);
         fputs("\n    }", stdout);
     } else {
         fputs("null", stdout);
@@ -212,8 +291,20 @@ static void emit_human(const metadata_doc *d)
                  mf ? mf : "?", mt ? mt : "?",
                  rv ? " rev " : "", rv ? rv : "");
         (void)mos_safe_ascii(media_buf, media_esc, sizeof media_esc);
+    } else if (d->ps && mos_physical_structure_have_physical(d->ps)) {
+        const char *bt = mos_book_type_name(
+                             mos_physical_structure_book_type(d->ps));
+        uint8_t layers = mos_physical_structure_num_layers(d->ps);
+        snprintf(media_buf, sizeof media_buf, "%s, %u layer%s%s",
+                 bt ? bt : "dvd",
+                 layers, layers == 1 ? "" : "s",
+                 (d->ps && mos_physical_structure_have_copyright(d->ps) &&
+                  mos_physical_structure_protection(d->ps)) ? ", protected" : "");
+        (void)mos_safe_ascii(media_buf, media_esc, sizeof media_esc);
     }
-    pairs[n++] = (mos_cli_human_pair){ "Media", d->did ? media_esc : NULL };
+    pairs[n++] = (mos_cli_human_pair){
+        "Media", (d->did || (d->ps && mos_physical_structure_have_physical(d->ps)))
+                     ? media_esc : NULL };
 
     char toc_buf[64];
     if (d->toc) {
@@ -282,13 +373,25 @@ int run_metadata(void)
     if (mos_query_disc_info(h, &di) == MOS_OK) d.di = di;
     const mos_toc *toc = NULL;
     if (mos_query_toc(h, &toc) == MOS_OK) d.toc = toc;
-    /* Disc structure (BD DI) is Blu-ray-only — gate on the profile class
-       so a CD/DVD does not eat a guaranteed-failing command. */
+    /* Disc structure is media-type-gated on the profile class so a disc
+       does not eat a guaranteed-failing command: BD DI is Blu-ray-only;
+       the physical/copyright structure is the DVD/HD-DVD family. */
     const char *pcls = mos_cli_profile_present(d.profile)
                            ? mos_profile_class(d.profile) : NULL;
     if (pcls && strcmp(pcls, "bd") == 0) {
         const mos_disc_id *did = NULL;
         if (mos_query_disc_id(h, &did) == MOS_OK) d.did = did;
+    } else if (pcls && (strcmp(pcls, "dvd") == 0 ||
+                        strcmp(pcls, "hd_dvd") == 0)) {
+        const mos_physical_structure *ps = NULL;
+        if (mos_query_physical_structure(h, &ps) == MOS_OK) d.ps = ps;
+    }
+    /* Track info / capacity — works on any media with a track; gate on a
+       profile being present (media inserted) so a no-media drive does
+       not eat a guaranteed-failing command. */
+    if (pcls) {
+        const mos_track_info *ti = NULL;
+        if (mos_query_track_info(h, &ti) == MOS_OK) d.ti = ti;
     }
     (void)mos_query_volume(h, &d.mounted,
                            d.volume_name, sizeof d.volume_name,

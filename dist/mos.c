@@ -399,6 +399,147 @@ struct mos_disc_id {
 bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
                                    struct mos_disc_id *out);
 
+/* ---- READ DISC STRUCTURE / physical structure decode (mos_physstruct.c) --- *
+ *
+ * Physical Format Information (READ DISC STRUCTURE 0xAD, DVD/HD-DVD media
+ * type, format 0x00) and Copyright Management Information (format 0x01).
+ * "Physical structure" rather than "DVD": the media-type-0 reply carries
+ * HD-DVD book types (0x4..0x6) as well as DVD ones. The physical fields
+ * are geometry the disc reports (book type, layer layout, data-area
+ * sector boundaries — end_sector_l0 is the layer break); the copyright
+ * fields are the protection-system type and the region mask. All read at
+ * CONSTANT offsets inside a fixed buffer; the only device length (the
+ * structure-data-length header) can only shrink the trusted region.
+ * Classification (book_type => media name, cpst => "CSS-protected") is
+ * the consumer's. The two halves share one struct: have_physical /
+ * have_copyright say which the adapter merged in. New fields append at
+ * the END (ABI-safe; accessors are the contract). */
+struct mos_physical_structure {
+    bool     have_physical;     /* format 0x00 was parsed */
+    uint8_t  book_type;         /* base[0] 7:4  (0 DVD-ROM, 2 DVD-R, ...) */
+    uint8_t  part_version;      /* base[0] 3:0  */
+    uint8_t  disc_size;         /* base[1] 7:4  (0 120mm, 1 80mm) */
+    uint8_t  max_rate;          /* base[1] 3:0  */
+    uint8_t  layer_type;        /* base[2] 3:0  */
+    uint8_t  track_path;        /* base[2] bit4 (0 ptp, 1 otp) */
+    uint8_t  num_layers;        /* base[2] 6:5 + 1 (1 or 2 layers) */
+    uint8_t  linear_density;    /* base[3] 7:4  */
+    uint8_t  track_density;     /* base[3] 3:0  */
+    bool     bca;               /* base[16] bit7 */
+    uint32_t start_sector;      /* base[5..7]   24-bit PSN of data area */
+    uint32_t end_sector;        /* base[9..11]  24-bit end PSN */
+    uint32_t end_sector_l0;     /* base[13..15] 24-bit layer-0 end (break) */
+
+    bool     have_copyright;    /* format 0x01 was parsed */
+    uint8_t  protection;        /* CPST: 0 none, 1 CSS/CPPM, 2 CPRM, 3 AACS */
+    uint8_t  region;            /* RMI region-management mask */
+};
+
+/* Parse the Physical Format Information (format 0x00) / Copyright
+ * Management Information (format 0x01) halves into *out. Each sets its
+ * own have_* flag and fills its own fields; the adapter zero-inits the
+ * struct once and calls both. True only when the trusted region (min of
+ * `len` and the reply's declared length) reaches the last needed byte.
+ * Pure, fixed-offset, no-OOB — fuzz/ASan-gated. */
+bool mos_internal_physical_format_parse(const uint8_t *buf, size_t len,
+                                        struct mos_physical_structure *out);
+bool mos_internal_copyright_mgmt_parse(const uint8_t *buf, size_t len,
+                                       struct mos_physical_structure *out);
+
+/* ---- READ TRACK INFORMATION decode (mos_trackinfo.c) --------------- *
+ *
+ * The capacity / append-state surface of one track from READ TRACK
+ * INFORMATION (0x52): track start, next writable address, free blocks,
+ * track size, last recorded address, plus the track/data mode and
+ * blank/damage bits. next_writable and last_recorded are meaningful only
+ * when nwa_valid / lra_valid (the reply's own validity bits) are set.
+ * Read at CONSTANT offsets; the only device length (the Track
+ * Information Length header) can only shrink the trusted region. New
+ * fields append at the END. */
+struct mos_track_info {
+    uint16_t track_number;     /* byte 2 (+ byte 32 MSB on long replies) */
+    uint16_t session_number;   /* byte 3 (+ byte 33 MSB) */
+    uint8_t  track_mode;       /* byte 5 bits 3:0 (Q-channel control) */
+    uint8_t  data_mode;        /* byte 6 bits 3:0 */
+    bool     blank;            /* byte 6 bit 6 */
+    bool     damage;           /* byte 5 bit 5 */
+    bool     nwa_valid;        /* byte 7 bit 0 */
+    bool     lra_valid;        /* byte 7 bit 1 */
+    uint32_t track_start;      /* bytes 8..11  */
+    uint32_t next_writable;    /* bytes 12..15 (valid iff nwa_valid) */
+    uint32_t free_blocks;      /* bytes 16..19 */
+    uint32_t track_size;       /* bytes 24..27 */
+    uint32_t last_recorded;    /* bytes 28..31 (valid iff lra_valid) */
+};
+
+/* Parse a Track Information Block into *out. True only when the trusted
+ * region (min of `len` and the reply's declared length) reaches the Last
+ * Recorded Address (byte 31). Pure, fixed-offset, no-OOB — fuzz/ASan-
+ * gated. */
+bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
+                                   struct mos_track_info *out);
+
+/* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *
+ *
+ * The drive's read/write performance from GET PERFORMANCE (0xAC, Type
+ * 00h Performance Data — the type the Apple convenience method exposes),
+ * summarized: max read and max write performance (kB/s) and the
+ * descriptor count. The read/write split is the CDB WRITE bit, so the
+ * adapter issues the command twice and fills this struct from the two
+ * replies. have is false when neither direction returned a descriptor
+ * (media-dependent — data, not error). Spec-derived layout (no in-repo
+ * capture yet); a real capture is a falsifier per the hardware ADR. New
+ * fields append at the END. */
+struct mos_drive_perf {
+    bool     have;              /* >= 1 descriptor in either direction */
+    uint16_t descriptor_count;  /* from the read-direction reply       */
+    uint32_t max_read_kbps;     /* max performance, WRITE=0 reply       */
+    uint32_t max_write_kbps;    /* max performance, WRITE=1 reply       */
+};
+
+/* Decode one Performance Data reply: the max performance (kB/s) across
+ * its Nominal Performance Descriptors and the descriptor count. True
+ * when the 8-byte header is present and coherent (list may be empty).
+ * Pure, fixed-offset, no-OOB — fuzz/ASan-gated. The adapter assembles
+ * the struct above from two calls (WRITE=0 / WRITE=1). */
+bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
+                                  uint32_t *max_kbps, uint16_t *count);
+
+/* ---- MODE SENSE(10) page decode (mos_modepage.c) ------------------- *
+ *
+ * Two read-only optical-specific pages (AGENTS 2026-06-13 addendum):
+ * page 0x2A (mechanical: loading mechanism, eject/lock support, the live
+ * locked bit, buffer size) and page 0x01 (read error-recovery config).
+ * Decoded by a bounded page walker; the only device lengths (mode data
+ * length, block descriptor length, per-page length) can only shrink the
+ * trusted region, and the walk strictly advances. New fields append at
+ * the END. */
+struct mos_mode_caps {
+    bool     have;              /* page 0x2A was present */
+    uint8_t  loading_mechanism; /* page[6] 7:5 (0 caddy,1 tray,2 popup,...) */
+    bool     can_eject;         /* page[6] bit 3 */
+    bool     lock_supported;    /* page[6] bit 1 */
+    bool     locked;            /* page[6] bit 2 (live state) */
+    uint16_t buffer_kb;         /* page[12..13] BE, KB */
+};
+
+struct mos_error_recovery {
+    bool    have;               /* page 0x01 was present */
+    bool    awre;               /* page[2] bit 7: auto write reallocation */
+    bool    arre;               /* page[2] bit 6: auto read reallocation */
+    bool    per;                /* page[2] bit 2: post error */
+    bool    dcr;                /* page[2] bit 0: disable correction */
+    uint8_t read_retry_count;   /* page[3] */
+};
+
+/* Parse MODE SENSE(10) for page 0x2A / 0x01 into *out. True only when the
+ * page is present and long enough for the fields read. Pure, bounded,
+ * no-OOB — fuzz/ASan-gated. */
+bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
+                                  struct mos_mode_caps *out);
+bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
+                                       struct mos_error_recovery *out);
+
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
  * True for the four SAM-5 status values that mean "drive contended,
@@ -733,6 +874,21 @@ struct mos_handle {
 
     /* Handle-owned disc-id result (mos_query_disc_id). Same terms. */
     struct mos_disc_id        disc_id;
+
+    /* Handle-owned physical structure result (mos_query_physical_structure).
+       Same terms; plain values, no borrowed pointers. */
+    struct mos_physical_structure physical_structure;
+
+    /* Handle-owned track-info result (mos_query_track_info). Same terms. */
+    struct mos_track_info     track_info;
+
+    /* Handle-owned drive-performance result (mos_query_drive_perf). */
+    struct mos_drive_perf     drive_perf;
+
+    /* Handle-owned MODE SENSE results (mos_query_mode_caps /
+       mos_query_error_recovery). Same terms. */
+    struct mos_mode_caps      mode_caps;
+    struct mos_error_recovery error_recovery;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
@@ -1547,6 +1703,418 @@ bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
     return true;
 }
 
+/* ==== src/mos_physstruct.c ==== */
+/*
+ * mos_physstruct.c — pure, bounds-safe decode of READ DISC STRUCTURE
+ * (MMC-5 0xAD) replies for the DVD / HD-DVD media-type family
+ * (MEDIA_TYPE = 0): the Physical Format Information (format 0x00) and
+ * the Copyright Management Information (format 0x01).
+ *
+ * "Physical structure" rather than "DVD": the same READ DISC STRUCTURE
+ * media-type-0 reply carries HD-DVD book types (0x4..0x6) alongside the
+ * DVD ones, so this decode is not DVD-specific. The BD half (Disc
+ * Information / DI) is a different media type and lives in
+ * mos_discstruct.c (mos_disc_id).
+ *
+ * No IOKit. The IOKit shell issues READ DISC STRUCTURE (DVD/HD-DVD media
+ * type) via the ReadDiscStructure convenience method into a fixed, zero-
+ * initialized buffer and hands that buffer plus its size here. Every
+ * length and value byte is device/disc-reported and therefore hostile;
+ * this file keeps the declared length from steering a read outside
+ * [buf, buf+len) and reads only fixed offsets — no payload byte is ever
+ * used as an offset or length.
+ *
+ * Wire layout (both formats share the READ DISC STRUCTURE 4-byte header):
+ *   [0..1] Disc Structure Data Length (BE) — bytes AFTER this field;
+ *          the response occupies 2 + value bytes. Only ever SHRINKS the
+ *          trusted region.
+ *   [2..3] reserved
+ *   [4..]  the format payload. With `base = &buf[4]`:
+ *
+ *   Format 0x00 (Physical Format Information):
+ *     base[0]  book_type (7:4) | part_version (3:0)
+ *     base[1]  disc_size (7:4) | maximum_rate (3:0)
+ *     base[2]  (rsv 7) | num_layers (6:5) | track_path (4) | layer_type (3:0)
+ *     base[3]  linear_density (7:4) | track_density (3:0)
+ *     base[5..7]   Starting PSN of Data Area (24-bit BE)
+ *     base[9..11]  End PSN of Data Area (24-bit BE)
+ *     base[13..15] End PSN in Layer 0 (24-bit BE) — the layer break
+ *     base[16] bca (bit 7)
+ *
+ *   Format 0x01 (Copyright Management Information):
+ *     buf[4] Copyright Protection System Type (CPST)
+ *     buf[5] Region Management Information (RMI)
+ *
+ * Offsets and the exact byte arithmetic are taken VERBATIM from the
+ * Linux kernel's wire parse — drivers/cdrom/cdrom.c dvd_read_physical
+ * (`base = &buf[4]`; book/version base[0], rate/size base[1],
+ * layer_type/track_path/nlayers base[2], densities base[3],
+ * start_sector base[5]<<16|base[6]<<8|base[7], end_sector base[9..11],
+ * end_sector_l0 base[13..15], bca base[16]>>7) and dvd_read_copyright
+ * (cpst buf[4], rmi buf[5]) — cross-checked against the field set
+ * redumper print_physical_structure decodes. Classification (book_type
+ * => media name, cpst => "CSS-protected") is the CONSUMER's; this decode
+ * surfaces the registered values faithfully and stops there, same
+ * division as the BD DI decode (mos_discstruct.c).
+ *
+ * No-OOB property gated headless under ASan/UBSan by
+ * tests/test_physstruct.c and tests/fuzz_pure.c.
+ */
+
+
+#define PS_HDR        4u                 /* 2-byte length + 2 reserved   */
+/* Physical (0x00): must reach base[16] = buf[PS_HDR+16] = buf[20]. */
+#define PHYS_MIN_LEN  (PS_HDR + 16u + 1u)
+/* Copyright (0x01): must reach the RMI byte, buf[5]. */
+#define COPY_MIN_LEN  6u
+
+/* Trusted end: the smaller of the real buffer and the reply's own
+   declared length (+2 for the length field itself). Computed wide so
+   the +2 cannot wrap. */
+static size_t mos_internal_ps_trusted_end(const uint8_t *buf, size_t len)
+{
+    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    return (len < declared) ? len : declared;
+}
+
+bool mos_internal_physical_format_parse(const uint8_t *buf, size_t len,
+                                        struct mos_physical_structure *out)
+{
+    if (!out) return false;
+    out->have_physical = false;
+    if (!buf || len < PHYS_MIN_LEN) return false;
+    if (mos_internal_ps_trusted_end(buf, len) < PHYS_MIN_LEN) return false;
+
+    const uint8_t *b = &buf[PS_HDR];
+    out->book_type      = (uint8_t)(b[0] >> 4);
+    out->part_version   = (uint8_t)(b[0] & 0x0f);
+    out->disc_size      = (uint8_t)(b[1] >> 4);
+    out->max_rate       = (uint8_t)(b[1] & 0x0f);
+    out->layer_type     = (uint8_t)(b[2] & 0x0f);
+    out->track_path     = (uint8_t)((b[2] >> 4) & 0x01);
+    /* MMC "Number of Layers": 0 => 1 layer, 1 => 2 layers. Surface the
+       human count (1 or 2), not the raw code. */
+    out->num_layers     = (uint8_t)(((b[2] >> 5) & 0x03) + 1u);
+    out->linear_density = (uint8_t)(b[3] >> 4);
+    out->track_density  = (uint8_t)(b[3] & 0x0f);
+    out->start_sector   = (uint32_t)b[5] << 16 | (uint32_t)b[6] << 8 | b[7];
+    out->end_sector     = (uint32_t)b[9] << 16 | (uint32_t)b[10] << 8 | b[11];
+    out->end_sector_l0  = (uint32_t)b[13] << 16 | (uint32_t)b[14] << 8 | b[15];
+    out->bca            = (b[16] >> 7) & 0x01;
+    out->have_physical  = true;
+    return true;
+}
+
+bool mos_internal_copyright_mgmt_parse(const uint8_t *buf, size_t len,
+                                       struct mos_physical_structure *out)
+{
+    if (!out) return false;
+    out->have_copyright = false;
+    if (!buf || len < COPY_MIN_LEN) return false;
+    if (mos_internal_ps_trusted_end(buf, len) < COPY_MIN_LEN) return false;
+
+    out->protection     = buf[4];   /* CPST */
+    out->region         = buf[5];   /* RMI region mask */
+    out->have_copyright = true;
+    return true;
+}
+
+/* ==== src/mos_trackinfo.c ==== */
+/*
+ * mos_trackinfo.c — pure, bounds-safe decode of a READ TRACK INFORMATION
+ * (MMC 0x52) Track Information Block: the capacity / append-state surface
+ * (track start, next writable address, free blocks, track size, last
+ * recorded address) plus the track/data mode and blank/damage bits.
+ *
+ * No IOKit. The IOKit shell issues READ TRACK INFORMATION via the
+ * ReadTrackInformation convenience method into a fixed, zero-initialized
+ * buffer and hands that buffer plus its size here. Every length and
+ * value byte is device-reported and therefore hostile; this file keeps
+ * the declared length from steering a read outside [buf, buf+len) and
+ * reads only fixed offsets.
+ *
+ * Wire layout (the MMC Track Information Block; offsets taken VERBATIM
+ * from the Linux kernel's `struct track_information` in
+ * include/uapi/linux/cdrom.h, which the kernel reads directly off the
+ * 0x52 reply — a packed struct, so field order == byte order):
+ *   [0..1]  Track Information Length (BE) — bytes AFTER this field
+ *   [2]     Track Number (LSB)
+ *   [3]     Session Number (LSB)
+ *   [4]     reserved
+ *   [5]     reserved(7:6) | damage(5) | copy(4) | track_mode(3:0)
+ *   [6]     rt(7) | blank(6) | packet(5) | fp(4) | data_mode(3:0)
+ *   [7]     reserved(7:2) | lra_v(1) | nwa_v(0)
+ *   [8..11]  Track Start Address (BE)
+ *   [12..15] Next Writable Address (BE)   — valid iff nwa_v
+ *   [16..19] Free Blocks (BE)
+ *   [20..23] Fixed Packet Size (BE)
+ *   [24..27] Track Size (BE)
+ *   [28..31] Last Recorded Address (BE)   — valid iff lra_v
+ *   [32..33] Track / Session Number MSB   — MMC-6 longer reply, optional
+ *
+ * The NWA and LRA are surfaced only when their *_v validity bit is set
+ * (the kernel and libburn both gate on these); otherwise the *_valid
+ * accessor is false and the value is meaningless — the consumer must
+ * check. No payload byte is ever used as an offset. No-OOB property
+ * gated headless under ASan/UBSan by tests/test_trackinfo.c and
+ * tests/fuzz_pure.c.
+ */
+
+
+#define TI_MIN_LEN  32u   /* through Last Recorded Address (byte 31) */
+#define TI_MSB_LEN  34u   /* track/session MSB present (byte 33) */
+
+static uint32_t mos_internal_ti_be32(const uint8_t *p)
+{
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+           (uint32_t)p[2] << 8  | p[3];
+}
+
+bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
+                                   struct mos_track_info *out)
+{
+    if (!out) return false;
+    *out = (struct mos_track_info){0};
+    if (!buf || len < TI_MIN_LEN) return false;
+
+    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    size_t end = (len < declared) ? len : declared;
+    if (end < TI_MIN_LEN) return false;
+
+    out->track_number   = buf[2];
+    out->session_number = buf[3];
+    out->track_mode     = (uint8_t)(buf[5] & 0x0f);
+    out->damage         = (buf[5] >> 5) & 0x01;
+    out->data_mode      = (uint8_t)(buf[6] & 0x0f);
+    out->blank          = (buf[6] >> 6) & 0x01;
+    out->lra_valid      = (buf[7] >> 1) & 0x01;
+    out->nwa_valid      = buf[7] & 0x01;
+    out->track_start    = mos_internal_ti_be32(&buf[8]);
+    out->next_writable  = mos_internal_ti_be32(&buf[12]);
+    out->free_blocks    = mos_internal_ti_be32(&buf[16]);
+    out->track_size     = mos_internal_ti_be32(&buf[24]);
+    out->last_recorded  = mos_internal_ti_be32(&buf[28]);
+
+    /* MMC-6 longer reply folds the high byte of track/session number in
+       at 32/33; only if the trusted region reaches them. */
+    if (end >= TI_MSB_LEN) {
+        out->track_number   = (uint16_t)(out->track_number   | (buf[32] << 8));
+        out->session_number = (uint16_t)(out->session_number | (buf[33] << 8));
+    }
+    return true;
+}
+
+/* ==== src/mos_perf.c ==== */
+/*
+ * mos_perf.c — pure, bounds-safe decode of a GET PERFORMANCE (MMC 0xAC)
+ * Performance Data response (the data type the Apple GetPerformance
+ * convenience method retrieves — TYPE 00h; the convenience signature
+ * exposes TOLERANCE/WRITE/EXCEPT but NOT the TYPE field, so write-speed
+ * descriptors, TYPE 03h, are unreachable without a raw CDB and stay out
+ * of scope). The read-vs-write direction is the WRITE bit in the CDB, so
+ * the adapter issues this twice (WRITE=0, WRITE=1) and this decode
+ * returns the max performance found in one reply.
+ *
+ * No IOKit. The IOKit shell issues GET PERFORMANCE via GetPerformance
+ * into a fixed, zero-initialized buffer and hands that buffer plus its
+ * size here. Every length and value byte is device-reported and hostile;
+ * this file keeps the declared length from steering a read outside
+ * [buf, buf+len) and reads only fixed offsets within each descriptor.
+ *
+ * Wire layout (MMC GET PERFORMANCE, Performance Data, TYPE 00h):
+ *   [0..3]  Performance Data Length (BE) — bytes AFTER byte 3
+ *   [4]     bit1 Write, bit0 Except (echo)   [5..7] reserved
+ *   [8..]   Nominal Performance Descriptors, 16 bytes each:
+ *     desc[0..3]   Start LBA
+ *     desc[4..7]   Start Performance (kB/s, BE)
+ *     desc[8..11]  End LBA
+ *     desc[12..15] End Performance (kB/s, BE)
+ *
+ * SPEC-DERIVED, no in-repo capture yet: the Performance Data descriptor
+ * layout is the MMC-6 Nominal Performance Descriptor. Per the AGENTS
+ * hardware ADR this is built to spec; a real GET PERFORMANCE capture is
+ * a falsifier, it does not steer the offsets. The list may be empty (a
+ * drive that declines the direction) — that is data (count 0), not an
+ * error. No payload byte is ever used as an offset. No-OOB property
+ * gated headless under ASan/UBSan by tests/test_perf.c and
+ * tests/fuzz_pure.c.
+ */
+
+
+#define GP_HDR        8u     /* 4-byte data length + 4 reserved/echo */
+#define GP_DESC       16u    /* one Nominal Performance Descriptor */
+#define GP_DESC_CAP   256u   /* clamp: no real drive lists this many */
+
+static uint32_t mos_internal_gp_be32(const uint8_t *p)
+{
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+           (uint32_t)p[2] << 8  | p[3];
+}
+
+/* Decode one GET PERFORMANCE Performance Data reply: the maximum
+   performance (kB/s) across its descriptors and the descriptor count.
+   True when the 8-byte header is present and coherent (the descriptor
+   list may be empty). */
+bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
+                                  uint32_t *max_kbps, uint16_t *count)
+{
+    if (max_kbps) *max_kbps = 0;
+    if (count)    *count = 0;
+    if (!buf || len < GP_HDR) return false;
+
+    /* Performance Data Length counts bytes AFTER byte 3, so the response
+       occupies 4 + value bytes. Declared only ever shrinks the trusted
+       region; computed wide so the +4 cannot wrap. */
+    size_t declared = (size_t)mos_internal_gp_be32(&buf[0]) + 4u;
+    size_t end = (len < declared) ? len : declared;
+    if (end < GP_HDR) return false;
+
+    size_t n = (end - GP_HDR) / GP_DESC;
+    if (n > GP_DESC_CAP) n = GP_DESC_CAP;
+
+    uint32_t mx = 0;
+    for (size_t i = 0; i < n; i++) {
+        const uint8_t *d = &buf[GP_HDR + i * GP_DESC];
+        uint32_t sp = mos_internal_gp_be32(&d[4]);    /* Start Performance */
+        uint32_t ep = mos_internal_gp_be32(&d[12]);   /* End Performance   */
+        if (sp > mx) mx = sp;
+        if (ep > mx) mx = ep;
+    }
+
+    if (max_kbps) *max_kbps = mx;
+    if (count)    *count = (uint16_t)n;
+    return true;
+}
+
+/* ==== src/mos_modepage.c ==== */
+/*
+ * mos_modepage.c — pure, bounds-safe decode of MODE SENSE(10) replies for
+ * the two optical-specific pages the scope doctrine admits (read-only;
+ * AGENTS.md 2026-06-13 addendum): page 0x2A (CD/DVD Capabilities &
+ * Mechanical Status — loading mechanism, eject/lock, buffer size) and
+ * page 0x01 (Read/Write Error Recovery — AWRE/ARRE/PER/DCR + read-retry
+ * count). NO MODE SELECT: mos reports configuration, never tunes it.
+ *
+ * No IOKit. The IOKit shell issues MODE SENSE(10) via the ModeSense10
+ * convenience method into a fixed, zero-initialized buffer and hands that
+ * buffer plus its size here. Every length is device-reported and hostile;
+ * the shared page walker keeps the declared lengths from steering a read
+ * outside [buf, buf+len) and cannot loop (each step strictly advances).
+ *
+ * MODE SENSE(10) mode parameter header:
+ *   [0..1] Mode Data Length (BE) — bytes AFTER this field
+ *   [2]    Medium Type   [3] Device-Specific Parameter
+ *   [4..5] reserved      [6..7] Block Descriptor Length (BE)
+ *   [8 + block_descriptor_length ..] the mode pages, each:
+ *     page[0] PS(7) SPF(6) Page Code(5:0); page[1] Page Length (n)
+ *     page[2..] page data (n bytes). (Sub-page format SPF=1 has a 4-byte
+ *     header with a BE16 length; pages 0x2A/0x01 are page_0 format.)
+ *
+ * Page 0x2A offsets (relative to page start) are from the Linux kernel
+ * sr.c get_capabilities() — loading mechanism page[6]>>5, eject
+ * page[6]&0x08 — plus the standard MMC-3 page-2A buffer size (page[12..13]
+ * BE, KB) and lock bits (page[6] bit1 supported, bit2 state). Page 0x01
+ * is the canonical SPC Read/Write Error Recovery page. The buffer-size
+ * and lock-bit positions have no in-repo capture yet (kernel confirms
+ * only loadmech+eject) — a real MODE SENSE capture is a falsifier per the
+ * hardware ADR, not a design input. No payload byte is ever used as an
+ * offset. No-OOB property gated headless under ASan/UBSan by
+ * tests/test_modepage.c and tests/fuzz_pure.c.
+ */
+
+
+#define MP_HDR  8u   /* MODE SENSE(10) parameter header */
+
+/* Locate a page_0-format mode page by code in a MODE SENSE(10) reply.
+   On success sets *poff (page start) and *plen (page length, i.e. data
+   bytes after the 2-byte page header) and returns true. Bounded: every
+   iteration advances off by at least the page header, so a hostile
+   page-length field cannot loop or read out of bounds. */
+static bool mos_internal_mode_page_find(const uint8_t *buf, size_t len,
+                                        uint8_t want,
+                                        size_t *poff, size_t *plen)
+{
+    if (!buf || len < MP_HDR) return false;
+
+    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    size_t end = (len < declared) ? len : declared;
+    if (end < MP_HDR) return false;
+
+    size_t bdl = (size_t)(((uint16_t)buf[6] << 8) | buf[7]);
+    size_t off = MP_HDR + bdl;
+
+    while (off + 2u <= end) {
+        uint8_t  code = buf[off] & 0x3f;
+        int      spf  = (buf[off] & 0x40) != 0;
+        size_t   hdr, page_len;
+
+        if (spf) {
+            if (off + 4u > end) break;
+            hdr = 4u;
+            page_len = (size_t)(((uint16_t)buf[off + 2] << 8) | buf[off + 3]);
+        } else {
+            hdr = 2u;
+            page_len = buf[off + 1];
+        }
+
+        size_t page_total = hdr + page_len;
+        if (off + page_total > end) break;   /* page claims past trusted end */
+
+        if (!spf && code == want) {
+            *poff = off;
+            *plen = page_len;
+            return true;
+        }
+        if (page_total == 0) break;          /* no-progress guard */
+        off += page_total;
+    }
+    return false;
+}
+
+bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
+                                  struct mos_mode_caps *out)
+{
+    if (!out) return false;
+    *out = (struct mos_mode_caps){0};
+
+    size_t poff, plen;
+    if (!mos_internal_mode_page_find(buf, len, 0x2A, &poff, &plen))
+        return false;
+    /* Need page bytes through 13 (buffer size at page[12..13]); the
+       walker has already bounded poff + 2 + plen to the trusted end. */
+    if (plen < 12u) return false;
+
+    const uint8_t *p = &buf[poff];
+    out->loading_mechanism = (uint8_t)(p[6] >> 5);
+    out->can_eject         = (p[6] & 0x08) != 0;
+    out->lock_supported    = (p[6] & 0x02) != 0;
+    out->locked            = (p[6] & 0x04) != 0;
+    out->buffer_kb         = (uint16_t)((p[12] << 8) | p[13]);
+    out->have              = true;
+    return true;
+}
+
+bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
+                                       struct mos_error_recovery *out)
+{
+    if (!out) return false;
+    *out = (struct mos_error_recovery){0};
+
+    size_t poff, plen;
+    if (!mos_internal_mode_page_find(buf, len, 0x01, &poff, &plen))
+        return false;
+    if (plen < 2u) return false;             /* need page bytes 2 and 3 */
+
+    const uint8_t *p = &buf[poff];
+    out->awre             = (p[2] & 0x80) != 0;
+    out->arre             = (p[2] & 0x40) != 0;
+    out->per              = (p[2] & 0x04) != 0;
+    out->dcr              = (p[2] & 0x01) != 0;
+    out->read_retry_count = p[3];
+    out->have             = true;
+    return true;
+}
+
 /* ==== src/mos_result.c ==== */
 /*
  * mos_result.c — accessors for the opaque mos_state_result and
@@ -1830,6 +2398,242 @@ const char *mos_disc_id_media_type(const mos_disc_id *d)
 const char *mos_disc_id_revision(const mos_disc_id *d)
 {
     return (d && d->revision[0]) ? d->revision : NULL;
+}
+
+/* ---- mos_physical_structure accessors (mos_query_physical_structure) - *
+ * Plain values, NULL-tolerant. Physical fields read 0/false unless
+ * have_physical; copyright fields unless have_copyright — the emitters
+ * gate on the have_* accessors. */
+
+bool mos_physical_structure_have_physical(const mos_physical_structure *d)
+{
+    return d ? d->have_physical : false;
+}
+
+uint8_t mos_physical_structure_book_type(const mos_physical_structure *d)
+{
+    return d ? d->book_type : 0;
+}
+
+uint8_t mos_physical_structure_part_version(const mos_physical_structure *d)
+{
+    return d ? d->part_version : 0;
+}
+
+uint8_t mos_physical_structure_disc_size(const mos_physical_structure *d)
+{
+    return d ? d->disc_size : 0;
+}
+
+uint8_t mos_physical_structure_max_rate(const mos_physical_structure *d)
+{
+    return d ? d->max_rate : 0;
+}
+
+uint8_t mos_physical_structure_layer_type(const mos_physical_structure *d)
+{
+    return d ? d->layer_type : 0;
+}
+
+uint8_t mos_physical_structure_track_path(const mos_physical_structure *d)
+{
+    return d ? d->track_path : 0;
+}
+
+uint8_t mos_physical_structure_num_layers(const mos_physical_structure *d)
+{
+    return d ? d->num_layers : 0;
+}
+
+uint8_t mos_physical_structure_linear_density(const mos_physical_structure *d)
+{
+    return d ? d->linear_density : 0;
+}
+
+uint8_t mos_physical_structure_track_density(const mos_physical_structure *d)
+{
+    return d ? d->track_density : 0;
+}
+
+bool mos_physical_structure_bca(const mos_physical_structure *d)
+{
+    return d ? d->bca : false;
+}
+
+uint32_t mos_physical_structure_start_sector(const mos_physical_structure *d)
+{
+    return d ? d->start_sector : 0;
+}
+
+uint32_t mos_physical_structure_end_sector(const mos_physical_structure *d)
+{
+    return d ? d->end_sector : 0;
+}
+
+uint32_t mos_physical_structure_end_sector_l0(const mos_physical_structure *d)
+{
+    return d ? d->end_sector_l0 : 0;
+}
+
+bool mos_physical_structure_have_copyright(const mos_physical_structure *d)
+{
+    return d ? d->have_copyright : false;
+}
+
+uint8_t mos_physical_structure_protection(const mos_physical_structure *d)
+{
+    return d ? d->protection : 0;
+}
+
+uint8_t mos_physical_structure_region(const mos_physical_structure *d)
+{
+    return d ? d->region : 0;
+}
+
+/* ---- mos_track_info accessors (mos_query_track_info) ---------------- *
+ * Plain values, NULL-tolerant. next_writable/last_recorded are valid
+ * only when nwa_valid/lra_valid — the emitter gates on those. */
+
+uint16_t mos_track_info_track_number(const mos_track_info *t)
+{
+    return t ? t->track_number : 0;
+}
+
+uint16_t mos_track_info_session_number(const mos_track_info *t)
+{
+    return t ? t->session_number : 0;
+}
+
+uint8_t mos_track_info_track_mode(const mos_track_info *t)
+{
+    return t ? t->track_mode : 0;
+}
+
+uint8_t mos_track_info_data_mode(const mos_track_info *t)
+{
+    return t ? t->data_mode : 0;
+}
+
+bool mos_track_info_blank(const mos_track_info *t)
+{
+    return t ? t->blank : false;
+}
+
+bool mos_track_info_damage(const mos_track_info *t)
+{
+    return t ? t->damage : false;
+}
+
+bool mos_track_info_nwa_valid(const mos_track_info *t)
+{
+    return t ? t->nwa_valid : false;
+}
+
+bool mos_track_info_lra_valid(const mos_track_info *t)
+{
+    return t ? t->lra_valid : false;
+}
+
+uint32_t mos_track_info_track_start(const mos_track_info *t)
+{
+    return t ? t->track_start : 0;
+}
+
+uint32_t mos_track_info_next_writable(const mos_track_info *t)
+{
+    return t ? t->next_writable : 0;
+}
+
+uint32_t mos_track_info_free_blocks(const mos_track_info *t)
+{
+    return t ? t->free_blocks : 0;
+}
+
+uint32_t mos_track_info_track_size(const mos_track_info *t)
+{
+    return t ? t->track_size : 0;
+}
+
+uint32_t mos_track_info_last_recorded(const mos_track_info *t)
+{
+    return t ? t->last_recorded : 0;
+}
+
+/* ---- mos_drive_perf accessors (mos_query_drive_perf) ---------------- *
+ * Plain values, NULL-tolerant. Speeds meaningful only when have. */
+
+bool mos_drive_perf_have(const mos_drive_perf *p)
+{
+    return p ? p->have : false;
+}
+
+uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p)
+{
+    return p ? p->descriptor_count : 0;
+}
+
+uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p)
+{
+    return p ? p->max_read_kbps : 0;
+}
+
+uint32_t mos_drive_perf_max_write_kbps(const mos_drive_perf *p)
+{
+    return p ? p->max_write_kbps : 0;
+}
+
+/* ---- mos_mode_caps accessors (mos_query_mode_caps) ----------------- */
+
+uint8_t mos_mode_caps_loading_mechanism(const mos_mode_caps *m)
+{
+    return m ? m->loading_mechanism : 0;
+}
+
+bool mos_mode_caps_can_eject(const mos_mode_caps *m)
+{
+    return m ? m->can_eject : false;
+}
+
+bool mos_mode_caps_lock_supported(const mos_mode_caps *m)
+{
+    return m ? m->lock_supported : false;
+}
+
+bool mos_mode_caps_locked(const mos_mode_caps *m)
+{
+    return m ? m->locked : false;
+}
+
+uint16_t mos_mode_caps_buffer_kb(const mos_mode_caps *m)
+{
+    return m ? m->buffer_kb : 0;
+}
+
+/* ---- mos_error_recovery accessors (mos_query_error_recovery) -------- */
+
+bool mos_error_recovery_awre(const mos_error_recovery *e)
+{
+    return e ? e->awre : false;
+}
+
+bool mos_error_recovery_arre(const mos_error_recovery *e)
+{
+    return e ? e->arre : false;
+}
+
+bool mos_error_recovery_per(const mos_error_recovery *e)
+{
+    return e ? e->per : false;
+}
+
+bool mos_error_recovery_dcr(const mos_error_recovery *e)
+{
+    return e ? e->dcr : false;
+}
+
+uint8_t mos_error_recovery_read_retry_count(const mos_error_recovery *e)
+{
+    return e ? e->read_retry_count : 0;
 }
 
 /* ==== src/mos_state_core.c ==== */
@@ -3845,6 +4649,69 @@ const char *mos_profile_class(uint16_t profile_code)
     }
 }
 
+/* Physical Format Information book-type codes (MMC-5 / the Linux uapi
+   dvd_layer book_type values) — DVD and HD-DVD share this field.
+   Lower_snake_case to match the profile-name convention; unrecognized
+   codes return NULL so consumers fall back to the numeric code. The
+   schema's book-type enum tracks this table (the validate.py drift
+   guard). */
+const char *mos_book_type_name(uint8_t book_type)
+{
+    switch (book_type) {
+        case 0x0: return "dvd_rom";
+        case 0x1: return "dvd_ram";
+        case 0x2: return "dvd_r";
+        case 0x3: return "dvd_rw";
+        case 0x4: return "hd_dvd_rom";
+        case 0x5: return "hd_dvd_ram";
+        case 0x6: return "hd_dvd_r";
+        case 0x9: return "dvd_plus_rw";
+        case 0xA: return "dvd_plus_r";
+        case 0xD: return "dvd_plus_rw_dl";
+        case 0xE: return "dvd_plus_r_dl";
+        default:  return NULL;
+    }
+}
+
+/* Track path: parallel (single-layer / sequential) vs opposite.
+   Explicit returns (not a ternary) so the validate.py drift guard can
+   harvest the token set. */
+const char *mos_track_path_name(uint8_t track_path)
+{
+    switch (track_path & 0x01) {
+        case 0:  return "ptp";
+        default: return "otp";
+    }
+}
+
+/* Copyright Protection System Type (READ DISC STRUCTURE format 0x01,
+   CPST byte). Unrecognized/reserved codes return NULL. */
+const char *mos_protection_name(uint8_t protection)
+{
+    switch (protection) {
+        case 0x00: return "none";
+        case 0x01: return "css_cppm";
+        case 0x02: return "cprm";
+        case 0x03: return "aacs";
+        default:   return NULL;
+    }
+}
+
+/* Loading-mechanism type (MODE SENSE page 0x2A byte 6 bits 7:5).
+   Explicit returns so the validate.py drift guard harvests the tokens;
+   unrecognized/reserved codes return NULL. */
+const char *mos_loading_mechanism_name(uint8_t code)
+{
+    switch (code) {
+        case 0:  return "caddy";
+        case 1:  return "tray";
+        case 2:  return "popup";
+        case 4:  return "changer_disc";
+        case 5:  return "changer_cartridge";
+        default: return NULL;
+    }
+}
+
 /* sysexits.h class for a mos_error. Kept in sync with the table in
    include/mos.h's mos_error_sysexit() doc-comment. */
 int mos_error_sysexit(mos_error e)
@@ -5164,6 +6031,222 @@ mos_error mos_query_disc_id(mos_handle_t *h, const mos_disc_id **out)
         return MOS_ERR_IO;   /* not a DI reply (non-BD, or refused) */
     }
     *out = &h->disc_id;
+    return MOS_OK;
+}
+
+mos_error mos_query_physical_structure(mos_handle_t *h,
+                                       const mos_physical_structure **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Two convenience reads of READ DISC STRUCTURE for the DVD/HD-DVD
+       media type (MEDIA_TYPE=0): FORMAT 0x00 (Physical Format
+       Information) and FORMAT 0x01 (Copyright Management Information).
+       Each into a fixed zero-init buffer — sizeof buf is the trusted
+       length (O-4); the reply's own Disc Structure Data Length can only
+       SHRINK the parse, and an under-filled reply fails the per-format
+       min-length gate. Both halves merge into one handle-owned struct;
+       the reads are independent (partial-readability ladder), so a drive
+       that answers one format but not the other still yields the half it
+       gave. No lock (convenience). */
+    struct mos_physical_structure *d = &h->physical_structure;
+    *d = (struct mos_physical_structure){0};
+
+    uint8_t         buf[2048] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x00,             /* FORMAT = Physical Format Info    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
+        (void)mos_internal_physical_format_parse(buf, sizeof(buf), d);
+
+    memset(buf, 0, sizeof buf);
+    st = 0;
+    sd = (SCSI_Sense_Data){0};
+    rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x01,             /* FORMAT = Copyright Management    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
+        (void)mos_internal_copyright_mgmt_parse(buf, sizeof(buf), d);
+
+    if (!d->have_physical && !d->have_copyright) {
+        return MOS_ERR_IO;   /* neither format answered (non-DVD, or refused) */
+    }
+    *out = d;
+    return MOS_OK;
+}
+
+mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* READ TRACK INFORMATION (0x52) for the first track via the
+       convenience method. ADDRESS_TYPE = 01b (logical track number),
+       ADDRESS = 1 (the first track) — well-defined on any media with a
+       track. 64 bytes covers the Track Information Block (the core block
+       is 36 bytes; MMC-6 extends it slightly). sizeof buf is the trusted
+       length (O-4); the reply's Track Information Length only shrinks the
+       parse. No lock (convenience). Signature confirmed against
+       SCSITaskLib.h (ADDRESS_NUMBER_TYPE, LBA/track/session, buffer,
+       bufferSize, taskStatus, senseData). */
+    uint8_t         buf[64] = {0};
+    SCSITaskStatus  st      = 0;
+    SCSI_Sense_Data sd      = {0};
+
+    IOReturn rc = (*h->mmc)->ReadTrackInformation(
+        h->mmc,
+        (UInt8)0x01,             /* ADDRESS_TYPE = logical track number */
+        (UInt32)1,               /* ADDRESS = first track               */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_track_info_parse(buf, sizeof(buf), &h->track_info)) {
+        return MOS_ERR_IO;   /* truncated/short reply — refused whole */
+    }
+    *out = &h->track_info;
+    return MOS_OK;
+}
+
+/* One GET PERFORMANCE (0xAC) Performance Data read in the given
+   direction (WRITE=0 read, WRITE=1 write). TOLERANCE=10b nominal,
+   EXCEPT=0 (nominal performance), STARTING_LBA=0. Returns MOS_OK and the
+   decoded max performance (kB/s) + descriptor count, or a non-OK code on
+   command failure. Convenience method: no lock. */
+static mos_error mos_internal_get_perf(mos_handle_t *h, uint8_t write,
+                                       uint32_t *max_kbps, uint16_t *count)
+{
+    uint8_t         buf[2048] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->GetPerformance(
+        h->mmc,
+        (UInt8)0x02,             /* TOLERANCE = 10b (nominal)      */
+        (UInt8)write,            /* WRITE                          */
+        (UInt8)0x00,             /* EXCEPT = 0 (nominal perf)      */
+        (UInt32)0,               /* STARTING_LBA                   */
+        (UInt16)64,              /* MAXIMUM_NUMBER_OF_DESCRIPTORS  */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+    if (!mos_internal_perf_data_parse(buf, sizeof(buf), max_kbps, count)) {
+        return MOS_ERR_IO;   /* short/incoherent header */
+    }
+    return MOS_OK;
+}
+
+mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Two Performance Data reads — read direction (WRITE=0) and write
+       direction (WRITE=1) — assembled into one result. The read read is
+       the gate (its success defines `have`); the write read is
+       best-effort (a read-only drive or non-writable medium simply
+       leaves max_write_kbps 0). */
+    struct mos_drive_perf *p = &h->drive_perf;
+    *p = (struct mos_drive_perf){0};
+
+    uint32_t rd_max = 0, wr_max = 0;
+    uint16_t rd_cnt = 0, wr_cnt = 0;
+
+    mos_error e = mos_internal_get_perf(h, 0, &rd_max, &rd_cnt);
+    if (e != MOS_OK) return e;
+
+    (void)mos_internal_get_perf(h, 1, &wr_max, &wr_cnt);  /* best-effort */
+
+    p->descriptor_count = rd_cnt;
+    p->max_read_kbps    = rd_max;
+    p->max_write_kbps   = wr_max;
+    p->have             = (rd_cnt > 0 || wr_cnt > 0);
+    *out = p;
+    return MOS_OK;
+}
+
+/* Shared MODE SENSE(10) issuance for the two read-only optical pages
+   (AGENTS scope addendum 2026-06-13). Signature confirmed against
+   SCSITaskLib.h (LLBAA, DBD, PC, PAGE_CODE, buffer, bufferSize,
+   taskStatus, senseData). PC = 00b (current values); DBD=1 (no block
+   descriptor) keeps the reply compact, though the pure walker tolerates
+   a descriptor either way. Non-exclusive convenience: no lock. */
+static mos_error mos_internal_mode_sense10(mos_handle_t *h, uint8_t page,
+                                           uint8_t *buf, size_t buf_len)
+{
+    SCSITaskStatus  st = 0;
+    SCSI_Sense_Data sd = {0};
+    IOReturn rc = (*h->mmc)->ModeSense10(
+        h->mmc,
+        (UInt8)0,                /* LLBAA = 0                           */
+        (UInt8)1,                /* DBD = 1 (disable block descriptor)  */
+        (UInt8)0x00,             /* PC = current values                 */
+        (UInt8)page,             /* PAGE_CODE                           */
+        buf, (UInt16)buf_len,
+        &st, &sd);
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+    return MOS_OK;
+}
+
+mos_error mos_query_mode_caps(mos_handle_t *h, const mos_mode_caps **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    uint8_t   buf[96] = {0};
+    mos_error e = mos_internal_mode_sense10(h, 0x2A, buf, sizeof buf);
+    if (e != MOS_OK) return e;
+
+    if (!mos_internal_mode_caps_parse(buf, sizeof(buf), &h->mode_caps)) {
+        return MOS_ERR_IO;   /* page 0x2A absent or short — refused whole */
+    }
+    *out = &h->mode_caps;
+    return MOS_OK;
+}
+
+mos_error mos_query_error_recovery(mos_handle_t *h,
+                                   const mos_error_recovery **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    uint8_t   buf[64] = {0};
+    mos_error e = mos_internal_mode_sense10(h, 0x01, buf, sizeof buf);
+    if (e != MOS_OK) return e;
+
+    if (!mos_internal_error_recovery_parse(buf, sizeof(buf),
+                                           &h->error_recovery)) {
+        return MOS_ERR_IO;   /* page 0x01 absent or short — refused whole */
+    }
+    *out = &h->error_recovery;
     return MOS_OK;
 }
 

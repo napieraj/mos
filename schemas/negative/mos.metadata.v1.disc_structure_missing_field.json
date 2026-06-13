@@ -11,8 +11,11 @@
     "disc_structure": {
       "disc_type": "BDR",
       "manufacturer_id": "MILLEN",
-      "media_type_id": "MR1"
+      "media_type_id": "MR1",
+      "physical": null,
+      "copyright": null
     },
-    "volume_name": null
+    "volume_name": null,
+    "track_info": null
   }
 }

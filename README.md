@@ -131,12 +131,13 @@ $ mos watch
 ### Metadata (disc identity)
 
 ```
-$ mos metadata 1            # pressed DVD video — these genuinely mount
+$ mos metadata 1            # pressed dual-layer DVD-Video (CSS) — these genuinely mount
      BSD:  /dev/disk4
   Volume:  ARRIVAL
     Path:  /Volumes/ARRIVAL
  Profile:  dvd  dvd_rom  (0x0010)
     Disc:  -
+   Media:  dvd_rom, 2 layers, protected
      TOC:  tracks 1-1, lead-out LBA 3824640
 ```
 
@@ -172,8 +173,64 @@ manufacturer ID, media-type ID, revision. This names the actual disc
 maker (`CMCMAG`, `VERBAT`, `RITEK`…) and, for Millenniata M-DISC,
 reports manufacturer `MILLEN` / media type `MR1`. mos surfaces the
 registered bytes faithfully; classifying `MILLEN` as M-DISC is the
-consumer's call (same division as the third-party ids). The field is
-null on CD/DVD, where the DI structure does not exist.
+consumer's call (same division as the third-party ids). These BD
+identity fields are null on CD/DVD/HD-DVD, where the DI structure does
+not exist.
+
+For the DVD/HD-DVD family, `disc.disc_structure` instead carries two
+sibling objects from READ DISC STRUCTURE media-type 0 (null on BD/CD):
+`physical` — the Physical Format Information (book type + token name,
+disc size, rate, layer layout, densities, BCA, and the data-area sector
+boundaries; `end_sector_l0` is the layer break on dual-layer OTP media)
+— and `copyright` — the Copyright Management Information (protection
+system type + token, region mask). Offsets follow the canonical kernel
+wire parse (`drivers/cdrom/cdrom.c`); the numeric fields are raw spec
+codes with `*_name` token mappings, and the copyright bytes are surfaced
+faithfully without classifying region semantics or reading any keys
+(scope doctrine). The structure is named `physical`, not `dvd`, because
+the same media-type-0 reply carries HD-DVD book types.
+
+`disc.track_info` adds the capacity / append-state of the first track
+from READ TRACK INFORMATION (`0x52`): track/data mode, blank/damage,
+track start, free blocks, track size, and the next-writable / last-
+recorded addresses (each null when the reply's NWA_V / LRA_V validity
+bit is clear). For a single-track pressed DVD/BD `track_size` is
+effectively the disc capacity; on a blank/appendable recordable
+`next_writable` is the append point.
+
+The `disc` subtree for that dual-layer DVD-Video (abridged to the new
+objects — `mos metadata 1 --json`):
+
+```jsonc
+"disc_structure": {
+  "disc_type": null, "manufacturer_id": null,        // BD DI fields: null on DVD
+  "media_type_id": null, "revision": null,
+  "physical": {                                      // READ DISC STRUCTURE fmt 0x00
+    "book_type": 0, "book_type_name": "dvd_rom",
+    "num_layers": 2, "track_path": "otp",            // dual layer, opposite
+    "start_sector": 196608, "end_sector": 3842048,
+    "end_sector_l0": 2050047,                        // the layer break
+    "bca": false, "disc_size": 0, "max_rate": 15,
+    "part_version": 1, "layer_type": 1,
+    "linear_density": 0, "track_density": 0
+  },
+  "copyright": {                                     // READ DISC STRUCTURE fmt 0x01
+    "protection": 1, "protection_name": "css_cppm", "region": 2
+  }
+},
+"track_info": {                                      // READ TRACK INFORMATION 0x52
+  "track_number": 1, "session_number": 1,
+  "track_mode": 4, "data_mode": 1,
+  "blank": false, "damage": false,
+  "track_start": 0, "free_blocks": 0,
+  "track_size": 2298496,                             // ≈ disc capacity (single track)
+  "next_writable": null,                             // NWA_V clear (finalized)
+  "last_recorded": 2298495
+}
+```
+
+A blank BD-R instead shows `track_info.blank: true` with `next_writable`
+set to the append point and `free_blocks` to the writable remainder.
 
 ### Drive (static facts)
 
@@ -186,16 +243,46 @@ Registry:  4295032831
 Revision:  1.00
   Serial:  -
     AACS:  version 68, bus encryption yes
+  Speeds:  read 10560, write 8310 kB/s (max)
+    Mech:  tray, buffer 4096 KB
+ErrRecov:  retry 20, PER
 ```
 
 `mos drive --json` emits `mos.drive.v1`: identity (open-time directory
 data, zero commands), `serial` (null in stage 1 — pending the VPD-0x80
-convenience-reachability check on hardware), and spec-grounded AACS
-capabilities from one GET CONFIGURATION feature walk. `bus_encryption`
+convenience-reachability check on hardware), spec-grounded AACS
+capabilities from one GET CONFIGURATION feature walk, and `speeds` (max
+read/write kB/s from GET PERFORMANCE `0xAC` — media-dependent, null with
+no writable medium loaded). `bus_encryption`
 is the drive-reported support bit; the cryptographically signed BEC
 flag lives in the AACS drive certificate, which mos does not fetch.
 There is deliberately no `libredrive` field: that status is a MakeMKV
 database property, not a drive property.
+
+`mechanical` and `error_recovery` are the two read-only MODE SENSE(10)
+reads the scope doctrine admits (page 0x2A and page 0x01; AGENTS
+addendum 2026-06-13). `mechanical` carries the loading-mechanism type,
+eject/lock support, the live media-locked bit, and the drive buffer
+size — the mechanical facts GET CONFIGURATION cannot report.
+`error_recovery` carries the drive's read error-recovery configuration
+(AWRE/ARRE/PER/DCR + read-retry count). Both are read-only: mos reports
+the configuration, it never issues the MODE SELECT that recovery tools
+use to tune it. Each is null when its page is unavailable.
+
+The three new drive objects (`mos drive 1 --json`, abridged):
+
+```jsonc
+"speeds": {                     // GET PERFORMANCE 0xAC (media-dependent, null with no media)
+  "descriptor_count": 4, "max_read_kbps": 10560, "max_write_kbps": 8310
+},
+"mechanical": {                 // MODE SENSE page 0x2A
+  "loading_mechanism": "tray", "can_eject": true,
+  "lock_supported": true, "locked": false, "buffer_kb": 4096
+},
+"error_recovery": {             // MODE SENSE page 0x01 (read-only; no MODE SELECT)
+  "awre": true, "arre": true, "per": false, "dcr": false, "read_retry_count": 20
+}
+```
 
 ### Features (medium writability)
 

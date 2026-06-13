@@ -150,6 +150,18 @@ strip_file() {
     echo "/* ==== src/mos_discstruct.c ==== */"
     strip_file "$SRC/mos_discstruct.c"
     echo
+    echo "/* ==== src/mos_physstruct.c ==== */"
+    strip_file "$SRC/mos_physstruct.c"
+    echo
+    echo "/* ==== src/mos_trackinfo.c ==== */"
+    strip_file "$SRC/mos_trackinfo.c"
+    echo
+    echo "/* ==== src/mos_perf.c ==== */"
+    strip_file "$SRC/mos_perf.c"
+    echo
+    echo "/* ==== src/mos_modepage.c ==== */"
+    strip_file "$SRC/mos_modepage.c"
+    echo
     echo "/* ==== src/mos_result.c ==== */"
     strip_file "$SRC/mos_result.c"
     echo

@@ -777,6 +777,222 @@ mos_error mos_query_disc_id(mos_handle_t *h, const mos_disc_id **out)
     return MOS_OK;
 }
 
+mos_error mos_query_physical_structure(mos_handle_t *h,
+                                       const mos_physical_structure **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Two convenience reads of READ DISC STRUCTURE for the DVD/HD-DVD
+       media type (MEDIA_TYPE=0): FORMAT 0x00 (Physical Format
+       Information) and FORMAT 0x01 (Copyright Management Information).
+       Each into a fixed zero-init buffer — sizeof buf is the trusted
+       length (O-4); the reply's own Disc Structure Data Length can only
+       SHRINK the parse, and an under-filled reply fails the per-format
+       min-length gate. Both halves merge into one handle-owned struct;
+       the reads are independent (partial-readability ladder), so a drive
+       that answers one format but not the other still yields the half it
+       gave. No lock (convenience). */
+    struct mos_physical_structure *d = &h->physical_structure;
+    *d = (struct mos_physical_structure){0};
+
+    uint8_t         buf[2048] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x00,             /* FORMAT = Physical Format Info    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
+        (void)mos_internal_physical_format_parse(buf, sizeof(buf), d);
+
+    memset(buf, 0, sizeof buf);
+    st = 0;
+    sd = (SCSI_Sense_Data){0};
+    rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x01,             /* FORMAT = Copyright Management    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
+        (void)mos_internal_copyright_mgmt_parse(buf, sizeof(buf), d);
+
+    if (!d->have_physical && !d->have_copyright) {
+        return MOS_ERR_IO;   /* neither format answered (non-DVD, or refused) */
+    }
+    *out = d;
+    return MOS_OK;
+}
+
+mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* READ TRACK INFORMATION (0x52) for the first track via the
+       convenience method. ADDRESS_TYPE = 01b (logical track number),
+       ADDRESS = 1 (the first track) — well-defined on any media with a
+       track. 64 bytes covers the Track Information Block (the core block
+       is 36 bytes; MMC-6 extends it slightly). sizeof buf is the trusted
+       length (O-4); the reply's Track Information Length only shrinks the
+       parse. No lock (convenience). Signature confirmed against
+       SCSITaskLib.h (ADDRESS_NUMBER_TYPE, LBA/track/session, buffer,
+       bufferSize, taskStatus, senseData). */
+    uint8_t         buf[64] = {0};
+    SCSITaskStatus  st      = 0;
+    SCSI_Sense_Data sd      = {0};
+
+    IOReturn rc = (*h->mmc)->ReadTrackInformation(
+        h->mmc,
+        (UInt8)0x01,             /* ADDRESS_TYPE = logical track number */
+        (UInt32)1,               /* ADDRESS = first track               */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_track_info_parse(buf, sizeof(buf), &h->track_info)) {
+        return MOS_ERR_IO;   /* truncated/short reply — refused whole */
+    }
+    *out = &h->track_info;
+    return MOS_OK;
+}
+
+/* One GET PERFORMANCE (0xAC) Performance Data read in the given
+   direction (WRITE=0 read, WRITE=1 write). TOLERANCE=10b nominal,
+   EXCEPT=0 (nominal performance), STARTING_LBA=0. Returns MOS_OK and the
+   decoded max performance (kB/s) + descriptor count, or a non-OK code on
+   command failure. Convenience method: no lock. */
+static mos_error mos_internal_get_perf(mos_handle_t *h, uint8_t write,
+                                       uint32_t *max_kbps, uint16_t *count)
+{
+    uint8_t         buf[2048] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->GetPerformance(
+        h->mmc,
+        (UInt8)0x02,             /* TOLERANCE = 10b (nominal)      */
+        (UInt8)write,            /* WRITE                          */
+        (UInt8)0x00,             /* EXCEPT = 0 (nominal perf)      */
+        (UInt32)0,               /* STARTING_LBA                   */
+        (UInt16)64,              /* MAXIMUM_NUMBER_OF_DESCRIPTORS  */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+    if (!mos_internal_perf_data_parse(buf, sizeof(buf), max_kbps, count)) {
+        return MOS_ERR_IO;   /* short/incoherent header */
+    }
+    return MOS_OK;
+}
+
+mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Two Performance Data reads — read direction (WRITE=0) and write
+       direction (WRITE=1) — assembled into one result. The read read is
+       the gate (its success defines `have`); the write read is
+       best-effort (a read-only drive or non-writable medium simply
+       leaves max_write_kbps 0). */
+    struct mos_drive_perf *p = &h->drive_perf;
+    *p = (struct mos_drive_perf){0};
+
+    uint32_t rd_max = 0, wr_max = 0;
+    uint16_t rd_cnt = 0, wr_cnt = 0;
+
+    mos_error e = mos_internal_get_perf(h, 0, &rd_max, &rd_cnt);
+    if (e != MOS_OK) return e;
+
+    (void)mos_internal_get_perf(h, 1, &wr_max, &wr_cnt);  /* best-effort */
+
+    p->descriptor_count = rd_cnt;
+    p->max_read_kbps    = rd_max;
+    p->max_write_kbps   = wr_max;
+    p->have             = (rd_cnt > 0 || wr_cnt > 0);
+    *out = p;
+    return MOS_OK;
+}
+
+/* Shared MODE SENSE(10) issuance for the two read-only optical pages
+   (AGENTS scope addendum 2026-06-13). Signature confirmed against
+   SCSITaskLib.h (LLBAA, DBD, PC, PAGE_CODE, buffer, bufferSize,
+   taskStatus, senseData). PC = 00b (current values); DBD=1 (no block
+   descriptor) keeps the reply compact, though the pure walker tolerates
+   a descriptor either way. Non-exclusive convenience: no lock. */
+static mos_error mos_internal_mode_sense10(mos_handle_t *h, uint8_t page,
+                                           uint8_t *buf, size_t buf_len)
+{
+    SCSITaskStatus  st = 0;
+    SCSI_Sense_Data sd = {0};
+    IOReturn rc = (*h->mmc)->ModeSense10(
+        h->mmc,
+        (UInt8)0,                /* LLBAA = 0                           */
+        (UInt8)1,                /* DBD = 1 (disable block descriptor)  */
+        (UInt8)0x00,             /* PC = current values                 */
+        (UInt8)page,             /* PAGE_CODE                           */
+        buf, (UInt16)buf_len,
+        &st, &sd);
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+    return MOS_OK;
+}
+
+mos_error mos_query_mode_caps(mos_handle_t *h, const mos_mode_caps **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    uint8_t   buf[96] = {0};
+    mos_error e = mos_internal_mode_sense10(h, 0x2A, buf, sizeof buf);
+    if (e != MOS_OK) return e;
+
+    if (!mos_internal_mode_caps_parse(buf, sizeof(buf), &h->mode_caps)) {
+        return MOS_ERR_IO;   /* page 0x2A absent or short — refused whole */
+    }
+    *out = &h->mode_caps;
+    return MOS_OK;
+}
+
+mos_error mos_query_error_recovery(mos_handle_t *h,
+                                   const mos_error_recovery **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    uint8_t   buf[64] = {0};
+    mos_error e = mos_internal_mode_sense10(h, 0x01, buf, sizeof buf);
+    if (e != MOS_OK) return e;
+
+    if (!mos_internal_error_recovery_parse(buf, sizeof(buf),
+                                           &h->error_recovery)) {
+        return MOS_ERR_IO;   /* page 0x01 absent or short — refused whole */
+    }
+    *out = &h->error_recovery;
+    return MOS_OK;
+}
+
 /* Open-time directory identity, exposed for the drive verb: zero
    commands, same borrowed-string terms as the state result's copies
    (which point into these same buffers). */

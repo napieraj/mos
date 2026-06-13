@@ -23,6 +23,12 @@ typedef struct {
     bool        aacs;
     uint8_t     aacs_version;
     bool        bus_encryption;
+    bool        have_speeds;   /* GET PERFORMANCE returned >= 1 descriptor */
+    uint16_t    speed_count;
+    uint32_t    max_read_kbps;
+    uint32_t    max_write_kbps;
+    const mos_mode_caps      *caps_2a;  /* NULL = page 0x2A unavailable */
+    const mos_error_recovery *erec;     /* NULL = page 0x01 unavailable */
 } drive_doc;
 
 static void emit_json(const drive_doc *d)
@@ -56,12 +62,53 @@ static void emit_json(const drive_doc *d)
     fputs(", \"bus_encryption\": ", stdout);
     if (d->aacs) fputs(d->bus_encryption ? "true" : "false", stdout);
     else         fputs("null", stdout);
-    fputs("}\n}\n", stdout);
+    fputs("}", stdout);
+
+    fputs(",\n  \"speeds\": ", stdout);
+    if (d->have_speeds)
+        fprintf(stdout,
+                "{\"descriptor_count\": %u, \"max_read_kbps\": %u, "
+                "\"max_write_kbps\": %u}",
+                d->speed_count, d->max_read_kbps, d->max_write_kbps);
+    else
+        fputs("null", stdout);
+
+    fputs(",\n  \"mechanical\": ", stdout);
+    if (d->caps_2a) {
+        const char *lm = mos_loading_mechanism_name(
+                             mos_mode_caps_loading_mechanism(d->caps_2a));
+        fputs("{\"loading_mechanism\": ", stdout);
+        if (lm) mos_cli_json_str(stdout, lm); else fputs("null", stdout);
+        fprintf(stdout,
+                ", \"can_eject\": %s, \"lock_supported\": %s, "
+                "\"locked\": %s, \"buffer_kb\": %u}",
+                mos_mode_caps_can_eject(d->caps_2a) ? "true" : "false",
+                mos_mode_caps_lock_supported(d->caps_2a) ? "true" : "false",
+                mos_mode_caps_locked(d->caps_2a) ? "true" : "false",
+                mos_mode_caps_buffer_kb(d->caps_2a));
+    } else {
+        fputs("null", stdout);
+    }
+
+    fputs(",\n  \"error_recovery\": ", stdout);
+    if (d->erec) {
+        fprintf(stdout,
+                "{\"awre\": %s, \"arre\": %s, \"per\": %s, \"dcr\": %s, "
+                "\"read_retry_count\": %u}",
+                mos_error_recovery_awre(d->erec) ? "true" : "false",
+                mos_error_recovery_arre(d->erec) ? "true" : "false",
+                mos_error_recovery_per(d->erec) ? "true" : "false",
+                mos_error_recovery_dcr(d->erec) ? "true" : "false",
+                mos_error_recovery_read_retry_count(d->erec));
+    } else {
+        fputs("null", stdout);
+    }
+    fputs("\n}\n", stdout);
 }
 
 static void emit_human(const drive_doc *d)
 {
-    mos_cli_human_pair pairs[8];
+    mos_cli_human_pair pairs[11];
     size_t n = 0;
 
     char bsd_buf[24];
@@ -93,6 +140,30 @@ static void emit_human(const drive_doc *d)
     else
         snprintf(aacs_buf, sizeof aacs_buf, "no");
     pairs[n++] = (mos_cli_human_pair){ "AACS", aacs_buf };
+
+    char spd_buf[48];
+    if (d->have_speeds)
+        snprintf(spd_buf, sizeof spd_buf, "read %u, write %u kB/s (max)",
+                 d->max_read_kbps, d->max_write_kbps);
+    pairs[n++] = (mos_cli_human_pair){ "Speeds", d->have_speeds ? spd_buf : NULL };
+
+    char mech_buf[64];
+    if (d->caps_2a) {
+        const char *lm = mos_loading_mechanism_name(
+                             mos_mode_caps_loading_mechanism(d->caps_2a));
+        snprintf(mech_buf, sizeof mech_buf, "%s, buffer %u KB%s",
+                 lm ? lm : "unknown", mos_mode_caps_buffer_kb(d->caps_2a),
+                 mos_mode_caps_locked(d->caps_2a) ? ", locked" : "");
+    }
+    pairs[n++] = (mos_cli_human_pair){ "Mech", d->caps_2a ? mech_buf : NULL };
+
+    char erec_buf[64];
+    if (d->erec)
+        snprintf(erec_buf, sizeof erec_buf, "retry %u%s%s",
+                 mos_error_recovery_read_retry_count(d->erec),
+                 mos_error_recovery_per(d->erec) ? ", PER" : "",
+                 mos_error_recovery_dcr(d->erec) ? ", DCR" : "");
+    pairs[n++] = (mos_cli_human_pair){ "ErrRecov", d->erec ? erec_buf : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }
@@ -142,6 +213,23 @@ int run_drive(void)
     d.aacs           = mos_drive_caps_aacs(c);
     d.aacs_version   = mos_drive_caps_aacs_version(c);
     d.bus_encryption = mos_drive_caps_bus_encryption(c);
+
+    /* Speeds are best-effort and media-dependent: a failed command or an
+       empty descriptor list leaves speeds null (have_speeds false). */
+    const mos_drive_perf *perf = NULL;
+    if (mos_query_drive_perf(h, &perf) == MOS_OK &&
+        mos_drive_perf_have(perf)) {
+        d.have_speeds    = true;
+        d.speed_count    = mos_drive_perf_descriptor_count(perf);
+        d.max_read_kbps  = mos_drive_perf_max_read_kbps(perf);
+        d.max_write_kbps = mos_drive_perf_max_write_kbps(perf);
+    }
+
+    /* MODE SENSE pages 0x2A / 0x01 — best-effort, each null on failure. */
+    const mos_mode_caps *caps2a = NULL;
+    if (mos_query_mode_caps(h, &caps2a) == MOS_OK) d.caps_2a = caps2a;
+    const mos_error_recovery *erec = NULL;
+    if (mos_query_error_recovery(h, &erec) == MOS_OK) d.erec = erec;
 
     if (flag_json) emit_json(&d);
     else           emit_human(&d);

@@ -168,6 +168,46 @@ def check_cli_enum_drift(here: Path) -> int:
                      enum_at(here / "mos.metadata.v1.json",
                              "disc", "disc_info", "status")),)))
 
+    # Physical-structure (DVD/HD-DVD) token tables vs the schema enums on
+    # mos.metadata.v1.disc.disc_structure.{physical,copyright}. Same
+    # pure-string-table shape; the schema enums carry an extra null
+    # (the token fns return NULL for unrecognized codes / unmounted), so
+    # compare against the enum set minus None.
+    c_book_type = fn_returns(root / "src" / "mos_strings.c",
+                             "mos_book_type_name")
+    checks.append(("book_type_name", c_book_type,
+                   "src/mos_strings.c mos_book_type_name()",
+                   (("mos.metadata.v1.disc.disc_structure.physical.book_type_name",
+                     enum_at(here / "mos.metadata.v1.json", "disc",
+                             "disc_structure", "physical",
+                             "book_type_name") - {None}),)))
+
+    c_track_path = fn_returns(root / "src" / "mos_strings.c",
+                              "mos_track_path_name")
+    checks.append(("track_path", c_track_path,
+                   "src/mos_strings.c mos_track_path_name()",
+                   (("mos.metadata.v1.disc.disc_structure.physical.track_path",
+                     enum_at(here / "mos.metadata.v1.json", "disc",
+                             "disc_structure", "physical",
+                             "track_path") - {None}),)))
+
+    c_protection = fn_returns(root / "src" / "mos_strings.c",
+                              "mos_protection_name")
+    checks.append(("protection_name", c_protection,
+                   "src/mos_strings.c mos_protection_name()",
+                   (("mos.metadata.v1.disc.disc_structure.copyright.protection_name",
+                     enum_at(here / "mos.metadata.v1.json", "disc",
+                             "disc_structure", "copyright",
+                             "protection_name") - {None}),)))
+
+    c_loadmech = fn_returns(root / "src" / "mos_strings.c",
+                            "mos_loading_mechanism_name")
+    checks.append(("loading_mechanism", c_loadmech,
+                   "src/mos_strings.c mos_loading_mechanism_name()",
+                   (("mos.drive.v1.mechanical.loading_mechanism",
+                     enum_at(here / "mos.drive.v1.json",
+                             "mechanical", "loading_mechanism") - {None}),)))
+
     print("\nCLI-enum drift (C emit tables vs schema enums):")
     failures = 0
     for field, c_set, c_src, schema_sets in checks:

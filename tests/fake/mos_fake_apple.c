@@ -360,6 +360,25 @@ static IOReturn mmc_ReadDiscStructure(void *self, SCSICmdField4Bit MEDIA_TYPE,
                                       SCSITaskStatus *taskStatus,
                                       SCSI_Sense_Data *senseDataBuffer);
 static SCSITaskDeviceInterface **mmc_GetSCSITaskDeviceInterface(void *self);
+static IOReturn mmc_GetPerformance(void *self, SCSICmdField2Bit TOLERANCE,
+                                   SCSICmdField1Bit WRITE, SCSICmdField2Bit EXCEPT,
+                                   SCSICmdField4Byte STARTING_LBA,
+                                   SCSICmdField2Byte MAXIMUM_NUMBER_OF_DESCRIPTORS,
+                                   void *buffer, SCSICmdField2Byte bufferSize,
+                                   SCSITaskStatus *taskStatus,
+                                   SCSI_Sense_Data *senseDataBuffer);
+static IOReturn mmc_ReadTrackInformation(void *self,
+                                         SCSICmdField2Bit ADDRESS_NUMBER_TYPE,
+                                         SCSICmdField4Byte LBA_TRACK_SESSION,
+                                         void *buffer, SCSICmdField2Byte bufferSize,
+                                         SCSITaskStatus *taskStatus,
+                                         SCSI_Sense_Data *senseDataBuffer);
+static IOReturn mmc_ModeSense10(void *self, SCSICmdField1Bit LLBAA,
+                                SCSICmdField1Bit DBD, SCSICmdField2Bit PC,
+                                SCSICmdField6Bit PAGE_CODE,
+                                void *buffer, SCSICmdField2Byte bufferSize,
+                                SCSITaskStatus *taskStatus,
+                                SCSI_Sense_Data *senseDataBuffer);
 
 static IOReturn std_ObtainExclusiveAccess(void *self);
 static IOReturn std_ReleaseExclusiveAccess(void *self);
@@ -403,6 +422,9 @@ static void ensure_vtbls(void)
     g_mmc_vtbl.ReadDiscInformation       = mmc_ReadDiscInformation;
     g_mmc_vtbl.ReadTableOfContents       = mmc_ReadTableOfContents;
     g_mmc_vtbl.ReadDiscStructure         = mmc_ReadDiscStructure;
+    g_mmc_vtbl.ReadTrackInformation      = mmc_ReadTrackInformation;
+    g_mmc_vtbl.GetPerformance            = mmc_GetPerformance;
+    g_mmc_vtbl.ModeSense10               = mmc_ModeSense10;
     g_mmc_vtbl.GetSCSITaskDeviceInterface = mmc_GetSCSITaskDeviceInterface;
 
     g_std_vtbl.AddRef                 = com_AddRef;
@@ -542,6 +564,56 @@ static IOReturn mmc_ReadDiscStructure(void *self, SCSICmdField4Bit MEDIA_TYPE,
         if (n) memcpy(buffer, g.ds, n);
     }
     if (taskStatus) *taskStatus = (SCSITaskStatus)g.ds_status;
+    return kIOReturnSuccess;
+}
+
+/* The v0.4 enrichment convenience methods. The default scenario returns
+   GOOD with a zeroed reply, so the pure decoders yield empty/null
+   results (speeds/mechanical/error_recovery/track_info null) — enough to
+   exercise the adapter call paths and emit valid documents. A scenario
+   wanting populated values would script a canned reply (not needed by
+   the current contract tests). */
+static IOReturn mmc_ReadTrackInformation(void *self,
+                                         SCSICmdField2Bit ADDRESS_NUMBER_TYPE,
+                                         SCSICmdField4Byte LBA_TRACK_SESSION,
+                                         void *buffer, SCSICmdField2Byte bufferSize,
+                                         SCSITaskStatus *taskStatus,
+                                         SCSI_Sense_Data *senseDataBuffer)
+{
+    (void)self; (void)ADDRESS_NUMBER_TYPE; (void)LBA_TRACK_SESSION;
+    (void)senseDataBuffer;
+    if (buffer && bufferSize) memset(buffer, 0, bufferSize);
+    if (taskStatus) *taskStatus = (SCSITaskStatus)kSCSITaskStatus_GOOD;
+    return kIOReturnSuccess;
+}
+
+static IOReturn mmc_GetPerformance(void *self, SCSICmdField2Bit TOLERANCE,
+                                   SCSICmdField1Bit WRITE, SCSICmdField2Bit EXCEPT,
+                                   SCSICmdField4Byte STARTING_LBA,
+                                   SCSICmdField2Byte MAXIMUM_NUMBER_OF_DESCRIPTORS,
+                                   void *buffer, SCSICmdField2Byte bufferSize,
+                                   SCSITaskStatus *taskStatus,
+                                   SCSI_Sense_Data *senseDataBuffer)
+{
+    (void)self; (void)TOLERANCE; (void)WRITE; (void)EXCEPT;
+    (void)STARTING_LBA; (void)MAXIMUM_NUMBER_OF_DESCRIPTORS;
+    (void)senseDataBuffer;
+    if (buffer && bufferSize) memset(buffer, 0, bufferSize);
+    if (taskStatus) *taskStatus = (SCSITaskStatus)kSCSITaskStatus_GOOD;
+    return kIOReturnSuccess;
+}
+
+static IOReturn mmc_ModeSense10(void *self, SCSICmdField1Bit LLBAA,
+                                SCSICmdField1Bit DBD, SCSICmdField2Bit PC,
+                                SCSICmdField6Bit PAGE_CODE,
+                                void *buffer, SCSICmdField2Byte bufferSize,
+                                SCSITaskStatus *taskStatus,
+                                SCSI_Sense_Data *senseDataBuffer)
+{
+    (void)self; (void)LLBAA; (void)DBD; (void)PC; (void)PAGE_CODE;
+    (void)senseDataBuffer;
+    if (buffer && bufferSize) memset(buffer, 0, bufferSize);
+    if (taskStatus) *taskStatus = (SCSITaskStatus)kSCSITaskStatus_GOOD;
     return kIOReturnSuccess;
 }
 

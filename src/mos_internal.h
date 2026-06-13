@@ -61,6 +61,21 @@ struct mos_handle {
 
     /* Handle-owned disc-id result (mos_query_disc_id). Same terms. */
     struct mos_disc_id        disc_id;
+
+    /* Handle-owned physical structure result (mos_query_physical_structure).
+       Same terms; plain values, no borrowed pointers. */
+    struct mos_physical_structure physical_structure;
+
+    /* Handle-owned track-info result (mos_query_track_info). Same terms. */
+    struct mos_track_info     track_info;
+
+    /* Handle-owned drive-performance result (mos_query_drive_perf). */
+    struct mos_drive_perf     drive_perf;
+
+    /* Handle-owned MODE SENSE results (mos_query_mode_caps /
+       mos_query_error_recovery). Same terms. */
+    struct mos_mode_caps      mode_caps;
+    struct mos_error_recovery error_recovery;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on

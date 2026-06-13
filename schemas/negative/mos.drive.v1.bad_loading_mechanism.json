@@ -1,6 +1,5 @@
 {
   "schema": "mos.drive.v1",
-  "bsd_node": null,
   "registry_id": 4295021843,
   "vendor": "PIONEER",
   "product": "BD-RW BDR-XS07",
@@ -17,7 +16,7 @@
     "max_write_kbps": 8310
   },
   "mechanical": {
-    "loading_mechanism": "tray",
+    "loading_mechanism": "rocket",
     "can_eject": true,
     "lock_supported": true,
     "locked": false,
@@ -29,5 +28,6 @@
     "per": false,
     "dcr": false,
     "read_retry_count": 20
-  }
+  },
+  "bsd_node": null
 }

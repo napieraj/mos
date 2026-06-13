@@ -48,6 +48,7 @@
       "tracks": 4
     },
     "disc_structure": null,
-    "volume_name": "Audio CD"
+    "volume_name": "Audio CD",
+    "track_info": null
   }
 }

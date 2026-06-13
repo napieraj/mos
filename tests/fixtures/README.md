@@ -215,3 +215,65 @@ scsi-layer.c (buf[4+8] disc-type, 100/106), and libburn mmc.c
 and non-DI cases are inline in that file, and the fixed-offset/
 dual-length no-OOB property is fuzz/ASan-gated (tests/fuzz_pure.c
 phase 8, MILLEN-shaped and wild buffers, exact-size allocations).
+
+### Physical Format / Copyright Information (DVD/HD-DVD) — inline fixtures
+READ DISC STRUCTURE (0xAD) media-type 0, format 0x00 (Physical Format
+Information) and 0x01 (Copyright Management Information), decoded by
+`mos_physstruct.c`. Unlike the BD DI capture above, these are exercised
+by spec-built inline fixtures in `test_physstruct.c` (no committed
+`.bin`): a single-layer DVD-ROM, a dual-layer OTP DVD+R DL (whose
+`end_sector_l0` is the layer break), an HD-DVD-ROM book type (the same
+media-type-0 reply carries HD-DVD book types — the reason the decode is
+named "physical", not "dvd"), and a CSS-protected copyright block.
+Offsets are taken VERBATIM from the kernel wire parse
+(`drivers/cdrom/cdrom.c` `dvd_read_physical`: book/version base[0],
+rate/size base[1], layer base[2], densities base[3], start/end/end_l0 at
+base[5..7]/[9..11]/[13..15], bca base[16]>>7; `dvd_read_copyright`: cpst
+buf[4], rmi buf[5]) and cross-checked against redumper
+`print_physical_structure`. The fixed-offset/dual-length no-OOB property
+is fuzz/ASan-gated (`tests/fuzz_pure.c` phase 9, planted-length and wild
+buffers, exact-size allocations). A real DVD physical/copyright capture
+remains a falsification-matrix item (it can refute or feed these, not
+steer them — AGENTS hardware ADR).
+
+### READ TRACK INFORMATION (0x52) — inline fixtures
+The Track Information Block decode (`mos_trackinfo.c`) is exercised by
+spec-built inline fixtures in `test_trackinfo.c`: an appendable track
+(NWA valid, blank), a finalized single-track DVD-ROM (LRA valid, no NWA;
+track_size == disc capacity), a long-reply MSB fold, and hostile length
+cases. Offsets follow the kernel `struct track_information`
+(include/uapi/linux/cdrom.h): track_lsb@2, session_lsb@3, damage/track_mode
+byte 5, blank/data_mode byte 6, lra_v/nwa_v byte 7, then the BE32 fields
+track_start@8, next_writable@12, free_blocks@16, track_size@24,
+last_rec@28. The fixed-offset/dual-length no-OOB property is fuzz/ASan-
+gated (`tests/fuzz_pure.c` phase 10).
+
+### GET PERFORMANCE (0xAC, Type 00h Performance Data) — inline fixtures
+The performance decode (`mos_perf.c`) is exercised by spec-built inline
+fixtures in `test_perf.c`: a multi-descriptor reply (max performance
+scanned across descriptors), an empty list (count 0), null out-params,
+and hostile cases (lying data length, partial trailing descriptor, short
+header). SPEC-DERIVED, no in-repo capture: the per-descriptor offsets
+(Start Performance @4..7, End Performance @12..15 within each 16-byte
+Nominal Performance Descriptor after the 8-byte header) are the MMC-6
+layout. The Apple GetPerformance convenience method exposes the WRITE bit
+but not the TYPE field, so only Performance Data (Type 00h) is reachable
+and read/write are two calls (WRITE=0/1) — write-speed descriptors
+(Type 03h) would need a raw CDB and stay out of scope. A real GET
+PERFORMANCE capture is a falsification-matrix item per the hardware ADR.
+The no-OOB property is fuzz/ASan-gated (`tests/fuzz_pure.c` phase 11).
+
+### MODE SENSE(10) page 0x2A / 0x01 — inline fixtures
+The mechanical (page 0x2A) and error-recovery (page 0x01) decodes
+(`mos_modepage.c`) are exercised by spec-built inline fixtures in
+`test_modepage.c`: a tray loader with eject/lock/locked + buffer size, an
+error-recovery page (AWRE/ARRE/PER + retry count), a reply that skips a
+block descriptor and a preceding page to find 0x2A, and hostile cases
+(lying mode-data / block-descriptor / page lengths) that the bounded page
+walker must neither loop on nor read past. Page 0x2A loading-mechanism
+(page[6]>>5) and eject (page[6]&0x08) are kernel-confirmed (sr.c
+get_capabilities); buffer size (page[12..13]) and the lock bits are the
+standard MMC-3 page-2A positions — a real MODE SENSE capture is a
+falsifier per the hardware ADR. Page 0x01 (AWRE/ARRE/PER/DCR @ page[2],
+retry @ page[3]) is the canonical SPC layout. No-OOB / no-loop property
+is fuzz/ASan-gated (`tests/fuzz_pure.c` phase 12).
