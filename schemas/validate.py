@@ -90,7 +90,7 @@ def check_cli_enum_drift(here: Path) -> int:
     string sets the CLI emits into schema-constrained fields. The C side
     is compile-time pinned (-Wswitch on the no-default switches), but
     nothing ties the SCHEMA enums to those switches — this check does.
-      - error codes:   cli/common.c mos_error_to_code() (minus the
+      - error codes:   cli/common.c mos_cli_error_to_code() (minus the
                        MOS_OK row: "ok" is unreachable in an error
                        envelope and excluded from the schema enums)
                        vs mos.error.v1 + mos.event.v1 error.code
@@ -127,8 +127,8 @@ def check_cli_enum_drift(here: Path) -> int:
     checks = []
 
     c_codes = switch_returns(root / "cli" / "common.c",
-                             "mos_error_to_code", "MOS_") - {"ok"}
-    checks.append(("error.code", c_codes, "cli/common.c mos_error_to_code()",
+                             "mos_cli_error_to_code", "MOS_") - {"ok"}
+    checks.append(("error.code", c_codes, "cli/common.c mos_cli_error_to_code()",
                    (("mos.error.v1.error.code",
                      enum_at(here / "mos.error.v1.json", "error", "code")),
                     ("mos.event.v1.error.code",
