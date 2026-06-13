@@ -11,6 +11,7 @@ Build:
                -framework IOKit \
                -framework CoreFoundation \
                -framework DiscRecording \
+               -framework DiskArbitration \
                -mmacosx-version-min=12.0
 
 License: 0BSD (see repository)
