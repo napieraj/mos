@@ -7,8 +7,9 @@
 #                               MOS_CLI_PROBE, default ON)
 #   mos_tests                 — pure-data unit tests (opt-in, on by default)
 #
-# Embedding in a downstream CMake project:
-#   add_subdirectory(vendor/mac-optical-state)
+# Embedding in a downstream CMake project (the vendored dir takes the
+# repo name, `mos`; the project/target names are unaffected):
+#   add_subdirectory(vendor/mos)
 #   target_link_libraries(your_app PRIVATE mos_core)
 
 cmake_minimum_required(VERSION 3.20)

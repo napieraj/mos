@@ -141,9 +141,11 @@ static void emit_human(const drive_doc *d)
         snprintf(aacs_buf, sizeof aacs_buf, "no");
     pairs[n++] = (mos_cli_human_pair){ "AACS", aacs_buf };
 
-    char spd_buf[48];
+    /* 64: worst case "read 4294967295 kB/s, write 4294967295 kB/s (max)"
+       is 49 + NUL — the per-value "kB/s" pushes it past the old 48. */
+    char spd_buf[64];
     if (d->have_speeds)
-        snprintf(spd_buf, sizeof spd_buf, "read %u, write %u kB/s (max)",
+        snprintf(spd_buf, sizeof spd_buf, "read %u kB/s, write %u kB/s (max)",
                  d->max_read_kbps, d->max_write_kbps);
     pairs[n++] = (mos_cli_human_pair){ "Speeds", d->have_speeds ? spd_buf : NULL };
 

@@ -19,8 +19,11 @@ static const char *const reserved_subcommands[] = {
     /* "identity" retired 2026-06-12: its surface shipped as the
        metadata + drive verbs (design doc taxonomy); "features" shipped
        the same day as the feature-list verb. "tray" shipped 2026-06-13
-       as the control verbs (eject/close/lock/unlock). */
-    "capacity", "speed", NULL
+       as the control verbs (eject/close/lock/unlock). "speed" retired
+       2026-06-13: the drive's read/write performance reporting shipped in
+       the drive verb (mos.drive.v1 "speeds", via GET PERFORMANCE) — SET CD
+       SPEED *setting* would be a controller verb in out-of-scope territory. */
+    "capacity", NULL
 };
 
 static bool is_reserved_subcommand(const char *cmd)
