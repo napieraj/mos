@@ -616,3 +616,19 @@ jobs:
           ./build-adapter/bin/mos_adapter_oneshot_tests
           cmake --build build-adapter --target mos_adapter_watch_tests
           ./build-adapter/bin/mos_adapter_watch_tests
+
+      - name: Emit-and-validate (CLI emit_json output vs schemas)
+        # Builds the emit harness on the same ASan/UBSan fake seam and
+        # validates each verb's REAL success-path JSON against the schema
+        # it names — the guard the branch review added so emitter<->schema
+        # drift fails CI instead of shipping (validate.py only sees
+        # hand-written fixtures; the CLI contract test only error paths).
+        env:
+          ASAN_OPTIONS: "abort_on_error=1"
+          UBSAN_OPTIONS: "halt_on_error=1"
+        run: |
+          set -e
+          cmake --build build-adapter --target mos_emit_fixtures
+          python3 -m pip install --quiet --break-system-packages jsonschema
+          python3 tests/emit/validate_emitted.py \
+            ./build-adapter/bin/mos_emit_fixtures schemas

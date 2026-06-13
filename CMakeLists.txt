@@ -408,6 +408,43 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
     )
     add_test(NAME adapter_oneshot COMMAND mos_adapter_oneshot_tests)
 
+    # Emit-and-validate harness: drive the REAL CLI emit_json paths
+    # (run_metadata/drive/features/query/list) against the fake and let
+    # tests/emit/validate_emitted.py validate stdout against the schema
+    # each document names. Closes the gap the branch review found —
+    # success-path JSON was never schema-checked (validate.py only sees
+    # hand-written fixtures; the CLI contract test only the error
+    # envelopes). Links the CLI verb layer (minus main.c) onto the same
+    # seam as the adapter tests.
+    add_executable(mos_emit_fixtures
+        tests/emit/emit_fixtures.c
+        tests/fake/mos_fake_apple.c
+        src/mos_scsi.c
+        src/mos_state.c
+        src/mos_dr.c
+        src/mos_da.c
+        cli/common.c
+        cli/io.c
+        cli/human.c
+        cli/status.c
+        cli/list.c
+        cli/metadata.c
+        cli/drive.c
+        cli/features.c
+    )
+    target_include_directories(mos_emit_fixtures PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/cli
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fake
+    )
+    target_link_libraries(mos_emit_fixtures PRIVATE
+        mos_pure ${COREFOUNDATION_FRAMEWORK})
+    set_target_properties(mos_emit_fixtures PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+
     # Phase 2: the watch lifecycle through the REAL mos_watch.c, on the
     # fake clock. Separate executable — its fake TU interposes libc/CF
     # symbols, and it has its own main.
