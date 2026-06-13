@@ -40,6 +40,11 @@ struct mos_handle {
                                                   entry ID, 0 == no media;
                                                   captured at open alongside
                                                   bsd_unit (F1 swap fingerprint) */
+    uint64_t                  media_bytes;     /* kIOMediaSizeKey off the same
+                                                  whole-disk node; 0 == absent
+                                                  (open-time, like bsd_unit) */
+    uint32_t                  media_block_bytes; /* kIOMediaPreferredBlockSizeKey;
+                                                    0 == absent */
     char                      vendor_str[9];   /* 8 chars + NUL */
     char                      product_str[17]; /* 16 chars + NUL */
     char                      revision_str[5]; /* 4 chars + NUL */
@@ -68,6 +73,10 @@ struct mos_handle {
 
     /* Handle-owned track-info result (mos_query_track_info). Same terms. */
     struct mos_track_info     track_info;
+
+    /* Handle-owned capacity result (mos_query_capacity). Assembled from
+       the open-time IOMedia size above + a fresh track_info read. */
+    struct mos_capacity       capacity;
 
     /* Handle-owned drive-performance result (mos_query_drive_perf). */
     struct mos_drive_perf     drive_perf;

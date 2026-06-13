@@ -40,6 +40,9 @@ SCENARIOS = [
     ("tray",     "lock_persistent", "mos.tray.v1"),
     ("tray",     "refused_locked",  "mos.tray.v1"),
     ("tray",     "refused_other",   "mos.tray.v1"),
+    ("capacity", "pressed_bd",      "mos.capacity.v1"),
+    ("capacity", "blank_bdr",       "mos.capacity.v1"),
+    ("capacity", "empty",           "mos.capacity.v1"),
 ]
 
 

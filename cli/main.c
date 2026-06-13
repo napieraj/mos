@@ -11,33 +11,13 @@
 #include <string.h>
 #include <sysexits.h>
 
-/* Reserved v0.4 subcommand names — single source of truth for the
-   dispatch rejection, the usage text, and the unknown-subcommand
-   diagnostic, so promoting a name in v0.4 is a one-site edit.
-   tests/cli/test_cli.sh (Test 18) loops over the same set. */
-static const char *const reserved_subcommands[] = {
-    /* "identity" retired 2026-06-12: its surface shipped as the
-       metadata + drive verbs (design doc taxonomy); "features" shipped
-       the same day as the feature-list verb. "tray" shipped 2026-06-13
-       as the control verbs (eject/close/lock/unlock). "speed" retired
-       2026-06-13: the drive's read/write performance reporting shipped in
-       the drive verb (mos.drive.v1 "speeds", via GET PERFORMANCE) — SET CD
-       SPEED *setting* would be a controller verb in out-of-scope territory. */
-    "capacity", NULL
-};
-
-static bool is_reserved_subcommand(const char *cmd)
-{
-    for (const char *const *r = reserved_subcommands; *r; ++r)
-        if (strcmp(cmd, *r) == 0) return true;
-    return false;
-}
-
-static void print_reserved_subcommands(FILE *f)
-{
-    for (const char *const *r = reserved_subcommands; *r; ++r)
-        fprintf(f, "%s%s", r == reserved_subcommands ? "" : ", ", *r);
-}
+/* The v0.4 typed-verb surface is complete: every reserved name has
+   shipped — "identity" became metadata + drive, "features" the
+   feature-list verb, "tray" the control verbs, "speed" folded into
+   drive's GET PERFORMANCE "speeds", and "capacity" landed 2026-06-13 as
+   mos.capacity.v1. The reserved-name machinery (a placeholder diagnostic
+   for not-yet-implemented names) retired with the last name; a future
+   reserved name reintroduces it. */
 
 void mos_cli_print_usage(FILE *f)
 {
@@ -62,17 +42,14 @@ void mos_cli_print_usage(FILE *f)
         "                    Control the tray: eject | close | lock |\n"
         "                    unlock — mos.tray.v1. eject takes --force\n"
         "                    (unlock first); lock/unlock take --persistent.\n"
+        "  capacity [drive]  Disc capacity: media size + recordable\n"
+        "                    free/append space — mos.capacity.v1.\n"
 #ifdef MOS_CLI_PROBE
         "  probe  <drive>    Diagnostic: stream raw IOKit/DiscRecording\n"
         "                    notification events (NDJSON, mos.probe.v0)\n"
         "                    until SIGINT; with --dump, a one-shot\n"
         "                    DiscRecording Info/Status plist capture.\n"
 #endif
-        "Future subcommands (v0.4+ typed APIs, not yet implemented):\n"
-        "  ",
-        progname);
-    print_reserved_subcommands(f);
-    fputs(".\n"
         "\n"
         "Drive (positional): an Index from 'mos list' (all digits), a\n"
         "registry_id from JSON output (all digits, above 2^32), or a BSD\n"
@@ -109,7 +86,7 @@ void mos_cli_print_usage(FILE *f)
         "Exit:   sysexits.h codes — 0 on observed state, 64 usage, 66 no\n"
         "        device, 69 unavailable, 70 internal, 71 OS err, 74 I/O,\n"
         "        75 temp-fail.\n",
-        f);
+        progname);
 }
 
 static void print_version(void)
@@ -248,41 +225,29 @@ int main(int argc, char **argv)
                diagnosed by mos_cli_run_tray. */
             if (argc >= 3 && argv[2][0] != '-' && argv[2][0] != '\0')
                 opt_tray_action = argv[2];
+        } else if (strcmp(cmd, "capacity") == 0) {
+            flag_capacity = true;
         } else if (strcmp(cmd, "probe") == 0) {
 #ifdef MOS_CLI_PROBE
             flag_probe = true;
 #else
             /* Known verb, compiled out — a specific diagnostic, not the
-               unknown-subcommand or reserved-name message (both would
-               mislead: the verb exists and is not a future typed API). */
+               unknown-subcommand message (which would mislead: the verb
+               exists, it just was not built into this binary). */
             fprintf(stderr, "%s: 'probe' is not built into this binary "
                     "(diagnostic subcommand; rebuild with "
                     "-DMOS_CLI_PROBE=ON)\n", progname);
             return EX_USAGE;
 #endif
-        } else if (is_reserved_subcommand(cmd)) {
-            /* cmd is provably one of the five literals here, so escaping is
-               unnecessary — done anyway so a future edit that broadens the
-               cmd source can't silently regress the escape-all-user-bytes
-               style. */
-            fprintf(stderr, "%s: subcommand '", progname);
-            mos_cli_safe_ascii(stderr, cmd);
-            fputs("' is reserved for the v0.4 typed APIs "
-                  "and is not yet implemented.\n"
-                  "See ROADMAP.md for status; the underlying MMC operations "
-                  "are available today via mos_raw_cdb() in the C library.\n",
-                  stderr);
-            return EX_USAGE;
         } else {
             fprintf(stderr, "%s: unknown subcommand: ", progname);
             mos_cli_safe_ascii(stderr, cmd);
-            fputs("\nRecognized: status, list, watch, metadata, drive, features, tray"
+            fputs("\nRecognized: status, list, watch, metadata, drive, "
+                  "features, tray, capacity"
 #ifdef MOS_CLI_PROBE
                   ", probe"
 #endif
-                  ".\nReserved (v0.4): ", stderr);
-            print_reserved_subcommands(stderr);
-            fputs(".\n", stderr);
+                  ".\n", stderr);
             return EX_USAGE;
         }
         /* Shift past the subcommand word so getopt parses the
@@ -473,6 +438,7 @@ int main(int argc, char **argv)
     if (flag_drive) return mos_cli_run_drive();
     if (flag_features) return mos_cli_run_features();
     if (flag_tray) return mos_cli_run_tray();
+    if (flag_capacity) return mos_cli_run_capacity();
     if (flag_watch) return mos_cli_run_watch();
     return mos_cli_run_query();
 }

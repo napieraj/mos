@@ -92,6 +92,28 @@ static void common_drive_setup(void)
     mos_fake_set_tur(0x00, NULL);   /* GOOD => READY */
 }
 
+/* A Track Information Block (READ TRACK INFORMATION 0x52) for the first
+   track — the recordable/append-state view mos_query_capacity folds in.
+   Offsets per src/mos_trackinfo.c; values written big-endian by shift so
+   no hand-packed hex. Length field set to a 36-byte block. */
+static void build_tib(uint8_t b[36], bool blank, bool nwa_valid,
+                      uint32_t free_blocks, uint32_t next_writable,
+                      uint32_t track_size)
+{
+    memset(b, 0, 36);
+    b[0] = 0x00; b[1] = 34;            /* Track Information Length (after field) */
+    b[2] = 1;                          /* Track Number LSB */
+    b[3] = 1;                          /* Session Number LSB */
+    if (blank)     b[6] |= 0x40;       /* byte 6 bit 6: blank */
+    if (nwa_valid) b[7] |= 0x01;       /* byte 7 bit 0: NWA_V */
+    b[12] = (uint8_t)(next_writable >> 24); b[13] = (uint8_t)(next_writable >> 16);
+    b[14] = (uint8_t)(next_writable >> 8);  b[15] = (uint8_t)next_writable;
+    b[16] = (uint8_t)(free_blocks >> 24);   b[17] = (uint8_t)(free_blocks >> 16);
+    b[18] = (uint8_t)(free_blocks >> 8);    b[19] = (uint8_t)free_blocks;
+    b[24] = (uint8_t)(track_size >> 24);    b[25] = (uint8_t)(track_size >> 16);
+    b[26] = (uint8_t)(track_size >> 8);     b[27] = (uint8_t)track_size;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) {
@@ -208,6 +230,41 @@ int main(int argc, char **argv)
         sense[0] = 0x70; sense[2] = 0x05; sense[12] = 0x24; sense[13] = 0x00;
         mos_fake_set_raw_reply(0x02 /*CHECK CONDITION*/, NULL, 0, 0, sense);
         return mos_cli_run_tray();
+    }
+
+    /* capacity: no capacity command — media size off the IOMedia node
+       (mos_fake_set_media_size) + the recordable view from READ TRACK
+       INFORMATION (build_tib). Three independently-nullable shapes. */
+    if (strcmp(verb, "capacity") == 0 && strcmp(scn, "pressed_bd") == 0) {
+        common_drive_setup();
+        /* Pressed BD-ROM: kernel-sized whole disk, single closed track
+           (NWA invalid). 25025314816 / 2048 = 12219392 blocks. */
+        mos_fake_set_media_size(25025314816ULL, 2048);
+        uint8_t tib[36];
+        build_tib(tib, /*blank*/false, /*nwa_valid*/false,
+                  /*free*/0, /*nwa*/0, /*track_size*/12219392);
+        mos_fake_set_readtrackinfo_reply(0x00, tib, sizeof tib);
+        return mos_cli_run_capacity();
+    }
+    if (strcmp(verb, "capacity") == 0 && strcmp(scn, "blank_bdr") == 0) {
+        common_drive_setup();
+        /* Blank BD-R: no whole-disk node (no media size), an appendable
+           track with a valid NWA. */
+        mos_fake_set_bsd_unit(-1);
+        mos_fake_set_media_size(0, 0);
+        uint8_t tib[36];
+        build_tib(tib, /*blank*/true, /*nwa_valid*/true,
+                  /*free*/11826176, /*nwa*/0, /*track_size*/11826176);
+        mos_fake_set_readtrackinfo_reply(0x00, tib, sizeof tib);
+        return mos_cli_run_capacity();
+    }
+    if (strcmp(verb, "capacity") == 0 && strcmp(scn, "empty") == 0) {
+        common_drive_setup();
+        /* Empty drive: no media size, READ TRACK INFORMATION rejected
+           (default zeroed reply) — both halves null. */
+        mos_fake_set_bsd_unit(-1);
+        mos_fake_set_media_size(0, 0);
+        return mos_cli_run_capacity();
     }
 
     fprintf(stderr, "unknown verb/scenario: %s %s\n", verb, scn);

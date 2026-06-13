@@ -17,6 +17,7 @@ bool        flag_metadata = false;
 bool        flag_drive = false;
 bool        flag_features = false;
 bool        flag_tray   = false;  /* tray subcommand (control verbs) */
+bool        flag_capacity = false; /* capacity subcommand (mos.capacity.v1) */
 bool        flag_force  = false;  /* tray eject --force */
 bool        flag_persistent = false; /* tray lock/unlock --persistent */
 bool        flag_probe  = false;  /* probe subcommand (MOS_CLI_PROBE builds) */

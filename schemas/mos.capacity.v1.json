@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/napieraj/mos/schemas/mos.capacity.v1.json",
+  "title": "mos.capacity.v1",
+  "description": "Disc capacity emitted by `mos capacity --json`: how big is the loaded disc. NO capacity command is issued (design: doc/research/2026-06-13-read-capacity-feasibility.md). The whole-disk byte size is the kernel's cached attach-time READ CAPACITY, read off the IOMedia node as a registry property — no SCSI command, no exclusive access, so it works on MOUNTED media where a raw READ CAPACITY would return BUSY. The recordable view is READ TRACK INFORMATION via the same non-exclusive convenience read mos.metadata.v1's track_info uses. The two halves are INDEPENDENTLY nullable: a pressed disc carries media_bytes but no recordable view; a blank recordable carries no media_bytes (no whole-disk node until recorded) but a recordable view; an empty drive, neither.",
+  "type": "object",
+  "required": [
+    "schema",
+    "bsd_node",
+    "media_bytes",
+    "block_bytes",
+    "media_blocks",
+    "recordable"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "mos.capacity.v1",
+      "description": "Schema identifier. Per-document versioned."
+    },
+    "bsd_node": {
+      "type": ["string", "null"],
+      "pattern": "^/dev/disk[0-9]+$",
+      "description": "Whole-disk dev node of the current media, or null when the drive carries no whole-disk IOMedia node (media absent). Addressing context for the disc this capacity describes."
+    },
+    "media_bytes": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Whole-disk capacity in bytes (kIOMediaSizeKey) — the kernel's cached READ CAPACITY result. null when there is no whole-disk node: a blank/unrecorded recordable disc or an empty drive. This is the READABLE capacity of recorded media; the maximum FORMATTABLE capacity of a blank disc (READ FORMAT CAPACITIES) is deliberately not reported — see the feasibility note."
+    },
+    "block_bytes": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Natural block size in bytes (kIOMediaPreferredBlockSizeKey) — 2048 for data optical, 2352 for audio. null whenever media_bytes is null (no size means no block size to report)."
+    },
+    "media_blocks": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Whole-disk capacity in natural blocks (media_bytes / block_bytes). DERIVED, never separately reported; null whenever media_bytes or block_bytes is null."
+    },
+    "recordable": {
+      "type": ["object", "null"],
+      "description": "The recordable / append-state view from READ TRACK INFORMATION (0x52) for the first track. null when the drive did not answer 0x52 — an empty drive, or a pressed disc with no readable first track. For single-track pressed media track_size is effectively the disc capacity; for a blank/appendable recordable, next_writable (when non-null) is the append point and free_blocks the remaining space.",
+      "required": ["free_blocks", "next_writable", "track_size"],
+      "additionalProperties": false,
+      "properties": {
+        "free_blocks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Free blocks remaining in the track (Track Information Block Free Blocks)."
+        },
+        "next_writable": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Next Writable Address (the append point), or null when the reply's NWA_V validity bit is clear (a closed/pressed track has no append point)."
+        },
+        "track_size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Track size in blocks (Track Information Block Track Size)."
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "title": "media_bytes null forces block_bytes and media_blocks null",
+      "description": "block_bytes and media_blocks have no meaning without a whole-disk size; reporting them when media_bytes is null would fabricate a reading.",
+      "if": {
+        "properties": { "media_bytes": { "const": null } },
+        "required": ["media_bytes"]
+      },
+      "then": {
+        "properties": {
+          "block_bytes": { "const": null },
+          "media_blocks": { "const": null }
+        }
+      }
+    }
+  ]
+}

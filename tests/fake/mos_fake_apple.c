@@ -29,6 +29,7 @@
 #include <IOKit/IOBSD.h>
 #include <IOKit/scsi/SCSITaskLib.h>
 #include <IOKit/scsi/SCSICmds_REQUEST_SENSE_Defs.h>
+#include <IOKit/storage/IOMedia.h>   /* kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey */
 #include <DiscRecording/DRCoreDevice.h>
 #include <DiskArbitration/DiskArbitration.h>
 
@@ -70,6 +71,8 @@ static struct {
     bool     present;
     uint64_t drive_id;
     uint64_t media_id;
+    uint64_t media_bytes;       /* kIOMediaSizeKey; 0 == property absent */
+    uint32_t media_block_bytes; /* kIOMediaPreferredBlockSizeKey; 0 == absent */
     int64_t  bsd_unit;          /* -1 == no whole-disk IOMedia child    */
     char     vendor[16];
     char     product[24];
@@ -80,6 +83,7 @@ static struct {
     uint32_t rdi_status;        uint8_t rdi[64];  size_t rdi_len;
     uint32_t toc_status;        uint8_t toc[804]; size_t toc_len;
     uint32_t ds_status;         uint8_t ds[4096]; size_t ds_len;
+    uint32_t rti_status;        uint8_t rti[64];  size_t rti_len;
     bool     da_present;        /* DADiskCopyDescription returns a dict   */
     char     da_name[256];      /* VolumeName; "" = key absent            */
     char     da_path[1024];     /* VolumePath; "" = key absent (unmounted)*/
@@ -136,6 +140,12 @@ void mos_fake_set_bsd_unit(int64_t unit) { g.bsd_unit = unit; }
 void mos_fake_set_drive_id(uint64_t id) { g.drive_id = id; }
 void mos_fake_set_media_id(uint64_t id) { g.media_id = id; }
 
+void mos_fake_set_media_size(uint64_t bytes, uint32_t block_bytes)
+{
+    g.media_bytes = bytes;
+    g.media_block_bytes = block_bytes;
+}
+
 void mos_fake_set_identity(const char *vendor, const char *product,
                            const char *revision)
 {
@@ -181,6 +191,14 @@ void mos_fake_set_disc_structure_reply(uint32_t task_status,
     g.ds_status = task_status;
     g.ds_len = (len > sizeof g.ds) ? sizeof g.ds : len;
     if (bytes && g.ds_len) memcpy(g.ds, bytes, g.ds_len);
+}
+
+void mos_fake_set_readtrackinfo_reply(uint32_t task_status,
+                                      const uint8_t *bytes, size_t len)
+{
+    g.rti_status = task_status;
+    g.rti_len = (len > sizeof g.rti) ? sizeof g.rti : len;
+    if (bytes && g.rti_len) memcpy(g.rti, bytes, g.rti_len);
 }
 
 void mos_fake_set_da_volume(const char *name, const char *path)
@@ -260,6 +278,16 @@ CFTypeRef IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
     }
     if (CFEqual(key, CFSTR("Whole"))) {
         return CFRetain(kCFBooleanTrue);
+    }
+    /* The kernel-cached capacity off the whole-disk node (mos_query_capacity).
+       0 models the property being absent (blank/unrecorded media). */
+    if (CFEqual(key, CFSTR(kIOMediaSizeKey)) && g.media_bytes) {
+        long long v = (long long)g.media_bytes;
+        return CFNumberCreate(kCFAllocatorDefault, kCFNumberLongLongType, &v);
+    }
+    if (CFEqual(key, CFSTR(kIOMediaPreferredBlockSizeKey)) && g.media_block_bytes) {
+        long long v = (long long)g.media_block_bytes;
+        return CFNumberCreate(kCFAllocatorDefault, kCFNumberLongLongType, &v);
     }
     return NULL;
 }
@@ -582,8 +610,14 @@ static IOReturn mmc_ReadTrackInformation(void *self,
 {
     (void)self; (void)ADDRESS_NUMBER_TYPE; (void)LBA_TRACK_SESSION;
     (void)senseDataBuffer;
-    if (buffer && bufferSize) memset(buffer, 0, bufferSize);
-    if (taskStatus) *taskStatus = (SCSITaskStatus)kSCSITaskStatus_GOOD;
+    if (buffer && bufferSize) {
+        size_t n = (g.rti_len < (size_t)bufferSize) ? g.rti_len : (size_t)bufferSize;
+        memset(buffer, 0, bufferSize);
+        if (n) memcpy(buffer, g.rti, n);
+    }
+    if (taskStatus)
+        *taskStatus = (SCSITaskStatus)(g.rti_len ? g.rti_status
+                                                 : kSCSITaskStatus_GOOD);
     return kIOReturnSuccess;
 }
 

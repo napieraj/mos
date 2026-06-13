@@ -17,6 +17,7 @@
 #include <IOKit/scsi/SCSICommandOperationCodes.h>
 #include <IOKit/scsi/SCSICmds_REQUEST_SENSE_Defs.h>
 #include <IOKit/storage/IOStorageProtocolCharacteristics.h>
+#include <IOKit/storage/IOMedia.h>   /* kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey */
 
 #include <stdlib.h>
 #include <string.h>
@@ -40,14 +41,40 @@ _Static_assert(kSenseDefaultSize == 18,
 /* The pure BSD-name helpers live in src/mos_pure.c (declared in mos_pure.h,
    re-included via mos_internal.h) so they link into the pure-only tests. */
 
+/* Read an OSNumber registry property off `node` as a uint64. Returns 0
+   (the "absent" sentinel the capacity contract uses) on a missing,
+   non-numeric, or non-positive value. Used for the whole-disk IOMedia
+   size/block-size — the kernel's cached READ CAPACITY result, no command. */
+static uint64_t mos_internal_cf_number_u64(io_registry_entry_t node,
+                                           CFStringRef key)
+{
+    CFTypeRef v MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
+            node, key, kCFAllocatorDefault, 0);
+    if (!v || CFGetTypeID(v) != CFNumberGetTypeID()) return 0;
+    long long out = 0;
+    if (!CFNumberGetValue((CFNumberRef)v, kCFNumberLongLongType, &out) ||
+        out <= 0) {
+        return 0;
+    }
+    return (uint64_t)out;
+}
+
 /* Resolve the whole-disk BSD unit (the N in "diskN") for an IOKit service,
    or -1 if none (e.g. an empty/open-tray drive with no IOMedia child), and
    capture the whole-disk IOMedia registry entry ID into *media_id_out (0 if
-   none). The transient "diskN" name buffers below never escape this
-   function — only the parsed integer identity does. */
-static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out)
+   none). When *media_bytes_out / *block_bytes_out are non-NULL they receive
+   the whole-disk node's kernel-cached byte size and natural block size
+   (kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey — the result of the
+   kernel's own attach-time READ CAPACITY; 0 if absent). The transient
+   "diskN" name buffers below never escape this function — only the parsed
+   integer identity does. */
+static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
+                                     uint64_t *media_bytes_out,
+                                     uint32_t *block_bytes_out)
 {
-    if (media_id_out) *media_id_out = 0;
+    if (media_id_out)    *media_id_out = 0;
+    if (media_bytes_out) *media_bytes_out = 0;
+    if (block_bytes_out) *block_bytes_out = 0;
     io_iterator_t it MOS_IO_AUTO = IO_OBJECT_NULL;
     if (IORegistryEntryCreateIterator(svc, kIOServicePlane,
             kIORegistryIterateRecursively, &it) != KERN_SUCCESS) {
@@ -67,6 +94,8 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out)
     char whole_name[MOS_BSD_NAME_CAP] = {0};
     char fallback_name[MOS_BSD_NAME_CAP] = {0};
     uint64_t whole_id = 0;
+    uint64_t whole_bytes = 0;   /* kIOMediaSizeKey off the Whole node */
+    uint32_t whole_block = 0;   /* kIOMediaPreferredBlockSizeKey */
 
     for (;;) {
         io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
@@ -110,6 +139,13 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out)
             if (IORegistryEntryGetRegistryEntryID(child, &whole_id) != KERN_SUCCESS) {
                 whole_id = 0;
             }
+            /* Same node, same tier: the kernel-cached capacity. Read here
+               while we hold the Whole IOMedia node rather than re-resolving
+               by media_id later — open-time, like the identity above. */
+            whole_bytes = mos_internal_cf_number_u64(child,
+                              CFSTR(kIOMediaSizeKey));
+            whole_block = (uint32_t)mos_internal_cf_number_u64(child,
+                              CFSTR(kIOMediaPreferredBlockSizeKey));
         } else if (!is_whole && fallback_name[0] == 0 &&
                    mos_internal_bsd_name_is_whole_shape(this_name)) {
             strlcpy(fallback_name, this_name, sizeof(fallback_name));
@@ -135,6 +171,11 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out)
                        : NULL;
     if (!chosen) return -1;
     if (media_id_out) *media_id_out = whole_name[0] ? whole_id : 0;
+    /* Size rides with the Whole node only: the fallback (non-IOMedia
+       bridge) branch captured none — its node's size, like its id, is
+       not the medium's (same reasoning as media_id above). */
+    if (media_bytes_out) *media_bytes_out = whole_name[0] ? whole_bytes : 0;
+    if (block_bytes_out) *block_bytes_out = whole_name[0] ? whole_block : 0;
     /* parse_bsd_unit normalizes any rdisk/ /dev/ prefix (some USB bridges
        expose only a raw entry), rejects partition/non-whole shapes, and
        returns the unit or -1. Identity is an integer from here; the
@@ -212,7 +253,9 @@ static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
        opens fine since the MMC plug-in and queries run off `svc`. Must
        assign unconditionally — the handle is calloc'd, so an unset bsd_unit
        would read 0 ("disk0"), a valid unit, not "no media". */
-    h->bsd_unit = mos_internal_bsd_unit(svc, &h->media_id);  /* -1 if no media */
+    h->bsd_unit = mos_internal_bsd_unit(svc, &h->media_id,
+                                        &h->media_bytes,
+                                        &h->media_block_bytes);  /* -1 if no media */
 
     SInt32 score = 0;
     kern_return_t kr = IOCreatePlugInInterfaceForService(
@@ -867,6 +910,42 @@ mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
         return MOS_ERR_IO;   /* truncated/short reply — refused whole */
     }
     *out = &h->track_info;
+    return MOS_OK;
+}
+
+mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out)
+{
+    if (out) *out = NULL;
+    if (!h || !out) return MOS_ERR_INVALID_ARG;
+
+    struct mos_capacity *c = &h->capacity;
+    *c = (struct mos_capacity){0};
+
+    /* (a) The whole-disk byte capacity — the kernel's own attach-time
+       READ CAPACITY, cached on the IOMedia node and captured at open
+       (no command, no exclusive access, works on mounted media). 0 ==
+       absent: a blank/absent disc has no whole-disk node. */
+    c->media_bytes = h->media_bytes;
+    c->block_bytes = h->media_block_bytes;
+
+    /* (b) The recordable / append-state view — a fresh READ TRACK
+       INFORMATION through the same non-exclusive convenience read.
+       Best-effort and independent of (a): a drive that rejects 0x52 (an
+       empty drive, or a pressed disc with no readable first track) just
+       leaves have_recordable false. Guard on the MMC interface so a
+       handle that somehow lacks it still returns the media size half. */
+    if (h->mmc) {
+        const mos_track_info *t = NULL;
+        if (mos_query_track_info(h, &t) == MOS_OK && t) {
+            c->have_recordable = true;
+            c->nwa_valid     = mos_track_info_nwa_valid(t);
+            c->free_blocks   = mos_track_info_free_blocks(t);
+            c->next_writable = mos_track_info_next_writable(t);
+            c->track_size    = mos_track_info_track_size(t);
+        }
+    }
+
+    *out = c;
     return MOS_OK;
 }
 

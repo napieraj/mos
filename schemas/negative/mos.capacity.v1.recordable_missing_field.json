@@ -1,0 +1,11 @@
+{
+  "schema": "mos.capacity.v1",
+  "bsd_node": "/dev/disk4",
+  "media_bytes": 25025314816,
+  "block_bytes": 2048,
+  "media_blocks": 12219392,
+  "recordable": {
+    "free_blocks": 0,
+    "next_writable": null
+  }
+}

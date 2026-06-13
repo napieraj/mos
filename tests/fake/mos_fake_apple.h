@@ -52,6 +52,12 @@ void mos_fake_set_identity(const char *vendor, const char *product,
 void mos_fake_set_drive_id(uint64_t id);
 void mos_fake_set_media_id(uint64_t id);
 
+/* Override the whole-disk IOMedia node's kernel-cached capacity
+   (kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey — what mos_query_capacity
+   reads). Default 0/0 (properties absent: blank/unrecorded media). A
+   non-zero pair models recorded/pressed media the kernel has sized. */
+void mos_fake_set_media_size(uint64_t bytes, uint32_t block_bytes);
+
 /* The MMC reply scripts. Bytes are copied into the fake; pass the
    committed fixture bytes. `task_status` is an SCSITaskStatus value
    (0x00 == GOOD). A status != GOOD or a NULL/zero-length reply makes
@@ -65,6 +71,11 @@ void mos_fake_set_toc_reply(uint32_t task_status,
                             const uint8_t *bytes, size_t len);
 void mos_fake_set_disc_structure_reply(uint32_t task_status,
                                        const uint8_t *bytes, size_t len);
+/* Script the READ TRACK INFORMATION (0x52) reply — the recordable /
+   append-state view mos_query_capacity folds in. Default (unset) is a
+   zeroed GOOD reply, which the parser rejects (recordable absent). */
+void mos_fake_set_readtrackinfo_reply(uint32_t task_status,
+                                      const uint8_t *bytes, size_t len);
 
 /* DiskArbitration scenario: make DADiskCopyDescription return a
    description with VolumeName `name` and (when `path` non-NULL/non-"")

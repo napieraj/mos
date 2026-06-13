@@ -265,24 +265,28 @@ assert_ec "status + retired --list is unknown option (64)" "64" "$EC"
 run_mos status --watch
 assert_ec "status + retired --watch is unknown option (64)" "64" "$EC"
 
-# Test 17: unknown subcommand exits 64 with a diagnostic listing
-# recognized and reserved names.
+# Test 17: unknown subcommand exits 64 with a diagnostic listing the
+# recognized verbs.
 run_mos garbage
 assert_ec "unknown subcommand exits 64" "64" "$EC"
 ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
 assert_contains "unknown subcommand diagnostic names recognized set" "$ERR" "status, list, watch"
 
-# Test 18: reserved-for-v0.4 subcommand names exit 64 with an
-# informative diagnostic rather than the generic "unknown" message.
-# This avoids the worst UX of users trying `mos capacity` once,
-# getting a vague error, and never trying again when the typed APIs
-# arrive.
-for reserved in capacity; do
-    run_mos "$reserved" --bsd disk0
-    assert_ec "reserved subcommand '$reserved' exits 64" "64" "$EC"
-    ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
-    assert_contains "reserved '$reserved' diagnostic names v0.4" "$ERR" "v0.4"
-done
+# Test 18 (capacity verb): 'capacity' was the lone remaining reserved
+# name; it shipped 2026-06-13 as mos.capacity.v1 (the reserved-name
+# machinery retired with it). It must now be a RECOGNIZED verb — a
+# selector miss carries the same mos.error.v1 envelope as the others, and
+# it must NOT hit the unknown-subcommand or reserved-name diagnostics.
+run_mos capacity --json --index 99
+assert_ec       "capacity no-drive JSON exit 66"     "66"   "$EC"
+assert_contains "capacity error envelope schema"     "$OUT" '"schema": "mos.error.v1"'
+run_mos capacity --bsd disk0
+case "$ERR" in
+    *"unknown subcommand"*|*"reserved for the v0.4"*)
+        fail=$((fail + 1))
+        printf 'fail: capacity hit the unknown/reserved diagnostic\n' ;;
+    *)  pass=$((pass + 1)) ;;
+esac
 
 # Test 19: list is mutually exclusive with --index/--bsd. List is
 # "enumerate ALL drives"; selectors target a single drive. Combining

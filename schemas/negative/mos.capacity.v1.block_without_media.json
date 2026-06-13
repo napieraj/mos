@@ -1,0 +1,8 @@
+{
+  "schema": "mos.capacity.v1",
+  "bsd_node": null,
+  "media_bytes": null,
+  "block_bytes": 2048,
+  "media_blocks": null,
+  "recordable": null
+}
