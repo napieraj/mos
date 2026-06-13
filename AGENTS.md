@@ -323,8 +323,54 @@ Three concepts, three names, no synonyms:
 - **bsd_name** — the string "diskN" (Apple: kIOBSDNameKey).
   `mos_bsd_name_format` renders it.
 - **dev node** — "/dev/" + bsd_name (Apple/diskutil: "Device Node").
-  `mos_bsd_dev_node` renders it; the JSON field `bsd`, flag `--bsd`,
-  and column `BSD` carry this form.
+  `mos_bsd_dev_node` renders it; the JSON field `bsd_node` (renamed
+  from `bsd` 2026-06-13, see addendum), the flag `--bsd`, and the
+  column `BSD` carry this form.
 Banned synonyms: bsd_path, bsd_number, "device path". CLI-layer
 identifiers carry the `mos_cli_` prefix uniformly (io, human, all of
 cli/).
+
+### Addendum: the volume vocabulary, and the `bsd` → `bsd_node` rename
+### (2026-06-13)
+
+Two new concepts, both Apple-canonical, both from DiskArbitration (not
+IOKit):
+- **volume_name** — the filesystem label (Apple:
+  kDADiskDescriptionVolumeNameKey). JSON field `volume_name`; metadata
+  `Volume` row; list folds it into the `Volume` column.
+- **volume_path** — the mount point "/Volumes/…" (Apple:
+  kDADiskDescriptionVolumePathKey). JSON field `volume_path`; metadata
+  `Path` row; list folds it into the same cell as `name (path)`.
+
+These became list/JSON first-class this branch and surfaced a tension:
+bsd_name is a *name* and the dev node is a *path*, so "name"/"path" read
+like one axis shared with volume_name/volume_path. They are not the same
+axis. bsd_unit → bsd_name → dev node is ONE identity in three renderings
+(a ladder) whose location rung is *computed* — "/dev/" + bsd_name, always
+present, never divergent. volume_name and volume_path are TWO INDEPENDENT
+facts — a label and a mount point that *diverge* under macOS
+disambiguation/sanitization (`ARRIVAL` vs `/Volumes/ARRIVAL 1`), the path
+*discovered* and nullable.
+
+The decision (the owner's; this supersedes a within-session "document it,
+don't rename" stance recorded earlier today): rename the JSON output field
+`bsd` → `bsd_node` across every document type (state, event, metadata,
+list, drive, features, error). Three reasons: (1) it completes a single
+prefixed ladder — `bsd_unit` / `bsd_name` / `bsd_node` — that a consumer
+learns once instead of memorizing that the bottom rung is the bare key
+`bsd`; (2) the bare `bsd` was the actual weak link — "BSD" is a namespace,
+not a noun, so the key never said *which* rung it carried; (3) it matches
+the internal renderer already named `mos_bsd_dev_node`. The suffix is
+`node`, not `path`: `bsd_node` is the computed rendering, `volume_path` the
+discovered location — different suffixes for genuinely different kinds of
+location, which is why `bsd_path` stays banned (it would assert a false
+name/path twinning the ladder does not have).
+
+Scope is OUTPUT ONLY. The `--bsd` selector flag and the human `BSD`
+column/row labels are unchanged — input ergonomics, output-not-input
+(doc/research/2026-04-27-v2-contract-design.md). The diagnostic
+`media_bsd` key in `mos.probe.v0` (cli/probe.c, not in schemas/) is
+untouched. Cost was zero: pre-first-tag, no external consumers, so the
+JSON-schema ADR's mutable-in-place clause applied — the rename landed in
+`mos.*.v1` directly, no v2, schemas + examples + negatives + emitters +
+docs in one commit.

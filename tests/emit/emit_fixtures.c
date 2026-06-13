@@ -166,6 +166,9 @@ int main(int argc, char **argv)
         common_drive_setup();
         mos_fake_set_getconfig_reply(0x00, cfg,
             build_getconfig(cfg, sizeof cfg, 0x0008, false));
+        /* Mounted: exercises both volume_name and volume_path in the
+           emitted mos.list.v1 row (validate_emitted.py). */
+        mos_fake_set_da_volume("ARRIVAL", "/Volumes/ARRIVAL");
         opt_index = 0;   /* list takes no selector */
         return run_list();
     }

@@ -46,7 +46,7 @@ static void emit_json(const feat_collect *c, int64_t bsd_unit,
 {
     fputs("{\n", stdout);
     fputs("  \"schema\": \"mos.features.v1\",\n", stdout);
-    fputs("  \"bsd\": ", stdout);
+    fputs("  \"bsd_node\": ", stdout);
     mos_cli_bsd_dev_node(stdout, bsd_unit);
     fprintf(stdout, ",\n  \"registry_id\": %llu",
             (unsigned long long)registry_id);

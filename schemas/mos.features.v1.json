@@ -4,14 +4,14 @@
   "title": "mos.features.v1",
   "description": "Raw MMC feature list emitted by `mos features --json`: one GET CONFIGURATION (RT=0) reply, one entry per feature descriptor in reply order. This is the medium-writability surface: a write feature's `current` flag answers whether the drive can write the medium mounted right now (e.g. code 0x0041 current with a blank BD-R inserted), complementing mos.metadata.v1's disc-side blank status. Codes are MMC feature numbers (MMC-6 §5.3); mos ships no name table — mapping is consumer-side. Deliberately carries NO current_profile: the state path's profile-only-on-READY rule (ARCHITECTURE §9) exists because drives cache stale profiles, and this document must not provide a bypass. Feature payloads are not exposed; payload facts go public as typed fields (mos.drive.v1 capabilities is the template).",
   "type": "object",
-  "required": ["schema", "bsd", "registry_id", "features"],
+  "required": ["schema", "bsd_node", "registry_id", "features"],
   "additionalProperties": false,
   "properties": {
     "schema": {
       "const": "mos.features.v1",
       "description": "Schema identifier. Per-document versioned."
     },
-    "bsd": {
+    "bsd_node": {
       "type": ["string", "null"],
       "pattern": "^/dev/disk[0-9]+$",
       "description": "Whole-disk dev node of the current media, or null when the drive is empty. The current flags are a function of this medium."

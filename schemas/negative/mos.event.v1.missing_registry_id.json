@@ -4,7 +4,7 @@
   "stream_open_ms": 1746526503000,
   "seq": 1,
   "ts": "2025-05-06T10:15:03Z",
-  "bsd": "/dev/disk4",
+  "bsd_node": "/dev/disk4",
   "state": "empty",
   "prev_state": "unknown",
   "current_profile": "0x0000"

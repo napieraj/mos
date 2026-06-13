@@ -1,6 +1,6 @@
 {
   "schema": "mos.state.v1",
   "state": "ready",
-  "bsd": "diskN",
+  "bsd_node": "diskN",
   "current_profile": "0x0040"
 }

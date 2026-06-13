@@ -1,6 +1,6 @@
 {
   "schema": "mos.features.v1",
-  "bsd": "/dev/disk4",
+  "bsd_node": "/dev/disk4",
   "registry_id": 4295032831,
   "features": [
     {"code": "0x0000", "current": true, "persistent": true, "version": 0},

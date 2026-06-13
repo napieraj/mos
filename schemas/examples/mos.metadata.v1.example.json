@@ -1,6 +1,6 @@
 {
   "schema": "mos.metadata.v1",
-  "bsd": "/dev/disk4",
+  "bsd_node": "/dev/disk4",
   "captured_at": "2026-06-12T19:48:00.123Z",
   "volume_path": null,
   "disc": {

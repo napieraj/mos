@@ -2,7 +2,7 @@
   "_comment": "sense must be absent (not all-zero) when there is no actual sense data.",
   "schema": "mos.state.v1",
   "state": "ready",
-  "bsd": "/dev/disk4",
+  "bsd_node": "/dev/disk4",
   "current_profile": "0x0040",
   "sense": {
     "key": "0x00",

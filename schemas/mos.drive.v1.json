@@ -6,7 +6,7 @@
   "type": "object",
   "required": [
     "schema",
-    "bsd",
+    "bsd_node",
     "registry_id",
     "vendor",
     "product",
@@ -20,7 +20,7 @@
       "const": "mos.drive.v1",
       "description": "Schema identifier. Per-document versioned."
     },
-    "bsd": {
+    "bsd_node": {
       "type": ["string", "null"],
       "pattern": "^/dev/disk[0-9]+$",
       "description": "Whole-disk dev node of the current media, or null when the drive is empty. Addressing context — a drive property only while this disc is loaded."

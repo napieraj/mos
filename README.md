@@ -38,9 +38,11 @@ never disagree. Identity is the same three fields on every surface
 (`vendor` / `product` / `revision`), captured from the platform's
 device directory once at device attach; when verifying a firmware
 flash, confirm `registry_id` changed too, or you're reading the
-pre-flash cache. The `bsd` field carries the full device node
+pre-flash cache. The `bsd_node` field carries the full device node
 (`/dev/disk4`) in both surfaces: pasteable, pipeable, and always a
-valid drive argument when non-null (an empty drive has none).
+valid drive argument when non-null (an empty drive has none). The
+human surfaces keep the short `BSD` label and the `--bsd` selector
+flag — input ergonomics, unchanged.
 
 ### Status (default)
 
@@ -52,7 +54,7 @@ Registry:  4295032831
  Profile:  bd  bd_rom  (0x0040)
   Vendor:  HL-DT-ST
  Product:  BD-RE WH16NS60
-     Rev:  1.00
+Revision:  1.00
 ```
 
 ```
@@ -60,7 +62,7 @@ $ mos status 1 --json
 {
   "schema": "mos.state.v1",
   "state": "ready",
-  "bsd": "/dev/disk4",
+  "bsd_node": "/dev/disk4",
   "registry_id": 4295032831,
   "index": 1,
   "current_profile": "0x0040",
@@ -82,7 +84,7 @@ Registry:  4295032831
    State:  open
   Vendor:  HL-DT-ST
  Product:  BD-RE WH16NS60
-     Rev:  1.00
+Revision:  1.00
 ```
 
 ### List
@@ -93,12 +95,21 @@ overview):
 
 ```
 $ mos list
- Index  State  Volume  BSD         Vendor    Product         Rev
-     1  ready  -       /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00
-     2  open   -       -           PIONEER   BD-RW BDR-XS07  1.01
+ Index  State  Volume                      BSD         Vendor    Product         Revision
+     1  ready  ARRIVAL (/Volumes/ARRIVAL)  /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00
+     2  open   -                           -           PIONEER   BD-RW BDR-XS07  1.01
 ```
 
-`mos list --json` emits `mos.list.v1` with the same fields per entry.
+A mounted disc shows its DA label and mount point folded into the one
+`Volume` column as `name (path)` — the path is where the full fusion
+shows itself per row (DiscRecording enumeration/identity, IOKit MMC down
+to the raw GESN state probe, and the DiscArbitration mount lookup). The
+label and the mount-point basename are distinct (macOS disambiguates a
+second `ARRIVAL` to `/Volumes/ARRIVAL 1`), so both earn their place.
+
+`mos list --json` emits `mos.list.v1` with the same fields per entry,
+carrying `volume_name` and `volume_path` as separate keys (both `null`
+when unmounted); the human column is the only place they're folded.
 
 ### Watch
 
@@ -114,7 +125,7 @@ looks like:
 $ mos watch
 {"schema":"mos.event.v1","event":"snapshot",...,"state":"empty","prev_state":"unknown",...}
 {"schema":"mos.event.v1","event":"state_changed",...,"state":"loading","prev_state":"empty",...}
-{"schema":"mos.event.v1","event":"state_changed",...,"bsd":"/dev/disk4","state":"ready",...}
+{"schema":"mos.event.v1","event":"state_changed",...,"bsd_node":"/dev/disk4","state":"ready",...}
 ```
 
 ### Metadata (disc identity)
@@ -172,7 +183,7 @@ $ mos drive 1
 Registry:  4295032831
   Vendor:  HL-DT-ST
  Product:  BD-RE WH16NS60
-     Rev:  1.00
+Revision:  1.00
   Serial:  -
     AACS:  version 68, bus encryption yes
 ```
