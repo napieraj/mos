@@ -18,8 +18,9 @@
 static const char *const reserved_subcommands[] = {
     /* "identity" retired 2026-06-12: its surface shipped as the
        metadata + drive verbs (design doc taxonomy); "features" shipped
-       the same day as the feature-list verb. */
-    "capacity", "tray", "speed", NULL
+       the same day as the feature-list verb. "tray" shipped 2026-06-13
+       as the control verbs (eject/close/lock/unlock). */
+    "capacity", "speed", NULL
 };
 
 static bool is_reserved_subcommand(const char *cmd)
@@ -54,6 +55,10 @@ void mos_cli_print_usage(FILE *f)
         "                    — mos.drive.v1.\n"
         "  features [drive]  MMC feature list with current bits (the\n"
         "                    medium-writability surface) — mos.features.v1.\n"
+        "  tray <action> [drive]\n"
+        "                    Control the tray: eject | close | lock |\n"
+        "                    unlock — mos.tray.v1. eject takes --force\n"
+        "                    (unlock first); lock/unlock take --persistent.\n"
 #ifdef MOS_CLI_PROBE
         "  probe  <drive>    Diagnostic: stream raw IOKit/DiscRecording\n"
         "                    notification events (NDJSON, mos.probe.v0)\n"
@@ -78,6 +83,9 @@ void mos_cli_print_usage(FILE *f)
         "  -i, --index N     1-based drive index (the Index column in\n"
         "                    'mos list'); explicit form of the positional\n"
         "      --bsd NAME    BSD form; explicit form of the positional\n"
+        "      --force       tray eject: ALLOW (unlock) before ejecting\n"
+        "      --persistent  tray lock/unlock: the Persistent Prevent state\n"
+        "                    (survives the operator eject button as an event)\n"
 #ifdef MOS_CLI_PROBE
         "      --dump        With probe: one-shot DR dictionary capture\n"
         "                    (text + XML plists; takes no drive argument)\n"
@@ -116,6 +124,8 @@ static void print_version(void)
 enum {
     OPT_BSD = 1000,
     OPT_VERSION,
+    OPT_FORCE,
+    OPT_PERSISTENT,
 #ifdef MOS_CLI_PROBE
     OPT_DUMP,
 #endif
@@ -124,6 +134,10 @@ enum {
 static const struct option long_options[] = {
     { "index",   required_argument, 0, 'i' },
     { "bsd",     required_argument, 0, OPT_BSD },
+    /* tray-only modifiers; validated against the verb below (an unrelated
+       subcommand seeing them is rejected, like --dump outside probe). */
+    { "force",      no_argument,    0, OPT_FORCE },
+    { "persistent", no_argument,    0, OPT_PERSISTENT },
 #ifdef MOS_CLI_PROBE
     /* Compiled out with the probe so an OFF build rejects --dump as an
        unknown option (usage + 64) instead of half-recognizing it. */
@@ -221,6 +235,16 @@ int main(int argc, char **argv)
             flag_drive = true;
         } else if (strcmp(cmd, "features") == 0) {
             flag_features = true;
+        } else if (strcmp(cmd, "tray") == 0) {
+            flag_tray = true;
+            /* tray takes an action word (eject/close/lock/unlock) before
+               any drive/flags. Capture it here so the shared getopt +
+               positional parser handle --force/--persistent and the
+               selector uniformly; the second shift below removes it from
+               getopt's view. A missing/flag-shaped action is left NULL and
+               diagnosed by mos_cli_run_tray. */
+            if (argc >= 3 && argv[2][0] != '-' && argv[2][0] != '\0')
+                opt_tray_action = argv[2];
         } else if (strcmp(cmd, "probe") == 0) {
 #ifdef MOS_CLI_PROBE
             flag_probe = true;
@@ -249,7 +273,7 @@ int main(int argc, char **argv)
         } else {
             fprintf(stderr, "%s: unknown subcommand: ", progname);
             mos_cli_safe_ascii(stderr, cmd);
-            fputs("\nRecognized: status, list, watch, metadata, drive, features"
+            fputs("\nRecognized: status, list, watch, metadata, drive, features, tray"
 #ifdef MOS_CLI_PROBE
                   ", probe"
 #endif
@@ -268,6 +292,15 @@ int main(int argc, char **argv)
         argv[1] = argv[0];
         argc--;
         argv++;
+
+        /* tray's action word now sits at argv[1] (the string opt_tray_action
+           still points to — only pointers moved). Shift again so getopt
+           sees only --force/--persistent and the drive selector. */
+        if (flag_tray && opt_tray_action) {
+            argv[1] = argv[0];
+            argc--;
+            argv++;
+        }
     }
 
     int c;
@@ -287,6 +320,8 @@ int main(int argc, char **argv)
             case OPT_BSD:
                 opt_bsd = optarg;
                 break;
+            case OPT_FORCE:      flag_force = true; break;
+            case OPT_PERSISTENT: flag_persistent = true; break;
 #ifdef MOS_CLI_PROBE
             case OPT_DUMP: flag_dump = true; break;
 #endif
@@ -369,6 +404,17 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 
+    /* --force / --persistent belong to tray (eject and lock/unlock
+       respectively); reject them on any other verb the way --dump is
+       rejected outside probe. The verb-specific eject-vs-lock match is
+       checked in mos_cli_run_tray, where the action word is known. */
+    if ((flag_force || flag_persistent) && !flag_tray) {
+        fprintf(stderr,
+                "%s: --force/--persistent apply only to the tray subcommand\n",
+                progname);
+        return EX_USAGE;
+    }
+
     /* (list + selector is rejected above, where the positional
        subject also lands — one guard, one message.) */
 
@@ -423,6 +469,7 @@ int main(int argc, char **argv)
     if (flag_metadata) return mos_cli_run_metadata();
     if (flag_drive) return mos_cli_run_drive();
     if (flag_features) return mos_cli_run_features();
+    if (flag_tray) return mos_cli_run_tray();
     if (flag_watch) return mos_cli_run_watch();
     return mos_cli_run_query();
 }

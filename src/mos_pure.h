@@ -473,6 +473,16 @@ bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
  * exercises the real disjunction, not a mirror. */
 bool mos_internal_status_is_contended(uint32_t status);
 
+/* ---- Tray-command outcome classification (mos_pure.c) ------------- *
+ *
+ * Classify a tray CDB's (task status, sense triple) into the public
+ * mos_tray_outcome. GOOD -> DONE, 5/53/02 -> REFUSED_LOCKED, any other
+ * non-GOOD -> REFUSED_OTHER. Pure; pinned by tests/test_tray.c. The
+ * caller has already mapped transport/lock failure to a negative
+ * mos_error — this only runs on a command the drive answered. */
+mos_tray_outcome mos_internal_tray_classify(uint32_t scsi_status,
+                                            uint8_t sk, uint8_t asc, uint8_t ascq);
+
 /* ---- GET EVENT STATUS NOTIFICATION media decode (mos_pure.c) ------- *
  *
  * Pull the authoritative Door/Tray-open bit out of a raw GESN (0x4A)

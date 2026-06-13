@@ -188,6 +188,9 @@ strip_file() {
     echo
     echo "/* ==== src/mos_scsi.c ==== */"
     strip_file "$SRC/mos_scsi.c"
+    echo
+    echo "/* ==== src/mos_tray.c ==== */"
+    strip_file "$SRC/mos_tray.c"
 } >> "$H"
 
 # The manifest is deterministic on purpose: dist/ is committed, and CI

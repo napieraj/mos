@@ -133,6 +133,30 @@ in `AGENTS.md`. The chain of files is the audit trail.
   (mos's one-raw-CDB rule is self-imposed scope) and libburn's macOS
   MMC path as dead (disabled behind `GET_SCSI_FIXED`).
 
+- `2026-06-13-tray-control-feasibility.md` — Full-session feasibility
+  report on the v0.4 tray-control surface (eject/close/lock/unlock) for a
+  ripping-robot workflow, verified against the tree + canonical sources
+  (T10 04-349r1, Apple's `IOSCSIMultimediaCommandsDevice`). Verdict:
+  feasible, the planned surface, and the robot's "lock survives handle
+  close" requirement is spec-derived (per-I_T-nexus PREVENT state; a
+  SCSITaskUserClient close is none of the SPC-4 clearing events; no
+  voluntary kext unlock on release) — so the verbs are fire-and-forget,
+  not a held session, and hardware's role is falsification, not design
+  input. Basis for the implemented tray verbs and the AGENTS controller-
+  verbs ADR.
+
+- `2026-06-13-eject-request-watch-event.md` — Design note for the
+  `eject_requested` watch follow-on (NOT implemented): why the
+  Persistent-Prevent soft-eject is the one case state-observation cannot
+  close (no state change by construction — edge vs level), what an
+  edge-triggered GESN event-drain in the watch would touch, and the three
+  constraints that make it hardware-gated (destructive single-consumer GESN
+  queue, the kernel's own ~1000 ms GESN poll racing userspace, multi-watcher
+  event theft). Build order: rig check first (does EjectRequest reach
+  userspace at all, via GESN drain or a forwarded IOKit notification), code
+  only if yes. No IPC daemon — the mechanism stays observation through the
+  drive.
+
 (An entry for a `2026-04-26-doctrine-review.md` note previously
 appeared in this index; that file was never committed and the entry
 was removed 2026-06-10.)

@@ -37,6 +37,18 @@ const char *mos_disc_status_description(mos_disc_status s)
     }
 }
 
+const char *mos_tray_outcome_description(mos_tray_outcome o)
+{
+    switch (o) {
+        case MOS_TRAY_DONE:           return "done";
+        case MOS_TRAY_REFUSED_LOCKED: return "refused_locked";
+        /* REFUSED_OTHER doubles as the out-of-enum fallback, same pinned-
+           coverage style as mos_state_description: -Wswitch still fires
+           when a new enumerator appears. */
+        case MOS_TRAY_REFUSED_OTHER: default: return "refused_other";
+    }
+}
+
 const char *mos_error_description(mos_error e)
 {
     switch (e) {

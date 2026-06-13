@@ -53,19 +53,19 @@ TEST(human_block_ready_mounted_golden)
         { "Volume",   "ARRIVAL_4K  (/Volumes/ARRIVAL_4K)" },
         { "Index",    "1" },
         { "BSD",      "/dev/disk4" },
-        { "Registry", "4295032831" },
+        { "Registry ID", "4295032831" },
         { "Drive",    "HL-DT-ST BD-RE WH16NS60 1.00" },
     };
     bool ok; char *out = capture_block(pairs, 7, &ok);
     EXPECT_EQ(true, ok);
     EXPECT_STREQ(
-        "   State:  ready\n"
-        " Profile:  0x0040  bd_rom  (bd)\n"
-        "  Volume:  ARRIVAL_4K  (/Volumes/ARRIVAL_4K)\n"
-        "   Index:  1\n"
-        "     BSD:  /dev/disk4\n"
-        "Registry:  4295032831\n"
-        "   Drive:  HL-DT-ST BD-RE WH16NS60 1.00\n", out);
+        "      State:  ready\n"
+        "    Profile:  0x0040  bd_rom  (bd)\n"
+        "     Volume:  ARRIVAL_4K  (/Volumes/ARRIVAL_4K)\n"
+        "      Index:  1\n"
+        "        BSD:  /dev/disk4\n"
+        "Registry ID:  4295032831\n"
+        "      Drive:  HL-DT-ST BD-RE WH16NS60 1.00\n", out);
     free(out);
     return 0;
 }
@@ -79,18 +79,18 @@ TEST(human_block_empty_or_open_sense_and_dashes)
         { "Sense",    "02/3a/01" },
         { "Index",    "1" },
         { "BSD",      NULL },
-        { "Registry", "4295032831" },
+        { "Registry ID", "4295032831" },
         { "Drive",    "HL-DT-ST BD-RE WH16NS60 1.00" },
     };
     bool ok; char *out = capture_block(pairs, 6, &ok);
     EXPECT_EQ(true, ok);
     EXPECT_STREQ(
-        "   State:  empty_or_open\n"
-        "   Sense:  02/3a/01\n"
-        "   Index:  1\n"
-        "     BSD:  -\n"
-        "Registry:  4295032831\n"
-        "   Drive:  HL-DT-ST BD-RE WH16NS60 1.00\n", out);
+        "      State:  empty_or_open\n"
+        "      Sense:  02/3a/01\n"
+        "      Index:  1\n"
+        "        BSD:  -\n"
+        "Registry ID:  4295032831\n"
+        "      Drive:  HL-DT-ST BD-RE WH16NS60 1.00\n", out);
     free(out);
     return 0;
 }

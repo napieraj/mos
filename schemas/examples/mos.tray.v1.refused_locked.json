@@ -1,0 +1,10 @@
+{
+  "schema": "mos.tray.v1",
+  "bsd_node": "/dev/disk4",
+  "registry_id": 4295021843,
+  "action": "eject",
+  "force": false,
+  "persistent": null,
+  "outcome": "refused_locked",
+  "sense": { "key": 5, "asc": 83, "ascq": 2 }
+}

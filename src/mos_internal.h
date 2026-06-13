@@ -159,6 +159,17 @@ mos_error mos_internal_mmc_test_unit_ready    (mos_handle_t *h,
                                                uint8_t sense[18]);
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile);
 
+/* Issue one 6-byte tray CDB (START STOP UNIT 0x1B / PREVENT ALLOW MEDIUM
+   REMOVAL 0x1E) on the mos_raw_cdb path and classify the result. Returns a
+   negative mos_error on transport/lock failure (BUSY on a mounted/contended
+   drive, NO_DEVICE, IO); on any command the drive ANSWERED returns MOS_OK and
+   sets *outcome (DONE / REFUSED_LOCKED / REFUSED_OTHER). sense_out, when
+   non-NULL, receives {sk, asc, ascq}; it is zeroed on MOS_OK with no sense.
+   The single ObtainExclusiveAccess call site stays mos_raw_cdb (§3) — this
+   wrapper adds none. Shared by the four public mos_tray_* verbs. */
+mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
+                                mos_tray_outcome *outcome, uint8_t sense_out[3]);
+
 
 
 /* Open a drive by its IORegistry entry ID — the identity-stable

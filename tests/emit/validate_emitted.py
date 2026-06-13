@@ -36,6 +36,10 @@ SCENARIOS = [
     ("features", "bd",            "mos.features.v1"),
     ("status",   "ready_mounted", "mos.state.v1"),
     ("list",     "one_drive",     "mos.list.v1"),
+    ("tray",     "eject_done",      "mos.tray.v1"),
+    ("tray",     "lock_persistent", "mos.tray.v1"),
+    ("tray",     "refused_locked",  "mos.tray.v1"),
+    ("tray",     "refused_other",   "mos.tray.v1"),
 ]
 
 

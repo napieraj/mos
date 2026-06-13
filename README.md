@@ -52,13 +52,13 @@ flag — input ergonomics, unchanged.
 
 ```
 $ mos status 1
-Registry:  4295032831
-     BSD:  /dev/disk4
-   State:  ready
- Profile:  bd  bd_rom  (0x0040)
-  Vendor:  HL-DT-ST
- Product:  BD-RE WH16NS60
-Revision:  1.00
+Registry ID:  4295032831
+        BSD:  /dev/disk4
+      State:  ready
+    Profile:  bd  bd_rom  (0x0040)
+     Vendor:  HL-DT-ST
+    Product:  BD-RE WH16NS60
+   Revision:  1.00
 ```
 
 ```
@@ -83,12 +83,12 @@ no guessing:
 
 ```
 $ mos status 1
-Registry:  4295032831
-     BSD:  -
-   State:  open
-  Vendor:  HL-DT-ST
- Product:  BD-RE WH16NS60
-Revision:  1.00
+Registry ID:  4295032831
+        BSD:  -
+      State:  open
+     Vendor:  HL-DT-ST
+    Product:  BD-RE WH16NS60
+   Revision:  1.00
 ```
 
 ### List
@@ -240,16 +240,16 @@ set to the append point and `free_blocks` to the writable remainder.
 
 ```
 $ mos drive 1
-     BSD:  /dev/disk4
-Registry:  4295032831
-  Vendor:  HL-DT-ST
- Product:  BD-RE WH16NS60
-Revision:  1.00
-  Serial:  -
-    AACS:  version 68, bus encryption yes
-  Speeds:  read 10560, write 8310 kB/s (max)
-    Mech:  tray, buffer 4096 KB
-ErrRecov:  retry 20, PER
+        BSD:  /dev/disk4
+Registry ID:  4295032831
+     Vendor:  HL-DT-ST
+    Product:  BD-RE WH16NS60
+   Revision:  1.00
+     Serial:  -
+       AACS:  version 68, bus encryption yes
+     Speeds:  read 10560, write 8310 kB/s (max)
+       Mech:  tray, buffer 4096 KB
+   ErrRecov:  retry 20, PER
 ```
 
 `mos drive --json` emits `mos.drive.v1`: identity (open-time directory
@@ -298,6 +298,44 @@ when `mos metadata` says the disc is blank **and** `mos features`
 shows the matching write feature current (0x0041 for BD-R). Codes map
 against MMC-6 §5.3; mos ships no name table.
 
+### Tray (control)
+
+The one part of mos that **changes** drive state rather than reporting
+it — the query path stays reporter-only. Four actions:
+
+```sh
+$ mos tray eject 1              # eject (START STOP UNIT, LoEj)
+$ mos tray eject 1 --force      # ALLOW (unlock) first, then eject
+$ mos tray close 1
+$ mos tray lock 1               # prevent removal until an unlock
+$ mos tray lock 1 --persistent  # robot-grade: the operator eject button
+                                # becomes an event, not a retraction
+$ mos tray unlock 1             # release a lock (add --persistent to
+                                # release a --persistent one — the two
+                                # prevent states are independent)
+```
+
+`mos tray <action> --json` emits one `mos.tray.v1` document with the
+`outcome`: `done`, `refused_locked` (an eject hit a lock — a reported
+fact, not a failure; the process still exits 0), or `refused_other`. A
+refusal carries the drive's SCSI `sense` triple so a non-lock rejection
+(e.g. a drive without Persistent Prevent answering `5/24/00`) is
+diagnosable, not just opaque.
+Mechanism facts only: mos issues the command and reports what happened,
+and **does not unmount for you** (the deliberate contrast with `drutil
+tray eject`'s unmount-then-eject policy — the orchestrator owns that
+decision). A lock targets a drive macOS has not mounted as a volume; on
+a mounted disc the verb returns busy (`mos.error.v1`, exit 75) and
+unmounting first is the caller's call.
+
+A lock **persists past the process** by design: the PREVENT state is the
+drive's, cleared only by an explicit unlock (on the same host), a bus
+reset, or power-off — so a ripping robot can lock an idle drive and walk
+away, and any later `mos tray unlock` recovers it. (mos has never run on
+real hardware yet — `mos tray` is built to T10 04-349r1 + Apple's kext
+source and is on the v0.4 hardware-falsification path; see
+`doc/research/2026-06-13-tray-control-feasibility.md`.)
+
 ### Shell integration
 
 The core pattern — act on every disc that turns readable, on any
@@ -320,8 +358,9 @@ once, swapping discs fires `media_changed`, a drive plugged in
 mid-run joins the stream live, and an ejected drive doesn't end it.
 For a one-shot answer, `mos status <drive> --json` is the same
 contract in a single document. Everything else composes from
-tools that already exist: tray control is `drutil tray eject` /
-`drutil tray close`, mount control is `diskutil mount` / `diskutil
+tools that already exist: tray control is `mos tray` (or `drutil tray
+eject` / `drutil tray close` if you want its unmount-first policy),
+mount control is `diskutil mount` / `diskutil
 unmount`, CD audio is `cdparanoia`, DVD/BD rip is `makemkvcon`,
 transcode is `HandBrakeCLI`. Keep your integration shallow; the power
 is in composition.

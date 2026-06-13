@@ -15,7 +15,7 @@ static void emit_human(const mos_state_result *r, int index1,
     mos_cli_human_pair pairs[11];
     size_t n = 0;
 
-    /* Addressing header first: Index, Registry, BSD. The selector the
+    /* Addressing header first: Index, Registry ID, BSD. The selector the
        caller invoked with is dropped (they typed it); BSD always stays
        — it is the pasteable, downstream-useful handle. */
     char idx_buf[12];
@@ -34,9 +34,9 @@ static void emit_human(const mos_state_result *r, int index1,
         if (reg) {
             snprintf(reg_buf, sizeof reg_buf, "%llu",
                      (unsigned long long)reg);
-            pairs[n++] = (mos_cli_human_pair){ "Registry", reg_buf };
+            pairs[n++] = (mos_cli_human_pair){ "Registry ID", reg_buf };
         } else {
-            pairs[n++] = (mos_cli_human_pair){ "Registry", NULL };
+            pairs[n++] = (mos_cli_human_pair){ "Registry ID", NULL };
         }
     }
 

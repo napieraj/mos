@@ -85,6 +85,30 @@ bool mos_internal_status_is_contended(uint32_t status)
            status == MOS_SCSI_STATUS_ACA_ACTIVE;
 }
 
+/* Tray-command outcome classifier (SPC-4 / MMC-6 START STOP UNIT 0x1B,
+   PREVENT ALLOW MEDIUM REMOVAL 0x1E). Pure so it is fuzz/ASan-checked and
+   test_tray.c exercises the real disjunction, not a mirror.
+
+   A command that ANSWERED is a reported fact, never a transport error:
+     GOOD                       -> DONE
+     CHECK CONDITION 5/53/02    -> REFUSED_LOCKED  (MEDIA REMOVAL PREVENTED:
+                                   an eject/close hit a basic Prevent lock —
+                                   T10 04-349r1 §6.18.3.3 / Table 9)
+     any other non-GOOD         -> REFUSED_OTHER   (e.g. a drive without the
+                                   PDTE Persistent Prevent state answering a
+                                   0x02/0x03 with ILLEGAL REQUEST 5/24/00 per
+                                   04-349r1 Table 2 note a)
+   The caller maps a transport/lock failure (BUSY on a mounted or contended
+   drive, NO_DEVICE, IO) out-of-band as a negative mos_error before this runs;
+   this function only classifies a command the drive actually answered. */
+mos_tray_outcome mos_internal_tray_classify(uint32_t scsi_status,
+                                            uint8_t sk, uint8_t asc, uint8_t ascq)
+{
+    if (scsi_status == MOS_SCSI_STATUS_GOOD)        return MOS_TRAY_DONE;
+    if (sk == 0x05 && asc == 0x53 && ascq == 0x02)  return MOS_TRAY_REFUSED_LOCKED;
+    return MOS_TRAY_REFUSED_OTHER;
+}
+
 /* IOReturn → mos_error mapping. Pure: takes int32_t, returns mos_error.
    The Apple adapter casts IOReturn to int32_t at the call site; the
    src/mos_scsi.c adapter file contains static_asserts that pin every

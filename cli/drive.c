@@ -119,7 +119,7 @@ static void emit_human(const drive_doc *d)
     if (d->registry_id)
         snprintf(reg_buf, sizeof reg_buf, "%llu",
                  (unsigned long long)d->registry_id);
-    pairs[n++] = (mos_cli_human_pair){ "Registry",
+    pairs[n++] = (mos_cli_human_pair){ "Registry ID",
                                        d->registry_id ? reg_buf : NULL };
 
     char v_esc[MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];

@@ -129,6 +129,21 @@ typedef enum {
 } mos_disc_status;
 MOS_ABI_PIN_I32(mos_disc_status);
 
+/* Outcome of a tray-control verb (mos_tray_*). A command the drive
+   ANSWERED always returns MOS_OK with one of these — the refusal is a
+   reported fact, not a query failure. A transport/lock failure (the drive
+   is mounted or held by another client, gone, or an IOKit error) returns a
+   negative mos_error instead and leaves the outcome unmodified. */
+typedef enum {
+    MOS_TRAY_DONE           = 0, /* command completed GOOD                  */
+    MOS_TRAY_REFUSED_LOCKED = 1, /* CHECK CONDITION 5/53/02 MEDIA REMOVAL
+                                    PREVENTED — an eject/close hit a lock    */
+    MOS_TRAY_REFUSED_OTHER  = 2, /* CHECK CONDITION, other sense (e.g. a
+                                    drive without Persistent Prevent support
+                                    rejecting --persistent with 5/24/00)     */
+} mos_tray_outcome;
+MOS_ABI_PIN_I32(mos_tray_outcome);
+
 /* ---- Query result struct -------------------------------------------- */
 
 /*
@@ -677,6 +692,75 @@ mos_error mos_enumerate_features(mos_handle_t *h,
                                  bool (*cb)(const mos_feature_info_t *f,
                                             void *ctx),
                                  void *ctx);
+
+/* ---- Tray control (v0.4 control verbs) -------------------------------- *
+ *
+ * The first commands mos issues that CHANGE drive state rather than report
+ * it (ARCHITECTURE.md §1 reporter-only stance is narrowed, not reversed —
+ * the query path never issues these; AGENTS.md controller-verbs ADR
+ * 2026-06-13). Each is one raw 6-byte CDB on the mos_raw_cdb path, so each
+ * acquires and RELEASES exclusive access within the call:
+ *
+ *   - MOS_ERR_BUSY / MOS_ERR_EXCLUSIVE_ACCESS when the drive is mounted as a
+ *     volume or held by another client — unmount/quiesce is the CONSUMER's
+ *     call (mos never unmounts for you, the deliberate contrast with
+ *     `drutil tray eject`). A robot orchestrator locks/ejects between stages.
+ *   - On a command the drive ANSWERED, MOS_OK and *out carries the outcome
+ *     (DONE / REFUSED_LOCKED / REFUSED_OTHER) — mechanism facts only.
+ *
+ * Lock lifetime (T10 04-349r1 §6.18): the PREVENT state is per-I_T-nexus and
+ * survives a handle close / process exit — it clears only on bus/LU/hard
+ * reset, power on, or an explicit ALLOW on the same initiator. A Mac presents
+ * a single initiator, so a stale lock is always clearable by a later
+ * mos_tray_unlock on the same host. The lock is therefore FIRE-AND-FORGET:
+ * mos holds nothing for the lock window and there is no held-session variant.
+ *
+ * `out` is REQUIRED (the outcome is the whole point of the call). `sense` is
+ * OPTIONAL (NULL to ignore): on MOS_OK it receives the {key, asc, ascq} the
+ * drive returned — meaningful on a refusal (REFUSED_LOCKED is always 5/53/02;
+ * REFUSED_OTHER is whatever the drive reported, e.g. 5/24/00 for an
+ * unsupported Persistent Prevent), all-zero on DONE. Zeroed on a transport
+ * failure (negative return). Same shape as mos_raw_cdb's sense out-param.
+ */
+
+/* Eject the tray / unload the medium (START STOP UNIT 0x1B, LoEj=1 START=0).
+   `force` issues an ALLOW (clear basic Prevent) immediately before the eject,
+   so a basic lock does not turn the eject into a REFUSED_LOCKED — the same
+   unlock-then-eject sequence the macOS kernel's own EjectTheMedia performs.
+   force does NOT clear a Persistent Prevent lock, and need not: an
+   initiator-issued eject succeeds under Persistent Prevent by spec
+   (04-349r1 §6.18.3.2). Without force, a basic-locked drive answers
+   REFUSED_LOCKED — a reported fact. (`sense` reflects the eject, not the
+   pre-step ALLOW.) */
+mos_error mos_tray_eject (mos_handle_t *h, bool force,
+                          mos_tray_outcome *out, uint8_t sense[3]);
+
+/* Close / load the tray (START STOP UNIT 0x1B, LoEj=1 START=1). */
+mos_error mos_tray_close (mos_handle_t *h,
+                          mos_tray_outcome *out, uint8_t sense[3]);
+
+/* Prevent medium removal (PREVENT ALLOW MEDIUM REMOVAL 0x1E). persistent
+   selects the PERSISTENT bit: false sets the basic Prevent state (byte4
+   0x01) — blocks operator-button AND initiator eject until an ALLOW; true
+   sets the Persistent Prevent state (byte4 0x03) — the robot-grade lock:
+   the operator button is converted to a GESN EjectRequest event instead of
+   ejecting, while an initiator eject still succeeds. A drive that does not
+   implement Persistent Prevent answers REFUSED_OTHER (5/24/00). */
+mos_error mos_tray_lock  (mos_handle_t *h, bool persistent,
+                          mos_tray_outcome *out, uint8_t sense[3]);
+
+/* Allow medium removal (PREVENT ALLOW MEDIUM REMOVAL 0x1E). persistent must
+   MATCH the lock being released — the two prevent states are independent
+   (04-349r1 §6.18.2): false issues 0x00 (clears basic Prevent), true issues
+   0x02 (clears Persistent Prevent). A 0x00 does NOT clear a persistent lock.
+   (This symmetric `persistent` parameter refines the v0.4 design sketch,
+   which predated confirming the two states are independent.) */
+mos_error mos_tray_unlock(mos_handle_t *h, bool persistent,
+                          mos_tray_outcome *out, uint8_t sense[3]);
+
+/* Stable lower_snake_case token for an outcome: "done" / "refused_locked" /
+   "refused_other". Same contract as mos_state_description (never NULL). */
+const char *mos_tray_outcome_description(mos_tray_outcome o);
 
 /*
  * Diagnostic: issue a raw CDB against the drive. Requires exclusive
