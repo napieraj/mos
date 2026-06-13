@@ -113,7 +113,7 @@ int emit_unknown_and_fail(const char *context, mos_error err,
         fprintf(stdout, "{%s", nl);
         fprintf(stdout, "%s\"schema\":%s\"mos.error.v1\",%s", i2, sp, nl);
         if (dev_node && *dev_node) {
-            fprintf(stdout, "%s\"bsd\":%s", i2, sp);
+            fprintf(stdout, "%s\"bsd_node\":%s", i2, sp);
             mos_cli_json_str(stdout, dev_node);
             fprintf(stdout, ",%s", nl);
         }
@@ -176,7 +176,7 @@ static void query_row(const mos_device_info_t *info, list_row *row)
     memset(row, 0, sizeof *row);
     row->registry_id = mos_device_info_registry_id(info);
     (void)mos_bsd_dev_node(mos_device_info_bsd_unit(info),
-                           row->bsd, sizeof row->bsd);
+                           row->bsd_node, sizeof row->bsd_node);
 
     mos_error err = MOS_OK;
     mos_handle_t *h = mos_open_device(info, &err);
@@ -194,7 +194,7 @@ static void query_row(const mos_device_info_t *info, list_row *row)
        the open re-validated identity, and media may have (un)loaded
        between snapshot and probe. */
     (void)mos_bsd_dev_node(mos_state_result_bsd_unit(r),
-                                 row->bsd, sizeof row->bsd);
+                                 row->bsd_node, sizeof row->bsd_node);
     if (mos_state_result_registry_id(r))
         row->registry_id = mos_state_result_registry_id(r);
     const char *v = mos_state_result_vendor(r);
@@ -254,7 +254,7 @@ void emit_list_table(FILE *f, const list_row *rows, int n,
             cells[r * ncols + c++] =
                 (rows[r].volume[0] || rows[r].volume_path[0]) ? vol_esc[r]
                                                               : NULL;
-        cells[r * ncols + c++] = rows[r].bsd[0] ? rows[r].bsd : NULL;
+        cells[r * ncols + c++] = rows[r].bsd_node[0] ? rows[r].bsd_node : NULL;
         cells[r * ncols + c++] = rows[r].vendor[0]   ? v_esc[r] : NULL;
         cells[r * ncols + c++] = rows[r].product[0]  ? p_esc[r] : NULL;
         cells[r * ncols + c++] = rows[r].revision[0] ? r_esc[r] : NULL;
@@ -278,8 +278,8 @@ void emit_list_json(const list_row *rows, int n)
         fputs(", \"volume_path\": ", stdout);
         if (rows[r].volume_path[0]) mos_cli_json_str(stdout, rows[r].volume_path);
         else                        fputs("null", stdout);
-        fputs(", \"bsd\": ", stdout);
-        if (rows[r].bsd[0]) mos_cli_json_str(stdout, rows[r].bsd);
+        fputs(", \"bsd_node\": ", stdout);
+        if (rows[r].bsd_node[0]) mos_cli_json_str(stdout, rows[r].bsd_node);
         else                fputs("null", stdout);
         fprintf(stdout, ", \"registry_id\": %llu",
                 (unsigned long long)rows[r].registry_id);

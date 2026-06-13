@@ -1,7 +1,7 @@
 {
   "schema": "mos.state.v1",
   "state": "ready",
-  "bsd": "/dev/disk4",
+  "bsd_node": "/dev/disk4",
   "registry_id": 4295032831,
   "index": -1,
   "current_profile": "0x0008",

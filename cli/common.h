@@ -84,7 +84,7 @@ static inline void mos_cli_list_volume_cell(const char *name,
 
 typedef struct {
     char     state[24];
-    char     bsd[24];        /* "" == none */
+    char     bsd_node[24];        /* "" == none */
     /* RAW identity bytes (trailing-stripped at extraction). JSON is
        byte-faithful; the table escapes at emit. */
     char     vendor[MOS_CLI_VENDOR_CAP];

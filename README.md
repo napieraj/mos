@@ -38,9 +38,11 @@ never disagree. Identity is the same three fields on every surface
 (`vendor` / `product` / `revision`), captured from the platform's
 device directory once at device attach; when verifying a firmware
 flash, confirm `registry_id` changed too, or you're reading the
-pre-flash cache. The `bsd` field carries the full device node
+pre-flash cache. The `bsd_node` field carries the full device node
 (`/dev/disk4`) in both surfaces: pasteable, pipeable, and always a
-valid drive argument when non-null (an empty drive has none).
+valid drive argument when non-null (an empty drive has none). The
+human surfaces keep the short `BSD` label and the `--bsd` selector
+flag — input ergonomics, unchanged.
 
 ### Status (default)
 
@@ -60,7 +62,7 @@ $ mos status 1 --json
 {
   "schema": "mos.state.v1",
   "state": "ready",
-  "bsd": "/dev/disk4",
+  "bsd_node": "/dev/disk4",
   "registry_id": 4295032831,
   "index": 1,
   "current_profile": "0x0040",
@@ -123,7 +125,7 @@ looks like:
 $ mos watch
 {"schema":"mos.event.v1","event":"snapshot",...,"state":"empty","prev_state":"unknown",...}
 {"schema":"mos.event.v1","event":"state_changed",...,"state":"loading","prev_state":"empty",...}
-{"schema":"mos.event.v1","event":"state_changed",...,"bsd":"/dev/disk4","state":"ready",...}
+{"schema":"mos.event.v1","event":"state_changed",...,"bsd_node":"/dev/disk4","state":"ready",...}
 ```
 
 ### Metadata (disc identity)

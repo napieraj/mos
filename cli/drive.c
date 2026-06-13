@@ -29,7 +29,7 @@ static void emit_json(const drive_doc *d)
 {
     fputs("{\n", stdout);
     fputs("  \"schema\": \"mos.drive.v1\",\n", stdout);
-    fputs("  \"bsd\": ", stdout);
+    fputs("  \"bsd_node\": ", stdout);
     mos_cli_bsd_dev_node(stdout, d->bsd_unit);
     fprintf(stdout, ",\n  \"registry_id\": %llu",
             (unsigned long long)d->registry_id);

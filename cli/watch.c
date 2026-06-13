@@ -90,7 +90,7 @@ static watch_emit_status emit_watch_ndjson(const mos_watch_event *e)
        empty-drive event keeps the required field present as null rather
        than dropping it (which would fail schema validation), and a real
        unit as "diskN" — the JSON wire shape is unchanged. */
-    fputs(",\"bsd\":", stdout); mos_cli_bsd_dev_node(stdout, mos_watch_event_bsd_unit(e));
+    fputs(",\"bsd_node\":", stdout); mos_cli_bsd_dev_node(stdout, mos_watch_event_bsd_unit(e));
 
     /* device_removed carries only prev_state; every other kind also carries
        the current state. prev_state is written unconditionally either way. */

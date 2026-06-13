@@ -10,7 +10,7 @@
     "schema": {
       "const": "mos.error.v1"
     },
-    "bsd": {
+    "bsd_node": {
       "type": "string",
       "pattern": "^/dev/disk[0-9]+$",
       "description": "Whole-disk dev node (/dev/diskN) of the drive a handle was open against when the failure occurred. Absent when the failure occurred before handle acquisition (e.g. drive not present at all)."

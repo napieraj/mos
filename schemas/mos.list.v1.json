@@ -20,7 +20,7 @@
         "required": [
           "index",
           "state",
-          "bsd",
+          "bsd_node",
           "registry_id",
           "vendor",
           "product",
@@ -59,7 +59,7 @@
               "null"
             ]
           },
-          "bsd": {
+          "bsd_node": {
             "anyOf": [
               {
                 "type": "string",

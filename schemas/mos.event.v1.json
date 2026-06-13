@@ -11,7 +11,7 @@
     "stream_open_ms",
     "seq",
     "ts",
-    "bsd",
+    "bsd_node",
     "prev_state"
   ],
   "additionalProperties": false,
@@ -50,7 +50,7 @@
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
       "description": "RFC 3339 UTC timestamp of the event. Pattern is conservative: integer seconds, trailing Z. Matches what src/mos_watch_core.c::format_rfc3339 emits. The explicit pattern is here because JSON Schema 2020-12's format-annotation vocabulary treats `format` as an annotation rather than a hard assertion by default, so a future malformed-timestamp fixture could pass the validator otherwise."
     },
-    "bsd": {
+    "bsd_node": {
       "type": [
         "string",
         "null"

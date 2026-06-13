@@ -5,7 +5,7 @@
   "stream_open_ms": 1746526503000,
   "seq": 8,
   "ts": "2025-05-06T10:17:52Z",
-  "bsd": null,
+  "bsd_node": null,
   "state": "empty_or_open",
   "prev_state": "ready",
   "current_profile": "0x0000",
