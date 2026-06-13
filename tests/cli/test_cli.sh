@@ -403,6 +403,15 @@ case "$ERR" in
     assert_ec "probe absent bsd exits 66" "66" "$EC"
     run_mos probe 99
     assert_ec "probe absent index exits 66" "66" "$EC"
+    # A registry-id selector (at/above the xnu floor 2^32+256) is accepted
+    # by the global positional grammar and honored by the other selector-
+    # taking subcommands, but probe resolves its service by BSD name only,
+    # so it is rejected at usage time (64) with an accurate message — not
+    # the generic "requires a drive" guard, which would misreport a drive
+    # that was in fact given.
+    run_mos probe 4294967552
+    assert_ec       "probe registry-id selector exits 64" "64" "$EC"
+    assert_contains "probe registry-id: named in error" "$ERR" "registry-id"
 
     # Test 30: probe --dump is runnable without hardware: the runner
     # has no burner, so the DR device array is empty — banner, count

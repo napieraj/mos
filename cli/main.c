@@ -66,9 +66,13 @@ void print_usage(FILE *f)
     print_reserved_subcommands(f);
     fputs(".\n"
         "\n"
-        "Drive (positional): an Index from 'mos list' (all digits), or a\n"
-        "BSD form (disk4, rdisk4, /dev/disk4). With one drive attached it\n"
-        "may be omitted; with several it is required.\n"
+        "Drive (positional): an Index from 'mos list' (all digits), a\n"
+        "registry_id from JSON output (all digits, above 2^32), or a BSD\n"
+        "form (disk4, rdisk4, /dev/disk4). With one drive attached it may\n"
+        "be omitted; with several it is required.\n"
+#ifdef MOS_CLI_PROBE
+        "(probe is the exception: index or BSD form only, no registry_id.)\n"
+#endif
         "\n"
         "Options:\n"
         "  -i, --index N     1-based drive index (the Index column in\n"
@@ -386,6 +390,19 @@ int main(int argc, char **argv)
     if (flag_dump && flag_json) {
         fprintf(stderr, "%s: probe --dump output is plain text + XML "
                         "plists; --json does not apply\n", progname);
+        return EX_USAGE;
+    }
+    if (flag_probe && !flag_dump && opt_registry) {
+        /* probe resolves its io_service_t by BSD name (cli/probe.c walks
+           the IOMedia up to the SCSI peripheral); a registry-id selector
+           has no resolution path there. The other selector-taking
+           subcommands accept registry ids via mos_open_by_registry_id —
+           probe is index/BSD only by design. Reject it with an accurate
+           message rather than falling through to the "requires a drive"
+           guard below, which would misreport a drive that *was* given. */
+        fprintf(stderr, "%s: probe does not accept registry-id selectors; "
+                        "use an index (see 'mos list') or a BSD form\n",
+                progname);
         return EX_USAGE;
     }
     if (flag_probe && !flag_dump && !opt_index && !opt_bsd) {
