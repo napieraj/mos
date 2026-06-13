@@ -777,6 +777,61 @@ mos_error mos_query_disc_id(mos_handle_t *h, const mos_disc_id **out)
     return MOS_OK;
 }
 
+mos_error mos_query_physical_structure(mos_handle_t *h,
+                                       const mos_physical_structure **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Two convenience reads of READ DISC STRUCTURE for the DVD/HD-DVD
+       media type (MEDIA_TYPE=0): FORMAT 0x00 (Physical Format
+       Information) and FORMAT 0x01 (Copyright Management Information).
+       Each into a fixed zero-init buffer — sizeof buf is the trusted
+       length (O-4); the reply's own Disc Structure Data Length can only
+       SHRINK the parse, and an under-filled reply fails the per-format
+       min-length gate. Both halves merge into one handle-owned struct;
+       the reads are independent (partial-readability ladder), so a drive
+       that answers one format but not the other still yields the half it
+       gave. No lock (convenience). */
+    struct mos_physical_structure *d = &h->physical_structure;
+    *d = (struct mos_physical_structure){0};
+
+    uint8_t         buf[2048] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x00,             /* FORMAT = Physical Format Info    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
+        (void)mos_internal_physical_format_parse(buf, sizeof(buf), d);
+
+    memset(buf, 0, sizeof buf);
+    st = 0;
+    sd = (SCSI_Sense_Data){0};
+    rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x01,             /* FORMAT = Copyright Management    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
+        (void)mos_internal_copyright_mgmt_parse(buf, sizeof(buf), d);
+
+    if (!d->have_physical && !d->have_copyright) {
+        return MOS_ERR_IO;   /* neither format answered (non-DVD, or refused) */
+    }
+    *out = d;
+    return MOS_OK;
+}
+
 /* Open-time directory identity, exposed for the drive verb: zero
    commands, same borrowed-string terms as the state result's copies
    (which point into these same buffers). */

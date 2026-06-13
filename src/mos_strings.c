@@ -118,6 +118,49 @@ const char *mos_profile_class(uint16_t profile_code)
     }
 }
 
+/* Physical Format Information book-type codes (MMC-5 / the Linux uapi
+   dvd_layer book_type values) — DVD and HD-DVD share this field.
+   Lower_snake_case to match the profile-name convention; unrecognized
+   codes return NULL so consumers fall back to the numeric code. The
+   schema's book-type enum tracks this table (the validate.py drift
+   guard). */
+const char *mos_book_type_name(uint8_t book_type)
+{
+    switch (book_type) {
+        case 0x0: return "dvd_rom";
+        case 0x1: return "dvd_ram";
+        case 0x2: return "dvd_r";
+        case 0x3: return "dvd_rw";
+        case 0x4: return "hd_dvd_rom";
+        case 0x5: return "hd_dvd_ram";
+        case 0x6: return "hd_dvd_r";
+        case 0x9: return "dvd_plus_rw";
+        case 0xA: return "dvd_plus_r";
+        case 0xD: return "dvd_plus_rw_dl";
+        case 0xE: return "dvd_plus_r_dl";
+        default:  return NULL;
+    }
+}
+
+/* Track path: parallel (single-layer / sequential) vs opposite. */
+const char *mos_track_path_name(uint8_t track_path)
+{
+    return track_path ? "otp" : "ptp";
+}
+
+/* Copyright Protection System Type (READ DISC STRUCTURE format 0x01,
+   CPST byte). Unrecognized/reserved codes return NULL. */
+const char *mos_protection_name(uint8_t protection)
+{
+    switch (protection) {
+        case 0x00: return "none";
+        case 0x01: return "css_cppm";
+        case 0x02: return "cprm";
+        case 0x03: return "aacs";
+        default:   return NULL;
+    }
+}
+
 /* sysexits.h class for a mos_error. Kept in sync with the table in
    include/mos.h's mos_error_sysexit() doc-comment. */
 int mos_error_sysexit(mos_error e)

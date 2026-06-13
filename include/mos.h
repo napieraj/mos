@@ -473,6 +473,65 @@ const char *mos_disc_id_manufacturer(const mos_disc_id *d);
 const char *mos_disc_id_media_type(const mos_disc_id *d);
 const char *mos_disc_id_revision(const mos_disc_id *d);
 
+/* ---- Physical structure: DVD/HD-DVD (v0.4 typed API) ----------------- */
+
+/* Result of a physical-structure query. Opaque, handle-owned; valid
+   until the next mos_query_physical_structure() call or mos_close(). */
+typedef struct mos_physical_structure mos_physical_structure;
+
+/*
+ * Query the disc's Physical Format Information and Copyright Management
+ * Information: READ DISC STRUCTURE (DVD/HD-DVD media type) format 0x00
+ * and 0x01 through the non-exclusive ReadDiscStructure convenience
+ * method. The DVD/HD-DVD analog of mos_query_disc_id (BD DI) — the
+ * geometry the disc reports (book type, layer layout, data-area sector
+ * boundaries, the layer break) plus the protection-system type and
+ * region mask. Named "physical structure", not "dvd", because the same
+ * media-type-0 reply carries HD-DVD book types too. DVD/HD-DVD-ONLY: on
+ * CD/BD media these formats are absent, so callers gate on a dvd or
+ * hd_dvd profile class. Surfaces the spec values faithfully and does NOT
+ * classify them (book_type => media name, cpst => "CSS-protected" are
+ * the consumer's call). The two formats are read with one query; a drive
+ * that answers one but not the other leaves the missing half's
+ * mos_physical_structure_have_* accessor false. `out` REQUIRED (NULL =>
+ * MOS_ERR_INVALID_ARG); MOS_ERR_IO when neither format parses.
+ */
+mos_error mos_query_physical_structure(mos_handle_t *h,
+                                       const mos_physical_structure **out);
+
+/* Accessors. NULL-tolerant (NULL reads as 0/false). The physical fields
+   are meaningful only when have_physical is true; the copyright fields
+   only when have_copyright is true. Numeric fields are the raw spec
+   codes; map them to names with the helpers below. */
+bool     mos_physical_structure_have_physical(const mos_physical_structure *d);
+uint8_t  mos_physical_structure_book_type(const mos_physical_structure *d);
+uint8_t  mos_physical_structure_part_version(const mos_physical_structure *d);
+uint8_t  mos_physical_structure_disc_size(const mos_physical_structure *d);
+uint8_t  mos_physical_structure_max_rate(const mos_physical_structure *d);
+uint8_t  mos_physical_structure_layer_type(const mos_physical_structure *d);
+uint8_t  mos_physical_structure_track_path(const mos_physical_structure *d);
+uint8_t  mos_physical_structure_num_layers(const mos_physical_structure *d);
+uint8_t  mos_physical_structure_linear_density(const mos_physical_structure *d);
+uint8_t  mos_physical_structure_track_density(const mos_physical_structure *d);
+bool     mos_physical_structure_bca(const mos_physical_structure *d);
+uint32_t mos_physical_structure_start_sector(const mos_physical_structure *d);
+uint32_t mos_physical_structure_end_sector(const mos_physical_structure *d);
+uint32_t mos_physical_structure_end_sector_l0(const mos_physical_structure *d);
+bool     mos_physical_structure_have_copyright(const mos_physical_structure *d);
+uint8_t  mos_physical_structure_protection(const mos_physical_structure *d);
+uint8_t  mos_physical_structure_region(const mos_physical_structure *d);
+
+/* Stable snake_case token for a DVD/HD-DVD book-type code (0 -> "dvd_rom",
+   2 -> "dvd_r", 0x0a -> "dvd_plus_r", 0x4 -> "hd_dvd_rom", ...) or NULL
+   if unrecognized (consumers fall back to the numeric code, same
+   contract as mos_profile_name). */
+const char *mos_book_type_name(uint8_t book_type);
+/* "ptp" (parallel, single/sequential) or "otp" (opposite track path). */
+const char *mos_track_path_name(uint8_t track_path);
+/* Copyright-protection-system token: "none" / "css_cppm" / "cprm" /
+   "aacs", or NULL for reserved/unknown codes. */
+const char *mos_protection_name(uint8_t protection);
+
 /* ---- Feature enumeration (v0.4 typed API) ----------------------------- */
 
 /* One MMC feature descriptor's header facts. Opaque; valid only inside

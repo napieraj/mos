@@ -31,6 +31,7 @@ void register_human_tests       (void);
 void register_config_tests      (void);
 void register_discinfo_tests    (void);
 void register_discstruct_tests  (void);
+void register_physstruct_tests  (void);
 void register_result_tests      (void);
 
 int main(void)
@@ -67,6 +68,9 @@ int main(void)
 
     printf("\nREAD DISC STRUCTURE / BD DI decode (matched fixtures + hostile input):\n");
     register_discstruct_tests();
+
+    printf("\nREAD DISC STRUCTURE / physical (DVD/HD-DVD) decode (hostile input):\n");
+    register_physstruct_tests();
 
     printf("\nOpaque result/event accessors:\n");
     register_result_tests();

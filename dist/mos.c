@@ -399,6 +399,53 @@ struct mos_disc_id {
 bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
                                    struct mos_disc_id *out);
 
+/* ---- READ DISC STRUCTURE / physical structure decode (mos_physstruct.c) --- *
+ *
+ * Physical Format Information (READ DISC STRUCTURE 0xAD, DVD/HD-DVD media
+ * type, format 0x00) and Copyright Management Information (format 0x01).
+ * "Physical structure" rather than "DVD": the media-type-0 reply carries
+ * HD-DVD book types (0x4..0x6) as well as DVD ones. The physical fields
+ * are geometry the disc reports (book type, layer layout, data-area
+ * sector boundaries — end_sector_l0 is the layer break); the copyright
+ * fields are the protection-system type and the region mask. All read at
+ * CONSTANT offsets inside a fixed buffer; the only device length (the
+ * structure-data-length header) can only shrink the trusted region.
+ * Classification (book_type => media name, cpst => "CSS-protected") is
+ * the consumer's. The two halves share one struct: have_physical /
+ * have_copyright say which the adapter merged in. New fields append at
+ * the END (ABI-safe; accessors are the contract). */
+struct mos_physical_structure {
+    bool     have_physical;     /* format 0x00 was parsed */
+    uint8_t  book_type;         /* base[0] 7:4  (0 DVD-ROM, 2 DVD-R, ...) */
+    uint8_t  part_version;      /* base[0] 3:0  */
+    uint8_t  disc_size;         /* base[1] 7:4  (0 120mm, 1 80mm) */
+    uint8_t  max_rate;          /* base[1] 3:0  */
+    uint8_t  layer_type;        /* base[2] 3:0  */
+    uint8_t  track_path;        /* base[2] bit4 (0 ptp, 1 otp) */
+    uint8_t  num_layers;        /* base[2] 6:5 + 1 (1 or 2 layers) */
+    uint8_t  linear_density;    /* base[3] 7:4  */
+    uint8_t  track_density;     /* base[3] 3:0  */
+    bool     bca;               /* base[16] bit7 */
+    uint32_t start_sector;      /* base[5..7]   24-bit PSN of data area */
+    uint32_t end_sector;        /* base[9..11]  24-bit end PSN */
+    uint32_t end_sector_l0;     /* base[13..15] 24-bit layer-0 end (break) */
+
+    bool     have_copyright;    /* format 0x01 was parsed */
+    uint8_t  protection;        /* CPST: 0 none, 1 CSS/CPPM, 2 CPRM, 3 AACS */
+    uint8_t  region;            /* RMI region-management mask */
+};
+
+/* Parse the Physical Format Information (format 0x00) / Copyright
+ * Management Information (format 0x01) halves into *out. Each sets its
+ * own have_* flag and fills its own fields; the adapter zero-inits the
+ * struct once and calls both. True only when the trusted region (min of
+ * `len` and the reply's declared length) reaches the last needed byte.
+ * Pure, fixed-offset, no-OOB — fuzz/ASan-gated. */
+bool mos_internal_physical_format_parse(const uint8_t *buf, size_t len,
+                                        struct mos_physical_structure *out);
+bool mos_internal_copyright_mgmt_parse(const uint8_t *buf, size_t len,
+                                       struct mos_physical_structure *out);
+
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
  * True for the four SAM-5 status values that mean "drive contended,
@@ -733,6 +780,10 @@ struct mos_handle {
 
     /* Handle-owned disc-id result (mos_query_disc_id). Same terms. */
     struct mos_disc_id        disc_id;
+
+    /* Handle-owned physical structure result (mos_query_physical_structure).
+       Same terms; plain values, no borrowed pointers. */
+    struct mos_physical_structure physical_structure;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
@@ -1547,6 +1598,122 @@ bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
     return true;
 }
 
+/* ==== src/mos_physstruct.c ==== */
+/*
+ * mos_physstruct.c — pure, bounds-safe decode of READ DISC STRUCTURE
+ * (MMC-5 0xAD) replies for the DVD / HD-DVD media-type family
+ * (MEDIA_TYPE = 0): the Physical Format Information (format 0x00) and
+ * the Copyright Management Information (format 0x01).
+ *
+ * "Physical structure" rather than "DVD": the same READ DISC STRUCTURE
+ * media-type-0 reply carries HD-DVD book types (0x4..0x6) alongside the
+ * DVD ones, so this decode is not DVD-specific. The BD half (Disc
+ * Information / DI) is a different media type and lives in
+ * mos_discstruct.c (mos_disc_id).
+ *
+ * No IOKit. The IOKit shell issues READ DISC STRUCTURE (DVD/HD-DVD media
+ * type) via the ReadDiscStructure convenience method into a fixed, zero-
+ * initialized buffer and hands that buffer plus its size here. Every
+ * length and value byte is device/disc-reported and therefore hostile;
+ * this file keeps the declared length from steering a read outside
+ * [buf, buf+len) and reads only fixed offsets — no payload byte is ever
+ * used as an offset or length.
+ *
+ * Wire layout (both formats share the READ DISC STRUCTURE 4-byte header):
+ *   [0..1] Disc Structure Data Length (BE) — bytes AFTER this field;
+ *          the response occupies 2 + value bytes. Only ever SHRINKS the
+ *          trusted region.
+ *   [2..3] reserved
+ *   [4..]  the format payload. With `base = &buf[4]`:
+ *
+ *   Format 0x00 (Physical Format Information):
+ *     base[0]  book_type (7:4) | part_version (3:0)
+ *     base[1]  disc_size (7:4) | maximum_rate (3:0)
+ *     base[2]  (rsv 7) | num_layers (6:5) | track_path (4) | layer_type (3:0)
+ *     base[3]  linear_density (7:4) | track_density (3:0)
+ *     base[5..7]   Starting PSN of Data Area (24-bit BE)
+ *     base[9..11]  End PSN of Data Area (24-bit BE)
+ *     base[13..15] End PSN in Layer 0 (24-bit BE) — the layer break
+ *     base[16] bca (bit 7)
+ *
+ *   Format 0x01 (Copyright Management Information):
+ *     buf[4] Copyright Protection System Type (CPST)
+ *     buf[5] Region Management Information (RMI)
+ *
+ * Offsets and the exact byte arithmetic are taken VERBATIM from the
+ * Linux kernel's wire parse — drivers/cdrom/cdrom.c dvd_read_physical
+ * (`base = &buf[4]`; book/version base[0], rate/size base[1],
+ * layer_type/track_path/nlayers base[2], densities base[3],
+ * start_sector base[5]<<16|base[6]<<8|base[7], end_sector base[9..11],
+ * end_sector_l0 base[13..15], bca base[16]>>7) and dvd_read_copyright
+ * (cpst buf[4], rmi buf[5]) — cross-checked against the field set
+ * redumper print_physical_structure decodes. Classification (book_type
+ * => media name, cpst => "CSS-protected") is the CONSUMER's; this decode
+ * surfaces the registered values faithfully and stops there, same
+ * division as the BD DI decode (mos_discstruct.c).
+ *
+ * No-OOB property gated headless under ASan/UBSan by
+ * tests/test_physstruct.c and tests/fuzz_pure.c.
+ */
+
+
+#define PS_HDR        4u                 /* 2-byte length + 2 reserved   */
+/* Physical (0x00): must reach base[16] = buf[PS_HDR+16] = buf[20]. */
+#define PHYS_MIN_LEN  (PS_HDR + 16u + 1u)
+/* Copyright (0x01): must reach the RMI byte, buf[5]. */
+#define COPY_MIN_LEN  6u
+
+/* Trusted end: the smaller of the real buffer and the reply's own
+   declared length (+2 for the length field itself). Computed wide so
+   the +2 cannot wrap. */
+static size_t mos_internal_ps_trusted_end(const uint8_t *buf, size_t len)
+{
+    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    return (len < declared) ? len : declared;
+}
+
+bool mos_internal_physical_format_parse(const uint8_t *buf, size_t len,
+                                        struct mos_physical_structure *out)
+{
+    if (!out) return false;
+    out->have_physical = false;
+    if (!buf || len < PHYS_MIN_LEN) return false;
+    if (mos_internal_ps_trusted_end(buf, len) < PHYS_MIN_LEN) return false;
+
+    const uint8_t *b = &buf[PS_HDR];
+    out->book_type      = (uint8_t)(b[0] >> 4);
+    out->part_version   = (uint8_t)(b[0] & 0x0f);
+    out->disc_size      = (uint8_t)(b[1] >> 4);
+    out->max_rate       = (uint8_t)(b[1] & 0x0f);
+    out->layer_type     = (uint8_t)(b[2] & 0x0f);
+    out->track_path     = (uint8_t)((b[2] >> 4) & 0x01);
+    /* MMC "Number of Layers": 0 => 1 layer, 1 => 2 layers. Surface the
+       human count (1 or 2), not the raw code. */
+    out->num_layers     = (uint8_t)(((b[2] >> 5) & 0x03) + 1u);
+    out->linear_density = (uint8_t)(b[3] >> 4);
+    out->track_density  = (uint8_t)(b[3] & 0x0f);
+    out->start_sector   = (uint32_t)b[5] << 16 | (uint32_t)b[6] << 8 | b[7];
+    out->end_sector     = (uint32_t)b[9] << 16 | (uint32_t)b[10] << 8 | b[11];
+    out->end_sector_l0  = (uint32_t)b[13] << 16 | (uint32_t)b[14] << 8 | b[15];
+    out->bca            = (b[16] >> 7) & 0x01;
+    out->have_physical  = true;
+    return true;
+}
+
+bool mos_internal_copyright_mgmt_parse(const uint8_t *buf, size_t len,
+                                       struct mos_physical_structure *out)
+{
+    if (!out) return false;
+    out->have_copyright = false;
+    if (!buf || len < COPY_MIN_LEN) return false;
+    if (mos_internal_ps_trusted_end(buf, len) < COPY_MIN_LEN) return false;
+
+    out->protection     = buf[4];   /* CPST */
+    out->region         = buf[5];   /* RMI region mask */
+    out->have_copyright = true;
+    return true;
+}
+
 /* ==== src/mos_result.c ==== */
 /*
  * mos_result.c — accessors for the opaque mos_state_result and
@@ -1830,6 +1997,96 @@ const char *mos_disc_id_media_type(const mos_disc_id *d)
 const char *mos_disc_id_revision(const mos_disc_id *d)
 {
     return (d && d->revision[0]) ? d->revision : NULL;
+}
+
+/* ---- mos_physical_structure accessors (mos_query_physical_structure) - *
+ * Plain values, NULL-tolerant. Physical fields read 0/false unless
+ * have_physical; copyright fields unless have_copyright — the emitters
+ * gate on the have_* accessors. */
+
+bool mos_physical_structure_have_physical(const mos_physical_structure *d)
+{
+    return d ? d->have_physical : false;
+}
+
+uint8_t mos_physical_structure_book_type(const mos_physical_structure *d)
+{
+    return d ? d->book_type : 0;
+}
+
+uint8_t mos_physical_structure_part_version(const mos_physical_structure *d)
+{
+    return d ? d->part_version : 0;
+}
+
+uint8_t mos_physical_structure_disc_size(const mos_physical_structure *d)
+{
+    return d ? d->disc_size : 0;
+}
+
+uint8_t mos_physical_structure_max_rate(const mos_physical_structure *d)
+{
+    return d ? d->max_rate : 0;
+}
+
+uint8_t mos_physical_structure_layer_type(const mos_physical_structure *d)
+{
+    return d ? d->layer_type : 0;
+}
+
+uint8_t mos_physical_structure_track_path(const mos_physical_structure *d)
+{
+    return d ? d->track_path : 0;
+}
+
+uint8_t mos_physical_structure_num_layers(const mos_physical_structure *d)
+{
+    return d ? d->num_layers : 0;
+}
+
+uint8_t mos_physical_structure_linear_density(const mos_physical_structure *d)
+{
+    return d ? d->linear_density : 0;
+}
+
+uint8_t mos_physical_structure_track_density(const mos_physical_structure *d)
+{
+    return d ? d->track_density : 0;
+}
+
+bool mos_physical_structure_bca(const mos_physical_structure *d)
+{
+    return d ? d->bca : false;
+}
+
+uint32_t mos_physical_structure_start_sector(const mos_physical_structure *d)
+{
+    return d ? d->start_sector : 0;
+}
+
+uint32_t mos_physical_structure_end_sector(const mos_physical_structure *d)
+{
+    return d ? d->end_sector : 0;
+}
+
+uint32_t mos_physical_structure_end_sector_l0(const mos_physical_structure *d)
+{
+    return d ? d->end_sector_l0 : 0;
+}
+
+bool mos_physical_structure_have_copyright(const mos_physical_structure *d)
+{
+    return d ? d->have_copyright : false;
+}
+
+uint8_t mos_physical_structure_protection(const mos_physical_structure *d)
+{
+    return d ? d->protection : 0;
+}
+
+uint8_t mos_physical_structure_region(const mos_physical_structure *d)
+{
+    return d ? d->region : 0;
 }
 
 /* ==== src/mos_state_core.c ==== */
@@ -3845,6 +4102,49 @@ const char *mos_profile_class(uint16_t profile_code)
     }
 }
 
+/* Physical Format Information book-type codes (MMC-5 / the Linux uapi
+   dvd_layer book_type values) — DVD and HD-DVD share this field.
+   Lower_snake_case to match the profile-name convention; unrecognized
+   codes return NULL so consumers fall back to the numeric code. The
+   schema's book-type enum tracks this table (the validate.py drift
+   guard). */
+const char *mos_book_type_name(uint8_t book_type)
+{
+    switch (book_type) {
+        case 0x0: return "dvd_rom";
+        case 0x1: return "dvd_ram";
+        case 0x2: return "dvd_r";
+        case 0x3: return "dvd_rw";
+        case 0x4: return "hd_dvd_rom";
+        case 0x5: return "hd_dvd_ram";
+        case 0x6: return "hd_dvd_r";
+        case 0x9: return "dvd_plus_rw";
+        case 0xA: return "dvd_plus_r";
+        case 0xD: return "dvd_plus_rw_dl";
+        case 0xE: return "dvd_plus_r_dl";
+        default:  return NULL;
+    }
+}
+
+/* Track path: parallel (single-layer / sequential) vs opposite. */
+const char *mos_track_path_name(uint8_t track_path)
+{
+    return track_path ? "otp" : "ptp";
+}
+
+/* Copyright Protection System Type (READ DISC STRUCTURE format 0x01,
+   CPST byte). Unrecognized/reserved codes return NULL. */
+const char *mos_protection_name(uint8_t protection)
+{
+    switch (protection) {
+        case 0x00: return "none";
+        case 0x01: return "css_cppm";
+        case 0x02: return "cprm";
+        case 0x03: return "aacs";
+        default:   return NULL;
+    }
+}
+
 /* sysexits.h class for a mos_error. Kept in sync with the table in
    include/mos.h's mos_error_sysexit() doc-comment. */
 int mos_error_sysexit(mos_error e)
@@ -5164,6 +5464,61 @@ mos_error mos_query_disc_id(mos_handle_t *h, const mos_disc_id **out)
         return MOS_ERR_IO;   /* not a DI reply (non-BD, or refused) */
     }
     *out = &h->disc_id;
+    return MOS_OK;
+}
+
+mos_error mos_query_physical_structure(mos_handle_t *h,
+                                       const mos_physical_structure **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Two convenience reads of READ DISC STRUCTURE for the DVD/HD-DVD
+       media type (MEDIA_TYPE=0): FORMAT 0x00 (Physical Format
+       Information) and FORMAT 0x01 (Copyright Management Information).
+       Each into a fixed zero-init buffer — sizeof buf is the trusted
+       length (O-4); the reply's own Disc Structure Data Length can only
+       SHRINK the parse, and an under-filled reply fails the per-format
+       min-length gate. Both halves merge into one handle-owned struct;
+       the reads are independent (partial-readability ladder), so a drive
+       that answers one format but not the other still yields the half it
+       gave. No lock (convenience). */
+    struct mos_physical_structure *d = &h->physical_structure;
+    *d = (struct mos_physical_structure){0};
+
+    uint8_t         buf[2048] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x00,             /* FORMAT = Physical Format Info    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
+        (void)mos_internal_physical_format_parse(buf, sizeof(buf), d);
+
+    memset(buf, 0, sizeof buf);
+    st = 0;
+    sd = (SCSI_Sense_Data){0};
+    rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x01,             /* FORMAT = Copyright Management    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
+        (void)mos_internal_copyright_mgmt_parse(buf, sizeof(buf), d);
+
+    if (!d->have_physical && !d->have_copyright) {
+        return MOS_ERR_IO;   /* neither format answered (non-DVD, or refused) */
+    }
+    *out = d;
     return MOS_OK;
 }
 

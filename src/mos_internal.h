@@ -61,6 +61,10 @@ struct mos_handle {
 
     /* Handle-owned disc-id result (mos_query_disc_id). Same terms. */
     struct mos_disc_id        disc_id;
+
+    /* Handle-owned physical structure result (mos_query_physical_structure).
+       Same terms; plain values, no borrowed pointers. */
+    struct mos_physical_structure physical_structure;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on

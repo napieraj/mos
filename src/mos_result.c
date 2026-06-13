@@ -282,3 +282,93 @@ const char *mos_disc_id_revision(const mos_disc_id *d)
 {
     return (d && d->revision[0]) ? d->revision : NULL;
 }
+
+/* ---- mos_physical_structure accessors (mos_query_physical_structure) - *
+ * Plain values, NULL-tolerant. Physical fields read 0/false unless
+ * have_physical; copyright fields unless have_copyright — the emitters
+ * gate on the have_* accessors. */
+
+bool mos_physical_structure_have_physical(const mos_physical_structure *d)
+{
+    return d ? d->have_physical : false;
+}
+
+uint8_t mos_physical_structure_book_type(const mos_physical_structure *d)
+{
+    return d ? d->book_type : 0;
+}
+
+uint8_t mos_physical_structure_part_version(const mos_physical_structure *d)
+{
+    return d ? d->part_version : 0;
+}
+
+uint8_t mos_physical_structure_disc_size(const mos_physical_structure *d)
+{
+    return d ? d->disc_size : 0;
+}
+
+uint8_t mos_physical_structure_max_rate(const mos_physical_structure *d)
+{
+    return d ? d->max_rate : 0;
+}
+
+uint8_t mos_physical_structure_layer_type(const mos_physical_structure *d)
+{
+    return d ? d->layer_type : 0;
+}
+
+uint8_t mos_physical_structure_track_path(const mos_physical_structure *d)
+{
+    return d ? d->track_path : 0;
+}
+
+uint8_t mos_physical_structure_num_layers(const mos_physical_structure *d)
+{
+    return d ? d->num_layers : 0;
+}
+
+uint8_t mos_physical_structure_linear_density(const mos_physical_structure *d)
+{
+    return d ? d->linear_density : 0;
+}
+
+uint8_t mos_physical_structure_track_density(const mos_physical_structure *d)
+{
+    return d ? d->track_density : 0;
+}
+
+bool mos_physical_structure_bca(const mos_physical_structure *d)
+{
+    return d ? d->bca : false;
+}
+
+uint32_t mos_physical_structure_start_sector(const mos_physical_structure *d)
+{
+    return d ? d->start_sector : 0;
+}
+
+uint32_t mos_physical_structure_end_sector(const mos_physical_structure *d)
+{
+    return d ? d->end_sector : 0;
+}
+
+uint32_t mos_physical_structure_end_sector_l0(const mos_physical_structure *d)
+{
+    return d ? d->end_sector_l0 : 0;
+}
+
+bool mos_physical_structure_have_copyright(const mos_physical_structure *d)
+{
+    return d ? d->have_copyright : false;
+}
+
+uint8_t mos_physical_structure_protection(const mos_physical_structure *d)
+{
+    return d ? d->protection : 0;
+}
+
+uint8_t mos_physical_structure_region(const mos_physical_structure *d)
+{
+    return d ? d->region : 0;
+}

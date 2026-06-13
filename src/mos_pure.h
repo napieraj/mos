@@ -323,6 +323,53 @@ struct mos_disc_id {
 bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
                                    struct mos_disc_id *out);
 
+/* ---- READ DISC STRUCTURE / physical structure decode (mos_physstruct.c) --- *
+ *
+ * Physical Format Information (READ DISC STRUCTURE 0xAD, DVD/HD-DVD media
+ * type, format 0x00) and Copyright Management Information (format 0x01).
+ * "Physical structure" rather than "DVD": the media-type-0 reply carries
+ * HD-DVD book types (0x4..0x6) as well as DVD ones. The physical fields
+ * are geometry the disc reports (book type, layer layout, data-area
+ * sector boundaries — end_sector_l0 is the layer break); the copyright
+ * fields are the protection-system type and the region mask. All read at
+ * CONSTANT offsets inside a fixed buffer; the only device length (the
+ * structure-data-length header) can only shrink the trusted region.
+ * Classification (book_type => media name, cpst => "CSS-protected") is
+ * the consumer's. The two halves share one struct: have_physical /
+ * have_copyright say which the adapter merged in. New fields append at
+ * the END (ABI-safe; accessors are the contract). */
+struct mos_physical_structure {
+    bool     have_physical;     /* format 0x00 was parsed */
+    uint8_t  book_type;         /* base[0] 7:4  (0 DVD-ROM, 2 DVD-R, ...) */
+    uint8_t  part_version;      /* base[0] 3:0  */
+    uint8_t  disc_size;         /* base[1] 7:4  (0 120mm, 1 80mm) */
+    uint8_t  max_rate;          /* base[1] 3:0  */
+    uint8_t  layer_type;        /* base[2] 3:0  */
+    uint8_t  track_path;        /* base[2] bit4 (0 ptp, 1 otp) */
+    uint8_t  num_layers;        /* base[2] 6:5 + 1 (1 or 2 layers) */
+    uint8_t  linear_density;    /* base[3] 7:4  */
+    uint8_t  track_density;     /* base[3] 3:0  */
+    bool     bca;               /* base[16] bit7 */
+    uint32_t start_sector;      /* base[5..7]   24-bit PSN of data area */
+    uint32_t end_sector;        /* base[9..11]  24-bit end PSN */
+    uint32_t end_sector_l0;     /* base[13..15] 24-bit layer-0 end (break) */
+
+    bool     have_copyright;    /* format 0x01 was parsed */
+    uint8_t  protection;        /* CPST: 0 none, 1 CSS/CPPM, 2 CPRM, 3 AACS */
+    uint8_t  region;            /* RMI region-management mask */
+};
+
+/* Parse the Physical Format Information (format 0x00) / Copyright
+ * Management Information (format 0x01) halves into *out. Each sets its
+ * own have_* flag and fills its own fields; the adapter zero-inits the
+ * struct once and calls both. True only when the trusted region (min of
+ * `len` and the reply's declared length) reaches the last needed byte.
+ * Pure, fixed-offset, no-OOB — fuzz/ASan-gated. */
+bool mos_internal_physical_format_parse(const uint8_t *buf, size_t len,
+                                        struct mos_physical_structure *out);
+bool mos_internal_copyright_mgmt_parse(const uint8_t *buf, size_t len,
+                                       struct mos_physical_structure *out);
+
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
  * True for the four SAM-5 status values that mean "drive contended,

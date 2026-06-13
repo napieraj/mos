@@ -479,6 +479,50 @@ static void fuzz_discstruct(uint64_t iters)
     }
 }
 
+/* READ DISC STRUCTURE physical (format 0x00) + copyright (format 0x01)
+   decode. No strings to terminate; the property is purely no-OOB — the
+   fixed-offset reads (through base[16] for physical, buf[5] for
+   copyright) must never read past [buf, buf+len), whatever the planted
+   Disc Structure Data Length claims. EXACT-size alloc => an OOB read
+   trips ASan. */
+static void fuzz_physstruct(uint64_t iters)
+{
+    for (uint64_t i = 0; i < iters; i++) {
+        size_t   len = rng_below(48);                  /* 0..47: spans the 21-byte region */
+        uint8_t *buf = (uint8_t *)malloc(len ? len : 1);
+        for (size_t b = 0; b < len; b++) buf[b] = (uint8_t)rng();
+
+        /* Half the time plant a Disc Structure Data Length, sometimes
+           huge (must only shrink-clamp, never extend the trusted end). */
+        if (len >= 2 && rng_below(2)) {
+            uint16_t dsl = (uint16_t)rng_below((uint64_t)len + 64);
+            buf[0] = (uint8_t)(dsl >> 8);
+            buf[1] = (uint8_t)(dsl & 0xFF);
+        }
+
+        struct mos_physical_structure d;
+        memset(&d, 0xA5, sizeof d);
+        if (mos_internal_physical_format_parse(buf, len, &d)) {
+            /* num_layers is ((b>>5)&3)+1 — always in [1,4] by
+               construction; assert it to pin the field never leaks the
+               0xA5 poison through an unwritten accept path. */
+            if (d.num_layers < 1 || d.num_layers > 4) {
+                fprintf(stderr, "FUZZ FAIL: physical num_layers=%u "
+                        "(len=%zu)\n", d.num_layers, len);
+                abort();
+            }
+        }
+        (void)mos_internal_copyright_mgmt_parse(buf, len, &d);
+        if ((i & 0xFFFF) == 0) {
+            (void)mos_internal_physical_format_parse(NULL, len, &d);
+            (void)mos_internal_physical_format_parse(buf, len, NULL);
+            (void)mos_internal_copyright_mgmt_parse(NULL, len, &d);
+            (void)mos_internal_copyright_mgmt_parse(buf, len, NULL);
+        }
+        free(buf);
+    }
+}
+
 int main(int argc, char **argv)
 {
     uint64_t seed = env_u64("MOS_FUZZ_SEED", 0x9E3779B97F4A7C15ULL);
@@ -493,6 +537,7 @@ int main(int argc, char **argv)
     uint64_t n_tl    = env_u64("MOS_FUZZ_TRUST",    200000);
     uint64_t n_toc   = env_u64("MOS_FUZZ_TOC",      200000);
     uint64_t n_ds    = env_u64("MOS_FUZZ_DISCSTRUCT", 500000);
+    uint64_t n_ps    = env_u64("MOS_FUZZ_PHYSSTRUCT", 500000);
 
     fprintf(stderr,
             "mos fuzz_pure seed=0x%016llx sense=%llu esc=%llu bsd=%llu cfg=%llu di=%llu tl=%llu toc=%llu\n",
@@ -510,8 +555,9 @@ int main(int argc, char **argv)
     fuzz_trusted_len(n_tl);
     fuzz_toc(n_toc);
     fuzz_discstruct(n_ds);
+    fuzz_physstruct(n_ps);
 
     fprintf(stderr, "OK: fuzz_pure clean (%llu iterations total)\n",
-            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc + n_ds));
+            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc + n_ds + n_ps));
     return 0;
 }
