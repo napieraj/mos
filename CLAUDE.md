@@ -5,7 +5,8 @@
 Claude-specific failure modes observed in this project. You don't
 remember prior sessions; entries are recorded failures, not
 hypotheticals. AGENTS.md has cross-tool canonical context;
-ROADMAP.md has versioned history. If an entry contradicts your
+ROADMAP.md has the forward plan (history lives in the AGENTS
+ADRs, doc/history/, and git). If an entry contradicts your
 current observation, the observation wins. Net flat or shrinking
 past ~200 lines.
 
