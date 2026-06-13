@@ -551,6 +551,40 @@ static void fuzz_trackinfo(uint64_t iters)
     }
 }
 
+/* GET PERFORMANCE (0xAC Type 03h) decode. No strings; the property is
+   no-OOB — the descriptor walk (8-byte header + N*16) must never read
+   past [buf, buf+len) whatever the planted data length / descriptor
+   count claims. */
+static void fuzz_perf(uint64_t iters)
+{
+    for (uint64_t i = 0; i < iters; i++) {
+        size_t   len = rng_below(120);                 /* 0..119: header + a few descs */
+        uint8_t *buf = (uint8_t *)malloc(len ? len : 1);
+        for (size_t b = 0; b < len; b++) buf[b] = (uint8_t)rng();
+
+        if (len >= 4 && rng_below(2)) {                /* plant a data length */
+            uint32_t dl = (uint32_t)rng_below((uint64_t)len + 256);
+            buf[0] = (uint8_t)(dl >> 24); buf[1] = (uint8_t)(dl >> 16);
+            buf[2] = (uint8_t)(dl >> 8);  buf[3] = (uint8_t)dl;
+        }
+
+        struct mos_drive_perf p;
+        memset(&p, 0xA5, sizeof p);
+        if (mos_internal_drive_perf_parse(buf, len, &p)) {
+            if (p.have && p.descriptor_count == 0) {
+                fprintf(stderr, "FUZZ FAIL: perf have w/ 0 descriptors "
+                        "(len=%zu)\n", len);
+                abort();
+            }
+        }
+        if ((i & 0xFFFF) == 0) {
+            (void)mos_internal_drive_perf_parse(NULL, len, &p);
+            (void)mos_internal_drive_perf_parse(buf, len, NULL);
+        }
+        free(buf);
+    }
+}
+
 int main(int argc, char **argv)
 {
     uint64_t seed = env_u64("MOS_FUZZ_SEED", 0x9E3779B97F4A7C15ULL);
@@ -567,6 +601,7 @@ int main(int argc, char **argv)
     uint64_t n_ds    = env_u64("MOS_FUZZ_DISCSTRUCT", 500000);
     uint64_t n_ps    = env_u64("MOS_FUZZ_PHYSSTRUCT", 500000);
     uint64_t n_ti    = env_u64("MOS_FUZZ_TRACKINFO", 500000);
+    uint64_t n_perf  = env_u64("MOS_FUZZ_PERF", 500000);
 
     fprintf(stderr,
             "mos fuzz_pure seed=0x%016llx sense=%llu esc=%llu bsd=%llu cfg=%llu di=%llu tl=%llu toc=%llu\n",
@@ -586,8 +621,9 @@ int main(int argc, char **argv)
     fuzz_discstruct(n_ds);
     fuzz_physstruct(n_ps);
     fuzz_trackinfo(n_ti);
+    fuzz_perf(n_perf);
 
     fprintf(stderr, "OK: fuzz_pure clean (%llu iterations total)\n",
-            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc + n_ds + n_ps + n_ti));
+            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc + n_ds + n_ps + n_ti + n_perf));
     return 0;
 }

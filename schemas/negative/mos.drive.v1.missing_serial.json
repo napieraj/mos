@@ -9,5 +9,6 @@
     "aacs": false,
     "aacs_version": null,
     "bus_encryption": null
-  }
+  },
+  "speeds": null
 }

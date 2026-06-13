@@ -12,7 +12,8 @@
     "product",
     "revision",
     "serial",
-    "capabilities"
+    "capabilities",
+    "speeds"
   ],
   "additionalProperties": false,
   "properties": {
@@ -65,6 +66,29 @@
         "bus_encryption": {
           "type": ["boolean", "null"],
           "description": "DRIVE-REPORTED bus-encryption support (feature payload byte 0 bit 1, per libaacs/UDFclient agreement), null when aacs is false. A firmware assertion: the cryptographically signed BEC bit lives in the AACS drive certificate behind REPORT KEY, which mos does not issue (scope doctrine)."
+        }
+      }
+    },
+    "speeds": {
+      "type": ["object", "null"],
+      "description": "Supported read/write speeds from GET PERFORMANCE (0xAC, Type 03h Write Speed) via the GetPerformance convenience method — the MMC-sanctioned modern speed source. MEDIA-DEPENDENT: the write-speed list reflects the loaded medium, so this is null when no media is loaded, the drive cannot write the medium, or the drive reported no descriptors (zero is data, not error). Spec-derived descriptor layout (no in-repo capture yet); a real GET PERFORMANCE capture is a falsifier per the hardware ADR.",
+      "required": ["descriptor_count", "max_read_kbps", "max_write_kbps"],
+      "additionalProperties": false,
+      "properties": {
+        "descriptor_count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of write-speed performance descriptors the drive returned."
+        },
+        "max_read_kbps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum Read Speed (kB/s) across the descriptors."
+        },
+        "max_write_kbps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum Write Speed (kB/s) across the descriptors."
         }
       }
     }

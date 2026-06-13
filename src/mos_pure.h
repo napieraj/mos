@@ -403,6 +403,28 @@ struct mos_track_info {
 bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
                                    struct mos_track_info *out);
 
+/* ---- GET PERFORMANCE write-speed decode (mos_perf.c) --------------- *
+ *
+ * The drive's supported read/write speed list from GET PERFORMANCE
+ * (0xAC, Type 03h), summarized: max read and max write speed (kB/s)
+ * scanned across the descriptors, plus the descriptor count. have is
+ * false when the drive reported zero descriptors (media-dependent —
+ * data, not error). Spec-derived layout (no in-repo capture yet); a real
+ * capture is a falsifier per the hardware ADR. New fields append at the
+ * END. */
+struct mos_drive_perf {
+    bool     have;              /* >= 1 descriptor parsed */
+    uint16_t descriptor_count;
+    uint32_t max_read_kbps;     /* max Read Speed across descriptors  */
+    uint32_t max_write_kbps;    /* max Write Speed across descriptors */
+};
+
+/* Parse a GET PERFORMANCE (Type 03h) reply into *out. True when the
+ * 8-byte header is present and coherent (descriptor list may be empty:
+ * have=false). Pure, fixed-offset, no-OOB — fuzz/ASan-gated. */
+bool mos_internal_drive_perf_parse(const uint8_t *buf, size_t len,
+                                   struct mos_drive_perf *out);
+
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
  * True for the four SAM-5 status values that mean "drive contended,

@@ -68,6 +68,9 @@ struct mos_handle {
 
     /* Handle-owned track-info result (mos_query_track_info). Same terms. */
     struct mos_track_info     track_info;
+
+    /* Handle-owned drive-performance result (mos_query_drive_perf). */
+    struct mos_drive_perf     drive_perf;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on

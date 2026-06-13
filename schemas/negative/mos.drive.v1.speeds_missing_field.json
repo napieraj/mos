@@ -8,8 +8,11 @@
   "serial": null,
   "capabilities": {
     "aacs": false,
-    "aacs_version": 68,
+    "aacs_version": null,
     "bus_encryption": null
   },
-  "speeds": null
+  "speeds": {
+    "descriptor_count": 4,
+    "max_read_kbps": 10560
+  }
 }

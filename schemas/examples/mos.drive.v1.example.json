@@ -10,5 +10,6 @@
     "aacs": true,
     "aacs_version": 78,
     "bus_encryption": true
-  }
+  },
+  "speeds": null
 }

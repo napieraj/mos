@@ -441,3 +441,26 @@ uint32_t mos_track_info_last_recorded(const mos_track_info *t)
 {
     return t ? t->last_recorded : 0;
 }
+
+/* ---- mos_drive_perf accessors (mos_query_drive_perf) ---------------- *
+ * Plain values, NULL-tolerant. Speeds meaningful only when have. */
+
+bool mos_drive_perf_have(const mos_drive_perf *p)
+{
+    return p ? p->have : false;
+}
+
+uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p)
+{
+    return p ? p->descriptor_count : 0;
+}
+
+uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p)
+{
+    return p ? p->max_read_kbps : 0;
+}
+
+uint32_t mos_drive_perf_max_write_kbps(const mos_drive_perf *p)
+{
+    return p ? p->max_write_kbps : 0;
+}

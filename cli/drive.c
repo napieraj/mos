@@ -23,6 +23,10 @@ typedef struct {
     bool        aacs;
     uint8_t     aacs_version;
     bool        bus_encryption;
+    bool        have_speeds;   /* GET PERFORMANCE returned >= 1 descriptor */
+    uint16_t    speed_count;
+    uint32_t    max_read_kbps;
+    uint32_t    max_write_kbps;
 } drive_doc;
 
 static void emit_json(const drive_doc *d)
@@ -56,12 +60,22 @@ static void emit_json(const drive_doc *d)
     fputs(", \"bus_encryption\": ", stdout);
     if (d->aacs) fputs(d->bus_encryption ? "true" : "false", stdout);
     else         fputs("null", stdout);
-    fputs("}\n}\n", stdout);
+    fputs("}", stdout);
+
+    fputs(",\n  \"speeds\": ", stdout);
+    if (d->have_speeds)
+        fprintf(stdout,
+                "{\"descriptor_count\": %u, \"max_read_kbps\": %u, "
+                "\"max_write_kbps\": %u}",
+                d->speed_count, d->max_read_kbps, d->max_write_kbps);
+    else
+        fputs("null", stdout);
+    fputs("\n}\n", stdout);
 }
 
 static void emit_human(const drive_doc *d)
 {
-    mos_cli_human_pair pairs[8];
+    mos_cli_human_pair pairs[9];
     size_t n = 0;
 
     char bsd_buf[24];
@@ -93,6 +107,12 @@ static void emit_human(const drive_doc *d)
     else
         snprintf(aacs_buf, sizeof aacs_buf, "no");
     pairs[n++] = (mos_cli_human_pair){ "AACS", aacs_buf };
+
+    char spd_buf[48];
+    if (d->have_speeds)
+        snprintf(spd_buf, sizeof spd_buf, "read %u, write %u kB/s (max)",
+                 d->max_read_kbps, d->max_write_kbps);
+    pairs[n++] = (mos_cli_human_pair){ "Speeds", d->have_speeds ? spd_buf : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }
@@ -142,6 +162,17 @@ int run_drive(void)
     d.aacs           = mos_drive_caps_aacs(c);
     d.aacs_version   = mos_drive_caps_aacs_version(c);
     d.bus_encryption = mos_drive_caps_bus_encryption(c);
+
+    /* Speeds are best-effort and media-dependent: a failed command or an
+       empty descriptor list leaves speeds null (have_speeds false). */
+    const mos_drive_perf *perf = NULL;
+    if (mos_query_drive_perf(h, &perf) == MOS_OK &&
+        mos_drive_perf_have(perf)) {
+        d.have_speeds    = true;
+        d.speed_count    = mos_drive_perf_descriptor_count(perf);
+        d.max_read_kbps  = mos_drive_perf_max_read_kbps(perf);
+        d.max_write_kbps = mos_drive_perf_max_write_kbps(perf);
+    }
 
     if (flag_json) emit_json(&d);
     else           emit_human(&d);

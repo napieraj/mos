@@ -869,6 +869,47 @@ mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
     return MOS_OK;
 }
 
+mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* GET PERFORMANCE (0xAC), Type 03h = Write Speed, via the
+       convenience method. 8-byte header + up to N 16-byte descriptors;
+       2048 bytes holds ~127 descriptors (no real drive lists that many).
+       sizeof buf is the trusted length (O-4); the reply's own data
+       length only shrinks the parse. No lock (convenience).
+
+       SDK-VERIFY the exact GetPerformance selector signature against
+       docs/apple/SCSITaskLib.h before shipping — the parameter order for
+       TOLERANCE/WRITE/EXCEPT/STARTING_LBA/MAX_DESCRIPTORS/TYPE is the
+       open item (same SDK-verify posture as ReadTrackInformation). */
+    uint8_t         buf[2048] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->GetPerformance(
+        h->mmc,
+        (UInt8)0x10,             /* TOLERANCE=10b nominal, WRITE=0, EXCEPT=0 */
+        (UInt32)0,               /* STARTING_LBA                            */
+        (UInt16)64,              /* MAXIMUM_NUMBER_OF_DESCRIPTORS           */
+        (UInt8)0x03,             /* TYPE = Write Speed                      */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_drive_perf_parse(buf, sizeof(buf), &h->drive_perf)) {
+        return MOS_ERR_IO;   /* short/incoherent header — refused whole */
+    }
+    *out = &h->drive_perf;
+    return MOS_OK;
+}
+
 /* Open-time directory identity, exposed for the drive verb: zero
    commands, same borrowed-string terms as the state result's copies
    (which point into these same buffers). */

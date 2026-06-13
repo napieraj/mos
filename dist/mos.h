@@ -570,6 +570,32 @@ uint32_t mos_track_info_free_blocks(const mos_track_info *t);
 uint32_t mos_track_info_track_size(const mos_track_info *t);
 uint32_t mos_track_info_last_recorded(const mos_track_info *t);
 
+/* ---- Drive speeds (v0.4 typed API) ----------------------------------- */
+
+/* Result of a drive-speed query. Opaque, handle-owned; valid until the
+   next mos_query_drive_perf() call or mos_close(). */
+typedef struct mos_drive_perf mos_drive_perf;
+
+/*
+ * Query GET PERFORMANCE (0xAC, Type 03h Write Speed) through the
+ * non-exclusive GetPerformance convenience method: the drive's supported
+ * read/write speeds, summarized as the max read and max write speed
+ * (kB/s) and the descriptor count. The MMC-sanctioned modern speed
+ * source (supersedes mode-page-0x2A speed fields). MEDIA-DEPENDENT: the
+ * write-speed list reflects the loaded medium, so an empty or read-only
+ * drive may report zero descriptors — mos_drive_perf_have() is then
+ * false, which is data, not an error. `out` REQUIRED (NULL =>
+ * MOS_ERR_INVALID_ARG); MOS_ERR_IO when the command itself fails.
+ */
+mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out);
+
+/* Accessors. NULL-tolerant (NULL reads as 0/false). The speeds are
+   meaningful only when have is true (>= 1 descriptor). */
+bool     mos_drive_perf_have(const mos_drive_perf *p);
+uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p);
+uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p);
+uint32_t mos_drive_perf_max_write_kbps(const mos_drive_perf *p);
+
 /* ---- Feature enumeration (v0.4 typed API) ----------------------------- */
 
 /* One MMC feature descriptor's header facts. Opaque; valid only inside

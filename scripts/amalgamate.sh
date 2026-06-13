@@ -156,6 +156,9 @@ strip_file() {
     echo "/* ==== src/mos_trackinfo.c ==== */"
     strip_file "$SRC/mos_trackinfo.c"
     echo
+    echo "/* ==== src/mos_perf.c ==== */"
+    strip_file "$SRC/mos_perf.c"
+    echo
     echo "/* ==== src/mos_result.c ==== */"
     strip_file "$SRC/mos_result.c"
     echo

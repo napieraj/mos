@@ -197,12 +197,15 @@ Registry:  4295032831
      Rev:  1.00
   Serial:  -
     AACS:  version 68, bus encryption yes
+  Speeds:  read 10560, write 8310 kB/s (max)
 ```
 
 `mos drive --json` emits `mos.drive.v1`: identity (open-time directory
 data, zero commands), `serial` (null in stage 1 — pending the VPD-0x80
-convenience-reachability check on hardware), and spec-grounded AACS
-capabilities from one GET CONFIGURATION feature walk. `bus_encryption`
+convenience-reachability check on hardware), spec-grounded AACS
+capabilities from one GET CONFIGURATION feature walk, and `speeds` (max
+read/write kB/s from GET PERFORMANCE `0xAC` — media-dependent, null with
+no writable medium loaded). `bus_encryption`
 is the drive-reported support bit; the cryptographically signed BEC
 flag lives in the AACS drive certificate, which mos does not fetch.
 There is deliberately no `libredrive` field: that status is a MakeMKV
