@@ -277,7 +277,7 @@ assert_contains "unknown subcommand diagnostic names recognized set" "$ERR" "sta
 # This avoids the worst UX of users trying `mos capacity` once,
 # getting a vague error, and never trying again when the typed APIs
 # arrive.
-for reserved in capacity speed; do
+for reserved in capacity; do
     run_mos "$reserved" --bsd disk0
     assert_ec "reserved subcommand '$reserved' exits 64" "64" "$EC"
     ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")

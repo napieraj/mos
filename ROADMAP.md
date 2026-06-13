@@ -64,13 +64,18 @@ These corroborate the spec-derived fixtures; they gate nothing.
 The typed verbs that justify removing the raw passthrough, plus the removal.
 `metadata`, `drive`, `features`, and `tray` shipped; what remains:
 
-- **`capacity` and `speed` verbs** — the reserved-name remainder
-  (`cli/main.c`). `capacity` = READ CAPACITY / READ DISC INFORMATION; `speed`
-  = SET CD SPEED, read-only reporting where the drive allows. CDBs from SDK
-  constants, never hand-packed. Two hardware-gated design axes: the
-  firmware-policy generation on `mos_open()` (the Pioneer December-2022 cutoff
-  flips bus-encryption and AACS behavior on identical silicon) and the Apple
+- **`capacity` verb** — the lone reserved-name remainder (`cli/main.c`):
+  READ CAPACITY / READ DISC INFORMATION for the disc-capacity blocks not
+  already covered by `mos_query_track_info`'s track size (which approximates
+  capacity for single-track pressed media). CDBs from SDK constants, never
+  hand-packed. Two hardware-gated design axes carry over: the firmware-policy
+  generation on `mos_open()` (the Pioneer December-2022 cutoff flips
+  bus-encryption and AACS behavior on identical silicon) and the Apple
   SuperDrive 0xEA wake gate (research-gated).
+  (`speed` retired 2026-06-13 alongside `identity`: the drive's read/write
+  performance reporting already ships in `mos drive`'s `speeds` via GET
+  PERFORMANCE, and SET CD SPEED *setting* is a control command in the
+  out-of-scope vendor write-quality territory.)
 
 - **Remove `mos_raw_cdb()`** — once the typed verbs cover the diagnostic
   cases the raw passthrough is legacy, and its removal is the major-version
@@ -203,7 +208,7 @@ release-on-return lock discipline is built to coexist with them, not host them.
 spec-conformance (the bar) ─► pure suite + fuzz green ─► decision layer correct
           └─► adapter smoke run on any Mac+drive ─► tag shipped (not a design gate)
 
-v0.4 ─► capacity + speed verbs ─► raw_cdb removed ─► API stable
+v0.4 ─► capacity verb ─► raw_cdb removed ─► API stable
           └─► eject_requested watch event (rig-gated, optional)
 
 v1.0 ─► multi-drive fixtures ─► integration-test gaps ─► CHANGELOG ─► ship
