@@ -52,13 +52,13 @@ flag — input ergonomics, unchanged.
 
 ```
 $ mos status 1
-Registry:  4295032831
-     BSD:  /dev/disk4
-   State:  ready
- Profile:  bd  bd_rom  (0x0040)
-  Vendor:  HL-DT-ST
- Product:  BD-RE WH16NS60
-Revision:  1.00
+Registry ID:  4295032831
+        BSD:  /dev/disk4
+      State:  ready
+    Profile:  bd  bd_rom  (0x0040)
+     Vendor:  HL-DT-ST
+    Product:  BD-RE WH16NS60
+   Revision:  1.00
 ```
 
 ```
@@ -83,12 +83,12 @@ no guessing:
 
 ```
 $ mos status 1
-Registry:  4295032831
-     BSD:  -
-   State:  open
-  Vendor:  HL-DT-ST
- Product:  BD-RE WH16NS60
-Revision:  1.00
+Registry ID:  4295032831
+        BSD:  -
+      State:  open
+     Vendor:  HL-DT-ST
+    Product:  BD-RE WH16NS60
+   Revision:  1.00
 ```
 
 ### List
@@ -240,16 +240,16 @@ set to the append point and `free_blocks` to the writable remainder.
 
 ```
 $ mos drive 1
-     BSD:  /dev/disk4
-Registry:  4295032831
-  Vendor:  HL-DT-ST
- Product:  BD-RE WH16NS60
-Revision:  1.00
-  Serial:  -
-    AACS:  version 68, bus encryption yes
-  Speeds:  read 10560, write 8310 kB/s (max)
-    Mech:  tray, buffer 4096 KB
-ErrRecov:  retry 20, PER
+        BSD:  /dev/disk4
+Registry ID:  4295032831
+     Vendor:  HL-DT-ST
+    Product:  BD-RE WH16NS60
+   Revision:  1.00
+     Serial:  -
+       AACS:  version 68, bus encryption yes
+     Speeds:  read 10560, write 8310 kB/s (max)
+       Mech:  tray, buffer 4096 KB
+   ErrRecov:  retry 20, PER
 ```
 
 `mos drive --json` emits `mos.drive.v1`: identity (open-time directory
