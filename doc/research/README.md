@@ -157,6 +157,20 @@ in `AGENTS.md`. The chain of files is the audit trail.
   only if yes. No IPC daemon — the mechanism stays observation through the
   drive.
 
+- `2026-06-13-read-capacity-feasibility.md` — Feasibility note for the
+  reserved `capacity` verb. Header-confirmed against `SCSITaskLib.h` that
+  `MMCDeviceInterface` has NO READ CAPACITY / READ FORMAT CAPACITIES
+  convenience wrapper, so a capacity *command* is raw-CDB-only (exclusive
+  access → BUSY on mounted media, the exact case capacity is wanted). Verdict:
+  don't add a raw READ CAPACITY — whole-disk byte capacity is free from the
+  kernel-computed `kIOMediaSizeKey`/`kIOMediaPreferredBlockSizeKey` on the
+  IOMedia node mos already resolves (no command, no lock, works mounted), and
+  the recordable/append-state view already ships via READ TRACK / DISC
+  INFORMATION. READ FORMAT CAPACITIES `0x23` is the one raw-verb candidate
+  (blank-media max formattable capacity, the gap the cheap paths miss),
+  deferred behind a stated need + the layer-1 showing. Includes the
+  no-new-command `mos.capacity.v1` surface sketch and pickup checklist.
+
 (An entry for a `2026-04-26-doctrine-review.md` note previously
 appeared in this index; that file was never committed and the entry
 was removed 2026-06-10.)
