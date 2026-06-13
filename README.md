@@ -393,7 +393,7 @@ cmake --build build`.
 ### Embedding in a C/C++ project
 
 ```cmake
-add_subdirectory(vendor/mac-optical-state)
+add_subdirectory(vendor/mos)
 target_link_libraries(your_app PRIVATE mos_core)
 ```
 
