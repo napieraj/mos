@@ -179,20 +179,20 @@ int main(int argc, char **argv)
        boolean), and a refused_locked outcome carrying a sense object. */
     if (strcmp(verb, "tray") == 0 && strcmp(scn, "eject_done") == 0) {
         mos_fake_reset();
-        tray_action = "eject";
+        opt_tray_action = "eject";
         mos_fake_set_raw_reply(0x00 /*GOOD*/, NULL, 0, 0, NULL);
         return mos_cli_run_tray();
     }
     if (strcmp(verb, "tray") == 0 && strcmp(scn, "lock_persistent") == 0) {
         mos_fake_reset();
-        tray_action   = "lock";
+        opt_tray_action   = "lock";
         flag_persistent = true;
         mos_fake_set_raw_reply(0x00 /*GOOD*/, NULL, 0, 0, NULL);
         return mos_cli_run_tray();
     }
     if (strcmp(verb, "tray") == 0 && strcmp(scn, "refused_locked") == 0) {
         mos_fake_reset();
-        tray_action = "eject";
+        opt_tray_action = "eject";
         uint8_t sense[18] = {0};
         sense[0] = 0x70; sense[2] = 0x05; sense[12] = 0x53; sense[13] = 0x02;
         mos_fake_set_raw_reply(0x02 /*CHECK CONDITION*/, NULL, 0, 0, sense);
@@ -202,7 +202,7 @@ int main(int argc, char **argv)
         /* A drive without Persistent Prevent rejecting 0x03 with 5/24/00 —
            exercises the now-populated sense object on a non-lock refusal. */
         mos_fake_reset();
-        tray_action   = "lock";
+        opt_tray_action   = "lock";
         flag_persistent = true;
         uint8_t sense[18] = {0};
         sense[0] = 0x70; sense[2] = 0x05; sense[12] = 0x24; sense[13] = 0x00;
