@@ -386,6 +386,12 @@ uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i);
  * a mount path that exceeds the cap reports unmounted rather than a
  * truncated path. Volume names are disc-controlled bytes: escape them
  * before terminals or structured output.
+ *
+ * OPTIONAL DEPENDENCY: DiskArbitration is the only thing this call
+ * needs. A build with MOS_USE_DISKARBITRATION=0 (no -framework
+ * DiskArbitration) keeps this function and its contract — it simply
+ * always reports unmounted (MOS_OK, *mounted=false, empty buffers), so
+ * the CLI and JSON shapes are identical with the volume fields null.
  */
 mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
                            char *name_buf, size_t name_cap,

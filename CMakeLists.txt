@@ -200,21 +200,32 @@ set_target_properties(mos_core PROPERTIES
 find_library(IOKIT_FRAMEWORK          IOKit          REQUIRED)
 find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
 find_library(DISCRECORDING_FRAMEWORK  DiscRecording  REQUIRED)
-find_library(DISKARBITRATION_FRAMEWORK DiskArbitration REQUIRED)
 
 # DiskArbitration's callback roles (watch wake, probe control arm) left
 # in the DR pivot / probe consolidation and do not return; it relinked
 # 2026-06-12 for exactly one synchronous call — the mounted-volume
 # lookup in mos_da.c (narrow re-admission terms at the top of that
-# file; AGENTS.md append of the same date).
+# file; AGENTS.md append of the same date). It is an OPTIONAL dependency:
+# MOS_USE_DISKARBITRATION=OFF drops the framework and mos_query_volume
+# reports unmounted (null volume fields — no CLI/schema shape change).
+option(MOS_USE_DISKARBITRATION
+       "Link DiskArbitration for mounted-volume name/path enrichment in mos_query_volume; OFF reports unmounted" ON)
+if(MOS_USE_DISKARBITRATION)
+    find_library(DISKARBITRATION_FRAMEWORK DiskArbitration REQUIRED)
+endif()
+
 target_link_libraries(mos_core
     PUBLIC  mos_pure
             ${IOKIT_FRAMEWORK}
             ${COREFOUNDATION_FRAMEWORK}
             ${DISCRECORDING_FRAMEWORK}
-            ${DISKARBITRATION_FRAMEWORK}
     PRIVATE mos_warnings
 )
+if(MOS_USE_DISKARBITRATION)
+    target_link_libraries(mos_core PUBLIC ${DISKARBITRATION_FRAMEWORK})
+else()
+    target_compile_definitions(mos_core PRIVATE MOS_USE_DISKARBITRATION=0)
+endif()
 
 # ---- CLI binary ---------------------------------------------------------
 

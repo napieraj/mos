@@ -49,10 +49,13 @@ cat > "$H" <<'HEADER'
  * DiskArbitration are on your link line, with the deployment target
  * pinned to macOS 12.0 to match the CMake build's
  * CMAKE_OSX_DEPLOYMENT_TARGET. Skipping -framework DiscRecording
- * fails to link at the DRCopyDeviceArray reference in mos_dr.c;
- * skipping -framework DiskArbitration fails at the
- * DADiskCopyDescription reference in mos_da.c (the one-shot
- * mounted-volume lookup behind mos_query_volume).
+ * fails to link at the DRCopyDeviceArray reference in mos_dr.c.
+ *
+ * DiskArbitration is OPTIONAL: compile with -DMOS_USE_DISKARBITRATION=0
+ * and you may drop -framework DiskArbitration entirely. mos_query_volume
+ * then always reports unmounted (volume name/path null) — the API, CLI,
+ * and JSON shapes are unchanged. With the default (flag unset), the
+ * DADiskCopyDescription reference in mos_da.c requires the framework.
  *
  * See mos.h for the API.
  * See https://github.com/napieraj/mos for source, tests,
@@ -167,6 +170,9 @@ strip_file() {
     echo
     echo "/* ==== src/mos_dr.c ==== */"
     strip_file "$SRC/mos_dr.c"
+    echo
+    echo "/* ==== src/mos_da.c ==== */"
+    strip_file "$SRC/mos_da.c"
     echo
     echo "/* ==== src/mos_scsi.c ==== */"
     strip_file "$SRC/mos_scsi.c"

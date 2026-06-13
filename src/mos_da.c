@@ -19,6 +19,16 @@
 
 #include "mos_internal.h"
 
+/* DiskArbitration is an OPTIONAL link dependency. Build with
+   -DMOS_USE_DISKARBITRATION=0 (and drop -framework DiskArbitration) and
+   mos_query_volume always reports unmounted — volume name/path null,
+   which the CLI and JSON schemas already permit, so no shape changes.
+   Default on (matches the linked build). */
+#ifndef MOS_USE_DISKARBITRATION
+#define MOS_USE_DISKARBITRATION 1
+#endif
+
+#if MOS_USE_DISKARBITRATION
 #include <DiskArbitration/DiskArbitration.h>
 
 /* Mounted-volume name and mount path for a whole-disk bsd_name
@@ -69,6 +79,24 @@ bool mos_internal_da_volume(const char *bsd_name,
     CFRelease(session);
     return mounted;
 }
+
+#else  /* !MOS_USE_DISKARBITRATION */
+
+/* No DiskArbitration linked: the mount layer is not consulted, so every
+   disc reports unmounted. Buffers cleared, false returned — the same
+   contract as a disk DA cannot describe; mos_query_volume surfaces null
+   volume fields and the emitters suppress them as usual. */
+bool mos_internal_da_volume(const char *bsd_name,
+                            char *name_buf, size_t name_cap,
+                            char *path_buf, size_t path_cap)
+{
+    (void)bsd_name;
+    if (name_buf && name_cap) name_buf[0] = 0;
+    if (path_buf && path_cap) path_buf[0] = 0;
+    return false;
+}
+
+#endif /* MOS_USE_DISKARBITRATION */
 
 /* Public wrapper (contract in mos.h): the nub gate lives HERE, so no
    caller can consult DA for a drive the kernel says holds no media. */
