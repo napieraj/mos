@@ -247,7 +247,7 @@ Registry ID:  4295032831
    Revision:  1.00
      Serial:  -
        AACS:  version 68, bus encryption yes
-     Speeds:  read 10560, write 8310 kB/s (max)
+     Speeds:  read 10560 kB/s, write 8310 kB/s (max)
        Mech:  tray, buffer 4096 KB
    ErrRecov:  retry 20, PER
 ```
