@@ -403,27 +403,31 @@ struct mos_track_info {
 bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
                                    struct mos_track_info *out);
 
-/* ---- GET PERFORMANCE write-speed decode (mos_perf.c) --------------- *
+/* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *
  *
- * The drive's supported read/write speed list from GET PERFORMANCE
- * (0xAC, Type 03h), summarized: max read and max write speed (kB/s)
- * scanned across the descriptors, plus the descriptor count. have is
- * false when the drive reported zero descriptors (media-dependent —
- * data, not error). Spec-derived layout (no in-repo capture yet); a real
- * capture is a falsifier per the hardware ADR. New fields append at the
- * END. */
+ * The drive's read/write performance from GET PERFORMANCE (0xAC, Type
+ * 00h Performance Data — the type the Apple convenience method exposes),
+ * summarized: max read and max write performance (kB/s) and the
+ * descriptor count. The read/write split is the CDB WRITE bit, so the
+ * adapter issues the command twice and fills this struct from the two
+ * replies. have is false when neither direction returned a descriptor
+ * (media-dependent — data, not error). Spec-derived layout (no in-repo
+ * capture yet); a real capture is a falsifier per the hardware ADR. New
+ * fields append at the END. */
 struct mos_drive_perf {
-    bool     have;              /* >= 1 descriptor parsed */
-    uint16_t descriptor_count;
-    uint32_t max_read_kbps;     /* max Read Speed across descriptors  */
-    uint32_t max_write_kbps;    /* max Write Speed across descriptors */
+    bool     have;              /* >= 1 descriptor in either direction */
+    uint16_t descriptor_count;  /* from the read-direction reply       */
+    uint32_t max_read_kbps;     /* max performance, WRITE=0 reply       */
+    uint32_t max_write_kbps;    /* max performance, WRITE=1 reply       */
 };
 
-/* Parse a GET PERFORMANCE (Type 03h) reply into *out. True when the
- * 8-byte header is present and coherent (descriptor list may be empty:
- * have=false). Pure, fixed-offset, no-OOB — fuzz/ASan-gated. */
-bool mos_internal_drive_perf_parse(const uint8_t *buf, size_t len,
-                                   struct mos_drive_perf *out);
+/* Decode one Performance Data reply: the max performance (kB/s) across
+ * its Nominal Performance Descriptors and the descriptor count. True
+ * when the 8-byte header is present and coherent (list may be empty).
+ * Pure, fixed-offset, no-OOB — fuzz/ASan-gated. The adapter assembles
+ * the struct above from two calls (WRITE=0 / WRITE=1). */
+bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
+                                  uint32_t *max_kbps, uint16_t *count);
 
 /* ---- MODE SENSE(10) page decode (mos_modepage.c) ------------------- *
  *

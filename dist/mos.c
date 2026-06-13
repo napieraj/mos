@@ -479,27 +479,31 @@ struct mos_track_info {
 bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
                                    struct mos_track_info *out);
 
-/* ---- GET PERFORMANCE write-speed decode (mos_perf.c) --------------- *
+/* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *
  *
- * The drive's supported read/write speed list from GET PERFORMANCE
- * (0xAC, Type 03h), summarized: max read and max write speed (kB/s)
- * scanned across the descriptors, plus the descriptor count. have is
- * false when the drive reported zero descriptors (media-dependent —
- * data, not error). Spec-derived layout (no in-repo capture yet); a real
- * capture is a falsifier per the hardware ADR. New fields append at the
- * END. */
+ * The drive's read/write performance from GET PERFORMANCE (0xAC, Type
+ * 00h Performance Data — the type the Apple convenience method exposes),
+ * summarized: max read and max write performance (kB/s) and the
+ * descriptor count. The read/write split is the CDB WRITE bit, so the
+ * adapter issues the command twice and fills this struct from the two
+ * replies. have is false when neither direction returned a descriptor
+ * (media-dependent — data, not error). Spec-derived layout (no in-repo
+ * capture yet); a real capture is a falsifier per the hardware ADR. New
+ * fields append at the END. */
 struct mos_drive_perf {
-    bool     have;              /* >= 1 descriptor parsed */
-    uint16_t descriptor_count;
-    uint32_t max_read_kbps;     /* max Read Speed across descriptors  */
-    uint32_t max_write_kbps;    /* max Write Speed across descriptors */
+    bool     have;              /* >= 1 descriptor in either direction */
+    uint16_t descriptor_count;  /* from the read-direction reply       */
+    uint32_t max_read_kbps;     /* max performance, WRITE=0 reply       */
+    uint32_t max_write_kbps;    /* max performance, WRITE=1 reply       */
 };
 
-/* Parse a GET PERFORMANCE (Type 03h) reply into *out. True when the
- * 8-byte header is present and coherent (descriptor list may be empty:
- * have=false). Pure, fixed-offset, no-OOB — fuzz/ASan-gated. */
-bool mos_internal_drive_perf_parse(const uint8_t *buf, size_t len,
-                                   struct mos_drive_perf *out);
+/* Decode one Performance Data reply: the max performance (kB/s) across
+ * its Nominal Performance Descriptors and the descriptor count. True
+ * when the 8-byte header is present and coherent (list may be empty).
+ * Pure, fixed-offset, no-OOB — fuzz/ASan-gated. The adapter assembles
+ * the struct above from two calls (WRITE=0 / WRITE=1). */
+bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
+                                  uint32_t *max_kbps, uint16_t *count);
 
 /* ---- MODE SENSE(10) page decode (mos_modepage.c) ------------------- *
  *
@@ -1902,42 +1906,44 @@ bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
 
 /* ==== src/mos_perf.c ==== */
 /*
- * mos_perf.c — pure, bounds-safe decode of a GET PERFORMANCE (MMC 0xAC,
- * Type 03h = Write Speed) response: the drive's supported read/write
- * speed descriptor list, summarized as the max read and max write speed
- * (kB/s) and the descriptor count.
+ * mos_perf.c — pure, bounds-safe decode of a GET PERFORMANCE (MMC 0xAC)
+ * Performance Data response (the data type the Apple GetPerformance
+ * convenience method retrieves — TYPE 00h; the convenience signature
+ * exposes TOLERANCE/WRITE/EXCEPT but NOT the TYPE field, so write-speed
+ * descriptors, TYPE 03h, are unreachable without a raw CDB and stay out
+ * of scope). The read-vs-write direction is the WRITE bit in the CDB, so
+ * the adapter issues this twice (WRITE=0, WRITE=1) and this decode
+ * returns the max performance found in one reply.
  *
- * No IOKit. The IOKit shell issues GET PERFORMANCE via the GetPerformance
- * convenience method into a fixed, zero-initialized buffer and hands that
- * buffer plus its size here. Every length and value byte is device-
- * reported and hostile; this file keeps the declared length from steering
- * a read outside [buf, buf+len) and reads only fixed offsets within each
- * descriptor.
+ * No IOKit. The IOKit shell issues GET PERFORMANCE via GetPerformance
+ * into a fixed, zero-initialized buffer and hands that buffer plus its
+ * size here. Every length and value byte is device-reported and hostile;
+ * this file keeps the declared length from steering a read outside
+ * [buf, buf+len) and reads only fixed offsets within each descriptor.
  *
- * Wire layout (MMC-6 GET PERFORMANCE, Type 03h Write Speed):
- *   [0..3]  Write Speed Descriptor Data Length (BE) — bytes AFTER byte 3
- *   [4..7]  reserved
- *   [8..]   Write Speed Performance Descriptors, 16 bytes each:
- *     desc[0]     flag byte (MRW/Exact/RDD/WRC) — not surfaced
- *     desc[4..7]  End LBA / capacity (BE)
- *     desc[8..11] Read Speed  (kB/s, BE)
- *     desc[12..15] Write Speed (kB/s, BE)
+ * Wire layout (MMC GET PERFORMANCE, Performance Data, TYPE 00h):
+ *   [0..3]  Performance Data Length (BE) — bytes AFTER byte 3
+ *   [4]     bit1 Write, bit0 Except (echo)   [5..7] reserved
+ *   [8..]   Nominal Performance Descriptors, 16 bytes each:
+ *     desc[0..3]   Start LBA
+ *     desc[4..7]   Start Performance (kB/s, BE)
+ *     desc[8..11]  End LBA
+ *     desc[12..15] End Performance (kB/s, BE)
  *
- * SPEC-DERIVED, no in-repo capture yet: the descriptor offsets are the
- * MMC-6 Write Speed Performance Descriptor layout. Per the AGENTS
+ * SPEC-DERIVED, no in-repo capture yet: the Performance Data descriptor
+ * layout is the MMC-6 Nominal Performance Descriptor. Per the AGENTS
  * hardware ADR this is built to spec; a real GET PERFORMANCE capture is
- * a falsification-matrix item that can refute or feed these offsets, it
- * does not steer them. GET PERFORMANCE is also media-dependent (an empty
- * or read-only drive may report zero write-speed descriptors) — that is
- * data (have=false), not an error. No payload byte is ever used as an
- * offset. No-OOB property gated headless under ASan/UBSan by
- * tests/test_perf.c and tests/fuzz_pure.c.
+ * a falsifier, it does not steer the offsets. The list may be empty (a
+ * drive that declines the direction) — that is data (count 0), not an
+ * error. No payload byte is ever used as an offset. No-OOB property
+ * gated headless under ASan/UBSan by tests/test_perf.c and
+ * tests/fuzz_pure.c.
  */
 
 
-#define GP_HDR        8u     /* 4-byte data length + 4 reserved */
-#define GP_DESC       16u    /* one Write Speed Performance Descriptor */
-#define GP_DESC_CAP   256u   /* clamp: no real drive lists this many speeds */
+#define GP_HDR        8u     /* 4-byte data length + 4 reserved/echo */
+#define GP_DESC       16u    /* one Nominal Performance Descriptor */
+#define GP_DESC_CAP   256u   /* clamp: no real drive lists this many */
 
 static uint32_t mos_internal_gp_be32(const uint8_t *p)
 {
@@ -1945,37 +1951,38 @@ static uint32_t mos_internal_gp_be32(const uint8_t *p)
            (uint32_t)p[2] << 8  | p[3];
 }
 
-bool mos_internal_drive_perf_parse(const uint8_t *buf, size_t len,
-                                   struct mos_drive_perf *out)
+/* Decode one GET PERFORMANCE Performance Data reply: the maximum
+   performance (kB/s) across its descriptors and the descriptor count.
+   True when the 8-byte header is present and coherent (the descriptor
+   list may be empty). */
+bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
+                                  uint32_t *max_kbps, uint16_t *count)
 {
-    if (!out) return false;
-    *out = (struct mos_drive_perf){0};
+    if (max_kbps) *max_kbps = 0;
+    if (count)    *count = 0;
     if (!buf || len < GP_HDR) return false;
 
-    /* Performance Data Length counts the bytes AFTER byte 3, so the
-       response occupies 4 + value bytes. Declared only ever shrinks the
-       trusted region; computed wide so the +4 cannot wrap. */
+    /* Performance Data Length counts bytes AFTER byte 3, so the response
+       occupies 4 + value bytes. Declared only ever shrinks the trusted
+       region; computed wide so the +4 cannot wrap. */
     size_t declared = (size_t)mos_internal_gp_be32(&buf[0]) + 4u;
     size_t end = (len < declared) ? len : declared;
     if (end < GP_HDR) return false;
 
-    size_t avail = end - GP_HDR;
-    size_t n = avail / GP_DESC;
+    size_t n = (end - GP_HDR) / GP_DESC;
     if (n > GP_DESC_CAP) n = GP_DESC_CAP;
 
-    uint32_t max_read = 0, max_write = 0;
+    uint32_t mx = 0;
     for (size_t i = 0; i < n; i++) {
         const uint8_t *d = &buf[GP_HDR + i * GP_DESC];
-        uint32_t rd = mos_internal_gp_be32(&d[8]);
-        uint32_t wr = mos_internal_gp_be32(&d[12]);
-        if (rd > max_read)  max_read  = rd;
-        if (wr > max_write) max_write = wr;
+        uint32_t sp = mos_internal_gp_be32(&d[4]);    /* Start Performance */
+        uint32_t ep = mos_internal_gp_be32(&d[12]);   /* End Performance   */
+        if (sp > mx) mx = sp;
+        if (ep > mx) mx = ep;
     }
 
-    out->descriptor_count = (uint16_t)n;
-    out->max_read_kbps    = max_read;
-    out->max_write_kbps   = max_write;
-    out->have             = (n > 0);
+    if (max_kbps) *max_kbps = mx;
+    if (count)    *count = (uint16_t)n;
     return true;
 }
 
@@ -6093,8 +6100,9 @@ mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
        track. 64 bytes covers the Track Information Block (the core block
        is 36 bytes; MMC-6 extends it slightly). sizeof buf is the trusted
        length (O-4); the reply's Track Information Length only shrinks the
-       parse. No lock (convenience). SDK-verify the exact selector
-       signature against docs/apple/SCSITaskLib.h before shipping. */
+       parse. No lock (convenience). Signature confirmed against
+       SCSITaskLib.h (ADDRESS_NUMBER_TYPE, LBA/track/session, buffer,
+       bufferSize, taskStatus, senseData). */
     uint8_t         buf[64] = {0};
     SCSITaskStatus  st      = 0;
     SCSI_Sense_Data sd      = {0};
@@ -6119,31 +6127,25 @@ mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
     return MOS_OK;
 }
 
-mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
+/* One GET PERFORMANCE (0xAC) Performance Data read in the given
+   direction (WRITE=0 read, WRITE=1 write). TOLERANCE=10b nominal,
+   EXCEPT=0 (nominal performance), STARTING_LBA=0. Returns MOS_OK and the
+   decoded max performance (kB/s) + descriptor count, or a non-OK code on
+   command failure. Convenience method: no lock. */
+static mos_error mos_internal_get_perf(mos_handle_t *h, uint8_t write,
+                                       uint32_t *max_kbps, uint16_t *count)
 {
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    /* GET PERFORMANCE (0xAC), Type 03h = Write Speed, via the
-       convenience method. 8-byte header + up to N 16-byte descriptors;
-       2048 bytes holds ~127 descriptors (no real drive lists that many).
-       sizeof buf is the trusted length (O-4); the reply's own data
-       length only shrinks the parse. No lock (convenience).
-
-       SDK-VERIFY the exact GetPerformance selector signature against
-       docs/apple/SCSITaskLib.h before shipping — the parameter order for
-       TOLERANCE/WRITE/EXCEPT/STARTING_LBA/MAX_DESCRIPTORS/TYPE is the
-       open item (same SDK-verify posture as ReadTrackInformation). */
     uint8_t         buf[2048] = {0};
     SCSITaskStatus  st        = 0;
     SCSI_Sense_Data sd        = {0};
 
     IOReturn rc = (*h->mmc)->GetPerformance(
         h->mmc,
-        (UInt8)0x10,             /* TOLERANCE=10b nominal, WRITE=0, EXCEPT=0 */
-        (UInt32)0,               /* STARTING_LBA                            */
-        (UInt16)64,              /* MAXIMUM_NUMBER_OF_DESCRIPTORS           */
-        (UInt8)0x03,             /* TYPE = Write Speed                      */
+        (UInt8)0x02,             /* TOLERANCE = 10b (nominal)      */
+        (UInt8)write,            /* WRITE                          */
+        (UInt8)0x00,             /* EXCEPT = 0 (nominal perf)      */
+        (UInt32)0,               /* STARTING_LBA                   */
+        (UInt16)64,              /* MAXIMUM_NUMBER_OF_DESCRIPTORS  */
         buf, (UInt16)sizeof(buf),
         &st, &sd);
 
@@ -6152,20 +6154,47 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
                    ? mos_internal_ioreturn_to_mos_error(rc)
                    : MOS_ERR_IO;
     }
-
-    if (!mos_internal_drive_perf_parse(buf, sizeof(buf), &h->drive_perf)) {
-        return MOS_ERR_IO;   /* short/incoherent header — refused whole */
+    if (!mos_internal_perf_data_parse(buf, sizeof(buf), max_kbps, count)) {
+        return MOS_ERR_IO;   /* short/incoherent header */
     }
-    *out = &h->drive_perf;
+    return MOS_OK;
+}
+
+mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Two Performance Data reads — read direction (WRITE=0) and write
+       direction (WRITE=1) — assembled into one result. The read read is
+       the gate (its success defines `have`); the write read is
+       best-effort (a read-only drive or non-writable medium simply
+       leaves max_write_kbps 0). */
+    struct mos_drive_perf *p = &h->drive_perf;
+    *p = (struct mos_drive_perf){0};
+
+    uint32_t rd_max = 0, wr_max = 0;
+    uint16_t rd_cnt = 0, wr_cnt = 0;
+
+    mos_error e = mos_internal_get_perf(h, 0, &rd_max, &rd_cnt);
+    if (e != MOS_OK) return e;
+
+    (void)mos_internal_get_perf(h, 1, &wr_max, &wr_cnt);  /* best-effort */
+
+    p->descriptor_count = rd_cnt;
+    p->max_read_kbps    = rd_max;
+    p->max_write_kbps   = wr_max;
+    p->have             = (rd_cnt > 0 || wr_cnt > 0);
+    *out = p;
     return MOS_OK;
 }
 
 /* Shared MODE SENSE(10) issuance for the two read-only optical pages
-   (AGENTS scope addendum 2026-06-13). PAGE_CONTROL = 00b (current
-   values). DBD=1 (no block descriptor) keeps the reply compact; the
-   pure walker tolerates a descriptor either way. SDK-verify the exact
-   ModeSense10 selector signature against docs/apple/SCSITaskLib.h before
-   shipping. Non-exclusive convenience: no lock. */
+   (AGENTS scope addendum 2026-06-13). Signature confirmed against
+   SCSITaskLib.h (LLBAA, DBD, PC, PAGE_CODE, buffer, bufferSize,
+   taskStatus, senseData). PC = 00b (current values); DBD=1 (no block
+   descriptor) keeps the reply compact, though the pure walker tolerates
+   a descriptor either way. Non-exclusive convenience: no lock. */
 static mos_error mos_internal_mode_sense10(mos_handle_t *h, uint8_t page,
                                            uint8_t *buf, size_t buf_len)
 {
@@ -6173,8 +6202,9 @@ static mos_error mos_internal_mode_sense10(mos_handle_t *h, uint8_t page,
     SCSI_Sense_Data sd = {0};
     IOReturn rc = (*h->mmc)->ModeSense10(
         h->mmc,
+        (UInt8)0,                /* LLBAA = 0                           */
         (UInt8)1,                /* DBD = 1 (disable block descriptor)  */
-        (UInt8)0x00,             /* PAGE_CONTROL = current values       */
+        (UInt8)0x00,             /* PC = current values                 */
         (UInt8)page,             /* PAGE_CODE                           */
         buf, (UInt16)buf_len,
         &st, &sd);

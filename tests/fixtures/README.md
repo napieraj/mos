@@ -248,17 +248,20 @@ track_start@8, next_writable@12, free_blocks@16, track_size@24,
 last_rec@28. The fixed-offset/dual-length no-OOB property is fuzz/ASan-
 gated (`tests/fuzz_pure.c` phase 10).
 
-### GET PERFORMANCE (0xAC, Type 03h) — inline fixtures
-The write-speed decode (`mos_perf.c`) is exercised by spec-built inline
-fixtures in `test_perf.c`: a multi-descriptor list (max read/write scanned
-across descriptors), an empty descriptor list (have=false), and hostile
-cases (lying data length, partial trailing descriptor, short header).
-SPEC-DERIVED, no in-repo capture: the per-descriptor offsets (read speed
-@8..11, write speed @12..15 within each 16-byte Write Speed Performance
-Descriptor after the 8-byte header) are the MMC-6 layout; a real GET
-PERFORMANCE capture is a falsification-matrix item per the hardware ADR
-(it can refute or feed these offsets, not steer them). The no-OOB
-property is fuzz/ASan-gated (`tests/fuzz_pure.c` phase 11).
+### GET PERFORMANCE (0xAC, Type 00h Performance Data) — inline fixtures
+The performance decode (`mos_perf.c`) is exercised by spec-built inline
+fixtures in `test_perf.c`: a multi-descriptor reply (max performance
+scanned across descriptors), an empty list (count 0), null out-params,
+and hostile cases (lying data length, partial trailing descriptor, short
+header). SPEC-DERIVED, no in-repo capture: the per-descriptor offsets
+(Start Performance @4..7, End Performance @12..15 within each 16-byte
+Nominal Performance Descriptor after the 8-byte header) are the MMC-6
+layout. The Apple GetPerformance convenience method exposes the WRITE bit
+but not the TYPE field, so only Performance Data (Type 00h) is reachable
+and read/write are two calls (WRITE=0/1) — write-speed descriptors
+(Type 03h) would need a raw CDB and stay out of scope. A real GET
+PERFORMANCE capture is a falsification-matrix item per the hardware ADR.
+The no-OOB property is fuzz/ASan-gated (`tests/fuzz_pure.c` phase 11).
 
 ### MODE SENSE(10) page 0x2A / 0x01 — inline fixtures
 The mechanical (page 0x2A) and error-recovery (page 0x01) decodes

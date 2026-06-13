@@ -73,24 +73,24 @@
     },
     "speeds": {
       "type": ["object", "null"],
-      "description": "Supported read/write speeds from GET PERFORMANCE (0xAC, Type 03h Write Speed) via the GetPerformance convenience method — the MMC-sanctioned modern speed source. MEDIA-DEPENDENT: the write-speed list reflects the loaded medium, so this is null when no media is loaded, the drive cannot write the medium, or the drive reported no descriptors (zero is data, not error). Spec-derived descriptor layout (no in-repo capture yet); a real GET PERFORMANCE capture is a falsifier per the hardware ADR.",
+      "description": "Read/write performance from GET PERFORMANCE (0xAC, Type 00h Performance Data) via the GetPerformance convenience method — the MMC-sanctioned modern speed source (the convenience signature exposes the WRITE bit but not the TYPE field, so write-speed descriptors are unreachable; read and write are two calls, WRITE=0/1). MEDIA-DEPENDENT: performance reflects the loaded medium, so this is null when no media is loaded or the drive reported no descriptors in either direction (zero is data, not error). Spec-derived descriptor layout (no in-repo capture yet); a real GET PERFORMANCE capture is a falsifier per the hardware ADR.",
       "required": ["descriptor_count", "max_read_kbps", "max_write_kbps"],
       "additionalProperties": false,
       "properties": {
         "descriptor_count": {
           "type": "integer",
-          "minimum": 1,
-          "description": "Number of write-speed performance descriptors the drive returned."
+          "minimum": 0,
+          "description": "Number of performance descriptors in the read-direction reply."
         },
         "max_read_kbps": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum Read Speed (kB/s) across the descriptors."
+          "description": "Maximum read performance (kB/s) across the WRITE=0 descriptors."
         },
         "max_write_kbps": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum Write Speed (kB/s) across the descriptors."
+          "description": "Maximum write performance (kB/s) across the WRITE=1 descriptors (0 on a read-only drive / non-writable medium)."
         }
       }
     },

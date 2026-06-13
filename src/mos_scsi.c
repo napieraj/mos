@@ -843,8 +843,9 @@ mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
        track. 64 bytes covers the Track Information Block (the core block
        is 36 bytes; MMC-6 extends it slightly). sizeof buf is the trusted
        length (O-4); the reply's Track Information Length only shrinks the
-       parse. No lock (convenience). SDK-verify the exact selector
-       signature against docs/apple/SCSITaskLib.h before shipping. */
+       parse. No lock (convenience). Signature confirmed against
+       SCSITaskLib.h (ADDRESS_NUMBER_TYPE, LBA/track/session, buffer,
+       bufferSize, taskStatus, senseData). */
     uint8_t         buf[64] = {0};
     SCSITaskStatus  st      = 0;
     SCSI_Sense_Data sd      = {0};
@@ -869,31 +870,25 @@ mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
     return MOS_OK;
 }
 
-mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
+/* One GET PERFORMANCE (0xAC) Performance Data read in the given
+   direction (WRITE=0 read, WRITE=1 write). TOLERANCE=10b nominal,
+   EXCEPT=0 (nominal performance), STARTING_LBA=0. Returns MOS_OK and the
+   decoded max performance (kB/s) + descriptor count, or a non-OK code on
+   command failure. Convenience method: no lock. */
+static mos_error mos_internal_get_perf(mos_handle_t *h, uint8_t write,
+                                       uint32_t *max_kbps, uint16_t *count)
 {
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    /* GET PERFORMANCE (0xAC), Type 03h = Write Speed, via the
-       convenience method. 8-byte header + up to N 16-byte descriptors;
-       2048 bytes holds ~127 descriptors (no real drive lists that many).
-       sizeof buf is the trusted length (O-4); the reply's own data
-       length only shrinks the parse. No lock (convenience).
-
-       SDK-VERIFY the exact GetPerformance selector signature against
-       docs/apple/SCSITaskLib.h before shipping — the parameter order for
-       TOLERANCE/WRITE/EXCEPT/STARTING_LBA/MAX_DESCRIPTORS/TYPE is the
-       open item (same SDK-verify posture as ReadTrackInformation). */
     uint8_t         buf[2048] = {0};
     SCSITaskStatus  st        = 0;
     SCSI_Sense_Data sd        = {0};
 
     IOReturn rc = (*h->mmc)->GetPerformance(
         h->mmc,
-        (UInt8)0x10,             /* TOLERANCE=10b nominal, WRITE=0, EXCEPT=0 */
-        (UInt32)0,               /* STARTING_LBA                            */
-        (UInt16)64,              /* MAXIMUM_NUMBER_OF_DESCRIPTORS           */
-        (UInt8)0x03,             /* TYPE = Write Speed                      */
+        (UInt8)0x02,             /* TOLERANCE = 10b (nominal)      */
+        (UInt8)write,            /* WRITE                          */
+        (UInt8)0x00,             /* EXCEPT = 0 (nominal perf)      */
+        (UInt32)0,               /* STARTING_LBA                   */
+        (UInt16)64,              /* MAXIMUM_NUMBER_OF_DESCRIPTORS  */
         buf, (UInt16)sizeof(buf),
         &st, &sd);
 
@@ -902,20 +897,47 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
                    ? mos_internal_ioreturn_to_mos_error(rc)
                    : MOS_ERR_IO;
     }
-
-    if (!mos_internal_drive_perf_parse(buf, sizeof(buf), &h->drive_perf)) {
-        return MOS_ERR_IO;   /* short/incoherent header — refused whole */
+    if (!mos_internal_perf_data_parse(buf, sizeof(buf), max_kbps, count)) {
+        return MOS_ERR_IO;   /* short/incoherent header */
     }
-    *out = &h->drive_perf;
+    return MOS_OK;
+}
+
+mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Two Performance Data reads — read direction (WRITE=0) and write
+       direction (WRITE=1) — assembled into one result. The read read is
+       the gate (its success defines `have`); the write read is
+       best-effort (a read-only drive or non-writable medium simply
+       leaves max_write_kbps 0). */
+    struct mos_drive_perf *p = &h->drive_perf;
+    *p = (struct mos_drive_perf){0};
+
+    uint32_t rd_max = 0, wr_max = 0;
+    uint16_t rd_cnt = 0, wr_cnt = 0;
+
+    mos_error e = mos_internal_get_perf(h, 0, &rd_max, &rd_cnt);
+    if (e != MOS_OK) return e;
+
+    (void)mos_internal_get_perf(h, 1, &wr_max, &wr_cnt);  /* best-effort */
+
+    p->descriptor_count = rd_cnt;
+    p->max_read_kbps    = rd_max;
+    p->max_write_kbps   = wr_max;
+    p->have             = (rd_cnt > 0 || wr_cnt > 0);
+    *out = p;
     return MOS_OK;
 }
 
 /* Shared MODE SENSE(10) issuance for the two read-only optical pages
-   (AGENTS scope addendum 2026-06-13). PAGE_CONTROL = 00b (current
-   values). DBD=1 (no block descriptor) keeps the reply compact; the
-   pure walker tolerates a descriptor either way. SDK-verify the exact
-   ModeSense10 selector signature against docs/apple/SCSITaskLib.h before
-   shipping. Non-exclusive convenience: no lock. */
+   (AGENTS scope addendum 2026-06-13). Signature confirmed against
+   SCSITaskLib.h (LLBAA, DBD, PC, PAGE_CODE, buffer, bufferSize,
+   taskStatus, senseData). PC = 00b (current values); DBD=1 (no block
+   descriptor) keeps the reply compact, though the pure walker tolerates
+   a descriptor either way. Non-exclusive convenience: no lock. */
 static mos_error mos_internal_mode_sense10(mos_handle_t *h, uint8_t page,
                                            uint8_t *buf, size_t buf_len)
 {
@@ -923,8 +945,9 @@ static mos_error mos_internal_mode_sense10(mos_handle_t *h, uint8_t page,
     SCSI_Sense_Data sd = {0};
     IOReturn rc = (*h->mmc)->ModeSense10(
         h->mmc,
+        (UInt8)0,                /* LLBAA = 0                           */
         (UInt8)1,                /* DBD = 1 (disable block descriptor)  */
-        (UInt8)0x00,             /* PAGE_CONTROL = current values       */
+        (UInt8)0x00,             /* PC = current values                 */
         (UInt8)page,             /* PAGE_CODE                           */
         buf, (UInt16)buf_len,
         &st, &sd);

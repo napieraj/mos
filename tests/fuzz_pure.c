@@ -568,18 +568,12 @@ static void fuzz_perf(uint64_t iters)
             buf[2] = (uint8_t)(dl >> 8);  buf[3] = (uint8_t)dl;
         }
 
-        struct mos_drive_perf p;
-        memset(&p, 0xA5, sizeof p);
-        if (mos_internal_drive_perf_parse(buf, len, &p)) {
-            if (p.have && p.descriptor_count == 0) {
-                fprintf(stderr, "FUZZ FAIL: perf have w/ 0 descriptors "
-                        "(len=%zu)\n", len);
-                abort();
-            }
-        }
+        uint32_t max_kbps = 0;
+        uint16_t count = 0;
+        (void)mos_internal_perf_data_parse(buf, len, &max_kbps, &count);
         if ((i & 0xFFFF) == 0) {
-            (void)mos_internal_drive_perf_parse(NULL, len, &p);
-            (void)mos_internal_drive_perf_parse(buf, len, NULL);
+            (void)mos_internal_perf_data_parse(NULL, len, &max_kbps, &count);
+            (void)mos_internal_perf_data_parse(buf, len, NULL, NULL);
         }
         free(buf);
     }
