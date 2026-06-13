@@ -1,0 +1,37 @@
+{
+  "schema": "mos.metadata.v1",
+  "bsd": "/dev/disk4",
+  "captured_at": "2026-06-12T19:48:00.123Z",
+  "volume_path": "/Volumes/FAMILY_ARCHIVE_2026",
+  "disc": {
+    "profile": "0x0041",
+    "class": "bd",
+    "toc": {
+      "first_track": 1,
+      "last_track": 1,
+      "leadout_lba": 11826176,
+      "tracks": [
+        {
+          "track": 1,
+          "adr": 1,
+          "control": 4,
+          "data": true,
+          "start_lba": 0
+        }
+      ]
+    },
+    "disc_info": {
+      "status": "complete",
+      "erasable": false,
+      "sessions": 1,
+      "tracks": 1
+    },
+    "disc_structure": {
+      "disc_type": "BDR",
+      "manufacturer_id": "MILLEN",
+      "media_type_id": "MR1",
+      "revision": "0"
+    },
+    "volume_name": "FAMILY_ARCHIVE_2026"
+  }
+}

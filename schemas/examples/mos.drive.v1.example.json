@@ -1,0 +1,14 @@
+{
+  "schema": "mos.drive.v1",
+  "bsd": "/dev/disk4",
+  "registry_id": 4295021843,
+  "vendor": "HL-DT-ST",
+  "product": "BD-RE WH16NS40",
+  "revision": "1.05",
+  "serial": null,
+  "capabilities": {
+    "aacs": true,
+    "aacs_version": 78,
+    "bus_encryption": true
+  }
+}

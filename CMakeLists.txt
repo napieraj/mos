@@ -29,7 +29,7 @@ if(NOT APPLE)
     # SCSITaskLib and MMCDeviceInterface, which have no equivalent on
     # Linux or Windows. However, the pure layer (mos_pure.c,
     # mos_sense.c, mos_strings.c, mos_state_core.c, mos_watch_core.c,
-    # mos_config.c, mos_discinfo.c, mos_result.c in src/) is C with no
+    # mos_config.c, mos_discinfo.c, mos_discstruct.c, mos_result.c in src/) is C with no
     # Apple framework dependencies, and
     # the unit test suite (tests/test_*.c) links only against the pure
     # layer. Both build cleanly on Linux and serve as a developer
@@ -145,6 +145,7 @@ add_library(mos_pure STATIC
     src/mos_watch_core.c
     src/mos_config.c
     src/mos_discinfo.c
+    src/mos_discstruct.c
     src/mos_result.c
 )
 
@@ -173,6 +174,7 @@ if(APPLE)
 
 add_library(mos_core STATIC
     src/mos_scsi.c
+    src/mos_da.c
     src/mos_state.c
     src/mos_watch.c
     src/mos_dr.c
@@ -199,9 +201,19 @@ find_library(IOKIT_FRAMEWORK          IOKit          REQUIRED)
 find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
 find_library(DISCRECORDING_FRAMEWORK  DiscRecording  REQUIRED)
 
-# DiskArbitration left the library link line in DR pivot Phase 2a (the
-# watch's DA wake retired) and the project entirely with the probe
-# consolidation (2026-06-11, ROADMAP append): no target links DA.
+# DiskArbitration's callback roles (watch wake, probe control arm) left
+# in the DR pivot / probe consolidation and do not return; it relinked
+# 2026-06-12 for exactly one synchronous call — the mounted-volume
+# lookup in mos_da.c (narrow re-admission terms at the top of that
+# file; AGENTS.md append of the same date). It is an OPTIONAL dependency:
+# MOS_USE_DISKARBITRATION=OFF drops the framework and mos_query_volume
+# reports unmounted (null volume fields — no CLI/schema shape change).
+option(MOS_USE_DISKARBITRATION
+       "Link DiskArbitration for mounted-volume name/path enrichment in mos_query_volume; OFF reports unmounted" ON)
+if(MOS_USE_DISKARBITRATION)
+    find_library(DISKARBITRATION_FRAMEWORK DiskArbitration REQUIRED)
+endif()
+
 target_link_libraries(mos_core
     PUBLIC  mos_pure
             ${IOKIT_FRAMEWORK}
@@ -209,6 +221,11 @@ target_link_libraries(mos_core
             ${DISCRECORDING_FRAMEWORK}
     PRIVATE mos_warnings
 )
+if(MOS_USE_DISKARBITRATION)
+    target_link_libraries(mos_core PUBLIC ${DISKARBITRATION_FRAMEWORK})
+else()
+    target_compile_definitions(mos_core PRIVATE MOS_USE_DISKARBITRATION=0)
+endif()
 
 # ---- CLI binary ---------------------------------------------------------
 
@@ -216,6 +233,9 @@ add_executable(mos
     cli/main.c
     cli/common.c
     cli/status.c
+    cli/metadata.c
+    cli/drive.c
+    cli/features.c
     cli/list.c
     cli/watch.c
     cli/human.c
@@ -279,6 +299,7 @@ if(MOS_BUILD_TESTS)
         tests/test_human.c
         tests/test_config.c
         tests/test_discinfo.c
+        tests/test_discstruct.c
         tests/test_result.c
     )
     # Tests link against mos_pure only — by design (plus cli/human.c,
@@ -368,6 +389,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         src/mos_scsi.c
         src/mos_state.c
         src/mos_dr.c
+        src/mos_da.c
     )
     target_include_directories(mos_adapter_oneshot_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -386,6 +408,43 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
     )
     add_test(NAME adapter_oneshot COMMAND mos_adapter_oneshot_tests)
 
+    # Emit-and-validate harness: drive the REAL CLI emit_json paths
+    # (run_metadata/drive/features/query/list) against the fake and let
+    # tests/emit/validate_emitted.py validate stdout against the schema
+    # each document names. Closes the gap the branch review found —
+    # success-path JSON was never schema-checked (validate.py only sees
+    # hand-written fixtures; the CLI contract test only the error
+    # envelopes). Links the CLI verb layer (minus main.c) onto the same
+    # seam as the adapter tests.
+    add_executable(mos_emit_fixtures
+        tests/emit/emit_fixtures.c
+        tests/fake/mos_fake_apple.c
+        src/mos_scsi.c
+        src/mos_state.c
+        src/mos_dr.c
+        src/mos_da.c
+        cli/common.c
+        cli/io.c
+        cli/human.c
+        cli/status.c
+        cli/list.c
+        cli/metadata.c
+        cli/drive.c
+        cli/features.c
+    )
+    target_include_directories(mos_emit_fixtures PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/cli
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fake
+    )
+    target_link_libraries(mos_emit_fixtures PRIVATE
+        mos_pure ${COREFOUNDATION_FRAMEWORK})
+    set_target_properties(mos_emit_fixtures PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+
     # Phase 2: the watch lifecycle through the REAL mos_watch.c, on the
     # fake clock. Separate executable — its fake TU interposes libc/CF
     # symbols, and it has its own main.
@@ -396,6 +455,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         src/mos_scsi.c
         src/mos_state.c
         src/mos_dr.c
+        src/mos_da.c
         src/mos_watch.c
     )
     target_include_directories(mos_adapter_watch_tests PRIVATE

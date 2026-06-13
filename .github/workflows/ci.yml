@@ -163,6 +163,23 @@ jobs:
           }
           echo "OK: MOS_CLI_PROBE=OFF build compiles and rejects 'probe' correctly"
 
+      - name: DiskArbitration opt-out build (MOS_USE_DISKARBITRATION=OFF)
+        # Folded into this already-running macOS job rather than a
+        # dedicated runner: the opt-out only changes when mos_da.c or the
+        # DA wiring does, so a whole macOS runner per push is not worth
+        # it. Keeps the stub path in mos_da.c compiling and proves the
+        # framework is genuinely dropped from the link (otool) — every
+        # other macOS build exercises the default ON path.
+        run: |
+          set -e
+          cmake -B build-noda -DCMAKE_BUILD_TYPE=Release -DMOS_USE_DISKARBITRATION=OFF
+          cmake --build build-noda --target mos --parallel
+          if otool -L build-noda/bin/mos | grep -i DiskArbitration; then
+            echo "ERROR: DiskArbitration linked despite MOS_USE_DISKARBITRATION=OFF"
+            exit 1
+          fi
+          echo "OK: MOS_USE_DISKARBITRATION=OFF build compiles and links no DiskArbitration"
+
       - name: Verify public symbol hygiene
         # Both static libraries must export only symbols prefixed `mos_`
         # or `_mos_` (Mach-O underscored convention). Anything else means
@@ -285,11 +302,11 @@ jobs:
              tests/test_ioreturn.c \
              tests/test_state_core.c tests/test_watch_core.c \
              tests/test_render.c tests/test_human.c \
-             tests/test_config.c tests/test_discinfo.c \
+             tests/test_config.c tests/test_discinfo.c tests/test_discstruct.c \
              tests/test_result.c \
              /tmp/amalgamated.o \
              -framework IOKit -framework CoreFoundation \
-             -framework DiscRecording \
+             -framework DiscRecording -framework DiskArbitration \
              -o /tmp/amalgamated_tests
           # test_render.c registers the hostile-input render fixtures
           # via register_render_tests(); test_main.c calls that
@@ -401,7 +418,7 @@ jobs:
              tests/audit/nub_invariant_check.c \
              src/mos_pure.c src/mos_sense.c src/mos_strings.c \
              src/mos_state_core.c src/mos_watch_core.c \
-             src/mos_config.c src/mos_discinfo.c src/mos_result.c \
+             src/mos_config.c src/mos_discinfo.c src/mos_discstruct.c src/mos_result.c \
              -o /tmp/nub
           MOS_NUB_STATUS_SET=1 /tmp/nub
 
@@ -440,23 +457,28 @@ jobs:
              -I include -I src -I tests \
              src/mos_pure.c src/mos_sense.c src/mos_strings.c \
              src/mos_state_core.c src/mos_watch_core.c \
-             src/mos_config.c src/mos_discinfo.c src/mos_result.c \
+             src/mos_config.c src/mos_discinfo.c src/mos_discstruct.c src/mos_result.c \
              cli/human.c \
              tests/test_main.c tests/test_sense.c tests/test_bsd_name.c \
              tests/test_scsi_status.c tests/test_ioreturn.c \
              tests/test_state_core.c tests/test_watch_core.c \
              tests/test_render.c tests/test_human.c \
-             tests/test_config.c tests/test_discinfo.c tests/test_result.c \
+             tests/test_config.c tests/test_discinfo.c tests/test_discstruct.c tests/test_result.c \
              -o /tmp/strict/mos_tests_strict
           /tmp/strict/mos_tests_strict
 
   strict-adapter-build:
     # macOS adapter TUs compiled with stricter -Werror flags than the
     # default CMake mos_warnings interface. As of v0.4.0-dev the list
-    # is: src/mos_scsi.c, src/mos_watch.c, src/mos_state.c, src/mos_dr.c,
-    # and the cli/ sources (cli/probe.c compiled with -DMOS_CLI_PROBE,
-    # the ON preprocessor path; the OFF path is compiled by the
-    # build-and-test job's MOS_CLI_PROBE=OFF leg).
+    # is: src/mos_scsi.c, src/mos_watch.c, src/mos_state.c, src/mos_dr.c, src/mos_da.c,
+    # and the ADAPTER-FACING cli/ sources (cli/probe.c compiled with
+    # -DMOS_CLI_PROBE, the ON preprocessor path; the OFF path is compiled
+    # by the build-and-test job's MOS_CLI_PROBE=OFF leg). The pure-API
+    # CLI verbs (cli/metadata.c, cli/drive.c, cli/features.c) are
+    # deliberately NOT here: they reach the adapter only through the
+    # public mos.h API and contain no Apple SDK types, so this leg's
+    # SDK-signature -Werror classes cannot fire in them; they build under
+    # the default -Wall -Wextra in the build-and-test job.
     # The extra
     # flags target classes of bug that Linux CI can never see because
     # they involve Apple SDK signatures:
@@ -494,7 +516,7 @@ jobs:
           set -e
           mkdir -p /tmp/strict-adapter
           for src in src/mos_scsi.c src/mos_watch.c src/mos_state.c \
-                     src/mos_dr.c \
+                     src/mos_dr.c src/mos_da.c \
                      cli/main.c cli/common.c cli/status.c cli/list.c \
                      cli/watch.c cli/human.c cli/io.c cli/probe.c \
                      tests/test_watch_lifetime.c; do
@@ -576,6 +598,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0 (Node 24)
+        with:
+          # Pinned to 3.12 to match the schemas job: requirements-ci.txt
+          # hash-pins rpds-py 0.20.0, whose newest wheels stop at
+          # cp312/cp313. Used by the emit-and-validate step below.
+          python-version: '3.12'
+
       - name: Configure + build + run (ASan/UBSan)
         env:
           ASAN_OPTIONS: "abort_on_error=1"
@@ -594,3 +623,20 @@ jobs:
           ./build-adapter/bin/mos_adapter_oneshot_tests
           cmake --build build-adapter --target mos_adapter_watch_tests
           ./build-adapter/bin/mos_adapter_watch_tests
+
+      - name: Emit-and-validate (CLI emit_json output vs schemas)
+        # Builds the emit harness on the same ASan/UBSan fake seam and
+        # validates each verb's REAL success-path JSON against the schema
+        # it names — the guard the branch review added so emitter<->schema
+        # drift fails CI instead of shipping (validate.py only sees
+        # hand-written fixtures; the CLI contract test only error paths).
+        env:
+          ASAN_OPTIONS: "abort_on_error=1"
+          UBSAN_OPTIONS: "halt_on_error=1"
+        run: |
+          set -e
+          cmake --build build-adapter --target mos_emit_fixtures
+          # Same hash-pinned jsonschema the ubuntu schema job uses.
+          pip install --require-hashes -r schemas/requirements-ci.txt
+          python3 tests/emit/validate_emitted.py \
+            ./build-adapter/bin/mos_emit_fixtures schemas

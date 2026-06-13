@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/napieraj/mos/schemas/mos.features.v1.json",
+  "title": "mos.features.v1",
+  "description": "Raw MMC feature list emitted by `mos features --json`: one GET CONFIGURATION (RT=0) reply, one entry per feature descriptor in reply order. This is the medium-writability surface: a write feature's `current` flag answers whether the drive can write the medium mounted right now (e.g. code 0x0041 current with a blank BD-R inserted), complementing mos.metadata.v1's disc-side blank status. Codes are MMC feature numbers (MMC-6 §5.3); mos ships no name table — mapping is consumer-side. Deliberately carries NO current_profile: the state path's profile-only-on-READY rule (ARCHITECTURE §9) exists because drives cache stale profiles, and this document must not provide a bypass. Feature payloads are not exposed; payload facts go public as typed fields (mos.drive.v1 capabilities is the template).",
+  "type": "object",
+  "required": ["schema", "bsd", "registry_id", "features"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "mos.features.v1",
+      "description": "Schema identifier. Per-document versioned."
+    },
+    "bsd": {
+      "type": ["string", "null"],
+      "pattern": "^/dev/disk[0-9]+$",
+      "description": "Whole-disk dev node of the current media, or null when the drive is empty. The current flags are a function of this medium."
+    },
+    "registry_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Drive service IORegistry entry ID (attachment identity). 0 = unavailable."
+    },
+    "features": {
+      "type": "array",
+      "description": "Reply order preserved. May be empty only on a degenerate reply (the walker fails closed on malformed descriptors, ending the list early rather than emitting attacker-shaped entries).",
+      "items": {
+        "type": "object",
+        "required": ["code", "current", "persistent", "version"],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^0x[0-9a-f]{4}$",
+            "description": "MMC feature number, lowercase 0xNNNN."
+          },
+          "current": {
+            "type": "boolean",
+            "description": "Descriptor byte 2 bit 0: feature active for the currently mounted medium."
+          },
+          "persistent": {
+            "type": "boolean",
+            "description": "Descriptor byte 2 bit 1: feature always active regardless of medium."
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 15,
+            "description": "Descriptor byte 2 bits 5:2."
+          }
+        }
+      }
+    }
+  }
+}

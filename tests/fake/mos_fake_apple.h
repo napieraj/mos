@@ -61,6 +61,16 @@ void mos_fake_set_getconfig_reply(uint32_t task_status,
                                   const uint8_t *bytes, size_t len);
 void mos_fake_set_readdiscinfo_reply(uint32_t task_status,
                                      const uint8_t *bytes, size_t len);
+void mos_fake_set_toc_reply(uint32_t task_status,
+                            const uint8_t *bytes, size_t len);
+void mos_fake_set_disc_structure_reply(uint32_t task_status,
+                                       const uint8_t *bytes, size_t len);
+
+/* DiskArbitration scenario: make DADiskCopyDescription return a
+   description with VolumeName `name` and (when `path` non-NULL/non-"")
+   VolumePath `path`. NULL path models present-but-unmounted. Cleared
+   by mos_fake_reset() (no description at all). */
+void mos_fake_set_da_volume(const char *name, const char *path);
 
 /* Raw-CDB path (the GESN tray probe). Script the ExecuteTaskSync
    outcome: reply bytes copied into the task's data buffer, the task
@@ -91,6 +101,8 @@ typedef enum {
     MOS_FAKE_METHOD_GETCONFIG    = 1,
     MOS_FAKE_METHOD_READDISCINFO = 2,
     MOS_FAKE_METHOD_EXECUTE      = 3,  /* ExecuteTaskSync (raw GESN) */
+    MOS_FAKE_METHOD_READTOC      = 4,  /* ReadTableOfContents */
+    MOS_FAKE_METHOD_READDISCSTRUCT = 5,  /* ReadDiscStructure */
 } mos_fake_method;
 void mos_fake_set_method_ioreturn(mos_fake_method m, uint32_t io_return);
 

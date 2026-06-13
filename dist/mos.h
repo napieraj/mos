@@ -336,6 +336,175 @@ uint8_t         mos_disc_info_last_session_state(const mos_disc_info *d);
    tokens, same contract as mos_state_description(). */
 const char     *mos_disc_status_description(mos_disc_status s);
 
+/* ---- Table of contents (v0.4 typed API) ------------------------------ */
+
+/* Result of a TOC query. Opaque, handle-owned, read through the
+   accessors; valid until the next mos_query_toc() call or mos_close(). */
+typedef struct mos_toc mos_toc;
+
+/*
+ * Query READ TOC/PMA/ATIP format 0000b (LBA) — the normalized table of
+ * contents, the disc-identity primitive. Issued on demand through the
+ * non-exclusive ReadTableOfContents convenience method; never part of
+ * the state path. FAIL-CLOSED end to end: a hostile or incoherent TOC
+ * (out-of-range, duplicate, or non-ascending tracks; a header span the
+ * descriptor list doesn't cover) returns MOS_ERR_IO with *out NULL —
+ * identity from a half-parsed TOC would be a falsely-stable
+ * fingerprint. A TOC without a lead-out parses; identity consumers
+ * must require mos_toc_have_leadout(). Same media preconditions as
+ * mos_query_disc_info(). `out` REQUIRED (NULL → MOS_ERR_INVALID_ARG).
+ */
+mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out);
+
+/* Accessors. NULL-tolerant: a NULL object reads as 0 / false. Track
+   entries are indexed 0..mos_toc_track_count()-1; out-of-range reads
+   as 0. control bit 2 set = data track (MMC Q-channel control). */
+uint8_t  mos_toc_first_track(const mos_toc *t);
+uint8_t  mos_toc_last_track(const mos_toc *t);
+size_t   mos_toc_track_count(const mos_toc *t);
+bool     mos_toc_have_leadout(const mos_toc *t);
+uint32_t mos_toc_leadout_lba(const mos_toc *t);
+uint8_t  mos_toc_track_number(const mos_toc *t, size_t i);
+uint8_t  mos_toc_track_adr(const mos_toc *t, size_t i);
+uint8_t  mos_toc_track_control(const mos_toc *t, size_t i);
+uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i);
+
+/* ---- Mounted volume (v0.4, DiskArbitration-sourced) ------------------ */
+
+/*
+ * Mounted-volume name and mount path for the drive's current media —
+ * what the FILESYSTEM layer says, complementing the SCSI-derived facts
+ * above. One synchronous DiskArbitration description read; no
+ * callbacks, no commands to the drive, no elevation. Gated on the
+ * whole-disk IOMedia node existing: media absent or no nub means DA is
+ * never consulted and *mounted is false. That nub is the handle's
+ * OPEN-TIME bsd_unit (same open-time-capture semantics as
+ * mos_state_result_bsd_unit above), NOT refreshed per query — so a
+ * handle opened on an empty drive reports unmounted for its whole life
+ * even after media is inserted and a later query returns READY. Re-open
+ * the handle (or use the watch API) for a freshly-inserted disc's
+ * volume. UNMOUNTED IS NOT AN ERROR — it is also the common case for
+ * UDF video discs — so the result is MOS_OK with *mounted=false and
+ * empty buffers; only a NULL handle returns
+ * MOS_ERR_INVALID_ARG. Buffers are optional (NULL/0 skips that field)
+ * and always NUL-terminated; name may be "" even when mounted (a
+ * volume can lack a label). Recommended caps: name 256, path 1024 —
+ * a mount path that exceeds the cap reports unmounted rather than a
+ * truncated path. Volume names are disc-controlled bytes: escape them
+ * before terminals or structured output.
+ *
+ * OPTIONAL DEPENDENCY: DiskArbitration is the only thing this call
+ * needs. A build with MOS_USE_DISKARBITRATION=0 (no -framework
+ * DiskArbitration) keeps this function and its contract — it simply
+ * always reports unmounted (MOS_OK, *mounted=false, empty buffers), so
+ * the CLI and JSON shapes are identical with the volume fields null.
+ */
+mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
+                           char *name_buf, size_t name_cap,
+                           char *path_buf, size_t path_cap);
+
+/* ---- Drive capabilities (v0.4 typed API) ----------------------------- */
+
+/* Result of a drive-capabilities query. Opaque, handle-owned; valid
+   until the next mos_query_drive_caps() call or mos_close(). */
+typedef struct mos_drive_caps mos_drive_caps;
+
+/*
+ * Query the drive's AACS capability facts: one full GET CONFIGURATION
+ * (RT=0) through the non-exclusive convenience method, decoded by the
+ * bounds-checked feature walk. These are the spec-grounded fields a
+ * MakeMKV drive dump shows ("Highest AACS version", bus-encryption
+ * support) WITHOUT the LibreDrive status synthesis, which is a MakeMKV
+ * database property, not a drive property (design doc 2026-06-10).
+ * bus_encryption is the DRIVE-REPORTED support bit from the AACS
+ * feature payload (0x010D byte 0 bit 1) — a firmware assertion; the
+ * cryptographically signed BEC bit lives in the AACS drive
+ * certificate behind a raw REPORT KEY, which mos does not issue
+ * (scope doctrine: no raw verb without GESN-grade justification).
+ * Drives without the AACS feature (every non-BD unit) report
+ * aacs=false — that is data, not an error.
+ */
+mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out);
+
+/* Accessors. NULL-tolerant (NULL reads as 0/false). aacs_version and
+   bus_encryption are meaningful only when aacs is true. */
+bool    mos_drive_caps_aacs(const mos_drive_caps *c);
+uint8_t mos_drive_caps_aacs_version(const mos_drive_caps *c);
+bool    mos_drive_caps_bus_encryption(const mos_drive_caps *c);
+
+/* Drive identity for a held handle — the open-time directory data
+   (DiscRecording pre-parsed INQUIRY strings) and the drive service's
+   registry entry ID. Zero commands. Strings are borrowed from the
+   handle (valid until mos_close), NULL when the directory had no
+   identity; registry id 0 = unavailable. */
+const char *mos_handle_vendor(const mos_handle_t *h);
+const char *mos_handle_product(const mos_handle_t *h);
+const char *mos_handle_revision(const mos_handle_t *h);
+uint64_t    mos_handle_registry_id(const mos_handle_t *h);
+
+/* ---- Disc identity from disc structure (v0.4 typed API) -------------- */
+
+/* Result of a disc-structure identity query. Opaque, handle-owned;
+   valid until the next mos_query_disc_id() call or mos_close(). */
+typedef struct mos_disc_id mos_disc_id;
+
+/*
+ * Query the disc's REGISTERED identity from a Blu-ray Disc Information
+ * (DI) structure: READ DISC STRUCTURE (BD media type, format 0x00)
+ * through the non-exclusive ReadDiscStructure convenience method. This
+ * is the manufacturer/media-code data a drive reads to pick its write
+ * strategy — including, for Millenniata M-DISC BD, the registered
+ * manufacturer "MILLEN" / media type "MR1". BD-ONLY: the DI structure
+ * is Blu-ray; on CD/DVD media this returns MOS_ERR_IO (no DI), so
+ * callers gate on a BD profile. mos surfaces the registered ID bytes
+ * faithfully and does NOT classify them (MILLEN => M-DISC is the
+ * consumer's call, same division as MusicBrainz ids). `out` REQUIRED
+ * (NULL => MOS_ERR_INVALID_ARG); on success *out is valid until the
+ * next query or mos_close().
+ */
+mos_error mos_query_disc_id(mos_handle_t *h, const mos_disc_id **out);
+
+/* Accessors. NULL/absent reads as NULL. All four are disc-controlled
+   ASCII (fixed-width, trailing spaces stripped); escape before display.
+   disc_type is "BDR" (BD-R) / "BDW" (BD-RE) / "BDO" (BD-ROM) read from
+   the disc's own structure, independent of the MMC profile. */
+const char *mos_disc_id_disc_type(const mos_disc_id *d);
+const char *mos_disc_id_manufacturer(const mos_disc_id *d);
+const char *mos_disc_id_media_type(const mos_disc_id *d);
+const char *mos_disc_id_revision(const mos_disc_id *d);
+
+/* ---- Feature enumeration (v0.4 typed API) ----------------------------- */
+
+/* One MMC feature descriptor's header facts. Opaque; valid only inside
+   the callback (stack-backed per iteration, like mos_device_info_t). */
+typedef struct mos_feature_info mos_feature_info_t;
+
+uint16_t mos_feature_info_code(const mos_feature_info_t *f);
+/* True when the feature is active for the CURRENTLY mounted medium —
+   the writability answer: e.g. BD-R write support is feature 0x0041's
+   current bit with a writable BD-R inserted, false for the same drive
+   with a pressed disc in it. */
+bool     mos_feature_info_current(const mos_feature_info_t *f);
+bool     mos_feature_info_persistent(const mos_feature_info_t *f);
+uint8_t  mos_feature_info_version(const mos_feature_info_t *f);
+
+/*
+ * Enumerate every feature the drive reports: one GET CONFIGURATION
+ * (RT=0) through the non-exclusive convenience method, walked by the
+ * same bounds-checked iterator the typed queries use. The callback
+ * runs once per descriptor in reply order; return false to stop early
+ * (not an error). Feature PAYLOADS are not exposed — payload facts go
+ * public as typed queries (mos_query_drive_caps is the template).
+ * Codes are MMC feature numbers (0x0000 Profile List ... 0x010D AACS);
+ * consumers map them against MMC-6 §5.3. Same preconditions as
+ * mos_query_drive_caps; the feature list itself needs no media, but
+ * which features are CURRENT depends on what is mounted.
+ */
+mos_error mos_enumerate_features(mos_handle_t *h,
+                                 bool (*cb)(const mos_feature_info_t *f,
+                                            void *ctx),
+                                 void *ctx);
+
 /*
  * Diagnostic: issue a raw CDB against the drive. Requires exclusive
  * access; returns MOS_ERR_BUSY or MOS_ERR_EXCLUSIVE_ACCESS if the drive

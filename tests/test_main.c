@@ -30,6 +30,7 @@ void register_render_tests      (void);
 void register_human_tests       (void);
 void register_config_tests      (void);
 void register_discinfo_tests    (void);
+void register_discstruct_tests  (void);
 void register_result_tests      (void);
 
 int main(void)
@@ -63,6 +64,9 @@ int main(void)
 
     printf("\nREAD DISC INFORMATION decode (matched fixtures + hostile input):\n");
     register_discinfo_tests();
+
+    printf("\nREAD DISC STRUCTURE / BD DI decode (matched fixtures + hostile input):\n");
+    register_discstruct_tests();
 
     printf("\nOpaque result/event accessors:\n");
     register_result_tests();

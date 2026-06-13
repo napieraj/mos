@@ -98,3 +98,120 @@ If you have an optical drive and want to add realism:
    (e.g. 0x46 GET CONFIGURATION, 0x51 READ DISC INFO) and dump the buffer.
    `mos_raw_cdb` is public and works today; the `mos_capture` convenience
    wrapper does not exist yet.
+
+## Log-derived captures (2026-06-12/13, media-info stage 1)
+
+Fixtures reversed from PUBLISHED tool output through the tools' source
+code — the methodology the disc-status ground-truth table above
+established, applied to the new v0.4 commands. Tier: device capture
+(realism), with the attested-vs-scaffold split recorded per fixture.
+
+| File | Command | Models | Consumed by |
+|------|---------|--------|-------------|
+| `readtoc_f0_audio_cd_single.bin` | READ TOC/PMA/ATIP 0x43 fmt 0000b | real 4-track audio CD single | `test_config.c :: toc_parses_real_pony_cd_single` |
+| `readdiscinfo_blank_bdr.bin` | READ DISC INFORMATION 0x51 | blank BD-R (BH16NS40 / JVC-AM/S6L) | `test_discinfo.c :: discinfo_blank_bdr_decodes_blank` |
+| `readdiscinfo_complete_bdre.bin` | READ DISC INFORMATION 0x51 | complete BD-RE (BDR-209D / CMCMAG-CN2), first erasable=true | `test_discinfo.c :: discinfo_complete_bdre_decodes_erasable` |
+| `getconfig_aacs_wh16ns40.bin` | GET CONFIGURATION 0x46 (RT=0) | WH16NS40 1.05 AACS feature | `test_config.c :: aacs_caps_from_real_wh16ns40_capture` |
+
+### `readtoc_f0_audio_cd_single.bin` (44 bytes)
+Ginuwine "Pony" CD single (1996). Provenance: whipper rip log in
+whipper-team/whipper PR #382 — MusicBrainz disc
+`TX6lKZ481BHv1ZW6pd6007j6OY4-` (release 84e4ddc3-92fd-49d5-b15d-3be7f85c85ab),
+CDDB 2d047f04, AccurateRip-confirmed (confidence 24-34). LBAs derived
+from the log's attested `toc=1+4+86497+150+24687+47627+68002`
+(MB offset = TOC LBA + 150): tracks at 0 / 24537 / 47477 / 67852,
+lead-out 86347. Byte map per cdrecord `scsi_cdr.c struct trackdesc`
+(byte 1 = ADR<<4|control, bytes 4-7 BE32 LBA) and libcdio sector.c
+(LSN = LBA, pregap 150). ATTESTED: track count, every LBA, audio (the
+log records stereo, no pre-emphasis). ASSUMED (standard commercial
+pressing): ADR=1, copy-permit bit 0. Derivation note: a transcription
+error in the research pass (track 2 as 0x5FE9) was caught by
+recomputing from the toc string — 24537 = 0x5FD9; the toc string is
+the authority.
+
+### `readdiscinfo_blank_bdr.bin` (34 bytes)
+Blank BD-R, HL-DT-ST BD-RE BH16NS40 1.00, media ID JVC-AM/S6L.
+Provenance: complete dvd+rw-mediainfo log,
+github.com/kneutron/ansitest `burnUDFsystem2DVD+R` lines 58-89
+("Mounted Media: 41h, BD-R SRM / Disc status: blank / Number of
+Sessions: 1 / Next Track: 1 / Number of Tracks: 1 / State of Last
+Session: empty"). Byte map per dvd+rw-tools 7.1 `dvd+rw-mediainfo.cpp`
+lines 863-887: status = b2&3, last-session = (b2>>2)&3, sessions =
+b9<<8|b4, next track = b10<<8|b5, tracks = b11<<8|b6. Erasable clear
+(BD-R is write-once; note dvd+rw-mediainfo prints no "Erasable:" line
+— it consumes b2&0x10 only as a READ FORMAT CAPACITIES gate, so an
+"Erasable:" line in a found log means cdrecord -minfo, not this tool).
+Bytes 7-33 zero: DID_V/DBC_V/DAC_V clear, and the CD ATIP lead-in/out
+MSF fields (16-23) are not applicable to BD — zeroed, unattested.
+Corroborates `schemas/examples/mos.metadata.v1.blank_bdr.json`, whose
+disc_info values match this capture field-for-field.
+
+### `getconfig_aacs_wh16ns40.bin` (20 bytes)
+AACS feature (0x010D) for HL-DT-ST BD-RE WH16NS40, revision 1.05.
+Provenance: MakeMKV drive-info dump in blog.ssanj.net 2023-10-02
+(verified via its source mirror raw.githubusercontent.com/ssanj/
+babyloncandle-docker): "Bus encryption flags: 17", "Highest AACS
+version: 78". ATTESTED (one byte): payload byte 0 = 0x17 (per the
+libaacs/UDFclient bit map: RDC|WBE|BEC|BNG — the dump prints no 0x
+prefix; hex is the reading consistent with every observed LG value).
+This is the only descriptor byte the dump pins, and bus_encryption
+(byte 0 bit 1) is what the mirroring test asserts as load-bearing.
+
+NOT ATTESTED — payload byte 3 (AACS version) is illustrative scaffold.
+The value 78 is carried over from the dump's "Highest AACS version"
+line, but provenance-corrected (2026-06-13 research): that line is a
+MakeMKV-LOCAL statistic — the highest-numbered saved MKB-dump file in
+MakeMKV's data dir — NOT a read of the 0x010D descriptor. Forum t=6685
+shows it empirically (deleting MKB_v28_*.tgz drops the displayed value
+to the next saved file); moderator Woodstock confirms it is "rather
+than being read from the drive" (t=14372, t=17356). The earlier
+77-vs-81 split on two identical BU40N drives
+(automatic-ripping-machine#1558, jlesage/docker-makemkv#248) is
+consistent: the number tracks MakeMKV's MKB history, not firmware or
+descriptor state. So the drive's true descriptor byte 3 is unknown
+from any MakeMKV dump — a raw GET CONFIGURATION capture next to a dump
+from the same drive is the only thing that pins it (falsification
+matrix). Also unattested scaffold: header current profile (0x0000),
+feature-header byte 2, nonce block count, AGID count (all zeroed).
+
+### `readdiscinfo_complete_bdre.bin` (34 bytes)
+BD-RE, Pioneer BDR-209D firmware 1.51, media ID CMCMAG/CN2.
+Provenance: verbatim (`<pre>`-preserved, column-aligned)
+dvd+rw-mediainfo dump in the cdwrite@debian list, mail-archive
+msg14498 — "Mounted Media: 43h, BD-RE / Disc status: complete /
+Number of Sessions: 1 / State of Last Session: complete / Number of
+Tracks: 1". Byte map per dvd+rw-mediainfo.cpp (same lines as the
+blank BD-R above). ATTESTED: status (complete), sessions (1),
+last-session state (complete), tracks (1). INFERRED, not log-attested:
+the erasable bit (byte 2 bit 4) is set because 43h BD-RE is a
+rewritable profile — dvd+rw-mediainfo prints no "Erasable:" line (it
+consumes that bit only as a READ FORMAT CAPACITIES gate, source L901),
+so the bit's value is spec-derived from the medium type, and is the
+one field a hardware capture would confirm. first_track_last_session
+is likewise inferred (the tool suppresses "Next Track" once complete).
+The first erasable=true fixture.
+
+Corroborating datum from the same capture (not committed as a fixture):
+the `FABRICATED TOC:` block — `Track#1 : 14@0`, `Track#AA : 14@11826176`
+— is the drive's real READ TOC 0x43 reply (dvd+rw-mediainfo.cpp L1048
+issues the command; "FABRICATED" is the tool's label for the
+spec-mandated synthesis, not tool-side invention). The lead-out at
+11826176 equals the disc's formatted capacity, not a written extent —
+live corroboration of the overwritable-media lead-out wrinkle in the
+mos.metadata.v1 leadout_lba prose.
+
+### `readdiscstruct_bd_di_mdisc.bin` (116 bytes)
+Blu-ray Disc Information (DI) structure for an M-DISC BD-R — READ DISC
+STRUCTURE (0xAD), BD media type, format 0x00. A spec-shaped single DI
+unit carrying the values attested by the xorriso M-DISC capture
+(cdwrite list msg14517, "Media product: MILLEN/MR1/0"): Disc Type
+Identifier "BDR" at DI offset 8, Disc Manufacturer ID "MILLEN" at 100,
+Media Type ID "MR1" at 106, Product Revision '0' at 111. Offsets
+cross-verified across dvd+rw-mediainfo.cpp (di+4+100/+106), dvdisaster
+scsi-layer.c (buf[4+8] disc-type, 100/106), and libburn mmc.c
+(mmc_set_product_id 100/106/111). The physical write-parameter region
+(DI offsets 11..99) is zeroed and deliberately not decoded. Consumed by
+`test_discstruct.c :: discstruct_decodes_mdisc_bd_r`; the hostile-length
+and non-DI cases are inline in that file, and the fixed-offset/
+dual-length no-OOB property is fuzz/ASan-gated (tests/fuzz_pure.c
+phase 8, MILLEN-shaped and wild buffers, exact-size allocations).

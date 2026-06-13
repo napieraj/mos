@@ -1,0 +1,14 @@
+{
+  "schema": "mos.metadata.v1",
+  "bsd": null,
+  "captured_at": "2026-06-12T19:48:00.123Z",
+  "volume_path": null,
+  "disc": {
+    "profile": null,
+    "class": null,
+    "toc": null,
+    "disc_info": null,
+    "disc_structure": null,
+    "volume_name": null
+  }
+}

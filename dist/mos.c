@@ -11,14 +11,21 @@
  *        -framework IOKit \\
  *        -framework CoreFoundation \\
  *        -framework DiscRecording \\
+ *        -framework DiskArbitration \\
  *        -mmacosx-version-min=12.0
  *
  * Or add both files (mos.h and this one) to your existing build system
- * and make sure IOKit, CoreFoundation, and DiscRecording are on your
- * link line, with the deployment target pinned to macOS 12.0 to match
- * the CMake build's CMAKE_OSX_DEPLOYMENT_TARGET. Skipping
- * -framework DiscRecording fails to link at the DRCopyDeviceArray
- * reference in mos_dr.c.
+ * and make sure IOKit, CoreFoundation, DiscRecording, and
+ * DiskArbitration are on your link line, with the deployment target
+ * pinned to macOS 12.0 to match the CMake build's
+ * CMAKE_OSX_DEPLOYMENT_TARGET. Skipping -framework DiscRecording
+ * fails to link at the DRCopyDeviceArray reference in mos_dr.c.
+ *
+ * DiskArbitration is OPTIONAL: compile with -DMOS_USE_DISKARBITRATION=0
+ * and you may drop -framework DiskArbitration entirely. mos_query_volume
+ * then always reports unmounted (volume name/path null) — the API, CLI,
+ * and JSON shapes are unchanged. With the default (flag unset), the
+ * DADiskCopyDescription reference in mos_da.c requires the framework.
  *
  * See mos.h for the API.
  * See https://github.com/napieraj/mos for source, tests,
@@ -251,7 +258,7 @@ typedef struct {
     uint32_t start_lba;
 } mos_toc_entry;
 
-typedef struct {
+typedef struct mos_toc {   /* tagged: mos.h forward-declares it opaquely */
     uint8_t       first_track;
     uint8_t       last_track;
     uint8_t       track_count;
@@ -287,6 +294,43 @@ size_t mos_internal_trusted_len(size_t allocated, size_t transferred,
 
 bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
                                       size_t *cursor, mos_config_feature *out);
+
+/* First feature matching `feature_code`, via the walker (same trust
+   bounds). False when absent or the walk fails closed. The v0.4 drive
+   verb reads AACS (0x010D) presence/version through this. */
+bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
+                                      uint16_t feature_code,
+                                      mos_config_feature *out);
+
+/* AACS capability facts from a full (RT=0) GET CONFIGURATION response —
+   the spec-grounded subset of what MakeMKV's drive dump shows, WITHOUT
+   the LibreDrive synthesis (design doc 2026-06-10 + 06-12 addendum).
+   bus_encryption is the DRIVE-REPORTED support bit (feature 0x010D
+   payload byte 0 bit 1, per libaacs/UDFclient agreement; the
+   authoritative signed BEC bit lives in the AACS drive certificate
+   behind REPORT KEY, out of scope). Feature present but payload
+   truncated (< 4 bytes) is malformed and reads as absent — fail
+   closed, same rule as the walker. */
+typedef struct mos_drive_caps {
+    bool    aacs;            /* feature 0x010D present in the walk      */
+    uint8_t aacs_version;    /* payload byte 3; 0 when aacs is false    */
+    bool    bus_encryption;  /* payload byte 0 bit 1; false when absent */
+} mos_drive_caps;
+
+void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
+                                        mos_drive_caps *out);
+
+/* One feature for the public enumeration (mos_enumerate_features) —
+   the descriptor header facts only. The payload bytes stay internal:
+   exposing a borrowed slice across the public ABI buys lifetime rules
+   no current consumer needs; a typed decode (the AACS caps above) is
+   how payload facts go public. Tagged: mos.h forward-declares it. */
+typedef struct mos_feature_info {
+    uint16_t code;
+    bool     current;
+    bool     persistent;
+    uint8_t  version;
+} mos_feature_info;
 
 /* Current Profile from a GET CONFIGURATION response; false ("no
    profile") unless the reply's own Data Length covers the field, so a
@@ -324,6 +368,36 @@ struct mos_disc_info {
  * (v0.4+). Layout and safety contract at the decoder (mos_discinfo.c). */
 bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
                                   mos_disc_info *out);
+
+/* ---- READ DISC STRUCTURE / BD Disc Information decode (mos_discstruct.c) -- *
+ *
+ * The disc's REGISTERED identity from a Blu-ray Disc Information (DI)
+ * reply (READ DISC STRUCTURE 0xAD, BD media type, format 0x00): the
+ * Disc Manufacturer ID, Media Type ID, and Product Revision. Fixed-
+ * width ASCII fields read at CONSTANT offsets inside the first DI unit;
+ * no device-supplied value is ever used as an offset or length (the
+ * only device length, the structure-data-length header, can only shrink
+ * the trusted region), and no payload byte is dereferenced — bytes are
+ * copied verbatim into these fixed buffers and the CLI layer escapes
+ * them, same as INQUIRY identity. Classification (e.g. manufacturer
+ * "MILLEN" => M-DISC) is the consumer's, not mos's. Strings are NUL-
+ * terminated with fixed-width space padding stripped; "" when the DI is
+ * absent. New fields append at the END (ABI-safe; accessors are the
+ * contract). */
+struct mos_disc_id {
+    char disc_type[4];      /* DI+8,   3 bytes + NUL: "BDR"/"BDW"/"BDO" */
+    char manufacturer[7];   /* DI+100, 6 bytes + NUL */
+    char media_type[4];     /* DI+106, 3 bytes + NUL */
+    char revision[2];       /* DI+111, 1 byte  + NUL */
+};
+
+/* Parse a BD DI reply into *out. True only when the 'DI' signature is
+ * present AND the trusted region (min of `len` and the reply's declared
+ * length) reaches the product-revision byte; false (and *out emptied)
+ * otherwise. Pure, fixed-offset, no-OOB — fuzz/ASan-gated by
+ * tests/fuzz_pure.c and tests/test_discstruct.c. */
+bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
+                                   struct mos_disc_id *out);
 
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
@@ -650,6 +724,15 @@ struct mos_handle {
     /* Handle-owned disc-information result (mos_query_disc_info).
        Overwritten each query; plain values, no borrowed pointers. */
     struct mos_disc_info      disc_info;
+
+    /* Handle-owned TOC result (mos_query_toc). Same terms. */
+    struct mos_toc            toc;
+
+    /* Handle-owned drive-caps result (mos_query_drive_caps). Same terms. */
+    struct mos_drive_caps     caps;
+
+    /* Handle-owned disc-id result (mos_query_disc_id). Same terms. */
+    struct mos_disc_id        disc_id;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
@@ -694,6 +777,17 @@ uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name);
    the snapshot builder and the watch doorbell's per-device filter. */
 uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path);
 
+/* Bounded CFTypeRef-string -> C-buffer copy (mos_dr.c); "" on
+   non-string, oversize, or conversion failure. Always terminates. */
+void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap);
+
+/* One-shot DiskArbitration mounted-volume lookup (mos_da.c). True only
+   when mounted; gate calls on bsd_unit present. No callbacks, no run
+   loop — see the narrow re-admission terms at the top of mos_da.c. */
+bool mos_internal_da_volume(const char *bsd_name,
+                            char *name_buf, size_t name_cap,
+                            char *path_buf, size_t path_cap);
+
 /* Extract one device's snapshot (registry id, bsd unit, identity) from
    a DRDeviceRef passed as CFTypeRef (mos_internal.h stays free of
    DiscRecording types). False when the device's registry path doesn't
@@ -722,10 +816,7 @@ mos_error mos_internal_mmc_test_unit_ready    (mos_handle_t *h,
                                                uint8_t sense[18]);
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile);
 
-/* STUB (v0.4, hardware-gated): the IOKit half of GET CONFIGURATION's feature
- * surface. Returns MOS_ERR_UNSUPPORTED until the RT=0 issuance is written and
- * HW-validated. See mos_scsi.c for the walker seam. */
-mos_error mos_internal_mmc_get_features       (mos_handle_t *h);
+
 
 /* Open a drive by its IORegistry entry ID — the identity-stable
    primitive: the kernel resolves IORegistryEntryIDMatching atomically,
@@ -1249,6 +1340,23 @@ bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
     return true;
 }
 
+/* Find one feature by code: the walker applied until a match. Same
+   trust bounds by construction; first match wins (MMC lists each
+   feature at most once — a duplicate from a hostile device yields the
+   earlier copy, never a re-scan). */
+bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
+                                      uint16_t feature_code,
+                                      mos_config_feature *out)
+{
+    if (!out) return false;
+    size_t cursor = 8;                            /* skip the feature header */
+    mos_config_feature f;
+    while (mos_internal_config_next_feature(buf, len, &cursor, &f)) {
+        if (f.feature_code == feature_code) { *out = f; return true; }
+    }
+    return false;
+}
+
 /* Current Profile = feature-header bytes 6-7, gated on the header's own
    Data Length (bytes 0-3, counting bytes that FOLLOW it): the profile
    field exists only when the drive claims >= 4 following bytes. The gate
@@ -1266,6 +1374,22 @@ bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
 
     *profile = (uint16_t)(((uint16_t)buf[6] << 8) | buf[7]);
     return true;
+}
+
+/* Contract in mos_pure.h. */
+void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
+                                        mos_drive_caps *out)
+{
+    if (!out) return;
+    *out = (mos_drive_caps){0};
+
+    mos_config_feature f;
+    if (!mos_internal_config_find_feature(buf, len, 0x010D, &f)) return;
+    if (f.data_len < 4 || !f.data) return;    /* malformed: reads as absent */
+
+    out->aacs           = true;
+    out->bus_encryption = (f.data[0] & 0x02u) != 0;
+    out->aacs_version   = f.data[3];
 }
 
 /* ==== src/mos_discinfo.c ==== */
@@ -1331,6 +1455,95 @@ bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
     out->number_of_sessions       = (uint16_t)(((uint16_t)buf[9]  << 8) | buf[4]);
     out->first_track_last_session = (uint16_t)(((uint16_t)buf[10] << 8) | buf[5]);
     out->last_track_last_session  = (uint16_t)(((uint16_t)buf[11] << 8) | buf[6]);
+    return true;
+}
+/* ==== src/mos_discstruct.c ==== */
+/*
+ * mos_discstruct.c — pure, bounds-safe decode of a READ DISC STRUCTURE
+ * (MMC-5 0xAD) Blu-ray Disc Information (DI) reply: the disc's
+ * registered Disc Manufacturer ID + Media Type ID.
+ *
+ * No IOKit. The IOKit shell issues READ DISC STRUCTURE (BD media type,
+ * format 0x00) via the ReadDiscStructure convenience method into a
+ * fixed, zero-initialized buffer and hands that buffer plus its size
+ * here. Every length and string byte is device/disc-reported and
+ * therefore hostile; this file keeps the declared length from steering
+ * a read outside [buf, buf+len), and copies the ID bytes verbatim into
+ * fixed buffers (the CLI layer escapes them at emit, same as INQUIRY).
+ *
+ * Layout (response buffer):
+ *   [0..1] Disc Structure Data Length (BE) — bytes available AFTER this
+ *          field; the response occupies 2 + value bytes.
+ *   [2..3] reserved
+ *   [4..]  the Disc Information (DI), a sequence of 112-byte DI units.
+ *          The first unit carries the identity:
+ *            [4+0..1]   "DI" signature
+ *            [4+8..10]  Disc Type Identifier (3 bytes) "BDR"/"BDW"/"BDO"
+ *            [4+100..105] Disc Manufacturer ID (6 bytes)  e.g. "MILLEN"
+ *            [4+106..108] Media Type ID        (3 bytes)  e.g. "MR1"
+ *            [4+111]      Product Revision Number (1 byte) e.g. '0'
+ *
+ * The DI offsets (8 / 100 / 106 / 111) are MMC-5 / BDA-registered and
+ * were cross-verified against dvd+rw-mediainfo.cpp (di+4+100, di+4+106),
+ * dvdisaster scsi-layer.c (buf[4+8] disc-type, 100/106), and libburn
+ * mmc.c (mmc_set_product_id 100, 106, 111). The physical write-parameter
+ * region (offsets 11..99) is deliberately NOT decoded — no consumer
+ * value, and its sub-field packing is not multiply-confirmed. For
+ * Millenniata
+ * M-DISC BD-R the registered values are manufacturer "MILLEN", media
+ * type "MR1" — but classification (MILLEN => M-DISC) is the CONSUMER's,
+ * not mos's: this decode surfaces the registered ID bytes faithfully
+ * and stops there (scope doctrine; same division as MusicBrainz ids).
+ *
+ * No-OOB property gated headless under ASan/UBSan by
+ * tests/test_discstruct.c.
+ */
+
+
+#define DI_HDR       4u                  /* 2-byte length + 2 reserved   */
+#define DI_SIG_HI    (DI_HDR + 0u)       /* 'D'                          */
+#define DI_SIG_LO    (DI_HDR + 1u)       /* 'I'                          */
+#define DI_DISCTYPE  (DI_HDR + 8u)       /* 3 bytes: BDR/BDW/BDO         */
+#define DI_MANUF     (DI_HDR + 100u)     /* 6 bytes                      */
+#define DI_MEDIA     (DI_HDR + 106u)     /* 3 bytes                      */
+#define DI_REVISION  (DI_HDR + 111u)     /* 1 byte                       */
+#define DI_MIN_LEN   (DI_REVISION + 1u)  /* must reach the revision byte */
+
+/* Copy a fixed-width DI field verbatim, NUL-terminate, then strip
+   trailing spaces (the field is space-padded — same convention as the
+   INQUIRY identity copies). `dst` holds n+1 bytes. */
+static void mos_internal_di_copy(const uint8_t *src, size_t n, char *dst)
+{
+    size_t i;
+    for (i = 0; i < n; i++) dst[i] = (char)src[i];
+    dst[i] = '\0';
+    while (i > 0 && dst[i - 1] == ' ') dst[--i] = '\0';
+}
+
+bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
+                                   struct mos_disc_id *out)
+{
+    if (!out) return false;
+    *out = (struct mos_disc_id){0};
+    if (!buf) return false;
+
+    /* Need the fixed identity region present per BOTH the buffer and the
+       reply's own declared length. Declared length only ever shrinks the
+       trusted region (computed wide so the +2 cannot wrap). */
+    if (len < DI_MIN_LEN) return false;
+    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    size_t end = (len < declared) ? len : declared;
+    if (end < DI_MIN_LEN) return false;
+
+    /* The DI signature gates the whole decode: a reply that is not a DI
+       structure (wrong media type, drive returned something else) is
+       refused rather than read as identity. */
+    if (buf[DI_SIG_HI] != 'D' || buf[DI_SIG_LO] != 'I') return false;
+
+    mos_internal_di_copy(&buf[DI_DISCTYPE], 3, out->disc_type);
+    mos_internal_di_copy(&buf[DI_MANUF],    6, out->manufacturer);
+    mos_internal_di_copy(&buf[DI_MEDIA],    3, out->media_type);
+    mos_internal_di_copy(&buf[DI_REVISION], 1, out->revision);
     return true;
 }
 
@@ -1510,6 +1723,113 @@ uint16_t mos_disc_info_last_track_last_session(const mos_disc_info *d)
 uint8_t mos_disc_info_last_session_state(const mos_disc_info *d)
 {
     return d ? d->last_session_state : 0;
+}
+
+/* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
+ * NULL- and range-tolerant like every accessor above; the entry index
+ * is bounded by track_count, which the fail-closed parser proved
+ * covers exactly first..last. */
+
+uint8_t mos_toc_first_track(const mos_toc *t) { return t ? t->first_track : 0; }
+uint8_t mos_toc_last_track(const mos_toc *t)  { return t ? t->last_track  : 0; }
+
+size_t mos_toc_track_count(const mos_toc *t)
+{
+    return t ? (size_t)t->track_count : 0;
+}
+
+bool mos_toc_have_leadout(const mos_toc *t)
+{
+    return t ? t->have_leadout : false;
+}
+
+uint32_t mos_toc_leadout_lba(const mos_toc *t)
+{
+    return (t && t->have_leadout) ? t->leadout_lba : 0;
+}
+
+uint8_t mos_toc_track_number(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].track : 0;
+}
+
+uint8_t mos_toc_track_adr(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].adr : 0;
+}
+
+uint8_t mos_toc_track_control(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].control : 0;
+}
+
+uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].start_lba : 0;
+}
+
+/* ---- mos_drive_caps accessors (mos_query_drive_caps) ----------------- */
+
+bool mos_drive_caps_aacs(const mos_drive_caps *c)
+{
+    return c ? c->aacs : false;
+}
+
+uint8_t mos_drive_caps_aacs_version(const mos_drive_caps *c)
+{
+    return c ? c->aacs_version : 0;
+}
+
+bool mos_drive_caps_bus_encryption(const mos_drive_caps *c)
+{
+    return c ? c->bus_encryption : false;
+}
+
+/* ---- mos_feature_info accessors (mos_enumerate_features) ------------- */
+
+uint16_t mos_feature_info_code(const mos_feature_info_t *f)
+{
+    return f ? f->code : 0;
+}
+
+bool mos_feature_info_current(const mos_feature_info_t *f)
+{
+    return f ? f->current : false;
+}
+
+bool mos_feature_info_persistent(const mos_feature_info_t *f)
+{
+    return f ? f->persistent : false;
+}
+
+uint8_t mos_feature_info_version(const mos_feature_info_t *f)
+{
+    return f ? f->version : 0;
+}
+
+/* ---- mos_disc_id accessors (mos_query_disc_id) ---------------------- *
+ * Borrowed strings into the handle-owned result; "" reads as NULL so the
+ * emitters suppress empty fields uniformly. Disc-controlled bytes — the
+ * CLI layer escapes them. */
+
+const char *mos_disc_id_disc_type(const mos_disc_id *d)
+{
+    return (d && d->disc_type[0]) ? d->disc_type : NULL;
+}
+
+const char *mos_disc_id_manufacturer(const mos_disc_id *d)
+{
+    return (d && d->manufacturer[0]) ? d->manufacturer : NULL;
+}
+
+const char *mos_disc_id_media_type(const mos_disc_id *d)
+{
+    return (d && d->media_type[0]) ? d->media_type : NULL;
+}
+
+const char *mos_disc_id_revision(const mos_disc_id *d)
+{
+    return (d && d->revision[0]) ? d->revision : NULL;
 }
 
 /* ==== src/mos_state_core.c ==== */
@@ -3741,9 +4061,10 @@ bool mos_bsd_dev_node(int64_t unit, char *out, size_t out_cap)
    identity fields whose real domain is ≤16 bytes, an absurdly long
    value is hostile data and empty is the right answer. dst is always
    NUL-terminated. Non-string values (a hostile or surprising
-   dictionary) also yield "". */
-static void mos_internal_dr_copy_string(CFTypeRef value,
-                                        char *dst, size_t cap)
+   dictionary) also yield "". Shared with the DA volume lookup
+   (mos_da.c), which reads volume-controlled strings under the same
+   trust terms (decl in mos_internal.h). */
+void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap)
 {
     if (!dst || cap == 0) return;
     dst[0] = 0;
@@ -3943,6 +4264,128 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
     }
     CFRelease(dev);
     return ok;
+}
+
+/* ==== src/mos_da.c ==== */
+/*
+ * mos_da.c — one-shot DiskArbitration volume lookup.
+ *
+ * DA's RE-ADMISSION IS NARROW (AGENTS.md append, 2026-06-12): the
+ * 2026-06-11 retirement removed DA's CALLBACK roles (the watch's wake
+ * legs, the probe's control arm) and those do not return. This file is
+ * the other modality: a synchronous DADiskCopyDescription read of what
+ * the mounted-volume layer already knows — no session scheduling, no
+ * run loop, no callbacks, no commands to the drive. Callers gate on
+ * the media nub existing (bsd_unit present); with no IOMedia node
+ * there is nothing mounted and DA is never consulted.
+ *
+ * Trust terms: the description dictionary is system-supplied but the
+ * values are volume-controlled (a hostile disc names its volume), so
+ * string extraction goes through the same bounded, type-checked,
+ * fail-to-empty seam as the DR identity copies. The CLI's output
+ * escaping guards the terminal/JSON regardless.
+ */
+
+
+/* DiskArbitration is an OPTIONAL link dependency. Build with
+   -DMOS_USE_DISKARBITRATION=0 (and drop -framework DiskArbitration) and
+   mos_query_volume always reports unmounted — volume name/path null,
+   which the CLI and JSON schemas already permit, so no shape changes.
+   Default on (matches the linked build). */
+#ifndef MOS_USE_DISKARBITRATION
+#define MOS_USE_DISKARBITRATION 1
+#endif
+
+#if MOS_USE_DISKARBITRATION
+#include <DiskArbitration/DiskArbitration.h>
+
+/* Mounted-volume name and mount path for a whole-disk bsd_name
+   ("diskN"). True only when DA has a description AND the volume is
+   mounted (VolumePath present); name may still be empty ("") if the
+   key is absent or hostile — the caller maps empty to null. Both
+   buffers are always NUL-terminated. */
+bool mos_internal_da_volume(const char *bsd_name,
+                            char *name_buf, size_t name_cap,
+                            char *path_buf, size_t path_cap)
+{
+    if (name_buf && name_cap) name_buf[0] = 0;
+    if (path_buf && path_cap) path_buf[0] = 0;
+    if (!bsd_name || !bsd_name[0]) return false;
+
+    DASessionRef session = DASessionCreate(kCFAllocatorDefault);
+    if (!session) return false;
+
+    bool      mounted = false;
+    DADiskRef disk    = DADiskCreateFromBSDName(kCFAllocatorDefault,
+                                                session, bsd_name);
+    CFDictionaryRef desc = disk ? DADiskCopyDescription(disk) : NULL;
+
+    if (desc) {
+        /* VolumePath is the mount proof: DA describes unmounted media
+           too, and an absent/non-URL path means "not mounted", not an
+           error. CFURLGetFileSystemRepresentation fails (false) when
+           the path exceeds the buffer; that yields not-mounted rather
+           than a truncated path a consumer might chdir into. */
+        CFTypeRef path = CFDictionaryGetValue(
+            desc, kDADiskDescriptionVolumePathKey);
+        if (path && CFGetTypeID(path) == CFURLGetTypeID() &&
+            path_buf && path_cap &&
+            CFURLGetFileSystemRepresentation((CFURLRef)path, true,
+                                             (UInt8 *)path_buf,
+                                             (CFIndex)path_cap)) {
+            mounted = true;
+            mos_internal_dr_copy_string(
+                CFDictionaryGetValue(desc, kDADiskDescriptionVolumeNameKey),
+                name_buf, name_cap);
+        } else if (path_buf && path_cap) {
+            path_buf[0] = 0;
+        }
+        CFRelease(desc);
+    }
+
+    if (disk)    CFRelease(disk);
+    CFRelease(session);
+    return mounted;
+}
+
+#else  /* !MOS_USE_DISKARBITRATION */
+
+/* No DiskArbitration linked: the mount layer is not consulted, so every
+   disc reports unmounted. Buffers cleared, false returned — the same
+   contract as a disk DA cannot describe; mos_query_volume surfaces null
+   volume fields and the emitters suppress them as usual. */
+bool mos_internal_da_volume(const char *bsd_name,
+                            char *name_buf, size_t name_cap,
+                            char *path_buf, size_t path_cap)
+{
+    (void)bsd_name;
+    if (name_buf && name_cap) name_buf[0] = 0;
+    if (path_buf && path_cap) path_buf[0] = 0;
+    return false;
+}
+
+#endif /* MOS_USE_DISKARBITRATION */
+
+/* Public wrapper (contract in mos.h): the nub gate lives HERE, so no
+   caller can consult DA for a drive the kernel says holds no media. */
+mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
+                           char *name_buf, size_t name_cap,
+                           char *path_buf, size_t path_cap)
+{
+    if (mounted) *mounted = false;
+    if (name_buf && name_cap) name_buf[0] = 0;
+    if (path_buf && path_cap) path_buf[0] = 0;
+    if (!h) return MOS_ERR_INVALID_ARG;
+
+    if (h->bsd_unit < 0) return MOS_OK;     /* no IOMedia node: unmounted */
+
+    char bsd[24];
+    if (!mos_bsd_name_format(h->bsd_unit, bsd, sizeof bsd)) return MOS_OK;
+
+    bool m = mos_internal_da_volume(bsd, name_buf, name_cap,
+                                    path_buf, path_cap);
+    if (mounted) *mounted = m;
+    return MOS_OK;
 }
 
 /* ==== src/mos_scsi.c ==== */
@@ -4578,36 +5021,173 @@ mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out)
     return MOS_OK;
 }
 
-/*
- * mos_internal_mmc_get_features — STUB (v0.4, hardware-gated).
- *
- * The IOKit half of the GET CONFIGURATION feature surface. Its pure,
- * bounds-safe walker (mos_internal_config_next_feature in mos_config.c) is
- * already written and fuzz/ASan-tested; this is the production caller it
- * waits for. Wired as a real caller over an empty header — so the walker is
- * a live seam, not an orphan with only test callers — and returns
- * UNSUPPORTED until the RT=0 issuance (header + all features) is written and
- * HW-validated. The walker owns the bounds; this half must not re-derive
- * them, only issue the command and consume features.
- */
-mos_error mos_internal_mmc_get_features(mos_handle_t *h)
+mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
 {
-    if (!h || !h->mmc) return MOS_ERR_INVALID_ARG;
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
-    uint8_t            buf[8] = {0};   /* TODO(v0.4): GetConfiguration(RT=0) fills a real,
-                                          larger buffer — parse bound via
-                                          mos_internal_trusted_len (contract O-4):
-                                          min(allocated, realizedByteCount), header
-                                          Data Length only ever shrinks it. */
-    size_t             cursor = 8;     /* past the 8-byte feature header */
-    mos_config_feature feat;
+    /* Format 0000b worst case: 4-byte header + 100 descriptors
+       (99 tracks + lead-out) x 8. The convenience method reports no
+       realized count, so sizeof buf is the trusted length (O-4); the
+       reply's own TOC Data Length only ever shrinks the parse. MSF=0
+       (LBA), starting track 0 (= from first). Non-exclusive: no lock. */
+    uint8_t         buf[4 + 100 * 8] = {0};
+    SCSITaskStatus  st               = 0;
+    SCSI_Sense_Data sd               = {0};
 
-    while (mos_internal_config_next_feature(buf, sizeof buf, &cursor, &feat)) {
-        /* TODO(v0.4): record feat.feature_code / feat.current / feat.data
-           into the (not-yet-designed) features output. */
+    IOReturn rc = (*h->mmc)->ReadTableOfContents(
+        h->mmc, 0 /*LBA*/, 0x00 /*format*/, 0 /*from first track*/,
+        buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
     }
 
-    return MOS_ERR_UNSUPPORTED;        /* not implemented until the issuance lands */
+    if (!mos_internal_toc_parse(buf, sizeof(buf), &h->toc)) {
+        return MOS_ERR_IO;   /* incoherent/hostile TOC — refused whole */
+    }
+    *out = &h->toc;
+    return MOS_OK;
+}
+
+mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* RT=0: header + every feature the drive implements. 1024 bytes
+       holds real-world feature lists several times over (a loaded
+       BD-RE's full list runs ~400 bytes); a longer hostile claim is
+       simply clamped — the walker trusts sizeof buf, and the reply's
+       own lengths only ever shrink the walk (O-4). Decode is the pure,
+       fuzz-checked mos_internal_aacs_caps_from_config: feature absent
+       (every non-BD drive) reads as aacs=false, which is data, not an
+       error. Non-exclusive convenience call: no lock interaction. */
+    uint8_t         buf[1024] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->GetConfiguration(
+        h->mmc,
+        (UInt8)0x00,             /* RT = 00b, all features              */
+        (UInt16)0x0000,          /* starting feature number             */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    mos_internal_aacs_caps_from_config(buf, sizeof(buf), &h->caps);
+    *out = &h->caps;
+    return MOS_OK;
+}
+
+mos_error mos_enumerate_features(mos_handle_t *h,
+                                 bool (*cb)(const mos_feature_info_t *f,
+                                            void *ctx),
+                                 void *ctx)
+{
+    if (!h || !h->mmc || !cb) return MOS_ERR_INVALID_ARG;
+
+    /* Same issuance and trust terms as mos_query_drive_caps above:
+       RT=0 into a zero-init 1024-byte buffer, sizeof buf is the
+       trusted length, reply lengths only shrink the walk (O-4). */
+    uint8_t         buf[1024] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->GetConfiguration(
+        h->mmc, (UInt8)0x00, (UInt16)0x0000,
+        buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    size_t             cursor = 8;
+    mos_config_feature feat;
+    while (mos_internal_config_next_feature(buf, sizeof buf, &cursor, &feat)) {
+        mos_feature_info info = {
+            .code       = feat.feature_code,
+            .current    = feat.current,
+            .persistent = feat.persistent,
+            .version    = feat.version,
+        };
+        if (!cb(&info, ctx)) break;     /* caller stop, not an error */
+    }
+    return MOS_OK;
+}
+
+mos_error mos_query_disc_id(mos_handle_t *h, const mos_disc_id **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* One-shot read of the full BD Disc Information into a fixed,
+       zero-init buffer (BD DI maxes ~3588 bytes; 4096 covers it). We
+       deliberately do NOT do dvd+rw-mediainfo's two-phase
+       read-the-length-then-reallocate dance: a single fixed buffer
+       means no device-reported length ever drives an allocation or a
+       second transfer. sizeof buf is the trusted length handed to the
+       pure decoder (O-4); the reply's own Disc Structure Data Length
+       can only SHRINK the parse, never extend it, and an under-filled
+       reply leaves zeros that fail the 'DI' gate. MEDIA_TYPE=1 (BD),
+       FORMAT=0x00 (Disc Information), ADDRESS/LAYER 0. Non-exclusive
+       convenience call: no lock. */
+    uint8_t         buf[4096] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x01,             /* MEDIA_TYPE = Blu-ray            */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x00,             /* FORMAT = Disc Information (DI)    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_bd_disc_id_parse(buf, sizeof(buf), &h->disc_id)) {
+        return MOS_ERR_IO;   /* not a DI reply (non-BD, or refused) */
+    }
+    *out = &h->disc_id;
+    return MOS_OK;
+}
+
+/* Open-time directory identity, exposed for the drive verb: zero
+   commands, same borrowed-string terms as the state result's copies
+   (which point into these same buffers). */
+const char *mos_handle_vendor(const mos_handle_t *h)
+{
+    return (h && h->vendor_str[0]) ? h->vendor_str : NULL;
+}
+
+const char *mos_handle_product(const mos_handle_t *h)
+{
+    return (h && h->product_str[0]) ? h->product_str : NULL;
+}
+
+const char *mos_handle_revision(const mos_handle_t *h)
+{
+    return (h && h->revision_str[0]) ? h->revision_str : NULL;
+}
+
+uint64_t mos_handle_registry_id(const mos_handle_t *h)
+{
+    return h ? h->drive_registry_id : 0;
 }
 
 /* The open-time INQUIRY (and its fixed-width SPC-4 string copier with

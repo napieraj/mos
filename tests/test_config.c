@@ -182,6 +182,67 @@ TEST(config_honors_data_length_shorter_than_buffer)
     return 0;
 }
 
+TEST(toc_parses_real_pony_cd_single)
+{
+    /* Real commercial pressing: Ginuwine "Pony" CD single (1996), 4
+       tracks — MusicBrainz disc TX6lKZ481BHv1ZW6pd6007j6OY4-,
+       AccurateRip-confirmed (whipper-team/whipper PR #382 rip log).
+       LBAs derived from the log's attested toc string
+       1+4+86497+150+24687+47627+68002 (MB offset = LBA + 150); ADR=1
+       and copy-bit=0 are the standard-pressing assumption (fixtures
+       README). Mirrors fixtures/readtoc_f0_audio_cd_single.bin. */
+    static const uint8_t t[] = {
+        0x00,0x2A, 0x01,0x04,
+        0x00,0x10, 0x01, 0x00,  0x00,0x00,0x00,0x00,
+        0x00,0x10, 0x02, 0x00,  0x00,0x00,0x5F,0xD9,
+        0x00,0x10, 0x03, 0x00,  0x00,0x00,0xB9,0x75,
+        0x00,0x10, 0x04, 0x00,  0x00,0x01,0x09,0x0C,
+        0x00,0x10, 0xAA, 0x00,  0x00,0x01,0x51,0x4B,
+    };
+    mos_toc toc;
+    EXPECT(mos_internal_toc_parse(t, sizeof t, &toc));
+    EXPECT_EQ(toc.first_track, 1);
+    EXPECT_EQ(toc.last_track, 4);
+    EXPECT_EQ(toc.track_count, 4);
+    EXPECT(toc.have_leadout);
+    EXPECT_EQ(toc.leadout_lba, 86347u);
+    EXPECT_EQ(toc.tracks[0].start_lba, 0u);
+    EXPECT_EQ(toc.tracks[1].start_lba, 24537u);
+    EXPECT_EQ(toc.tracks[2].start_lba, 47477u);
+    EXPECT_EQ(toc.tracks[3].start_lba, 67852u);
+    for (int i = 0; i < 4; i++) {
+        EXPECT_EQ(toc.tracks[i].adr, 1);
+        EXPECT(!(toc.tracks[i].control & 0x4));      /* audio */
+    }
+    return 0;
+}
+
+TEST(aacs_caps_from_real_wh16ns40_capture)
+{
+    /* MakeMKV drive dump, HL-DT-ST BD-RE WH16NS40 1.05: "Bus
+       encryption flags: 17" — the ONE attested descriptor byte
+       (payload byte 0 = 0x17 per the libaacs bit map: RDC|WBE|BEC|BNG).
+       The descriptor's AACS-version byte (payload byte 3) is NOT
+       attested by this dump: MakeMKV's "Highest AACS version" line is
+       a MakeMKV-local statistic (the highest saved MKB-dump file —
+       deleting one lowers the number, forum t=6685), not the 0x010D
+       byte. Byte 3 here (and profile, header byte 2, nonce/AGID counts)
+       is illustrative scaffold — see the fixtures README entry. The
+       load-bearing assertion is bus_encryption; the version assertion
+       only proves byte-3 extraction works. Mirrors
+       fixtures/getconfig_aacs_wh16ns40.bin. */
+    static const uint8_t cfg[] = {
+        0,0,0,16,  0,0, 0x00,0x00,
+        0x01,0x0D, 0x00, 0x04,  0x17, 0x00, 0x00, 78,
+    };
+    mos_drive_caps c;
+    mos_internal_aacs_caps_from_config(cfg, sizeof cfg, &c);
+    EXPECT(c.aacs);                    /* feature 0x010D present       */
+    EXPECT(c.bus_encryption);          /* 0x17 & 0x02 — attested       */
+    EXPECT_EQ(c.aacs_version, 78);     /* scaffold byte; extraction only */
+    return 0;
+}
+
 TEST(toc_parses_realistic_audio_cd)
 {
     /* 3-track audio CD + lead-out, MMC format-0 shape. Header Data
@@ -561,8 +622,90 @@ TEST(config_payload_ending_exactly_at_span_is_accepted)
     return 0;
 }
 
+TEST(aacs_caps_decode_and_fail_closed)
+{
+    /* AACS feature, version 2, BEC set, AACS version 68. */
+    uint8_t buf[] = {
+        0,0,0,16,  0,0, 0x00,0x40,
+        0x00,0x00, 0x03, 0x00,
+        0x01,0x0D, 0x09, 0x04,  0x03, 0x00, 0x01, 68,
+    };
+    mos_drive_caps c;
+    mos_internal_aacs_caps_from_config(buf, sizeof buf, &c);
+    EXPECT(c.aacs && c.bus_encryption && c.aacs_version == 68);
+
+    /* BEC clear. */
+    buf[16] = 0x01;
+    mos_internal_aacs_caps_from_config(buf, sizeof buf, &c);
+    EXPECT(c.aacs && !c.bus_encryption && c.aacs_version == 68);
+
+    /* Feature absent. */
+    uint8_t plain[] = { 0,0,0,8,  0,0, 0x00,0x10,  0x00,0x00, 0x03, 0x00 };
+    mos_internal_aacs_caps_from_config(plain, sizeof plain, &c);
+    EXPECT(!c.aacs && !c.bus_encryption && c.aacs_version == 0);
+
+    /* Feature present but payload truncated to 0 bytes: malformed,
+       reads as absent (fail closed). */
+    uint8_t trunc[] = { 0,0,0,8,  0,0, 0x00,0x40,  0x01,0x0D, 0x09, 0x00 };
+    mos_internal_aacs_caps_from_config(trunc, sizeof trunc, &c);
+    EXPECT(!c.aacs);
+
+    mos_internal_aacs_caps_from_config(NULL, 0, &c);
+    EXPECT(!c.aacs);
+    mos_internal_aacs_caps_from_config(buf, sizeof buf, NULL); /* no crash */
+    return 0;
+}
+
+TEST(config_find_feature_returns_match_with_payload)
+{
+    /* Profile List, then an AACS descriptor (0x010D, version 2 in the
+       header bits, 4 payload bytes: BNG, nonce blocks, AGIDs, AACS
+       version 68 — the MMC-6 AACS feature shape). */
+    uint8_t buf[] = {
+        0,0,0,16,  0,0, 0x00,0x40,
+        0x00,0x00, 0x03, 0x00,
+        0x01,0x0D, 0x09, 0x04,  0x01, 0x00, 0x01, 68,
+    };
+    mos_config_feature f;
+    EXPECT(mos_internal_config_find_feature(buf, sizeof buf, 0x010D, &f));
+    EXPECT(f.feature_code == 0x010D);
+    EXPECT(f.current);
+    EXPECT(f.version == 2);
+    EXPECT(f.data_len == 4 && f.data != NULL);
+    EXPECT(f.data[3] == 68);
+    /* Earlier feature is reachable too — find is not a tail scan. */
+    EXPECT(mos_internal_config_find_feature(buf, sizeof buf, 0x0000, &f));
+    EXPECT(f.feature_code == 0x0000);
+    return 0;
+}
+
+TEST(config_find_feature_absent_or_hostile_is_false)
+{
+    uint8_t buf[] = {
+        0,0,0,8,  0,0, 0x00,0x10,
+        0x00,0x00, 0x03, 0x00,
+    };
+    mos_config_feature f;
+    EXPECT(!mos_internal_config_find_feature(buf, sizeof buf, 0x010D, &f));
+    /* Misaligned Additional Length ends the walk before any match:
+       fail-closed propagates to not-found. */
+    uint8_t bad[] = {
+        0,0,0,8,  0,0, 0x00,0x10,
+        0x01,0x0D, 0x03, 0x03,
+    };
+    EXPECT(!mos_internal_config_find_feature(bad, sizeof bad, 0x010D, &f));
+    EXPECT(!mos_internal_config_find_feature(NULL, 0, 0x010D, &f));
+    EXPECT(!mos_internal_config_find_feature(bad, sizeof bad, 0x010D, NULL));
+    return 0;
+}
+
 void register_config_tests(void)
 {
+    RUN(toc_parses_real_pony_cd_single);
+    RUN(aacs_caps_from_real_wh16ns40_capture);
+    RUN(aacs_caps_decode_and_fail_closed);
+    RUN(config_find_feature_returns_match_with_payload);
+    RUN(config_find_feature_absent_or_hostile_is_false);
     RUN(config_payload_ending_exactly_at_span_is_accepted);
     RUN(config_walks_real_dvdrom_profile_list);
     RUN(config_walks_two_well_formed_features);

@@ -346,3 +346,265 @@ identical-drives case gets its first-order answer (class), and the
 volume name follows in v0.3.x/v0.4 with the adapter wiring, Mac-smoke
 items (DA name on a mounted disc; PVD name on an unmounted data disc;
 null on a blank), and fixtures from real media via `mos_probe`.
+
+## Addendum 2026-06-12 — stage-1 reconciliation + canonical-implementation research
+
+The 06-10 design above predates two tree changes and is now
+reconciled against them plus a research pass over the named
+known-good implementations (session of record: the stage-1 kickoff).
+
+**Decisions taken (maintainer + session):**
+
+1. **Volume name/path source: DiskArbitration, re-admitted narrowly.**
+   The 06-11 DA retirement was about the watch's wake callbacks and
+   the probe's control arm — neither returns. The metadata path gets
+   a ONE-SHOT, callback-free `DADiskCopyDescription` lookup
+   (VolumeName/VolumePath keys), gated on the media nub existing
+   (bsd_unit present; no IOMedia → fields null, DA never called).
+   Requires the dated AGENTS.md append when the wiring lands.
+2. **Verbs are `mos metadata` and `mos drive`** (per the taxonomy
+   above); the reserved-subcommand list's `identity` is their fossil
+   and retires when they land. `capacity/tray/speed/features` stay
+   reserved.
+3. **Serial ships null in stage 1** with the VPD-0x80-vs-convenience
+   question as a recorded Mac falsifier. A raw INQUIRY would need the
+   AGENTS raw-verb showing; stage 1 does not attempt it.
+4. **TOC route stays convenience `ReadTableOfContents`** (format
+   0000b, LBA), parsed by the shipped `mos_internal_toc_parse`.
+   Falsifier noted: libcdio's macOS driver reads the kernel's
+   full-TOC blob from `kIOCDMediaTOCKey` (zero commands, CD-only,
+   different wire shape — POINT descriptors, A0/A1/A2, MSF); if the
+   convenience RTOC misbehaves on real hardware, that property is
+   the kernel-authored fallback to evaluate.
+
+**Research findings (full agent reports in the session transcript):**
+
+- **READ DISC INFORMATION byte map confirmed five ways** (dvd+rw-
+  mediainfo, Linux kernel uapi, QEMU scsi-disk, libburn, systemd
+  cdrom_id): status `b2&3`, last-session `(b2>>2)&3`, erasable
+  `b2&0x10`, sessions `9<<8|4`, tracks `10<<8|5` / `11<<8|6`,
+  declared length excludes itself (+2). Zero disagreement;
+  `mos_discinfo.c` matches and is stricter than every reference
+  (dvd+rw trusts fixed offsets in a 32-byte alloc; libcdio decodes
+  only the erasable bit and never reads the reply length).
+- **Schema-prose obligations:** disc_status `11b` ("other") is the
+  NORMAL regime for DVD-RAM/BD-RE random-access media (libburn
+  pivots on it; dvd+rw-mediainfo suppresses DVD-RAM per-track info
+  as meaningless). Document, don't special-case.
+- **TOC defenses to pin in fixtures** (libcdio osx/gnu_linux
+  drivers): skip `adr != 1` descriptors; bound tracks to [1,99] and
+  clamp counts; first/last by min/max scan, not header trust;
+  missing lead-out = identity loss (the existing `leadout_lba:
+  null` rule); reject `next_lba <= start_lba`.
+- **Validation posture confirmed** (dvd+rw-mediainfo + libcdio
+  converge): two-phase fetch at the drive's declared length, clamp
+  to local buffer, zero-init reply buffers, bail on arithmetic
+  impossibilities, whitelist-and-default enums, NO per-vendor
+  branching (sole exception in 25 years of dvd+rw-tools: a Sony TOC
+  control-byte bit). This is the dual-length/GESN doctrine already
+  in force; no posture change.
+- **MediaInfo is file-only** (no SCSI/ioctl/device code in either
+  MediaArea repo; optical = parsing IFO/BDMV/ISO bytes off a mounted
+  filesystem) — a living example of the consumer-side boundary the
+  matrix's volume-name row draws.
+- **Stage-2 notes banked:** BG format status (RDI byte 7 & 3, with
+  the REQUEST SENSE progress-percent read when "in progress");
+  CD-TEXT structural gates (18-byte packs, multiple-of-18 length,
+  block count ≤ 8, charset codes lie — libcdio treats declared-ASCII
+  as ISO-8859-1; CRC bytes present but unverified in libcdio);
+  book-type discrimination via READ DVD STRUCTURE format 00h when
+  profile alone is ambiguous.
+
+**Correction (2026-06-12, same session):** the original stage-1 sketch
+above illustrates `volume_path` with `/Volumes/MY_MOVIE_UHD` — a
+mounted UHD title. Per this doc's own matrix row ("UDF BD/UHD video
+often does not auto-mount; MakeMKV prefers unmounted"), that is not
+the typical reading: BD/UHD video normally presents as
+media-present-unmounted on macOS, so the volume fields read null and
+identity rides on profile/TOC/disc-info. The shipped fixtures and
+README examples reflect this — the flagship `mos.metadata.v1` example
+is an unmounted UHD BD; the mounted examples are a DVD-video volume,
+an audio CD (macOS's generic "Audio CD" label), and data discs, which
+genuinely mount. The historical sketch above is left as written.
+
+**M-DISC (2026-06-12, same session):** added as the fixture-pinned
+archival example (`mos.metadata.v1.mdisc_archive`,
+`mos.state.v1.mdisc_archive_mounted`) — deliberately: the volume
+surface is not exclusively ripping-adjacent, and archival burns are
+the canonical mounted-data case. Handling claim: at the MMC level
+M-DISC is profile-transparent — the BD flavor reports standard BD-R
+SRM (0x0041, already in the profile/class tables), and the
+M-DISC-ness lives in disc-structure manufacturer/media-ID fields mos
+does not read (READ DISC STRUCTURE is stage-2 banked, book-type
+note above). So M-DISC is handled by construction today: state,
+profile, class, TOC, disc_info, and the mounted volume name all
+behave as for any BD-R. A hardware falsification pass should include
+one finalized M-DISC alongside the pressed/UHD/audio matrix rows.
+
+**TOC-on-DVD/BD verified (2026-06-12, same session):** challenged in
+review ("does TOC even look like that on anything non-CD?") and
+checked against canonical sources rather than this doc's own claims.
+Confirmed: the single-synthesized-track shape is NORMATIVE, not a
+drive courtesy. MMC-5 table 483 ("Fabrication of TOC Form 0 for
+Single Session DVD") mandates track 1 @ LBA 0 plus an AAh lead-out
+for DVD; the Mt. Fuji companion (INF-TA-1010, the spec vendors
+actually implement) carries an explicit "Detail of BD media
+fabricated READ TOC response" section, so BD fabrication is normative
+too (section title verified; the table itself is member-gated).
+Corroborated: QEMU's cdrom_read_toc synthesizes identically for
+CD/DVD; udev's cdrom_id issues READ TOC unconditionally on every
+medium; libcdio-devel (T. Schmitt) treats the lead-out as a size
+query on DVD and BD alike. Two wrinkles for consumers, now in the
+schema prose: (1) on overwritable media (DVD+RW/BD-RE) some
+firmwares report formatted capacity rather than written extent in
+the fabricated lead-out — not a precise data-size source (libburn
+prefers READ DISC/TRACK INFORMATION for sizes); (2) blank CD-R/RW
+rejects format 0 by spec, blank DVD/BD recordables are
+drive-dependent — toc:null on blanks is expected output, not a bug.
+No UHD-specific READ TOC failures found (MakeMKV-forum failures are
+AACS sector reads, not TOC). The identity rule is unchanged and
+exactly right: never key on a synthesized TOC; mos_toc_have_leadout
+gates identity use.
+
+## Log-derived fixture batch 2 + provenance correction (2026-06-13)
+
+Second Phase-A0 pass (forum/list captures the first agent couldn't
+reach; user supplied the page text). Three outcomes — one correction,
+one new fixture, one piece of by-construction evidence.
+
+**Correction — "Highest AACS version" is not the descriptor byte.**
+The batch-1 fixture `getconfig_aacs_wh16ns40.bin` listed payload
+byte 3 = 78 as ATTESTED, sourced from MakeMKV's "Highest AACS
+version: 78" line. That is wrong provenance: forum t=6685 demonstrates
+the number is a MakeMKV-local statistic (the highest saved MKB-dump
+file — delete one and the displayed value drops), and moderator
+Woodstock states it is "rather than being read from the drive"
+(t=14372, t=17356). The two identical-BU40N dumps showing 77 vs 81
+corroborate (MKB history differs, hardware does not). The DESIGN is
+unaffected — descriptor byte 3 IS the AACS Version per libaacs/
+UDFclient, and `mos_query_drive_caps` decodes that byte correctly —
+but no MakeMKV dump attests it, so the fixture's byte 3 is now marked
+illustrative scaffold and the load-bearing assertion is bus_encryption
+(byte 0 = 0x17, the one attested descriptor byte). Fixtures README and
+the mirroring test corrected the same day. The raw-descriptor-vs-dump
+capture stays on the falsification matrix; its job is now to pin
+byte 3, which nothing in the wild does.
+
+**New fixture — first erasable=true RDI.** `readdiscinfo_complete_bdre.bin`
+from a verbatim BDR-209D dump (status complete, 1 session, 1 track;
+erasable inferred from the 43h BD-RE rewritable profile, since
+dvd+rw-mediainfo never prints the bit). Its `FABRICATED TOC` block is
+the drive's real READ TOC reply (confirmed against
+dvd+rw-mediainfo.cpp L1048) and shows the lead-out at the disc's
+formatted capacity, not a written extent — live corroboration of the
+overwritable-media lead-out wrinkle already in the leadout_lba prose.
+
+**M-DISC by-construction claim — now evidenced.** A verified xorriso
+capture (cdwrite list, msg14517) of an M-DISC BD-R in an HL-DT-ST
+WH16NS40: `Media product: MILLEN/MR1/0 , Millenniata Inc.`,
+`Media current: BD-R sequential recording`, `Media status: is blank`,
+12219392 writable blocks. This confirms what the design doc asserted
+from spec: M-DISC BD presents as ordinary BD-R SRM (profile 41h) at
+the MMC command layer — state, profile, class, disc-info, and the
+fabricated TOC all behave as for any BD-R. The M-DISC-ness lives in
+the `MILLEN/MR1` manufacturer/media ID (disc-structure data), not in
+the profile or disc-info mos already reads. Whether that ID — or a
+drive-side M-DISC write capability — is reachable through an MMC read
+mos could honestly surface is under active research (see the
+stage-2 M-DISC question); xorriso prints the ID from a real read, so
+SOMETHING carries it. Still-open gaps from this batch: the M-DISC
+**DVD** profile (11h DVD-R vs 1Bh DVD+R — no captured Mounted Media
+line found; Schmitt asserts "DVD+R or BD-R" but unverified), and an
+**appendable** BD-R RDI (no verbatim capture surfaced — the only
+candidate was a fetch-blocked Launchpad snippet).
+
+## M-DISC: surfaceable, as a registered manufacturer ID (2026-06-13)
+
+Closes the open M-DISC-reachability question from the batch-2 entry.
+Three converging sources (dvd+rw-mediainfo.cpp verified locally,
+dvdisaster scsi-layer.c, and the Blu-ray Disc Association licensee
+registry) settle it.
+
+**Where M-DISC lives.** Not in any read mos does today, and not as a
+flag bit. It is the disc's **Disc Manufacturer ID + Media Type ID**,
+read via **READ DISC STRUCTURE (0xAD)**, BD media type, format 0x00
+(Disc Information / DI): manufacturer ID = 6 bytes at DI offset +100,
+media type ID = 3 bytes at +106 (verified at dvd+rw-mediainfo.cpp
+L352, `Media ID: %6.6s/%-3.3s` from `di+4+100`/`di+4+106`). For
+Millenniata M-DISC BD-R these are the REGISTERED values **`MILLEN`** /
+**`MR1`** (BDA licensee list; full media code `MILLEN-MR1-000`) —
+exactly the `MILLEN/MR1/0` xorriso printed from the verified capture.
+
+**It is the disc that self-identifies, not the drive.** There is NO
+drive-side "M-DISC write capable" advertisement in any standard MMC
+read — no GET CONFIGURATION feature, no mode page (verified: dvd+rw-
+tools, cdrtools, k3b all treat M-DISC as ordinary recordable media and
+none contain an mdisc/millenniata string). The drive selects its
+higher write strategy FROM the media ID it reads, not from a
+capability bit it exposes. This resolves the "the capability must
+present itself somewhere" intuition: it presents as DISC identity
+(manufacturer ID), never as drive capability.
+
+**Detection is a string match, not a bit.** `manufacturer_id ==
+"MILLEN" && media_type_id == "MR1"`. Even dvdisaster does not
+special-case it — M-DISC awareness is a layer the consumer adds.
+
+**Doctrine fit — surface the ID, not an `mdisc` boolean.** The
+correct shape under the scope doctrine is for mos to emit the
+**registered manufacturer/media-type ID fields** (a faithful read of
+a spec-defined structure) and leave the `MILLEN -> M-DISC`
+interpretation consumer-side — the same division as MusicBrainz ids
+and the LibreDrive status (mos emits bytes it read; consumers
+interpret). A hardcoded `mdisc: true` that string-matches MILLEN
+inside mos is the vendor-string special-casing the doctrine forbids.
+Bonus: the manufacturer ID is useful well beyond M-DISC — it names
+the actual disc maker (CMCMAG, RITEK, VERBAT, MILLEN...), a real
+quality/dedup signal, which is why surfacing the general field beats a
+single-purpose M-DISC flag.
+
+**Cost / gating for a stage-2 increment.**
+- Command: 0xAD READ DISC STRUCTURE. This entry's design doc table
+  already notes a `ReadDVDStructure` convenience method exists, so the
+  likely cost is a layer-1 convenience call, NOT a raw CDB — SDK-verify
+  the exact MMCDeviceInterface selector before building; if absent, it
+  needs the AGENTS raw-verb showing.
+- BD path is clean (registered MILLEN/MR1 at fixed DI offsets).
+- DVD M-DISC is NOT clean: no BD-style DI unit, the manufacturer ID is
+  scattered across format-specific offsets (DVD-dash media-ID format
+  0x0E at +17/+25; DVD-plus ADIP format 0x11 at +23/+31), and M-DISC
+  DVD lacks the tidy MILLEN/MR1 pair. BD-first; DVD deferred until a
+  real M-DISC DVD capture pins it.
+- Fixture path: a real READ DISC STRUCTURE DI capture (or a reversed
+  verbatim log) becomes the committed fixture; the BD DI offsets are
+  the parse target.
+
+## READ DISC STRUCTURE shipped — disc_structure identity (2026-06-13)
+
+Implemented the M-DISC resolution above as a general field, per the
+"surface everything the command returns" steer (not tunnel-visioned on
+the M-DISC angle). `mos_query_disc_id` issues READ DISC STRUCTURE via
+the Apple `ReadDiscStructure` convenience method (SDK-verified
+signature: MEDIA_TYPE/ADDRESS/LAYER_NUMBER/FORMAT + buffer; the generic
+MMC-5 wrapper, not the DVD-only `ReadDVDStructure`), BD media type,
+format 0x00 (Disc Information). The pure decoder (mos_discstruct.c)
+extracts the four confirmed ASCII/enumerable DI fields — Disc Type
+Identifier (offset 8: BDR/BDW/BDO), Disc Manufacturer ID (100), Media
+Type ID (106), Product Revision (111) — and deliberately skips the
+physical write-parameter region (11..99), whose sub-field packing was
+not multiply-confirmed.
+
+Security posture (the device controls both length and bytes): the
+identity fields are read at CONSTANT offsets inside the FIRST DI unit
+only — no walking a device-controlled chain, so no payload value ever
+becomes a read offset; the one device length (Disc Structure Data
+Length) can only SHRINK the trusted region via the dual-length clamp;
+no payload byte is dereferenced as a pointer; and the adapter uses a
+single fixed zero-init buffer (no two-phase read-the-length-then-
+reallocate). Gated by 3M-iteration exact-allocation ASan/UBSan fuzzing
+(fuzz_pure phase 8) plus inline hostile-buffer tests.
+
+Surfaced in mos.metadata.v1 as a nullable `disc_structure` sub-object
+(mirrors disc_info), gated on a BD profile in the verb. Classification
+stays consumer-side (MILLEN => M-DISC), per the doctrine. DVD-side
+manufacturer ID (formats 0x0E/0x11, scattered offsets, no clean
+MILLEN/MR1 pair) remains deferred until a real M-DISC DVD capture.

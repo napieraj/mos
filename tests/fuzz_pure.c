@@ -59,7 +59,7 @@
  *      -fno-sanitize-recover=all \
  *      -I include -I src \
  *      src/mos_pure.c src/mos_sense.c src/mos_strings.c \
- *      src/mos_config.c src/mos_discinfo.c \
+ *      src/mos_config.c src/mos_discinfo.c src/mos_discstruct.c \
  *      tests/fuzz_pure.c -o /tmp/fuzz_pure
  *   ASAN_OPTIONS=abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/fuzz_pure
  */
@@ -439,6 +439,46 @@ static void fuzz_toc(uint64_t iters)
     }
 }
 
+/* ---- phase 8: READ DISC STRUCTURE / BD DI decode -------------------- */
+static void fuzz_discstruct(uint64_t iters)
+{
+    for (uint64_t i = 0; i < iters; i++) {
+        size_t   len = rng_below(160);             /* 0..159: spans the 116 region */
+        uint8_t *buf = (uint8_t *)malloc(len ? len : 1); /* EXACT size: read at [len] => ASan */
+        for (size_t b = 0; b < len; b++) buf[b] = (uint8_t)rng();
+
+        /* Half the time, plant the 'DI' signature so the accept path runs
+           as often as the reject paths; and plant a Disc Structure Data
+           Length, sometimes huge (must only shrink-clamp, never extend). */
+        if (len >= 6 && rng_below(2)) {
+            buf[4] = 'D'; buf[5] = 'I';
+            uint16_t dsl = (uint16_t)rng_below((uint64_t)len + 64);
+            buf[0] = (uint8_t)(dsl >> 8);
+            buf[1] = (uint8_t)(dsl & 0xFF);
+        }
+
+        struct mos_disc_id id;
+        memset(&id, 0xA5, sizeof id);
+        if (mos_internal_bd_disc_id_parse(buf, len, &id)) {
+            /* Accepted => every string is NUL-terminated within its fixed
+               buffer (no 0xA5 poison survived as an unterminated copy). */
+            if (id.disc_type[sizeof id.disc_type - 1] != 0 ||
+                id.manufacturer[sizeof id.manufacturer - 1] != 0 ||
+                id.media_type[sizeof id.media_type - 1] != 0 ||
+                id.revision[sizeof id.revision - 1] != 0) {
+                fprintf(stderr, "FUZZ FAIL: disc_id field not terminated "
+                        "(len=%zu)\n", len);
+                abort();
+            }
+        }
+        if ((i & 0xFFFF) == 0) {
+            (void)mos_internal_bd_disc_id_parse(NULL, len, &id);
+            (void)mos_internal_bd_disc_id_parse(buf, len, NULL);
+        }
+        free(buf);
+    }
+}
+
 int main(int argc, char **argv)
 {
     uint64_t seed = env_u64("MOS_FUZZ_SEED", 0x9E3779B97F4A7C15ULL);
@@ -452,6 +492,7 @@ int main(int argc, char **argv)
     uint64_t n_di    = env_u64("MOS_FUZZ_DISCINFO", 500000);
     uint64_t n_tl    = env_u64("MOS_FUZZ_TRUST",    200000);
     uint64_t n_toc   = env_u64("MOS_FUZZ_TOC",      200000);
+    uint64_t n_ds    = env_u64("MOS_FUZZ_DISCSTRUCT", 500000);
 
     fprintf(stderr,
             "mos fuzz_pure seed=0x%016llx sense=%llu esc=%llu bsd=%llu cfg=%llu di=%llu tl=%llu toc=%llu\n",
@@ -468,8 +509,9 @@ int main(int argc, char **argv)
     fuzz_discinfo(n_di);
     fuzz_trusted_len(n_tl);
     fuzz_toc(n_toc);
+    fuzz_discstruct(n_ds);
 
     fprintf(stderr, "OK: fuzz_pure clean (%llu iterations total)\n",
-            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc));
+            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc + n_ds));
     return 0;
 }

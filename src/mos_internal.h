@@ -52,6 +52,15 @@ struct mos_handle {
     /* Handle-owned disc-information result (mos_query_disc_info).
        Overwritten each query; plain values, no borrowed pointers. */
     struct mos_disc_info      disc_info;
+
+    /* Handle-owned TOC result (mos_query_toc). Same terms. */
+    struct mos_toc            toc;
+
+    /* Handle-owned drive-caps result (mos_query_drive_caps). Same terms. */
+    struct mos_drive_caps     caps;
+
+    /* Handle-owned disc-id result (mos_query_disc_id). Same terms. */
+    struct mos_disc_id        disc_id;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
@@ -96,6 +105,17 @@ uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name);
    the snapshot builder and the watch doorbell's per-device filter. */
 uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path);
 
+/* Bounded CFTypeRef-string -> C-buffer copy (mos_dr.c); "" on
+   non-string, oversize, or conversion failure. Always terminates. */
+void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap);
+
+/* One-shot DiskArbitration mounted-volume lookup (mos_da.c). True only
+   when mounted; gate calls on bsd_unit present. No callbacks, no run
+   loop — see the narrow re-admission terms at the top of mos_da.c. */
+bool mos_internal_da_volume(const char *bsd_name,
+                            char *name_buf, size_t name_cap,
+                            char *path_buf, size_t path_cap);
+
 /* Extract one device's snapshot (registry id, bsd unit, identity) from
    a DRDeviceRef passed as CFTypeRef (mos_internal.h stays free of
    DiscRecording types). False when the device's registry path doesn't
@@ -124,10 +144,7 @@ mos_error mos_internal_mmc_test_unit_ready    (mos_handle_t *h,
                                                uint8_t sense[18]);
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile);
 
-/* STUB (v0.4, hardware-gated): the IOKit half of GET CONFIGURATION's feature
- * surface. Returns MOS_ERR_UNSUPPORTED until the RT=0 issuance is written and
- * HW-validated. See mos_scsi.c for the walker seam. */
-mos_error mos_internal_mmc_get_features       (mos_handle_t *h);
+
 
 /* Open a drive by its IORegistry entry ID — the identity-stable
    primitive: the kernel resolves IORegistryEntryIDMatching atomically,

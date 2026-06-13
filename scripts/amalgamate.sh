@@ -7,7 +7,8 @@
 #
 # Consumers can drop those two files into their source tree. Compile
 # mos.c as a regular translation unit; on the link step, add IOKit,
-# CoreFoundation, and DiscRecording to the link line. No CMake, no
+# CoreFoundation, DiscRecording, and DiskArbitration to the link
+# line. No CMake, no
 # submodule.
 #
 # This is the stb / SQLite integration model. See CONTRIBUTING.md for
@@ -40,14 +41,21 @@ cat > "$H" <<'HEADER'
  *        -framework IOKit \\
  *        -framework CoreFoundation \\
  *        -framework DiscRecording \\
+ *        -framework DiskArbitration \\
  *        -mmacosx-version-min=12.0
  *
  * Or add both files (mos.h and this one) to your existing build system
- * and make sure IOKit, CoreFoundation, and DiscRecording are on your
- * link line, with the deployment target pinned to macOS 12.0 to match
- * the CMake build's CMAKE_OSX_DEPLOYMENT_TARGET. Skipping
- * -framework DiscRecording fails to link at the DRCopyDeviceArray
- * reference in mos_dr.c.
+ * and make sure IOKit, CoreFoundation, DiscRecording, and
+ * DiskArbitration are on your link line, with the deployment target
+ * pinned to macOS 12.0 to match the CMake build's
+ * CMAKE_OSX_DEPLOYMENT_TARGET. Skipping -framework DiscRecording
+ * fails to link at the DRCopyDeviceArray reference in mos_dr.c.
+ *
+ * DiskArbitration is OPTIONAL: compile with -DMOS_USE_DISKARBITRATION=0
+ * and you may drop -framework DiskArbitration entirely. mos_query_volume
+ * then always reports unmounted (volume name/path null) — the API, CLI,
+ * and JSON shapes are unchanged. With the default (flag unset), the
+ * DADiskCopyDescription reference in mos_da.c requires the framework.
  *
  * See mos.h for the API.
  * See https://github.com/napieraj/mos for source, tests,
@@ -138,6 +146,9 @@ strip_file() {
     echo
     echo "/* ==== src/mos_discinfo.c ==== */"
     strip_file "$SRC/mos_discinfo.c"
+
+    echo "/* ==== src/mos_discstruct.c ==== */"
+    strip_file "$SRC/mos_discstruct.c"
     echo
     echo "/* ==== src/mos_result.c ==== */"
     strip_file "$SRC/mos_result.c"
@@ -159,6 +170,9 @@ strip_file() {
     echo
     echo "/* ==== src/mos_dr.c ==== */"
     strip_file "$SRC/mos_dr.c"
+    echo
+    echo "/* ==== src/mos_da.c ==== */"
+    strip_file "$SRC/mos_da.c"
     echo
     echo "/* ==== src/mos_scsi.c ==== */"
     strip_file "$SRC/mos_scsi.c"

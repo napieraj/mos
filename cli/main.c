@@ -16,7 +16,10 @@
    diagnostic, so promoting a name in v0.4 is a one-site edit.
    tests/cli/test_cli.sh (Test 18) loops over the same set. */
 static const char *const reserved_subcommands[] = {
-    "capacity", "identity", "tray", "speed", "features", NULL
+    /* "identity" retired 2026-06-12: its surface shipped as the
+       metadata + drive verbs (design doc taxonomy); "features" shipped
+       the same day as the feature-list verb. */
+    "capacity", "tray", "speed", NULL
 };
 
 static bool is_reserved_subcommand(const char *cmd)
@@ -45,6 +48,12 @@ void print_usage(FILE *f)
         "  watch  [drive]    Stream state events (NDJSON) until SIGINT;\n"
         "                    all drives unless a drive narrows it (hot-plug\n"
         "                    joins; removal is per-drive, stream continues).\n"
+        "  metadata [drive]  Disc identity record (profile, TOC, disc\n"
+        "                    info, mounted volume) — mos.metadata.v1.\n"
+        "  drive [drive]     Drive facts (identity, AACS capabilities)\n"
+        "                    — mos.drive.v1.\n"
+        "  features [drive]  MMC feature list with current bits (the\n"
+        "                    medium-writability surface) — mos.features.v1.\n"
 #ifdef MOS_CLI_PROBE
         "  probe  <drive>    Diagnostic: stream raw IOKit/DiscRecording\n"
         "                    notification events (NDJSON, mos.probe.v0)\n"
@@ -172,27 +181,26 @@ int main(int argc, char **argv)
 
     /* Bare `mos` is an entry point, not an implicit status (the
        single-drive default was a carryover from the one-word-stdout
-       era; retired 2026-06-12). Drive table + hint to stderr, EX_USAGE. */
+       era; retired 2026-06-12) — and not a probe either: the drive
+       table's state column rides the not-ready GESN branch, which
+       takes the exclusive lock, and an intent-free invocation must
+       not touch hardware (same-day revision of the table-at-entry
+       shape). Usage + hint, EX_USAGE; the table is one deliberate
+       `mos list` away. */
     if (argc == 1) {
-        static list_row rows[MOS_CLI_LIST_CAP];
-        int n = 0;
-        int total = collect_and_query(rows, &n);
-        if (total > 0) {
-            fprintf(stderr, "%s: no subcommand; %d drive%s present:\n",
-                    progname, total, total == 1 ? "" : "s");
-            emit_list_table(stderr, rows, n, false);
-            fprintf(stderr, "\nTry `%s status%s` or `%s --help`.\n",
-                    progname, total == 1 ? "" : " <index>", progname);
-        } else {
-            fprintf(stderr, "%s: no optical drives attached.\n\n", progname);
-            print_usage(stderr);
-        }
+        /* %1$s: POSIX numbered conversions — one progname argument,
+           reused; mixing numbered and unnumbered in one format is UB,
+           so every conversion here must stay numbered. */
+        fprintf(stderr,
+                "%1$s: no subcommand (state is `%1$s status`; drives, `%1$s list`).\n\n",
+                progname);
+        print_usage(stderr);
         return EX_USAGE;
     }
 
     /* Subcommands are additive aliases for the flag forms, recognized only
        when argv[1] is a bare word (flag-first invocations reach getopt
-       unchanged). The five v0.4 names are reserved so a premature use gets
+       unchanged). The remaining v0.4 names are reserved so a premature use gets
        a clearer diagnostic than "unknown subcommand". */
     if (argc >= 2 && argv[1][0] != '-' && argv[1][0] != '\0') {
         const char *cmd = argv[1];
@@ -203,6 +211,12 @@ int main(int argc, char **argv)
             flag_list = true;
         } else if (strcmp(cmd, "watch") == 0) {
             flag_watch = true;
+        } else if (strcmp(cmd, "metadata") == 0) {
+            flag_metadata = true;
+        } else if (strcmp(cmd, "drive") == 0) {
+            flag_drive = true;
+        } else if (strcmp(cmd, "features") == 0) {
+            flag_features = true;
         } else if (strcmp(cmd, "probe") == 0) {
 #ifdef MOS_CLI_PROBE
             flag_probe = true;
@@ -231,7 +245,7 @@ int main(int argc, char **argv)
         } else {
             fprintf(stderr, "%s: unknown subcommand: ", progname);
             mos_cli_safe_ascii(stderr, cmd);
-            fputs("\nRecognized: status, list, watch"
+            fputs("\nRecognized: status, list, watch, metadata, drive, features"
 #ifdef MOS_CLI_PROBE
                   ", probe"
 #endif
@@ -389,6 +403,9 @@ int main(int argc, char **argv)
     if (flag_probe) return run_probe();
 #endif
     if (flag_list)  return run_list();
+    if (flag_metadata) return run_metadata();
+    if (flag_drive) return run_drive();
+    if (flag_features) return run_features();
     if (flag_watch) return run_watch();
     return run_query();
 }

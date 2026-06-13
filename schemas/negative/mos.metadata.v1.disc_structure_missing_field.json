@@ -1,0 +1,18 @@
+{
+  "schema": "mos.metadata.v1",
+  "bsd": "/dev/disk4",
+  "captured_at": "2026-06-13T02:50:00.000Z",
+  "volume_path": null,
+  "disc": {
+    "profile": "0x0041",
+    "class": "bd",
+    "toc": null,
+    "disc_info": null,
+    "disc_structure": {
+      "disc_type": "BDR",
+      "manufacturer_id": "MILLEN",
+      "media_type_id": "MR1"
+    },
+    "volume_name": null
+  }
+}

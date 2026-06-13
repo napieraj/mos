@@ -175,3 +175,110 @@ uint8_t mos_disc_info_last_session_state(const mos_disc_info *d)
 {
     return d ? d->last_session_state : 0;
 }
+
+/* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
+ * NULL- and range-tolerant like every accessor above; the entry index
+ * is bounded by track_count, which the fail-closed parser proved
+ * covers exactly first..last. */
+
+uint8_t mos_toc_first_track(const mos_toc *t) { return t ? t->first_track : 0; }
+uint8_t mos_toc_last_track(const mos_toc *t)  { return t ? t->last_track  : 0; }
+
+size_t mos_toc_track_count(const mos_toc *t)
+{
+    return t ? (size_t)t->track_count : 0;
+}
+
+bool mos_toc_have_leadout(const mos_toc *t)
+{
+    return t ? t->have_leadout : false;
+}
+
+uint32_t mos_toc_leadout_lba(const mos_toc *t)
+{
+    return (t && t->have_leadout) ? t->leadout_lba : 0;
+}
+
+uint8_t mos_toc_track_number(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].track : 0;
+}
+
+uint8_t mos_toc_track_adr(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].adr : 0;
+}
+
+uint8_t mos_toc_track_control(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].control : 0;
+}
+
+uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i)
+{
+    return (t && i < t->track_count) ? t->tracks[i].start_lba : 0;
+}
+
+/* ---- mos_drive_caps accessors (mos_query_drive_caps) ----------------- */
+
+bool mos_drive_caps_aacs(const mos_drive_caps *c)
+{
+    return c ? c->aacs : false;
+}
+
+uint8_t mos_drive_caps_aacs_version(const mos_drive_caps *c)
+{
+    return c ? c->aacs_version : 0;
+}
+
+bool mos_drive_caps_bus_encryption(const mos_drive_caps *c)
+{
+    return c ? c->bus_encryption : false;
+}
+
+/* ---- mos_feature_info accessors (mos_enumerate_features) ------------- */
+
+uint16_t mos_feature_info_code(const mos_feature_info_t *f)
+{
+    return f ? f->code : 0;
+}
+
+bool mos_feature_info_current(const mos_feature_info_t *f)
+{
+    return f ? f->current : false;
+}
+
+bool mos_feature_info_persistent(const mos_feature_info_t *f)
+{
+    return f ? f->persistent : false;
+}
+
+uint8_t mos_feature_info_version(const mos_feature_info_t *f)
+{
+    return f ? f->version : 0;
+}
+
+/* ---- mos_disc_id accessors (mos_query_disc_id) ---------------------- *
+ * Borrowed strings into the handle-owned result; "" reads as NULL so the
+ * emitters suppress empty fields uniformly. Disc-controlled bytes — the
+ * CLI layer escapes them. */
+
+const char *mos_disc_id_disc_type(const mos_disc_id *d)
+{
+    return (d && d->disc_type[0]) ? d->disc_type : NULL;
+}
+
+const char *mos_disc_id_manufacturer(const mos_disc_id *d)
+{
+    return (d && d->manufacturer[0]) ? d->manufacturer : NULL;
+}
+
+const char *mos_disc_id_media_type(const mos_disc_id *d)
+{
+    return (d && d->media_type[0]) ? d->media_type : NULL;
+}
+
+const char *mos_disc_id_revision(const mos_disc_id *d)
+{
+    return (d && d->revision[0]) ? d->revision : NULL;
+}

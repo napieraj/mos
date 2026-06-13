@@ -10,7 +10,8 @@ the drive and distinguishes them, as a CLI and an embeddable pure-C
 library.
 
 No runtime dependencies beyond Apple's own IOKit, CoreFoundation,
-and DiscRecording frameworks; no entitlements, no root. A status
+DiscRecording, and DiskArbitration frameworks; no entitlements, no
+root. A status
 query costs at most three MMC commands — the command-by-command
 rationale, decision tree, and sense tables are in `ARCHITECTURE.md`.
 Disc details beyond state (blank / appendable / finalized, session
@@ -29,8 +30,7 @@ xnu starts registry IDs above 2^32), or a BSD form (`disk4`,
 `rdisk4`, `/dev/disk4`). With one drive attached it may be omitted
 (`mos status`); with several, `mos status` without a subject exits 64
 and prints the drive table to stderr — no first-drive guessing. Bare
-`mos` is an entry point, not a status query: it prints the drive
-table and a hint to stderr and exits 64.
+`mos` prints a hint and the usage text to stderr and exits 64.
 
 Human views and JSON share every enum string verbatim
 (`ready`, `bd_rom`) — a terminal report and a jq query can
@@ -117,6 +117,85 @@ $ mos watch
 {"schema":"mos.event.v1","event":"state_changed",...,"bsd":"/dev/disk4","state":"ready",...}
 ```
 
+### Metadata (disc identity)
+
+```
+$ mos metadata 1            # pressed DVD video — these genuinely mount
+     BSD:  /dev/disk4
+  Volume:  ARRIVAL
+    Path:  /Volumes/ARRIVAL
+ Profile:  dvd  dvd_rom  (0x0010)
+    Disc:  -
+     TOC:  tracks 1-1, lead-out LBA 3824640
+```
+
+`mos metadata --json` emits one `mos.metadata.v1` document. Its `disc`
+object is the fingerprint subtree: a fixed, closed key set
+(profile/class/TOC/disc-info/volume-name, each required and nullable)
+whose canonical serialization consumers hash for dedup — third-party
+ids (MusicBrainz, AccurateRip, dvdid) are pure functions of these
+fields, computed consumer-side. Unreadable facts emit `null`; partial
+readability is the normal regime, not an error.
+
+For archival flows (M-DISC and friends) the `disc_info` row answers
+fresh-vs-burned directly, because READ DISC INFORMATION reads disc
+structure, not the filesystem: `blank` = unburned, ready to write;
+`appendable` = open session; `complete` plus a mounted Volume =
+burned and readable; `complete` with Volume null = burned but the
+filesystem did not mount — possibly damaged (when even the TOC won't
+read, `mos status` reports `media_unreadable`). `erasable`
+distinguishes wipe-and-reuse media (RW/RE) from one-shot (R/M-DISC). The volume name/path
+are mount-sourced only (one synchronous DiskArbitration description
+read): a present-but-unmounted disc reads `null` by design — sector
+reads are the consumer's privilege and parsing burden. That null is
+the NORMAL reading for BD/UHD video: those discs typically do not
+mount on macOS (the rip workload's common case), so their identity
+rides on profile/TOC/disc-info while `volume_name` carries
+DVD-video, audio-CD ("Audio CD"), and data/archival labels — a
+finalized M-DISC backup mounts like any data volume and is the
+fixture-pinned archival example (`mos.metadata.v1.mdisc_archive`).
+
+For Blu-ray media `disc.disc_structure` adds the disc's REGISTERED
+identity from READ DISC STRUCTURE — disc type (`BDR`/`BDW`/`BDO`),
+manufacturer ID, media-type ID, revision. This names the actual disc
+maker (`CMCMAG`, `VERBAT`, `RITEK`…) and, for Millenniata M-DISC,
+reports manufacturer `MILLEN` / media type `MR1`. mos surfaces the
+registered bytes faithfully; classifying `MILLEN` as M-DISC is the
+consumer's call (same division as the third-party ids). The field is
+null on CD/DVD, where the DI structure does not exist.
+
+### Drive (static facts)
+
+```
+$ mos drive 1
+     BSD:  /dev/disk4
+Registry:  4295032831
+  Vendor:  HL-DT-ST
+ Product:  BD-RE WH16NS60
+     Rev:  1.00
+  Serial:  -
+    AACS:  version 68, bus encryption yes
+```
+
+`mos drive --json` emits `mos.drive.v1`: identity (open-time directory
+data, zero commands), `serial` (null in stage 1 — pending the VPD-0x80
+convenience-reachability check on hardware), and spec-grounded AACS
+capabilities from one GET CONFIGURATION feature walk. `bus_encryption`
+is the drive-reported support bit; the cryptographically signed BEC
+flag lives in the AACS drive certificate, which mos does not fetch.
+There is deliberately no `libredrive` field: that status is a MakeMKV
+database property, not a drive property.
+
+### Features (medium writability)
+
+`mos features --json` emits `mos.features.v1`: the raw MMC feature
+list, one entry per GET CONFIGURATION descriptor — code, `current`,
+`persistent`, version. The `current` flags are the writability
+answer for the mounted medium: a blank M-DISC is *ready for archival*
+when `mos metadata` says the disc is blank **and** `mos features`
+shows the matching write feature current (0x0041 for BD-R). Codes map
+against MMC-6 §5.3; mos ships no name table.
+
 ### Shell integration
 
 The core pattern — act on every disc that turns readable, on any
@@ -161,7 +240,7 @@ release flow is documented in `CONTRIBUTING.md`.
 
 ```sh
 git clone https://github.com/napieraj/mos
-cd mac-optical-state
+cd mos
 make build      # release build of library + CLI (thin wrapper over cmake)
 make test       # pure-data unit tests — no drive or hardware needed
 ./build/bin/mos list
@@ -181,7 +260,7 @@ Include `<mos.h>` — the public header depends only on `<stdint.h>`,
 `<stdbool.h>`, `<stddef.h>`; wrap calls in `#ifdef __APPLE__` in
 cross-platform code. For a single-file drop-in,
 `./scripts/amalgamate.sh` emits `dist/mos.h` + `dist/mos.c`: link
-IOKit, CoreFoundation, and DiscRecording; build with
+IOKit, CoreFoundation, DiscRecording, and DiskArbitration; build with
 `-mmacosx-version-min=12.0`.
 
 ## Requirements

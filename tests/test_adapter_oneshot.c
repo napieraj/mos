@@ -12,6 +12,7 @@
 
 #include "mos.h"
 #include "mos_fake_apple.h"
+#include "../src/mos_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -242,6 +243,248 @@ TEST(adapter_disc_info_replays_fixtures)
     return 0;
 }
 
+TEST(adapter_toc_round_trip_and_fail_closed)
+{
+    /* Synthetic two-track audio TOC, format 0000b: header (len=26,
+       first=1, last=2), tracks 1 (lba 0) and 2 (lba 18000), lead-out
+       0xAA (lba 210895). Same shape the pure parser's fixtures pin. */
+    static const uint8_t toc[] = {
+        0x00, 0x1A, 0x01, 0x02,
+        0x00, 0x10, 0x01, 0x00,  0x00, 0x00, 0x00, 0x00,
+        0x00, 0x10, 0x02, 0x00,  0x00, 0x00, 0x46, 0x50,
+        0x00, 0x10, 0xAA, 0x00,  0x00, 0x03, 0x37, 0xCF,
+    };
+    mos_fake_reset();
+    mos_fake_set_toc_reply(0x00, toc, sizeof toc);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    const mos_toc *t = NULL;
+    EXPECT_EQ(MOS_OK, mos_query_toc(h, &t));
+    EXPECT_EQ(1, mos_toc_first_track(t));
+    EXPECT_EQ(2, mos_toc_last_track(t));
+    EXPECT_EQ(2, (int)mos_toc_track_count(t));
+    EXPECT(mos_toc_have_leadout(t));
+    EXPECT_EQ(210895u, mos_toc_leadout_lba(t));
+    EXPECT_EQ(18000u, mos_toc_track_start_lba(t, 1));
+    EXPECT(!(mos_toc_track_control(t, 0) & 0x4));   /* audio */
+
+    /* Hostile: non-ascending tracks refuse the whole TOC (*out NULL). */
+    static const uint8_t bad[] = {
+        0x00, 0x12, 0x01, 0x02,
+        0x00, 0x10, 0x02, 0x00,  0x00, 0x00, 0x00, 0x00,
+        0x00, 0x10, 0x01, 0x00,  0x00, 0x00, 0x46, 0x50,
+    };
+    mos_fake_set_toc_reply(0x00, bad, sizeof bad);
+    EXPECT_EQ(MOS_ERR_IO, mos_query_toc(h, &t));
+    EXPECT(t == NULL);
+
+    /* Transport injection maps the IOReturn, not MOS_ERR_IO. */
+    mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_READTOC, 0xE00002D6u);
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_query_toc(h, &t));
+
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_da_volume_lookup_modalities)
+{
+    char name[256], path[1024];
+
+    /* Unknown disk: no description, not mounted. */
+    mos_fake_reset();
+    EXPECT(!mos_internal_da_volume("disk4", name, sizeof name,
+                                   path, sizeof path));
+    EXPECT(name[0] == 0 && path[0] == 0);
+
+    /* Mounted with a name. */
+    mos_fake_set_da_volume("ARRIVAL", "/Volumes/ARRIVAL");
+    EXPECT(mos_internal_da_volume("disk4", name, sizeof name,
+                                  path, sizeof path));
+    EXPECT(strcmp(name, "ARRIVAL") == 0);
+    EXPECT(strcmp(path, "/Volumes/ARRIVAL") == 0);
+
+    /* Present but unmounted (description without VolumePath):
+       false, both empty — DA describes unmounted media too. */
+    mos_fake_set_da_volume("GHOST", NULL);
+    EXPECT(!mos_internal_da_volume("disk4", name, sizeof name,
+                                   path, sizeof path));
+    EXPECT(name[0] == 0 && path[0] == 0);
+
+    /* Hostile/degenerate args stay in bounds and report unmounted. */
+    EXPECT(!mos_internal_da_volume(NULL, name, sizeof name,
+                                   path, sizeof path));
+    EXPECT(!mos_internal_da_volume("", name, sizeof name,
+                                   path, sizeof path));
+    return 0;
+}
+
+TEST(adapter_query_volume_gates_on_nub)
+{
+    char name[256], path[1024];
+    bool mounted = true;
+
+    /* Media absent (bsd_unit -1): MOS_OK, unmounted, DA never asked —
+       the fake would have answered (da_volume set) if consulted. */
+    mos_fake_reset();
+    mos_fake_set_bsd_unit(-1);
+    mos_fake_set_da_volume("SHOULD_NOT_SURFACE", "/Volumes/NO");
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+    EXPECT_EQ(MOS_OK, mos_query_volume(h, &mounted, name, sizeof name,
+                                       path, sizeof path));
+    EXPECT(!mounted && name[0] == 0 && path[0] == 0);
+    mos_close(h);
+
+    /* Nub present and mounted: fields surface through the public API. */
+    mos_fake_set_bsd_unit(4);
+    h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+    EXPECT_EQ(MOS_OK, mos_query_volume(h, &mounted, name, sizeof name,
+                                       path, sizeof path));
+    EXPECT(mounted);
+    EXPECT(strcmp(name, "SHOULD_NOT_SURFACE") == 0);
+    EXPECT(strcmp(path, "/Volumes/NO") == 0);
+
+    EXPECT_EQ(MOS_ERR_INVALID_ARG,
+              mos_query_volume(NULL, &mounted, name, sizeof name,
+                               path, sizeof path));
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_drive_caps_roundtrip_and_absent)
+{
+    /* RT=0 reply: feature header (profile 0x0040) + Profile List +
+       AACS feature (BEC set, AACS version 68). */
+    static const uint8_t cfg_aacs[] = {
+        0,0,0,16,  0,0, 0x00,0x40,
+        0x00,0x00, 0x03, 0x00,
+        0x01,0x0D, 0x09, 0x04,  0x03, 0x00, 0x01, 68,
+    };
+    mos_fake_reset();
+    mos_fake_set_getconfig_reply(0x00, cfg_aacs, sizeof cfg_aacs);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    const mos_drive_caps *c = NULL;
+    EXPECT_EQ(MOS_OK, mos_query_drive_caps(h, &c));
+    EXPECT(mos_drive_caps_aacs(c));
+    EXPECT(mos_drive_caps_bus_encryption(c));
+    EXPECT_EQ(68, mos_drive_caps_aacs_version(c));
+
+    /* Non-BD drive: feature list without 0x010D — aacs=false is data. */
+    static const uint8_t cfg_plain[] = {
+        0,0,0,8,  0,0, 0x00,0x10,
+        0x00,0x00, 0x03, 0x00,
+    };
+    mos_fake_set_getconfig_reply(0x00, cfg_plain, sizeof cfg_plain);
+    EXPECT_EQ(MOS_OK, mos_query_drive_caps(h, &c));
+    EXPECT(!mos_drive_caps_aacs(c));
+    EXPECT(!mos_drive_caps_bus_encryption(c));
+    EXPECT_EQ(0, mos_drive_caps_aacs_version(c));
+
+    /* Transport injection maps the IOReturn. */
+    mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_GETCONFIG, 0xE00002D6u);
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_query_drive_caps(h, &c));
+    EXPECT(c == NULL);
+
+    mos_close(h);
+    return 0;
+}
+
+typedef struct { int n; uint16_t codes[8]; bool cur[8]; int stop_after; } feat_ctx;
+static bool feat_cb(const mos_feature_info_t *f, void *vctx)
+{
+    feat_ctx *c = (feat_ctx *)vctx;
+    if (c->n < 8) {
+        c->codes[c->n] = mos_feature_info_code(f);
+        c->cur[c->n]   = mos_feature_info_current(f);
+    }
+    c->n++;
+    return c->stop_after == 0 || c->n < c->stop_after;
+}
+
+TEST(adapter_feature_enumeration_order_and_stop)
+{
+    /* Profile List + Core + AACS, reply order. */
+    static const uint8_t cfg[] = {
+        0,0,0,20,  0,0, 0x00,0x40,
+        0x00,0x00, 0x03, 0x00,
+        0x00,0x01, 0x01, 0x00,
+        0x01,0x0D, 0x09, 0x04,  0x03, 0x00, 0x01, 68,
+    };
+    mos_fake_reset();
+    mos_fake_set_getconfig_reply(0x00, cfg, sizeof cfg);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    feat_ctx c = {0};
+    EXPECT_EQ(MOS_OK, mos_enumerate_features(h, feat_cb, &c));
+    EXPECT_EQ(3, c.n);
+    EXPECT_EQ(0x0000, c.codes[0]);
+    EXPECT_EQ(0x0001, c.codes[1]);
+    EXPECT_EQ(0x010D, c.codes[2]);
+    EXPECT(c.cur[0] && c.cur[1] && c.cur[2]);
+
+    /* Early stop is honored and is not an error. */
+    feat_ctx c2 = {0}; c2.stop_after = 1;
+    EXPECT_EQ(MOS_OK, mos_enumerate_features(h, feat_cb, &c2));
+    EXPECT_EQ(1, c2.n);
+
+    EXPECT_EQ(MOS_ERR_INVALID_ARG, mos_enumerate_features(h, NULL, NULL));
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_disc_id_decodes_and_fails_closed)
+{
+    /* One-DI-unit BD reply: disc type BDR, MILLEN/MR1, rev 0. */
+    static const uint8_t di[116] = {
+        0x00, 114, 0x00, 0x00,  'D','I', 0x00,0x00,
+        [12]='B',[13]='D',[14]='R',
+        [104]='M',[105]='I',[106]='L',[107]='L',[108]='E',[109]='N',
+        [110]='M',[111]='R',[112]='1',
+        [115]='0',
+    };
+    mos_fake_reset();
+    mos_fake_set_disc_structure_reply(0x00, di, sizeof di);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    const mos_disc_id *id = NULL;
+    EXPECT_EQ(MOS_OK, mos_query_disc_id(h, &id));
+    EXPECT(strcmp(mos_disc_id_disc_type(id), "BDR") == 0);
+    EXPECT(strcmp(mos_disc_id_manufacturer(id), "MILLEN") == 0);
+    EXPECT(strcmp(mos_disc_id_media_type(id), "MR1") == 0);
+    EXPECT(strcmp(mos_disc_id_revision(id), "0") == 0);
+
+    /* Non-BD media (or any reply without a 'DI' structure): GOOD status
+       but the decode refuses -> MOS_ERR_IO, *out NULL. */
+    static const uint8_t notdi[116] = { 0x00, 114, 0,0, 'X','X' };
+    mos_fake_set_disc_structure_reply(0x00, notdi, sizeof notdi);
+    EXPECT_EQ(MOS_ERR_IO, mos_query_disc_id(h, &id));
+    EXPECT(id == NULL);
+
+    /* Transport injection maps the IOReturn. */
+    mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_READDISCSTRUCT, 0xE00002D6u);
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_query_disc_id(h, &id));
+
+    EXPECT_EQ(MOS_ERR_INVALID_ARG, mos_query_disc_id(h, NULL));
+    mos_close(h);
+    return 0;
+}
+
 int main(void)
 {
     printf("adapter one-shot (headless, link-seam fake):\n");
@@ -252,6 +495,12 @@ int main(void)
     RUN(adapter_becoming_ready_is_loading);
     RUN(adapter_lock_denied_falls_back_to_sense);
     RUN(adapter_disc_info_replays_fixtures);
+    RUN(adapter_toc_round_trip_and_fail_closed);
+    RUN(adapter_da_volume_lookup_modalities);
+    RUN(adapter_query_volume_gates_on_nub);
+    RUN(adapter_drive_caps_roundtrip_and_absent);
+    RUN(adapter_disc_id_decodes_and_fails_closed);
+    RUN(adapter_feature_enumeration_order_and_stop);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);
     return mos_tests_failed ? 1 : 0;

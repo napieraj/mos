@@ -277,7 +277,7 @@ assert_contains "unknown subcommand diagnostic names recognized set" "$ERR" "sta
 # This avoids the worst UX of users trying `mos capacity` once,
 # getting a vague error, and never trying again when the typed APIs
 # arrive.
-for reserved in capacity identity tray speed features; do
+for reserved in capacity tray speed; do
     run_mos "$reserved" --bsd disk0
     assert_ec "reserved subcommand '$reserved' exits 64" "64" "$EC"
     ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
@@ -332,15 +332,19 @@ assert_contains    "watch sans --json: envelope present" "$OUT" '"schema":"mos.e
 assert_single_line "watch sans --json: one NDJSON line"  "$OUT"
 
 # Test 25a: bare `mos` is an entry point, not a status query (retired
-# implicit-status default, 2026-06-12): exit 64, NOTHING on stdout.
-# stderr carries the drive table + hint (drives attached) or the
-# no-drives line + usage (none) — non-empty either way, so these pins
-# hold on both a driveless CI runner and a developer's Mac.
+# implicit-status default, 2026-06-12) — and does NO device work (the
+# table-at-entry shape was revised out the same day: its state column
+# rode the GESN exclusive lock, wrong for an intent-free invocation).
+# Exit 64, NOTHING on stdout, hint + usage on stderr — identical on a
+# driveless CI runner and a developer's Mac, so pin the usage shape
+# and the absence of the table's header row.
 run_mos
 assert_ec     "bare mos exits 64 (entry point)"  "64" "$EC"
 assert_equals "bare mos stdout is empty"         ""   "$OUT"
 ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
-[ -n "$ERR" ] || { echo "FAIL: bare mos stderr is empty (expected table+hint or usage)"; fail=$((fail+1)); }
+assert_contains     "bare mos stderr carries usage"        "$ERR" "Subcommands:"
+assert_contains     "bare mos hint points at status/list"  "$ERR" "no subcommand"
+assert_not_contains "bare mos prints no drive table"       "$ERR" "Vendor"
 
 # Test 25b: positional registry-id selector and its dispatch boundary
 # (the xnu floor 2^32+256 = 4294967552; pure-pinned in
@@ -410,6 +414,39 @@ case "$ERR" in
     assert_contains "probe --dump banner"         "$OUT" "mos probe --dump"
     assert_contains "probe --dump empty directory" "$OUT" "0 device(s)"
     ;;
+esac
+
+# Test 19a (drive verb): same envelope contract as metadata below;
+# 'identity' left the reserved list when metadata + drive shipped its
+# surface, so it must now hit the UNKNOWN-subcommand diagnostic.
+run_mos drive --json --index 99
+assert_ec       "drive no-drive JSON exit 66"        "66"   "$EC"
+assert_contains "drive error envelope schema"        "$OUT" '"schema": "mos.error.v1"'
+run_mos identity --bsd disk0
+assert_ec       "retired 'identity' exits 64"        "64"   "$EC"
+assert_contains "retired 'identity' is unknown now"  "$ERR" "unknown subcommand"
+
+# Test 19b (features verb): recognized, same envelope contract.
+run_mos features --json --index 99
+assert_ec       "features no-drive JSON exit 66"     "66"   "$EC"
+assert_contains "features error envelope schema"     "$OUT" '"schema": "mos.error.v1"'
+
+# Test 19 (metadata verb): selector errors carry the same mos.error.v1
+# contract as status — the verb's success path needs a drive, but the
+# error envelope and exit-code surface are pinned here.
+run_mos metadata --json --index 99
+assert_ec       "metadata no-drive JSON exit 66"     "66"   "$EC"
+assert_contains "metadata error envelope schema"     "$OUT" '"schema": "mos.error.v1"'
+assert_contains "metadata error code no_device"      "$OUT" '"code": "no_device"'
+
+# metadata is a recognized verb: it must NOT trip the unknown-subcommand
+# or reserved-name diagnostics.
+run_mos metadata --json --index 99
+case "$ERR" in
+    *"unknown subcommand"*|*"reserved for the v0.4"*)
+        fail=$((fail + 1))
+        printf 'fail: metadata hit the unknown/reserved diagnostic\n' ;;
+    *)  pass=$((pass + 1)) ;;
 esac
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

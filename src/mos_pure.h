@@ -182,7 +182,7 @@ typedef struct {
     uint32_t start_lba;
 } mos_toc_entry;
 
-typedef struct {
+typedef struct mos_toc {   /* tagged: mos.h forward-declares it opaquely */
     uint8_t       first_track;
     uint8_t       last_track;
     uint8_t       track_count;
@@ -218,6 +218,43 @@ size_t mos_internal_trusted_len(size_t allocated, size_t transferred,
 
 bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
                                       size_t *cursor, mos_config_feature *out);
+
+/* First feature matching `feature_code`, via the walker (same trust
+   bounds). False when absent or the walk fails closed. The v0.4 drive
+   verb reads AACS (0x010D) presence/version through this. */
+bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
+                                      uint16_t feature_code,
+                                      mos_config_feature *out);
+
+/* AACS capability facts from a full (RT=0) GET CONFIGURATION response —
+   the spec-grounded subset of what MakeMKV's drive dump shows, WITHOUT
+   the LibreDrive synthesis (design doc 2026-06-10 + 06-12 addendum).
+   bus_encryption is the DRIVE-REPORTED support bit (feature 0x010D
+   payload byte 0 bit 1, per libaacs/UDFclient agreement; the
+   authoritative signed BEC bit lives in the AACS drive certificate
+   behind REPORT KEY, out of scope). Feature present but payload
+   truncated (< 4 bytes) is malformed and reads as absent — fail
+   closed, same rule as the walker. */
+typedef struct mos_drive_caps {
+    bool    aacs;            /* feature 0x010D present in the walk      */
+    uint8_t aacs_version;    /* payload byte 3; 0 when aacs is false    */
+    bool    bus_encryption;  /* payload byte 0 bit 1; false when absent */
+} mos_drive_caps;
+
+void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
+                                        mos_drive_caps *out);
+
+/* One feature for the public enumeration (mos_enumerate_features) —
+   the descriptor header facts only. The payload bytes stay internal:
+   exposing a borrowed slice across the public ABI buys lifetime rules
+   no current consumer needs; a typed decode (the AACS caps above) is
+   how payload facts go public. Tagged: mos.h forward-declares it. */
+typedef struct mos_feature_info {
+    uint16_t code;
+    bool     current;
+    bool     persistent;
+    uint8_t  version;
+} mos_feature_info;
 
 /* Current Profile from a GET CONFIGURATION response; false ("no
    profile") unless the reply's own Data Length covers the field, so a
@@ -255,6 +292,36 @@ struct mos_disc_info {
  * (v0.4+). Layout and safety contract at the decoder (mos_discinfo.c). */
 bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
                                   mos_disc_info *out);
+
+/* ---- READ DISC STRUCTURE / BD Disc Information decode (mos_discstruct.c) -- *
+ *
+ * The disc's REGISTERED identity from a Blu-ray Disc Information (DI)
+ * reply (READ DISC STRUCTURE 0xAD, BD media type, format 0x00): the
+ * Disc Manufacturer ID, Media Type ID, and Product Revision. Fixed-
+ * width ASCII fields read at CONSTANT offsets inside the first DI unit;
+ * no device-supplied value is ever used as an offset or length (the
+ * only device length, the structure-data-length header, can only shrink
+ * the trusted region), and no payload byte is dereferenced — bytes are
+ * copied verbatim into these fixed buffers and the CLI layer escapes
+ * them, same as INQUIRY identity. Classification (e.g. manufacturer
+ * "MILLEN" => M-DISC) is the consumer's, not mos's. Strings are NUL-
+ * terminated with fixed-width space padding stripped; "" when the DI is
+ * absent. New fields append at the END (ABI-safe; accessors are the
+ * contract). */
+struct mos_disc_id {
+    char disc_type[4];      /* DI+8,   3 bytes + NUL: "BDR"/"BDW"/"BDO" */
+    char manufacturer[7];   /* DI+100, 6 bytes + NUL */
+    char media_type[4];     /* DI+106, 3 bytes + NUL */
+    char revision[2];       /* DI+111, 1 byte  + NUL */
+};
+
+/* Parse a BD DI reply into *out. True only when the 'DI' signature is
+ * present AND the trusted region (min of `len` and the reply's declared
+ * length) reaches the product-revision byte; false (and *out emptied)
+ * otherwise. Pure, fixed-offset, no-OOB — fuzz/ASan-gated by
+ * tests/fuzz_pure.c and tests/test_discstruct.c. */
+bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
+                                   struct mos_disc_id *out);
 
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/napieraj/mos/schemas/mos.drive.v1.json",
+  "title": "mos.drive.v1",
+  "description": "Static drive facts emitted by `mos drive --json`: what IS this drive, vs mos.metadata.v1's what disc is this (design: doc/research/2026-06-10-media-info-design.md, schema taxonomy). Identity is open-time directory data (zero commands); capabilities are one GET CONFIGURATION RT=0 feature walk. The drive-disc JOIN is consumer-side: the pipeline that loaded a disc knows which drive it used. serial — when it arrives — is the durable inventory key that survives replug and machine moves; registry_id is ATTACHMENT identity (replug mints a new one) and must not be used as a durable key.",
+  "type": "object",
+  "required": [
+    "schema",
+    "bsd",
+    "registry_id",
+    "vendor",
+    "product",
+    "revision",
+    "serial",
+    "capabilities"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "mos.drive.v1",
+      "description": "Schema identifier. Per-document versioned."
+    },
+    "bsd": {
+      "type": ["string", "null"],
+      "pattern": "^/dev/disk[0-9]+$",
+      "description": "Whole-disk dev node of the current media, or null when the drive is empty. Addressing context — a drive property only while this disc is loaded."
+    },
+    "registry_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Drive service IORegistry entry ID — attachment identity, the state/event join key. 0 = unavailable. NOT durable: replug mints a new ID by construction."
+    },
+    "vendor": {
+      "type": ["string", "null"],
+      "description": "INQUIRY-derived vendor string (DiscRecording pre-parsed directory data), null when the directory has no identity. Same sanitization rules as mos.state.v1."
+    },
+    "product": {
+      "type": ["string", "null"],
+      "description": "Product identity, same terms as vendor."
+    },
+    "revision": {
+      "type": ["string", "null"],
+      "description": "Firmware revision (SPC-4 PRODUCT_REVISION_LEVEL), same terms as vendor."
+    },
+    "serial": {
+      "type": ["string", "null"],
+      "description": "INQUIRY unit serial (VPD page 0x80) — the durable drive-inventory key. STAGE 1: always null; whether the convenience InquiryDevice surfaces VPD pages is a recorded Mac falsifier (design doc, 2026-06-12 addendum), and a raw INQUIRY would need the AGENTS raw-verb showing. The key is present so the v1 field set never moves when the value arrives."
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "Spec-grounded GET CONFIGURATION facts only — the same bits a MakeMKV drive dump shows as 'Highest AACS version' / bus-encryption flags, WITHOUT the LibreDrive status synthesis (a MakeMKV database property, not a drive property; mos emits no libredrive field by design).",
+      "required": ["aacs", "aacs_version", "bus_encryption"],
+      "additionalProperties": false,
+      "properties": {
+        "aacs": {
+          "type": "boolean",
+          "description": "AACS feature (0x010D) present in the feature list. false on every non-BD drive — data, not an error."
+        },
+        "aacs_version": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255,
+          "description": "AACS Version (feature payload byte 3), null when aacs is false."
+        },
+        "bus_encryption": {
+          "type": ["boolean", "null"],
+          "description": "DRIVE-REPORTED bus-encryption support (feature payload byte 0 bit 1, per libaacs/UDFclient agreement), null when aacs is false. A firmware assertion: the cryptographically signed BEC bit lives in the AACS drive certificate behind REPORT KEY, which mos does not issue (scope doctrine)."
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "title": "aacs false forces null version and bus_encryption",
+      "description": "Both fields decode from the AACS feature payload; without the feature there is nothing to report and false/0 would fabricate a reading.",
+      "if": {
+        "properties": {
+          "capabilities": {
+            "properties": { "aacs": { "const": false } },
+            "required": ["aacs"]
+          }
+        },
+        "required": ["capabilities"]
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "properties": {
+              "aacs_version": { "const": null },
+              "bus_encryption": { "const": null }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
