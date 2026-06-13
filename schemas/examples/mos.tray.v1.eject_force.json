@@ -1,0 +1,10 @@
+{
+  "schema": "mos.tray.v1",
+  "bsd_node": "/dev/disk4",
+  "registry_id": 4295021843,
+  "action": "eject",
+  "force": true,
+  "persistent": null,
+  "outcome": "done",
+  "sense": null
+}

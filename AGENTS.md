@@ -351,6 +351,80 @@ general SCSI introspection surface — is intact. If a future page request
 is not optical-specific and read-only, it is a fresh argument to make
 here, not covered by this entry.
 
+## ADR: controller verbs admitted — tray (eject/close/lock/unlock)
+## (2026-06-13, narrows ARCHITECTURE §1 "reporter, not controller")
+
+`ARCHITECTURE.md:20` reads "mos is a state reporter, not a state
+controller." This entry records that the tray verbs — the v0.4 surface §1
+itself already carved out (`mos tray {eject, close, lock, unlock}`) — are
+admitted, and why that is an additive narrowing, not a reversal of the
+clause.
+
+**What changed.** An orchestrating consumer now exists: a ripping-robot
+workflow needs to lock an idle drive so a stray operator eject can't fire
+the tray into a moving arm, and to eject/close between stages. That is the
+motivating case `ROADMAP.md:179-216` wrote down, and the feasibility
+analysis (doc/research/2026-06-13-tray-control-feasibility.md) verified the
+design against the tree + canonical sources (T10 04-349r1, Apple's
+IOSCSIMultimediaCommandsDevice). The maintainer green-lit implementation
+the same day.
+
+**Why additive, not a reversal.** The *query path* is untouched:
+`mos_query_state` still issues no control command and keeps its
+no-lock-on-ready guarantee; `tray` is a distinct verb. The one hard line
+preserved verbatim is **mechanism facts only** — mos reports what the
+command did (the `outcome`: done / refused_locked / refused_other) and does
+**not** unmount for you (the deliberate contrast with `drutil tray eject`'s
+unmount-then-eject *policy*). A `5/53/02` locked-eject refusal is a reported
+fact, not an error to defeat.
+
+**Scope-doctrine compliance (layer 1).** The verbs are authored as raw CDBs
+(START STOP UNIT 0x1B, PREVENT ALLOW MEDIUM REMOVAL 0x1E) with the two
+showings layer 1 requires: (a) the convenience `SetTrayState` is structurally
+sense-blind (ARCHITECTURE §9.7/§9.9), so no convenience method can carry the
+honest refusal — the masking-trap analysis IS the showing; (b) the
+nub-collision analysis is simpler than GESN's — the verbs are user-initiated,
+not gated on not-ready, so they inherit the plain `ObtainExclusiveAccess`
+BUSY-on-mounted guard (mos returns MOS_ERR_BUSY on a mounted volume rather
+than disturbing a live IOMedia nub). The one-raw-CDB count becomes one-of-
+three (GESN + the two tray opcodes); `mos_raw_cdb` stays the SINGLE exclusive-
+access call site (§3). Privilege footprint (layer 3) is unchanged: the same
+SCSITaskUserClient console grant, no root, no entitlement, no TCC.
+
+**PREVENT field encoding (T10 04-349r1 Table 8, byte4 = {PERSISTENT,PREVENT}).**
+0x00 clear basic Prevent (unlock); 0x01 set basic Prevent (lock); 0x02 clear
+Persistent Prevent (persistent allow); 0x03 set Persistent Prevent
+(persistent lock). The basic and Persistent Prevent states are INDEPENDENT
+(§6.18.2) — 0x00 does NOT clear a 0x03 lock; 0x02 does. So `mos_tray_unlock`
+takes a `persistent` parameter symmetric with `mos_tray_lock` (one CDB → one
+state). This refines the feasibility doc's A.3 sketch, which had `unlock`
+take no argument because it predated confirming the two states are
+independent — the confirmation is the upload now frozen as the design basis.
+
+**Lock lifetime — no atexit on the single-shot path (narrows
+INTEGRATION_HARNESS.md:432).** That v0.3-prep note said "atexit cleanup on
+the PREVENT path is non-negotiable." It predated the lock-persistence
+derivation. The PREVENT state is per-I_T-nexus and survives a handle close /
+process exit by spec (clears only on bus/LU/hard reset, power on, or an
+explicit ALLOW on the same initiator — a SCSITaskUserClient close is none of
+those, and Apple's kext issues no voluntary ALLOW on exclusive-access
+release). A single-shot `mos tray lock` that atexit-released would be a
+**no-op**; and a persistent lock is exactly what the robot wants to outlive
+the process. So the single-shot verbs register no atexit ALLOW; persistence
+is fire-and-forget, and recovery is a later `mos tray unlock` on the same
+single-initiator host (always succeeds). If a future *held-session* lock mode
+is added (mos staying resident while it holds a lock during a multi-step
+op), atexit cleanup for THAT mode is a fresh argument to make here — this
+entry authorizes only the single-shot, persist-by-design verbs.
+
+**What hardware can still falsify (not establish).** Per the hardware-role
+ADR: a non-conformant USB-SATA bridge that drops the nexus on close
+(clearing the lock early); a firmware that ignores prevent and retracts
+anyway (the prevent *state* still reads back); a drive without the PDTE
+Persistent Prevent state answering 0x02/0x03 with 5/24/00 (classified
+refused_other — already handled). Each lands as a fixture + dated note with
+a generic defense, never a per-device special-case.
+
 ## Naming standard: the BSD vocabulary (Apple-canonical, 2026-06-10)
 
 Three concepts, three names, no synonyms:

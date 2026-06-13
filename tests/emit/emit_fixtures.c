@@ -173,6 +173,32 @@ int main(int argc, char **argv)
         return mos_cli_run_list();
     }
 
+    /* tray: control verbs. No query — just open + issue the raw CDB, whose
+       outcome the fake scripts. Covers the three schema conditionals:
+       eject (force boolean, persistent null), lock --persistent (persistent
+       boolean), and a refused_locked outcome carrying a sense object. */
+    if (strcmp(verb, "tray") == 0 && strcmp(scn, "eject_done") == 0) {
+        mos_fake_reset();
+        tray_action = "eject";
+        mos_fake_set_raw_reply(0x00 /*GOOD*/, NULL, 0, 0, NULL);
+        return mos_cli_run_tray();
+    }
+    if (strcmp(verb, "tray") == 0 && strcmp(scn, "lock_persistent") == 0) {
+        mos_fake_reset();
+        tray_action   = "lock";
+        flag_persistent = true;
+        mos_fake_set_raw_reply(0x00 /*GOOD*/, NULL, 0, 0, NULL);
+        return mos_cli_run_tray();
+    }
+    if (strcmp(verb, "tray") == 0 && strcmp(scn, "refused_locked") == 0) {
+        mos_fake_reset();
+        tray_action = "eject";
+        uint8_t sense[18] = {0};
+        sense[0] = 0x70; sense[2] = 0x05; sense[12] = 0x53; sense[13] = 0x02;
+        mos_fake_set_raw_reply(0x02 /*CHECK CONDITION*/, NULL, 0, 0, sense);
+        return mos_cli_run_tray();
+    }
+
     fprintf(stderr, "unknown verb/scenario: %s %s\n", verb, scn);
     return 2;
 }

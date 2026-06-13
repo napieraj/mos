@@ -208,6 +208,23 @@ def check_cli_enum_drift(here: Path) -> int:
                      enum_at(here / "mos.drive.v1.json",
                              "mechanical", "loading_mechanism") - {None}),)))
 
+    # Tray outcome (src/mos_strings.c mos_tray_outcome_description, with a
+    # `case MOS_TRAY_REFUSED_OTHER: default:` fallback) and the tray action
+    # word (cli/tray.c action_word, same fallback shape) — both pure string
+    # tables, harvested whole like mos_disc_status_description.
+    c_tray_outcome = fn_returns(root / "src" / "mos_strings.c",
+                                "mos_tray_outcome_description")
+    checks.append(("tray_outcome", c_tray_outcome,
+                   "src/mos_strings.c mos_tray_outcome_description()",
+                   (("mos.tray.v1.outcome",
+                     enum_at(here / "mos.tray.v1.json", "outcome")),)))
+
+    c_tray_action = fn_returns(root / "cli" / "tray.c", "action_word")
+    checks.append(("tray_action", c_tray_action,
+                   "cli/tray.c action_word()",
+                   (("mos.tray.v1.action",
+                     enum_at(here / "mos.tray.v1.json", "action")),)))
+
     print("\nCLI-enum drift (C emit tables vs schema enums):")
     failures = 0
     for field, c_set, c_src, schema_sets in checks:

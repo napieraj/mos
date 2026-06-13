@@ -485,6 +485,129 @@ TEST(adapter_disc_id_decodes_and_fails_closed)
     return 0;
 }
 
+/* Pin one tray verb: script a raw reply, issue it, assert the authored CDB
+   bytes, that the lock balanced (acquire-on-call / release-on-return), and
+   the classified outcome. */
+static int pin_tray_cdb(mos_handle_t *h, mos_error (*call)(mos_handle_t *,
+                        mos_tray_outcome *), const uint8_t want[6],
+                        mos_tray_outcome want_outcome)
+{
+    mos_fake_set_raw_reply(0x00 /*GOOD*/, NULL, 0, 0, NULL);
+    mos_tray_outcome out = (mos_tray_outcome)-1;
+    EXPECT_EQ(MOS_OK, call(h, &out));
+    EXPECT_EQ(want_outcome, out);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    uint8_t cdb[16];
+    size_t len = mos_fake_last_cdb(cdb);
+    EXPECT_EQ(6, (int)len);
+    EXPECT(memcmp(cdb, want, 6) == 0);
+    return 0;
+}
+
+/* Thin adapters so pin_tray_cdb can take a uniform (handle, outcome*)
+   signature for the close/lock/unlock variants. */
+static mos_error call_close(mos_handle_t *h, mos_tray_outcome *o)
+{ return mos_tray_close(h, o); }
+static mos_error call_lock(mos_handle_t *h, mos_tray_outcome *o)
+{ return mos_tray_lock(h, false, o); }
+static mos_error call_lock_p(mos_handle_t *h, mos_tray_outcome *o)
+{ return mos_tray_lock(h, true, o); }
+static mos_error call_unlock(mos_handle_t *h, mos_tray_outcome *o)
+{ return mos_tray_unlock(h, false, o); }
+static mos_error call_unlock_p(mos_handle_t *h, mos_tray_outcome *o)
+{ return mos_tray_unlock(h, true, o); }
+static mos_error call_eject(mos_handle_t *h, mos_tray_outcome *o)
+{ return mos_tray_eject(h, false, o); }
+
+TEST(adapter_tray_cdbs_pinned_byte_for_byte)
+{
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    /* START STOP UNIT 0x1B: eject LoEj1 START0 -> 0x02, close -> 0x03. */
+    static const uint8_t eject[6]  = { 0x1B, 0, 0, 0, 0x02, 0 };
+    static const uint8_t close_[6] = { 0x1B, 0, 0, 0, 0x03, 0 };
+    /* PREVENT ALLOW 0x1E byte4 {PERSISTENT,PREVENT} (04-349r1 Table 8). */
+    static const uint8_t lock_[6]    = { 0x1E, 0, 0, 0, 0x01, 0 };
+    static const uint8_t lock_p[6]   = { 0x1E, 0, 0, 0, 0x03, 0 };
+    static const uint8_t unlock_[6]  = { 0x1E, 0, 0, 0, 0x00, 0 };
+    static const uint8_t unlock_p[6] = { 0x1E, 0, 0, 0, 0x02, 0 };
+
+    int rc = 0;
+    rc |= pin_tray_cdb(h, call_eject,    eject,    MOS_TRAY_DONE);
+    rc |= pin_tray_cdb(h, call_close,    close_,   MOS_TRAY_DONE);
+    rc |= pin_tray_cdb(h, call_lock,     lock_,    MOS_TRAY_DONE);
+    rc |= pin_tray_cdb(h, call_lock_p,   lock_p,   MOS_TRAY_DONE);
+    rc |= pin_tray_cdb(h, call_unlock,   unlock_,  MOS_TRAY_DONE);
+    rc |= pin_tray_cdb(h, call_unlock_p, unlock_p, MOS_TRAY_DONE);
+    mos_close(h);
+    return rc;
+}
+
+TEST(adapter_tray_eject_force_is_unlock_then_eject)
+{
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    mos_fake_set_raw_reply(0x00 /*GOOD*/, NULL, 0, 0, NULL);
+    mos_tray_outcome out = (mos_tray_outcome)-1;
+    EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/true, &out));
+    EXPECT_EQ(MOS_TRAY_DONE, out);
+    /* Two CDBs, each its own acquire/release — net balance 0, and the LAST
+       authored CDB is the eject (the ALLOW preceded it). */
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    EXPECT_EQ(2, mos_fake_lock_acquires());
+    uint8_t cdb[16];
+    EXPECT_EQ(6, (int)mos_fake_last_cdb(cdb));
+    static const uint8_t eject[6] = { 0x1B, 0, 0, 0, 0x02, 0 };
+    EXPECT(memcmp(cdb, eject, 6) == 0);
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_tray_locked_eject_classifies_refused_locked)
+{
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    /* CHECK CONDITION + 5/53/02 MEDIA REMOVAL PREVENTED. */
+    uint8_t sense[18] = {0};
+    sense[0] = 0x70; sense[2] = 0x05; sense[12] = 0x53; sense[13] = 0x02;
+    mos_fake_set_raw_reply(0x02 /*CHECK CONDITION*/, NULL, 0, 0, sense);
+
+    mos_tray_outcome out = (mos_tray_outcome)-1;
+    EXPECT_EQ(MOS_OK, mos_tray_eject(h, false, &out));   /* answered = MOS_OK */
+    EXPECT_EQ(MOS_TRAY_REFUSED_LOCKED, out);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_tray_exclusive_denied_is_negative_error)
+{
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    /* Another client holds the drive: ObtainExclusiveAccess fails, so the
+       verb is a transport failure (negative), not an answered refusal. */
+    mos_fake_set_exclusive_denied(true);
+    mos_tray_outcome out = MOS_TRAY_DONE;
+    mos_error e = mos_tray_lock(h, false, &out);
+    EXPECT(e != MOS_OK);
+    EXPECT_EQ(MOS_ERR_EXCLUSIVE_ACCESS, e);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    mos_close(h);
+    return 0;
+}
+
 int main(void)
 {
     printf("adapter one-shot (headless, link-seam fake):\n");
@@ -501,6 +624,10 @@ int main(void)
     RUN(adapter_drive_caps_roundtrip_and_absent);
     RUN(adapter_disc_id_decodes_and_fails_closed);
     RUN(adapter_feature_enumeration_order_and_stop);
+    RUN(adapter_tray_cdbs_pinned_byte_for_byte);
+    RUN(adapter_tray_eject_force_is_unlock_then_eject);
+    RUN(adapter_tray_locked_eject_classifies_refused_locked);
+    RUN(adapter_tray_exclusive_denied_is_negative_error);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);
     return mos_tests_failed ? 1 : 0;

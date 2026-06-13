@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/napieraj/mos/schemas/mos.tray.v1.json",
+  "title": "mos.tray.v1",
+  "description": "Outcome of a tray-control verb emitted by `mos tray <action> --json`: the first commands mos issues that CHANGE drive state (eject/close via START STOP UNIT 0x1B, lock/unlock via PREVENT ALLOW MEDIUM REMOVAL 0x1E). Mechanism facts only — mos reports what the command did and does NOT unmount for you (the deliberate contrast with `drutil tray eject`'s policy). A command the drive ANSWERED is success (the process exits 0) even when the outcome is a refusal; a transport/lock failure (drive mounted or held by another client, gone, IO) emits mos.error.v1 and a non-zero exit instead. Design: doc/research/2026-06-13-tray-control-feasibility.md; encoding: T10 04-349r1.",
+  "type": "object",
+  "required": [
+    "schema",
+    "bsd_node",
+    "registry_id",
+    "action",
+    "force",
+    "persistent",
+    "outcome",
+    "sense"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "mos.tray.v1",
+      "description": "Schema identifier. Per-document versioned."
+    },
+    "bsd_node": {
+      "type": ["string", "null"],
+      "pattern": "^/dev/disk[0-9]+$",
+      "description": "Whole-disk dev node of the current media, or null when the drive is empty (an eject of an empty tray is still a valid command)."
+    },
+    "registry_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Drive service IORegistry entry ID — attachment identity. 0 = unavailable. NOT durable: replug mints a new ID."
+    },
+    "action": {
+      "enum": ["eject", "close", "lock", "unlock"],
+      "description": "The control verb issued. eject/close are START STOP UNIT (LoEj=1, START=0/1); lock/unlock are PREVENT ALLOW MEDIUM REMOVAL."
+    },
+    "force": {
+      "type": ["boolean", "null"],
+      "description": "eject only (null on every other action): when true, an ALLOW (clear basic Prevent) was issued immediately before the eject — the unlock-then-eject sequence the macOS kernel's own EjectTheMedia performs. Does not clear a Persistent Prevent lock, and need not: an initiator eject succeeds under Persistent Prevent (04-349r1 §6.18.3.2)."
+    },
+    "persistent": {
+      "type": ["boolean", "null"],
+      "description": "lock/unlock only (null on every other action): selects the PERSISTENT bit (04-349r1 Table 8). lock true sets the Persistent Prevent state (byte4 0x03 — the robot-grade lock: operator eject button becomes a GESN EjectRequest event); false sets the basic Prevent state (0x01). unlock must match the lock being released — the two prevent states are independent (0x00 clears basic, 0x02 clears persistent)."
+    },
+    "outcome": {
+      "enum": ["done", "refused_locked", "refused_other"],
+      "description": "done = command completed GOOD. refused_locked = CHECK CONDITION 5/53/02 MEDIA REMOVAL PREVENTED (an eject/close hit a basic Prevent lock — a reported fact, not a CLI failure). refused_other = any other answered CHECK CONDITION (e.g. a drive without Persistent Prevent support rejecting --persistent with 5/24/00)."
+    },
+    "sense": {
+      "type": ["object", "null"],
+      "description": "SCSI sense triple on a refusal, or null. The public API exposes outcome, not raw sense, so this is populated only for the known refused_locked case (5/53/02); refused_other carries bytes the API does not surface and is null. Always null on done.",
+      "required": ["key", "asc", "ascq"],
+      "additionalProperties": false,
+      "properties": {
+        "key":  { "type": "integer", "minimum": 0, "maximum": 15,  "description": "Sense key (e.g. 5 = ILLEGAL REQUEST)." },
+        "asc":  { "type": "integer", "minimum": 0, "maximum": 255, "description": "Additional Sense Code (e.g. 0x53 = 83)." },
+        "ascq": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Additional Sense Code Qualifier (e.g. 0x02 = 2)." }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "title": "force is a boolean only for eject",
+      "if": {
+        "properties": { "action": { "const": "eject" } },
+        "required": ["action"]
+      },
+      "then": { "properties": { "force": { "type": "boolean" }, "persistent": { "const": null } } },
+      "else": { "properties": { "force": { "const": null } } }
+    },
+    {
+      "title": "persistent is a boolean only for lock/unlock",
+      "if": {
+        "properties": { "action": { "enum": ["lock", "unlock"] } },
+        "required": ["action"]
+      },
+      "then": { "properties": { "persistent": { "type": "boolean" } } },
+      "else": { "properties": { "persistent": { "const": null } } }
+    },
+    {
+      "title": "done carries no sense",
+      "if": {
+        "properties": { "outcome": { "const": "done" } },
+        "required": ["outcome"]
+      },
+      "then": { "properties": { "sense": { "const": null } } }
+    }
+  ]
+}

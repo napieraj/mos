@@ -215,6 +215,26 @@ interlock (it is not). Note the deliberate contrast with `drutil tray eject`,
 which is documented unmount-then-eject *policy* — mos does not unmount for
 you (doc/research/2026-06-10-drutil-contract.md).
 
+**Status (2026-06-13): implemented.** `mos tray {eject, close, lock, unlock}`
+shipped — public API (`mos_tray_*`, `include/mos.h`), the raw-CDB seam
+(`src/mos_tray.c` on the single `mos_raw_cdb` site), the pure outcome
+classifier + headless test (`tests/test_tray.c`), the CLI verb
+(`cli/tray.c`, de-reserved in `main.c`), and the `mos.tray.v1` schema. The
+feasibility analysis (`doc/research/2026-06-13-tray-control-feasibility.md`)
+and the maintainer-supplied T10 04-349r1 demoted the two "hardware gates"
+above to spec-resolved + falsifiable: the prevent bit survives handle close
+by spec (per-I_T-nexus state; a SCSITaskUserClient close is none of the SPC-4
+clearing events), so the verbs are fire-and-forget with consumer-owned
+unlock — no held session, no atexit on the single-shot path. The
+persistent-prevent encoding is confirmed ({PERSISTENT,PREVENT} = byte4
+0x00/0x01/0x02/0x03, two independent states), so `unlock` takes a
+`--persistent` matching `lock`. What remains for the rig is pure
+falsification: whether a given mechanism physically honors prevent, the
+per-drive cooperative-button (EjectRequest) matrix, and a non-conformant
+bridge dropping the nexus on close. The `eject_requested` watch event
+(GESN EjectRequest surfaced on `--watch`) is the noted v0.4+ follow-on, not
+shipped here.
+
 **Remove `mos_raw_cdb()`** — once the typed APIs cover the diagnostic cases the
 raw passthrough is legacy; removal is the major-version justification. (The
 `goto cleanup` consolidation this item once demanded already landed — the

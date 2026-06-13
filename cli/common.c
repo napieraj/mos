@@ -15,6 +15,10 @@ bool        flag_watch  = false;
 bool        flag_metadata = false;
 bool        flag_drive = false;
 bool        flag_features = false;
+bool        flag_tray   = false;  /* tray subcommand (control verbs) */
+const char *tray_action = NULL;   /* eject|close|lock|unlock; NULL = missing */
+bool        flag_force  = false;  /* tray eject --force */
+bool        flag_persistent = false; /* tray lock/unlock --persistent */
 bool        flag_probe  = false;  /* probe subcommand (MOS_CLI_PROBE builds) */
 bool        flag_dump   = false;  /* probe --dump one-shot DR capture */
 

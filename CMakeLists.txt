@@ -178,6 +178,7 @@ if(APPLE)
 
 add_library(mos_core STATIC
     src/mos_scsi.c
+    src/mos_tray.c
     src/mos_da.c
     src/mos_state.c
     src/mos_watch.c
@@ -240,6 +241,7 @@ add_executable(mos
     cli/metadata.c
     cli/drive.c
     cli/features.c
+    cli/tray.c
     cli/list.c
     cli/watch.c
     cli/human.c
@@ -308,6 +310,7 @@ if(MOS_BUILD_TESTS)
         tests/test_trackinfo.c
         tests/test_perf.c
         tests/test_modepage.c
+        tests/test_tray.c
         tests/test_result.c
     )
     # Tests link against mos_pure only — by design (plus cli/human.c,
@@ -395,6 +398,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         tests/test_adapter_oneshot.c
         tests/fake/mos_fake_apple.c
         src/mos_scsi.c
+        src/mos_tray.c
         src/mos_state.c
         src/mos_dr.c
         src/mos_da.c
@@ -428,6 +432,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         tests/emit/emit_fixtures.c
         tests/fake/mos_fake_apple.c
         src/mos_scsi.c
+        src/mos_tray.c
         src/mos_state.c
         src/mos_dr.c
         src/mos_da.c
@@ -439,6 +444,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         cli/metadata.c
         cli/drive.c
         cli/features.c
+        cli/tray.c
     )
     target_include_directories(mos_emit_fixtures PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
