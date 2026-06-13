@@ -16,8 +16,9 @@
 #include <string.h>
 #include <sysexits.h>
 
-#define FEAT_CAP 128   /* a real drive reports ~30; the walk caps at
-                          1024 bytes / 4 = 256 descriptors anyway */
+#define FEAT_CAP 256   /* covers the walk's own ceiling (1024 bytes / 4 =
+                          256 descriptors); a real drive reports ~30, so
+                          both human and JSON carry every descriptor walked */
 
 typedef struct {
     struct {
@@ -77,8 +78,10 @@ static void emit_human(const feat_collect *c)
                 c->rows[i].version);
     }
     if (c->total > c->n) {
-        fprintf(stdout, "  (+%d more past the %d-row display cap; "
-                        "--json carries the full list)\n",
+        /* Unreachable while FEAT_CAP matches the walk ceiling; kept as a
+           guard. Both renderings cap at FEAT_CAP, so overflow rows are
+           not shown anywhere — do not claim --json carries them. */
+        fprintf(stdout, "  (+%d more past the %d-row cap; not shown)\n",
                 c->total - c->n, FEAT_CAP);
     }
 }

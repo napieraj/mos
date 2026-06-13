@@ -927,7 +927,7 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
     p->descriptor_count = rd_cnt;
     p->max_read_kbps    = rd_max;
     p->max_write_kbps   = wr_max;
-    p->have             = (rd_cnt > 0 || wr_cnt > 0);
+    p->have             = (rd_cnt > 0);   /* read read is the gate (see above) */
     *out = p;
     return MOS_OK;
 }

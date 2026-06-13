@@ -60,7 +60,7 @@ const char *mos_error_description(mos_error e)
         case MOS_ERR_BUSY:              return "drive reports busy";
         case MOS_ERR_TIMEOUT:           return "timed out";
         case MOS_ERR_IO:                return "IOKit error";
-        case MOS_ERR_UNSUPPORTED:       return "not implemented in this build";
+        case MOS_ERR_UNSUPPORTED:       return "operation unsupported by this drive, driver, or build";
         case MOS_ERR_OOM:               return "out of memory";
         default:                        return "unknown error";
     }
