@@ -366,7 +366,7 @@ drive, hot-plug included — is one pipeline. No polling, no `sleep`:
 ```sh
 mos watch | jq --unbuffered -r '
     select(.event != "error" and .state == "ready")
-    | "\(.bsd) \(.media_class // "unknown")"' |
+    | "\(.bsd_node) \(.media_class // "unknown")"' |
 while read -r dev class; do
     case "$class" in
         cd)     cdparanoia -B -d "$dev" ;;
