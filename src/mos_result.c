@@ -464,3 +464,57 @@ uint32_t mos_drive_perf_max_write_kbps(const mos_drive_perf *p)
 {
     return p ? p->max_write_kbps : 0;
 }
+
+/* ---- mos_mode_caps accessors (mos_query_mode_caps) ----------------- */
+
+uint8_t mos_mode_caps_loading_mechanism(const mos_mode_caps *m)
+{
+    return m ? m->loading_mechanism : 0;
+}
+
+bool mos_mode_caps_can_eject(const mos_mode_caps *m)
+{
+    return m ? m->can_eject : false;
+}
+
+bool mos_mode_caps_lock_supported(const mos_mode_caps *m)
+{
+    return m ? m->lock_supported : false;
+}
+
+bool mos_mode_caps_locked(const mos_mode_caps *m)
+{
+    return m ? m->locked : false;
+}
+
+uint16_t mos_mode_caps_buffer_kb(const mos_mode_caps *m)
+{
+    return m ? m->buffer_kb : 0;
+}
+
+/* ---- mos_error_recovery accessors (mos_query_error_recovery) -------- */
+
+bool mos_error_recovery_awre(const mos_error_recovery *e)
+{
+    return e ? e->awre : false;
+}
+
+bool mos_error_recovery_arre(const mos_error_recovery *e)
+{
+    return e ? e->arre : false;
+}
+
+bool mos_error_recovery_per(const mos_error_recovery *e)
+{
+    return e ? e->per : false;
+}
+
+bool mos_error_recovery_dcr(const mos_error_recovery *e)
+{
+    return e ? e->dcr : false;
+}
+
+uint8_t mos_error_recovery_read_retry_count(const mos_error_recovery *e)
+{
+    return e ? e->read_retry_count : 0;
+}

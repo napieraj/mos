@@ -13,7 +13,9 @@
     "revision",
     "serial",
     "capabilities",
-    "speeds"
+    "speeds",
+    "mechanical",
+    "error_recovery"
   ],
   "additionalProperties": false,
   "properties": {
@@ -89,6 +91,53 @@
           "type": "integer",
           "minimum": 0,
           "description": "Maximum Write Speed (kB/s) across the descriptors."
+        }
+      }
+    },
+    "mechanical": {
+      "type": ["object", "null"],
+      "description": "MODE SENSE(10) page 0x2A (MM Capabilities & Mechanical Status) via the ModeSense10 convenience method — the mechanical facts GET CONFIGURATION cannot carry: loading-mechanism type, eject/lock support, the live media-locked bit, and the drive buffer size. Read-only (no MODE SELECT). null when the command failed or page 0x2A was absent. loading_mechanism and eject are kernel-confirmed (sr.c get_capabilities); buffer_kb and the lock bits are the standard MMC-3 page-2A positions with no in-repo capture yet (hardware falsifier per the ADR).",
+      "required": ["loading_mechanism", "can_eject", "lock_supported", "locked", "buffer_kb"],
+      "additionalProperties": false,
+      "properties": {
+        "loading_mechanism": {
+          "enum": ["caddy", "tray", "popup", "changer_disc", "changer_cartridge", null],
+          "description": "Loading-mechanism token (page[6] bits 7:5 via mos_loading_mechanism_name), or null for a reserved/unknown code."
+        },
+        "can_eject": {
+          "type": "boolean",
+          "description": "Drive supports START/STOP eject (page[6] bit 3)."
+        },
+        "lock_supported": {
+          "type": "boolean",
+          "description": "Drive supports media locking (page[6] bit 1)."
+        },
+        "locked": {
+          "type": "boolean",
+          "description": "Media is currently locked (page[6] bit 2) — the live state bit."
+        },
+        "buffer_kb": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Drive buffer size in KB (page[12..13])."
+        }
+      }
+    },
+    "error_recovery": {
+      "type": ["object", "null"],
+      "description": "MODE SENSE(10) page 0x01 (Read/Write Error Recovery) via the ModeSense10 convenience method — the drive's read error-recovery configuration. Read-only: mos reports it, it never issues the MODE SELECT that recovery tools (dvdisaster, sdparm) use to tune it. null when the command failed or page 0x01 was absent.",
+      "required": ["awre", "arre", "per", "dcr", "read_retry_count"],
+      "additionalProperties": false,
+      "properties": {
+        "awre": { "type": "boolean", "description": "Automatic Write Reallocation Enabled (page[2] bit 7)." },
+        "arre": { "type": "boolean", "description": "Automatic Read Reallocation Enabled (page[2] bit 6)." },
+        "per":  { "type": "boolean", "description": "Post Error (page[2] bit 2)." },
+        "dcr":  { "type": "boolean", "description": "Disable Correction (page[2] bit 0)." },
+        "read_retry_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Read Retry Count (page[3])."
         }
       }
     }

@@ -17,7 +17,7 @@
     "max_write_kbps": 8310
   },
   "mechanical": {
-    "loading_mechanism": "tray",
+    "loading_mechanism": "rocket",
     "can_eject": true,
     "lock_supported": true,
     "locked": false,

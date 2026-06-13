@@ -910,6 +910,66 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
     return MOS_OK;
 }
 
+/* Shared MODE SENSE(10) issuance for the two read-only optical pages
+   (AGENTS scope addendum 2026-06-13). PAGE_CONTROL = 00b (current
+   values). DBD=1 (no block descriptor) keeps the reply compact; the
+   pure walker tolerates a descriptor either way. SDK-verify the exact
+   ModeSense10 selector signature against docs/apple/SCSITaskLib.h before
+   shipping. Non-exclusive convenience: no lock. */
+static mos_error mos_internal_mode_sense10(mos_handle_t *h, uint8_t page,
+                                           uint8_t *buf, size_t buf_len)
+{
+    SCSITaskStatus  st = 0;
+    SCSI_Sense_Data sd = {0};
+    IOReturn rc = (*h->mmc)->ModeSense10(
+        h->mmc,
+        (UInt8)1,                /* DBD = 1 (disable block descriptor)  */
+        (UInt8)0x00,             /* PAGE_CONTROL = current values       */
+        (UInt8)page,             /* PAGE_CODE                           */
+        buf, (UInt16)buf_len,
+        &st, &sd);
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+    return MOS_OK;
+}
+
+mos_error mos_query_mode_caps(mos_handle_t *h, const mos_mode_caps **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    uint8_t   buf[96] = {0};
+    mos_error e = mos_internal_mode_sense10(h, 0x2A, buf, sizeof buf);
+    if (e != MOS_OK) return e;
+
+    if (!mos_internal_mode_caps_parse(buf, sizeof(buf), &h->mode_caps)) {
+        return MOS_ERR_IO;   /* page 0x2A absent or short — refused whole */
+    }
+    *out = &h->mode_caps;
+    return MOS_OK;
+}
+
+mos_error mos_query_error_recovery(mos_handle_t *h,
+                                   const mos_error_recovery **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    uint8_t   buf[64] = {0};
+    mos_error e = mos_internal_mode_sense10(h, 0x01, buf, sizeof buf);
+    if (e != MOS_OK) return e;
+
+    if (!mos_internal_error_recovery_parse(buf, sizeof(buf),
+                                           &h->error_recovery)) {
+        return MOS_ERR_IO;   /* page 0x01 absent or short — refused whole */
+    }
+    *out = &h->error_recovery;
+    return MOS_OK;
+}
+
 /* Open-time directory identity, exposed for the drive verb: zero
    commands, same borrowed-string terms as the state result's copies
    (which point into these same buffers). */

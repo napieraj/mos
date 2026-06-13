@@ -211,6 +211,16 @@ flag lives in the AACS drive certificate, which mos does not fetch.
 There is deliberately no `libredrive` field: that status is a MakeMKV
 database property, not a drive property.
 
+`mechanical` and `error_recovery` are the two read-only MODE SENSE(10)
+reads the scope doctrine admits (page 0x2A and page 0x01; AGENTS
+addendum 2026-06-13). `mechanical` carries the loading-mechanism type,
+eject/lock support, the live media-locked bit, and the drive buffer
+size — the mechanical facts GET CONFIGURATION cannot report.
+`error_recovery` carries the drive's read error-recovery configuration
+(AWRE/ARRE/PER/DCR + read-retry count). Both are read-only: mos reports
+the configuration, it never issues the MODE SELECT that recovery tools
+use to tune it. Each is null when its page is unavailable.
+
 ### Features (medium writability)
 
 `mos features --json` emits `mos.features.v1`: the raw MMC feature

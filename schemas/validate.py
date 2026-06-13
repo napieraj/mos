@@ -200,6 +200,14 @@ def check_cli_enum_drift(here: Path) -> int:
                              "disc_structure", "copyright",
                              "protection_name") - {None}),)))
 
+    c_loadmech = fn_returns(root / "src" / "mos_strings.c",
+                            "mos_loading_mechanism_name")
+    checks.append(("loading_mechanism", c_loadmech,
+                   "src/mos_strings.c mos_loading_mechanism_name()",
+                   (("mos.drive.v1.mechanical.loading_mechanism",
+                     enum_at(here / "mos.drive.v1.json",
+                             "mechanical", "loading_mechanism") - {None}),)))
+
     print("\nCLI-enum drift (C emit tables vs schema enums):")
     failures = 0
     for field, c_set, c_src, schema_sets in checks:

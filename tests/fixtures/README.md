@@ -259,3 +259,18 @@ Descriptor after the 8-byte header) are the MMC-6 layout; a real GET
 PERFORMANCE capture is a falsification-matrix item per the hardware ADR
 (it can refute or feed these offsets, not steer them). The no-OOB
 property is fuzz/ASan-gated (`tests/fuzz_pure.c` phase 11).
+
+### MODE SENSE(10) page 0x2A / 0x01 — inline fixtures
+The mechanical (page 0x2A) and error-recovery (page 0x01) decodes
+(`mos_modepage.c`) are exercised by spec-built inline fixtures in
+`test_modepage.c`: a tray loader with eject/lock/locked + buffer size, an
+error-recovery page (AWRE/ARRE/PER + retry count), a reply that skips a
+block descriptor and a preceding page to find 0x2A, and hostile cases
+(lying mode-data / block-descriptor / page lengths) that the bounded page
+walker must neither loop on nor read past. Page 0x2A loading-mechanism
+(page[6]>>5) and eject (page[6]&0x08) are kernel-confirmed (sr.c
+get_capabilities); buffer size (page[12..13]) and the lock bits are the
+standard MMC-3 page-2A positions — a real MODE SENSE capture is a
+falsifier per the hardware ADR. Page 0x01 (AWRE/ARRE/PER/DCR @ page[2],
+retry @ page[3]) is the canonical SPC layout. No-OOB / no-loop property
+is fuzz/ASan-gated (`tests/fuzz_pure.c` phase 12).

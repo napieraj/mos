@@ -596,6 +596,56 @@ uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p);
 uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p);
 uint32_t mos_drive_perf_max_write_kbps(const mos_drive_perf *p);
 
+/* ---- Mechanical + error-recovery (MODE SENSE, v0.4 typed API) --------- */
+
+/* Results of the two read-only MODE SENSE(10) page reads (AGENTS scope
+   addendum 2026-06-13). Opaque, handle-owned; each valid until the next
+   call of its query or mos_close(). */
+typedef struct mos_mode_caps      mos_mode_caps;
+typedef struct mos_error_recovery mos_error_recovery;
+
+/*
+ * Query MODE SENSE(10) page 0x2A (MM Capabilities & Mechanical Status)
+ * through the non-exclusive ModeSense10 convenience method: the
+ * mechanical facts GET CONFIGURATION cannot carry — loading-mechanism
+ * type, eject/lock support, the live media-locked bit, and the drive
+ * buffer size. Read-only (no MODE SELECT — mos reports, never tunes).
+ * `out` REQUIRED; MOS_ERR_IO when the command fails or page 0x2A is
+ * absent. Page 0x2A is the MMC-5/6 Legacy annex; mos reads only the
+ * non-deprecated residue (speeds come from mos_query_drive_perf).
+ */
+mos_error mos_query_mode_caps(mos_handle_t *h, const mos_mode_caps **out);
+
+/* Accessors. NULL-tolerant (0/false). loading_mechanism is the raw code;
+   map it with mos_loading_mechanism_name(). */
+uint8_t  mos_mode_caps_loading_mechanism(const mos_mode_caps *m);
+bool     mos_mode_caps_can_eject(const mos_mode_caps *m);
+bool     mos_mode_caps_lock_supported(const mos_mode_caps *m);
+bool     mos_mode_caps_locked(const mos_mode_caps *m);
+uint16_t mos_mode_caps_buffer_kb(const mos_mode_caps *m);
+
+/* Loading-mechanism token: "caddy" / "tray" / "popup" / "changer_disc" /
+   "changer_cartridge", or NULL for reserved/unknown codes. */
+const char *mos_loading_mechanism_name(uint8_t code);
+
+/*
+ * Query MODE SENSE(10) page 0x01 (Read/Write Error Recovery) through the
+ * ModeSense10 convenience method: the drive's read error-recovery
+ * configuration — AWRE, ARRE, PER, DCR, and the read-retry count.
+ * Read-only (the MODE SELECT tuning recovery tools perform is out of
+ * scope). `out` REQUIRED; MOS_ERR_IO when the command fails or page 0x01
+ * is absent.
+ */
+mos_error mos_query_error_recovery(mos_handle_t *h,
+                                   const mos_error_recovery **out);
+
+/* Accessors. NULL-tolerant (0/false). */
+bool    mos_error_recovery_awre(const mos_error_recovery *e);
+bool    mos_error_recovery_arre(const mos_error_recovery *e);
+bool    mos_error_recovery_per(const mos_error_recovery *e);
+bool    mos_error_recovery_dcr(const mos_error_recovery *e);
+uint8_t mos_error_recovery_read_retry_count(const mos_error_recovery *e);
+
 /* ---- Feature enumeration (v0.4 typed API) ----------------------------- */
 
 /* One MMC feature descriptor's header facts. Opaque; valid only inside

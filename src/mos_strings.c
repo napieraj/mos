@@ -166,6 +166,21 @@ const char *mos_protection_name(uint8_t protection)
     }
 }
 
+/* Loading-mechanism type (MODE SENSE page 0x2A byte 6 bits 7:5).
+   Explicit returns so the validate.py drift guard harvests the tokens;
+   unrecognized/reserved codes return NULL. */
+const char *mos_loading_mechanism_name(uint8_t code)
+{
+    switch (code) {
+        case 0:  return "caddy";
+        case 1:  return "tray";
+        case 2:  return "popup";
+        case 4:  return "changer_disc";
+        case 5:  return "changer_cartridge";
+        default: return NULL;
+    }
+}
+
 /* sysexits.h class for a mos_error. Kept in sync with the table in
    include/mos.h's mos_error_sysexit() doc-comment. */
 int mos_error_sysexit(mos_error e)

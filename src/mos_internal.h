@@ -71,6 +71,11 @@ struct mos_handle {
 
     /* Handle-owned drive-performance result (mos_query_drive_perf). */
     struct mos_drive_perf     drive_perf;
+
+    /* Handle-owned MODE SENSE results (mos_query_mode_caps /
+       mos_query_error_recovery). Same terms. */
+    struct mos_mode_caps      mode_caps;
+    struct mos_error_recovery error_recovery;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on

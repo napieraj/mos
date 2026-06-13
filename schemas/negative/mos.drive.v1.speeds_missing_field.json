@@ -14,5 +14,7 @@
   "speeds": {
     "descriptor_count": 4,
     "max_read_kbps": 10560
-  }
+  },
+  "mechanical": null,
+  "error_recovery": null
 }

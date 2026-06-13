@@ -425,6 +425,41 @@ struct mos_drive_perf {
 bool mos_internal_drive_perf_parse(const uint8_t *buf, size_t len,
                                    struct mos_drive_perf *out);
 
+/* ---- MODE SENSE(10) page decode (mos_modepage.c) ------------------- *
+ *
+ * Two read-only optical-specific pages (AGENTS 2026-06-13 addendum):
+ * page 0x2A (mechanical: loading mechanism, eject/lock support, the live
+ * locked bit, buffer size) and page 0x01 (read error-recovery config).
+ * Decoded by a bounded page walker; the only device lengths (mode data
+ * length, block descriptor length, per-page length) can only shrink the
+ * trusted region, and the walk strictly advances. New fields append at
+ * the END. */
+struct mos_mode_caps {
+    bool     have;              /* page 0x2A was present */
+    uint8_t  loading_mechanism; /* page[6] 7:5 (0 caddy,1 tray,2 popup,...) */
+    bool     can_eject;         /* page[6] bit 3 */
+    bool     lock_supported;    /* page[6] bit 1 */
+    bool     locked;            /* page[6] bit 2 (live state) */
+    uint16_t buffer_kb;         /* page[12..13] BE, KB */
+};
+
+struct mos_error_recovery {
+    bool    have;               /* page 0x01 was present */
+    bool    awre;               /* page[2] bit 7: auto write reallocation */
+    bool    arre;               /* page[2] bit 6: auto read reallocation */
+    bool    per;                /* page[2] bit 2: post error */
+    bool    dcr;                /* page[2] bit 0: disable correction */
+    uint8_t read_retry_count;   /* page[3] */
+};
+
+/* Parse MODE SENSE(10) for page 0x2A / 0x01 into *out. True only when the
+ * page is present and long enough for the fields read. Pure, bounded,
+ * no-OOB — fuzz/ASan-gated. */
+bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
+                                  struct mos_mode_caps *out);
+bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
+                                       struct mos_error_recovery *out);
+
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
  * True for the four SAM-5 status values that mean "drive contended,
