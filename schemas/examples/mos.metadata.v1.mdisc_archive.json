@@ -30,7 +30,9 @@
       "disc_type": "BDR",
       "manufacturer_id": "MILLEN",
       "media_type_id": "MR1",
-      "revision": "0"
+      "revision": "0",
+      "physical": null,
+      "copyright": null
     },
     "volume_name": "FAMILY_ARCHIVE_2026"
   }

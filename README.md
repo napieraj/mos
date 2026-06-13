@@ -161,8 +161,22 @@ manufacturer ID, media-type ID, revision. This names the actual disc
 maker (`CMCMAG`, `VERBAT`, `RITEK`…) and, for Millenniata M-DISC,
 reports manufacturer `MILLEN` / media type `MR1`. mos surfaces the
 registered bytes faithfully; classifying `MILLEN` as M-DISC is the
-consumer's call (same division as the third-party ids). The field is
-null on CD/DVD, where the DI structure does not exist.
+consumer's call (same division as the third-party ids). These BD
+identity fields are null on CD/DVD/HD-DVD, where the DI structure does
+not exist.
+
+For the DVD/HD-DVD family, `disc.disc_structure` instead carries two
+sibling objects from READ DISC STRUCTURE media-type 0 (null on BD/CD):
+`physical` — the Physical Format Information (book type + token name,
+disc size, rate, layer layout, densities, BCA, and the data-area sector
+boundaries; `end_sector_l0` is the layer break on dual-layer OTP media)
+— and `copyright` — the Copyright Management Information (protection
+system type + token, region mask). Offsets follow the canonical kernel
+wire parse (`drivers/cdrom/cdrom.c`); the numeric fields are raw spec
+codes with `*_name` token mappings, and the copyright bytes are surfaced
+faithfully without classifying region semantics or reading any keys
+(scope doctrine). The structure is named `physical`, not `dvd`, because
+the same media-type-0 reply carries HD-DVD book types.
 
 ### Drive (static facts)
 

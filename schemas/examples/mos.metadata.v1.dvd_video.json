@@ -1,0 +1,53 @@
+{
+  "schema": "mos.metadata.v1",
+  "bsd": "/dev/disk4",
+  "captured_at": "2026-06-13T03:10:00.000Z",
+  "volume_path": null,
+  "disc": {
+    "profile": "0x0010",
+    "class": "dvd",
+    "toc": {
+      "first_track": 1,
+      "last_track": 1,
+      "leadout_lba": 3842048,
+      "tracks": [
+        {
+          "track": 1,
+          "adr": 1,
+          "control": 4,
+          "data": true,
+          "start_lba": 0
+        }
+      ]
+    },
+    "disc_info": null,
+    "disc_structure": {
+      "disc_type": null,
+      "manufacturer_id": null,
+      "media_type_id": null,
+      "revision": null,
+      "physical": {
+        "book_type": 0,
+        "book_type_name": "dvd_rom",
+        "part_version": 1,
+        "disc_size": 0,
+        "max_rate": 15,
+        "num_layers": 2,
+        "track_path": "otp",
+        "layer_type": 1,
+        "linear_density": 0,
+        "track_density": 0,
+        "bca": false,
+        "start_sector": 196608,
+        "end_sector": 3842048,
+        "end_sector_l0": 2050047
+      },
+      "copyright": {
+        "protection": 1,
+        "protection_name": "css_cppm",
+        "region": 2
+      }
+    },
+    "volume_name": null
+  }
+}

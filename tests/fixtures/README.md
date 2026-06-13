@@ -215,3 +215,23 @@ scsi-layer.c (buf[4+8] disc-type, 100/106), and libburn mmc.c
 and non-DI cases are inline in that file, and the fixed-offset/
 dual-length no-OOB property is fuzz/ASan-gated (tests/fuzz_pure.c
 phase 8, MILLEN-shaped and wild buffers, exact-size allocations).
+
+### Physical Format / Copyright Information (DVD/HD-DVD) — inline fixtures
+READ DISC STRUCTURE (0xAD) media-type 0, format 0x00 (Physical Format
+Information) and 0x01 (Copyright Management Information), decoded by
+`mos_physstruct.c`. Unlike the BD DI capture above, these are exercised
+by spec-built inline fixtures in `test_physstruct.c` (no committed
+`.bin`): a single-layer DVD-ROM, a dual-layer OTP DVD+R DL (whose
+`end_sector_l0` is the layer break), an HD-DVD-ROM book type (the same
+media-type-0 reply carries HD-DVD book types — the reason the decode is
+named "physical", not "dvd"), and a CSS-protected copyright block.
+Offsets are taken VERBATIM from the kernel wire parse
+(`drivers/cdrom/cdrom.c` `dvd_read_physical`: book/version base[0],
+rate/size base[1], layer base[2], densities base[3], start/end/end_l0 at
+base[5..7]/[9..11]/[13..15], bca base[16]>>7; `dvd_read_copyright`: cpst
+buf[4], rmi buf[5]) and cross-checked against redumper
+`print_physical_structure`. The fixed-offset/dual-length no-OOB property
+is fuzz/ASan-gated (`tests/fuzz_pure.c` phase 9, planted-length and wild
+buffers, exact-size allocations). A real DVD physical/copyright capture
+remains a falsification-matrix item (it can refute or feed these, not
+steer them — AGENTS hardware ADR).

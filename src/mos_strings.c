@@ -142,10 +142,15 @@ const char *mos_book_type_name(uint8_t book_type)
     }
 }
 
-/* Track path: parallel (single-layer / sequential) vs opposite. */
+/* Track path: parallel (single-layer / sequential) vs opposite.
+   Explicit returns (not a ternary) so the validate.py drift guard can
+   harvest the token set. */
 const char *mos_track_path_name(uint8_t track_path)
 {
-    return track_path ? "otp" : "ptp";
+    switch (track_path & 0x01) {
+        case 0:  return "ptp";
+        default: return "otp";
+    }
 }
 
 /* Copyright Protection System Type (READ DISC STRUCTURE format 0x01,

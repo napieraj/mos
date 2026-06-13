@@ -190,7 +190,9 @@
             "disc_type",
             "manufacturer_id",
             "media_type_id",
-            "revision"
+            "revision",
+            "physical",
+            "copyright"
           ],
           "additionalProperties": false,
           "properties": {
@@ -221,6 +223,160 @@
                 "null"
               ],
               "description": "Product Revision Number (DI offset 111, 1 byte), e.g. '0'."
+            },
+            "physical": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "description": "Physical Format Information from READ DISC STRUCTURE (0xAD, DVD/HD-DVD media type, format 0x00) via the ReadDiscStructure convenience method; null on BD/CD media (this format is the DVD/HD-DVD family) or when the drive did not answer. The disc-reported geometry: book type, layer layout, data-area sector boundaries (end_sector_l0 is the layer break), BCA presence. Numeric fields are the raw spec codes; *_name are the mos token mappings (drift-guarded in validate.py). Offsets per the kernel wire parse (drivers/cdrom/cdrom.c dvd_read_physical).",
+              "required": [
+                "book_type",
+                "book_type_name",
+                "part_version",
+                "disc_size",
+                "max_rate",
+                "num_layers",
+                "track_path",
+                "layer_type",
+                "linear_density",
+                "track_density",
+                "bca",
+                "start_sector",
+                "end_sector",
+                "end_sector_l0"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "book_type": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 15,
+                  "description": "Book Type (base[0] bits 7:4): 0 DVD-ROM, 2 DVD-R, 0xA DVD+R, 0x4 HD DVD-ROM, ..."
+                },
+                "book_type_name": {
+                  "enum": [
+                    "dvd_rom",
+                    "dvd_ram",
+                    "dvd_r",
+                    "dvd_rw",
+                    "hd_dvd_rom",
+                    "hd_dvd_ram",
+                    "hd_dvd_r",
+                    "dvd_plus_rw",
+                    "dvd_plus_r",
+                    "dvd_plus_rw_dl",
+                    "dvd_plus_r_dl",
+                    null
+                  ],
+                  "description": "Stable token for book_type (mos_book_type_name), or null for a code outside the table — consumers fall back to the numeric book_type."
+                },
+                "part_version": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 15,
+                  "description": "Part Version (base[0] bits 3:0)."
+                },
+                "disc_size": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 15,
+                  "description": "Disc Size (base[1] bits 7:4): 0 = 120mm, 1 = 80mm."
+                },
+                "max_rate": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 15,
+                  "description": "Maximum Rate (base[1] bits 3:0)."
+                },
+                "num_layers": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4,
+                  "description": "Number of layers (base[2] bits 6:5 + 1): 1 or 2."
+                },
+                "track_path": {
+                  "enum": [
+                    "ptp",
+                    "otp"
+                  ],
+                  "description": "Track path (base[2] bit 4): 'ptp' parallel (single-layer/sequential) or 'otp' opposite."
+                },
+                "layer_type": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 15,
+                  "description": "Layer Type (base[2] bits 3:0)."
+                },
+                "linear_density": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 15,
+                  "description": "Linear Density (base[3] bits 7:4)."
+                },
+                "track_density": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 15,
+                  "description": "Track Density (base[3] bits 3:0)."
+                },
+                "bca": {
+                  "type": "boolean",
+                  "description": "Burst Cutting Area present (base[16] bit 7)."
+                },
+                "start_sector": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Starting Physical Sector Number of the data area (base[5..7], 24-bit)."
+                },
+                "end_sector": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "End Physical Sector Number of the data area (base[9..11], 24-bit)."
+                },
+                "end_sector_l0": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "End PSN in layer 0 (base[13..15], 24-bit) — the layer break on dual-layer OTP media; 0 on single-layer."
+                }
+              }
+            },
+            "copyright": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "description": "Copyright Management Information from READ DISC STRUCTURE format 0x01 (DVD/HD-DVD); null on BD/CD media or when not answered. The protection-system type and region mask are surfaced faithfully — mos does NOT classify ('CSS-protected', region semantics are the consumer's), and reads no keys (scope doctrine). Offsets per dvd_read_copyright (cpst buf[4], rmi buf[5]).",
+              "required": [
+                "protection",
+                "protection_name",
+                "region"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "protection": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255,
+                  "description": "Copyright Protection System Type (CPST): 0 none, 1 CSS/CPPM, 2 CPRM, 3 AACS."
+                },
+                "protection_name": {
+                  "enum": [
+                    "none",
+                    "css_cppm",
+                    "cprm",
+                    "aacs",
+                    null
+                  ],
+                  "description": "Stable token for protection (mos_protection_name), or null for a reserved/unknown code."
+                },
+                "region": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255,
+                  "description": "Region Management Information (RMI) mask — the raw byte; region playability is the consumer's interpretation."
+                }
+              }
             }
           }
         },
