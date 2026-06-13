@@ -137,7 +137,7 @@ static watch_emit_status emit_watch_ndjson(const mos_watch_event *e)
 
     if (kind_e == MOS_EVENT_ERROR) {
         fputs(",\"error\":{\"code\":", stdout);
-        mos_cli_json_str(stdout, mos_error_to_code(err));
+        mos_cli_json_str(stdout, mos_cli_error_to_code(err));
         fputs(",\"message\":", stdout);
         mos_cli_json_str(stdout, mos_error_description(err));
         fputs(",\"recoverable\":", stdout);
@@ -176,12 +176,12 @@ static uint32_t getenv_uint(const char *name, uint32_t default_value)
     return (uint32_t)n;
 }
 
-int run_watch(void)
+int mos_cli_run_watch(void)
 {
     /* Watch is NDJSON end to end — the event stream AND any error
        envelope (doc/research/2026-06-10-cli-design.md): a stream
        consumed by orchestrators has one format. Forcing the flag here
-       keeps emit_unknown_and_fail on its compact single-line framing
+       keeps mos_cli_emit_unknown_and_fail on its compact single-line framing
        without a second mode check. */
     flag_json = true;
 
@@ -203,7 +203,7 @@ int run_watch(void)
     mos_watch_t *w = NULL;
     bool single_target = (opt_bsd || opt_index || opt_registry);
     if (opt_bsd) {
-        /* Same as run_query: the library parse normalizes; don't duplicate. */
+        /* Same as mos_cli_run_query: the library parse normalizes; don't duplicate. */
         w = mos_watch_open_by_bsd_name(opt_bsd, stable_ms, transition_ms, &err);
     } else if (opt_index) {
         w = mos_watch_open_by_index(opt_index, stable_ms, transition_ms, &err);
@@ -221,7 +221,7 @@ int run_watch(void)
         w = mos_watch_open_all(stable_ms, transition_ms, &err);
     }
 
-    if (!w) return emit_unknown_and_fail("could not open drive for watch",
+    if (!w) return mos_cli_emit_unknown_and_fail("could not open drive for watch",
                                          err, NULL);
 
     /* Loop: pump events until SIGINT or device_removed. */
@@ -256,11 +256,11 @@ int run_watch(void)
                 bsd_buf[0] = 0;
             }
             mos_watch_close(w);
-            return emit_unknown_and_fail("watch pump failed", ne,
+            return mos_cli_emit_unknown_and_fail("watch pump failed", ne,
                                          bsd_buf[0] ? bsd_buf : NULL);
         }
 
-        /* NDJSON unconditionally (forced in run_watch); --json is a
+        /* NDJSON unconditionally (forced in mos_cli_run_watch); --json is a
            no-op here. */
         watch_emit_status est = emit_watch_ndjson(ev);
 

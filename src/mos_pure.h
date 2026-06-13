@@ -17,7 +17,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#include "mos.h"  /* for mos_state_enum */
+#include "mos.h"  /* for mos_state */
 
 /* ---- Returned-object layouts (opaque in the public header) --------- *
  *
@@ -28,7 +28,7 @@
  * because external callers only ever see the accessors, that is ABI-safe
  * with no size/version negotiation. Keep additions at the end. */
 struct mos_state_result {
-    mos_state_enum state;
+    mos_state state;
     int64_t        bsd_unit;      /* whole-disk unit; -1 = no whole-disk IOMedia node (media absent) */
     uint64_t       registry_id;   /* DRIVE service registry entry ID (the
                                      attachment identity; same value the
@@ -64,8 +64,8 @@ struct mos_watch_event {
     const char    *vendor;
     const char    *product;
     const char    *revision;
-    mos_state_enum state;
-    mos_state_enum prev_state;
+    mos_state state;
+    mos_state prev_state;
     uint16_t       current_profile;
     uint8_t        sense_key;
     uint8_t        asc;
@@ -98,7 +98,7 @@ void mos_internal_parse_sense(const uint8_t sense[18],
    sense fork). Never returns OPEN/EMPTY_OR_OPEN — it does not decide the
    tray. UNKNOWN when the sense carries no meaning we assert. See
    mos_sense.c and ARCHITECTURE.md §5. */
-mos_state_enum mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uint8_t ascq);
+mos_state mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uint8_t ascq);
 
 /* ---- BSD name normalization (mos_pure.c) --------------------------- *
  *
@@ -248,13 +248,15 @@ void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
    the descriptor header facts only. The payload bytes stay internal:
    exposing a borrowed slice across the public ABI buys lifetime rules
    no current consumer needs; a typed decode (the AACS caps above) is
-   how payload facts go public. Tagged: mos.h forward-declares it. */
-typedef struct mos_feature_info {
+   how payload facts go public. Tagged, no internal typedef alias: mos.h
+   owns the sole typedef (mos_feature_info_t), exactly as struct
+   mos_device_info is defined here but typedef'd only across the ABI. */
+struct mos_feature_info {
     uint16_t code;
     bool     current;
     bool     persistent;
     uint8_t  version;
-} mos_feature_info;
+};
 
 /* Current Profile from a GET CONFIGURATION response; false ("no
    profile") unless the reply's own Data Length covers the field, so a
@@ -609,7 +611,7 @@ typedef struct {
     uint32_t       transition_poll_ms;
 
     /* State tracking. */
-    mos_state_enum last_state;
+    mos_state last_state;
     bool           have_last_state;
     /* Error-backoff tracking: consecutive identical probe errors widen
        the retry interval (escalation rule at the pump, mos_watch_core.c). */

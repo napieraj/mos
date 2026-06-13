@@ -66,7 +66,7 @@ void mos_internal_parse_sense(const uint8_t sense[18],
  *   T10 ASC/ASCQ public list: https://www.t10.org/lists/asc-num.htm
  *   MMC-6 / SBC-4 sense usage is consistent with the generic SCSI table.
  */
-mos_state_enum mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uint8_t ascq)
+mos_state mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uint8_t ascq)
 {
     /* HARDWARE ERROR (key 0x04): the drive itself faulted — outranks any
        medium/not-ready detail that might also be set. */

@@ -107,6 +107,37 @@ CI enforces this via `nm` on both built static libraries
 (`libmos.a` and `libmos_pure.a` — see CMakeLists.txt for the
 two-tier split rationale). Non-`mos_` symbols fail the build.
 
+The `nm` check covers the library archives only; the `mos` CLI is a
+separate binary. Within `cli/`, every cross-translation-unit identifier
+(header-declared functions and types) carries a `mos_cli_` prefix —
+`mos_cli_run_query`, `mos_cli_emit_list_table`, `mos_cli_list_row`,
+`mos_cli_human_pair`, the `mos_cli_stdout_*` family. File-local `static`
+symbols and the parse-state `extern` globals (`opt_*`, `flag_*`,
+`progname`) are exempt: the prefix exists to keep cross-TU names from
+colliding, which `static` cannot, and the argv-parse globals are a
+deliberate file-spanning state block named for the options they hold.
+
+### `_t` suffix
+
+The suffix is not decorative; it marks a category, so a reader can tell
+a handle from a value at the use site:
+
+- **`_t`** — opaque types the caller holds across calls (`mos_handle_t`,
+  `mos_watch_t`), opaque iteration subjects handed to a callback
+  (`mos_device_info_t`, `mos_feature_info_t`), and internal ops-vtable /
+  environment structs (`mos_mmc_ops_t`, `mos_state_env_t`,
+  `mos_watch_ops_t`).
+- **no `_t`** — query-result objects read through accessors
+  (`mos_state_result`, `mos_disc_info`, `mos_toc`, `mos_drive_caps`, …),
+  public enums (`mos_error`, `mos_state`, `mos_disc_status`,
+  `mos_event_kind`, `mos_xfer_dir`), and plain pure-data structs
+  (`mos_toc_entry`, `mos_config_feature`, `mos_cli_human_pair`).
+
+A struct exposed publicly as an iteration subject is defined as a bare
+tagged `struct` internally and typedef'd to its `_t` name *only* in
+`include/mos.h` — `struct mos_device_info` / `struct mos_feature_info`
+are the two of these; do not add a second internal typedef alias.
+
 ## Comment doctrine
 
 Two rules keep commentary useful and bounded (the survey behind them

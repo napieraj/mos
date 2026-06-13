@@ -104,7 +104,7 @@
  * because external callers only ever see the accessors, that is ABI-safe
  * with no size/version negotiation. Keep additions at the end. */
 struct mos_state_result {
-    mos_state_enum state;
+    mos_state state;
     int64_t        bsd_unit;      /* whole-disk unit; -1 = no whole-disk IOMedia node (media absent) */
     uint64_t       registry_id;   /* DRIVE service registry entry ID (the
                                      attachment identity; same value the
@@ -140,8 +140,8 @@ struct mos_watch_event {
     const char    *vendor;
     const char    *product;
     const char    *revision;
-    mos_state_enum state;
-    mos_state_enum prev_state;
+    mos_state state;
+    mos_state prev_state;
     uint16_t       current_profile;
     uint8_t        sense_key;
     uint8_t        asc;
@@ -174,7 +174,7 @@ void mos_internal_parse_sense(const uint8_t sense[18],
    sense fork). Never returns OPEN/EMPTY_OR_OPEN — it does not decide the
    tray. UNKNOWN when the sense carries no meaning we assert. See
    mos_sense.c and ARCHITECTURE.md §5. */
-mos_state_enum mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uint8_t ascq);
+mos_state mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uint8_t ascq);
 
 /* ---- BSD name normalization (mos_pure.c) --------------------------- *
  *
@@ -324,13 +324,15 @@ void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
    the descriptor header facts only. The payload bytes stay internal:
    exposing a borrowed slice across the public ABI buys lifetime rules
    no current consumer needs; a typed decode (the AACS caps above) is
-   how payload facts go public. Tagged: mos.h forward-declares it. */
-typedef struct mos_feature_info {
+   how payload facts go public. Tagged, no internal typedef alias: mos.h
+   owns the sole typedef (mos_feature_info_t), exactly as struct
+   mos_device_info is defined here but typedef'd only across the ABI. */
+struct mos_feature_info {
     uint16_t code;
     bool     current;
     bool     persistent;
     uint8_t  version;
-} mos_feature_info;
+};
 
 /* Current Profile from a GET CONFIGURATION response; false ("no
    profile") unless the reply's own Data Length covers the field, so a
@@ -685,7 +687,7 @@ typedef struct {
     uint32_t       transition_poll_ms;
 
     /* State tracking. */
-    mos_state_enum last_state;
+    mos_state last_state;
     bool           have_last_state;
     /* Error-backoff tracking: consecutive identical probe errors widen
        the retry interval (escalation rule at the pump, mos_watch_core.c). */
@@ -1103,7 +1105,7 @@ void mos_internal_parse_sense(const uint8_t sense[18],
  *   T10 ASC/ASCQ public list: https://www.t10.org/lists/asc-num.htm
  *   MMC-6 / SBC-4 sense usage is consistent with the generic SCSI table.
  */
-mos_state_enum mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uint8_t ascq)
+mos_state mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uint8_t ascq)
 {
     /* HARDWARE ERROR (key 0x04): the drive itself faulted — outranks any
        medium/not-ready detail that might also be set. */
@@ -2133,7 +2135,7 @@ bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
 
 /* ---- mos_state_result --------------------------------------------- */
 
-mos_state_enum mos_state_result_state(const mos_state_result *r)
+mos_state mos_state_result_state(const mos_state_result *r)
 {
     return r ? r->state : MOS_STATE_UNKNOWN;
 }
@@ -2223,12 +2225,12 @@ const char *mos_watch_event_revision(const mos_watch_event *e)
     return e ? e->revision : NULL;
 }
 
-mos_state_enum mos_watch_event_state(const mos_watch_event *e)
+mos_state mos_watch_event_state(const mos_watch_event *e)
 {
     return e ? e->state : MOS_STATE_UNKNOWN;
 }
 
-mos_state_enum mos_watch_event_prev_state(const mos_watch_event *e)
+mos_state mos_watch_event_prev_state(const mos_watch_event *e)
 {
     return e ? e->prev_state : MOS_STATE_UNKNOWN;
 }
@@ -2989,7 +2991,7 @@ void mos_internal_watch_notify_wake(mos_watch_state *w)
 
 /* Whether the state is a "transition" state for backoff purposes.
    Loading / busy / unknown are transitional; the others are stable. */
-static bool watch_state_is_transitional(mos_state_enum s)
+static bool watch_state_is_transitional(mos_state s)
 {
     switch (s) {
         /* In-progress or degraded observations — poll fast to converge. */
@@ -3007,7 +3009,7 @@ static bool watch_state_is_transitional(mos_state_enum s)
         case MOS_STATE_DEVICE_FAULT:      /* drive fault; not self-resolving */
             return false;
     }
-    /* No default: a new mos_state_enum value trips -Wswitch under -Werror, so
+    /* No default: a new mos_state value trips -Wswitch under -Werror, so
        its poll class must be chosen deliberately rather than silently
        inheriting "stable." This trailing return only handles an out-of-range
        value (the enum is int32-wide). */
@@ -3070,7 +3072,7 @@ static uint32_t mos_watch_latency_ms(uint64_t start, uint64_t end)
    transition_poll_ms, stable states at stable_poll_ms. One site so the
    policy is audited in one place. */
 static uint32_t poll_ms_for_state(const mos_watch_state *w,
-                                  mos_state_enum state)
+                                  mos_state state)
 {
     return watch_state_is_transitional(state)
         ? w->transition_poll_ms
@@ -4539,7 +4541,7 @@ mos_error mos_watch_next_event(mos_watch_t *w, const mos_watch_event **out,
 #include <stddef.h>
 #include <stdint.h>
 
-const char *mos_state_description(mos_state_enum s)
+const char *mos_state_description(mos_state s)
 {
     switch (s) {
         case MOS_STATE_OPEN:    return "open";
@@ -5981,7 +5983,7 @@ mos_error mos_enumerate_features(mos_handle_t *h,
     size_t             cursor = 8;
     mos_config_feature feat;
     while (mos_internal_config_next_feature(buf, sizeof buf, &cursor, &feat)) {
-        mos_feature_info info = {
+        mos_feature_info_t info = {
             .code       = feat.feature_code,
             .current    = feat.current,
             .persistent = feat.persistent,

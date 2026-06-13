@@ -35,7 +35,7 @@ def schema_name_from_filename(name: str) -> str:
 
 def check_state_enum_drift(here: Path) -> int:
     """Guard against the C state-string table and the JSON schema state
-    enums drifting apart — the exact failure where a new mos_state_enum
+    enums drifting apart — the exact failure where a new mos_state
     value is emitted by the program but rejected by mos.event.v1. The
     source of truth is mos_state_description() in src/mos_strings.c; both
     schema enums (mos.state.v1 state, mos.event.v1 state + prev_state)
