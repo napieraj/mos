@@ -30,7 +30,11 @@ xnu starts registry IDs above 2^32), or a BSD form (`disk4`,
 `rdisk4`, `/dev/disk4`). With one drive attached it may be omitted
 (`mos status`); with several, `mos status` without a subject exits 64
 and prints the drive table to stderr — no first-drive guessing. Bare
-`mos` prints a hint and the usage text to stderr and exits 64.
+`mos` prints a hint and the usage text to stderr and exits 64. The
+diagnostic `probe` subcommand is the one exception to the selector
+grammar: it resolves its drive by index or BSD form only (it subscribes
+to the drive's IOKit service by BSD name), so a `registry_id` selector
+is rejected with exit 64.
 
 Human views and JSON share every enum string verbatim
 (`ready`, `bd_rom`) — a terminal report and a jq query can
