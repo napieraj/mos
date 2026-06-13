@@ -42,6 +42,7 @@ typedef struct {
     const mos_toc       *toc;            /* NULL = unavailable          */
     const mos_disc_id   *did;            /* NULL = non-BD or unavailable  */
     const mos_physical_structure *ps;    /* NULL = non-DVD/HD-DVD or unavail */
+    const mos_track_info *ti;            /* NULL = unavailable          */
     bool                 mounted;
     char                 volume_name[256];
     char                 volume_path[1024];
@@ -173,6 +174,37 @@ static void emit_json(const metadata_doc *d)
         } else {
             fputs("null", stdout);
         }
+        fputs("\n    }", stdout);
+    } else {
+        fputs("null", stdout);
+    }
+
+    fputs(",\n    \"track_info\": ", stdout);
+    if (d->ti) {
+        fprintf(stdout,
+                "{\n      \"track_number\": %u, \"session_number\": %u, "
+                "\"track_mode\": %u, \"data_mode\": %u,\n      "
+                "\"blank\": %s, \"damage\": %s, \"track_start\": %u,\n      "
+                "\"next_writable\": ",
+                mos_track_info_track_number(d->ti),
+                mos_track_info_session_number(d->ti),
+                mos_track_info_track_mode(d->ti),
+                mos_track_info_data_mode(d->ti),
+                mos_track_info_blank(d->ti) ? "true" : "false",
+                mos_track_info_damage(d->ti) ? "true" : "false",
+                mos_track_info_track_start(d->ti));
+        if (mos_track_info_nwa_valid(d->ti))
+            fprintf(stdout, "%u", mos_track_info_next_writable(d->ti));
+        else
+            fputs("null", stdout);
+        fprintf(stdout, ", \"free_blocks\": %u, \"track_size\": %u,\n      "
+                "\"last_recorded\": ",
+                mos_track_info_free_blocks(d->ti),
+                mos_track_info_track_size(d->ti));
+        if (mos_track_info_lra_valid(d->ti))
+            fprintf(stdout, "%u", mos_track_info_last_recorded(d->ti));
+        else
+            fputs("null", stdout);
         fputs("\n    }", stdout);
     } else {
         fputs("null", stdout);
@@ -353,6 +385,13 @@ int run_metadata(void)
                         strcmp(pcls, "hd_dvd") == 0)) {
         const mos_physical_structure *ps = NULL;
         if (mos_query_physical_structure(h, &ps) == MOS_OK) d.ps = ps;
+    }
+    /* Track info / capacity — works on any media with a track; gate on a
+       profile being present (media inserted) so a no-media drive does
+       not eat a guaranteed-failing command. */
+    if (pcls) {
+        const mos_track_info *ti = NULL;
+        if (mos_query_track_info(h, &ti) == MOS_OK) d.ti = ti;
     }
     (void)mos_query_volume(h, &d.mounted,
                            d.volume_name, sizeof d.volume_name,

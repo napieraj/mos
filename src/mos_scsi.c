@@ -832,6 +832,43 @@ mos_error mos_query_physical_structure(mos_handle_t *h,
     return MOS_OK;
 }
 
+mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* READ TRACK INFORMATION (0x52) for the first track via the
+       convenience method. ADDRESS_TYPE = 01b (logical track number),
+       ADDRESS = 1 (the first track) — well-defined on any media with a
+       track. 64 bytes covers the Track Information Block (the core block
+       is 36 bytes; MMC-6 extends it slightly). sizeof buf is the trusted
+       length (O-4); the reply's Track Information Length only shrinks the
+       parse. No lock (convenience). SDK-verify the exact selector
+       signature against docs/apple/SCSITaskLib.h before shipping. */
+    uint8_t         buf[64] = {0};
+    SCSITaskStatus  st      = 0;
+    SCSI_Sense_Data sd      = {0};
+
+    IOReturn rc = (*h->mmc)->ReadTrackInformation(
+        h->mmc,
+        (UInt8)0x01,             /* ADDRESS_TYPE = logical track number */
+        (UInt32)1,               /* ADDRESS = first track               */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_track_info_parse(buf, sizeof(buf), &h->track_info)) {
+        return MOS_ERR_IO;   /* truncated/short reply — refused whole */
+    }
+    *out = &h->track_info;
+    return MOS_OK;
+}
+
 /* Open-time directory identity, exposed for the drive verb: zero
    commands, same borrowed-string terms as the state result's copies
    (which point into these same buffers). */

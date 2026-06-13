@@ -65,6 +65,9 @@ struct mos_handle {
     /* Handle-owned physical structure result (mos_query_physical_structure).
        Same terms; plain values, no borrowed pointers. */
     struct mos_physical_structure physical_structure;
+
+    /* Handle-owned track-info result (mos_query_track_info). Same terms. */
+    struct mos_track_info     track_info;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on

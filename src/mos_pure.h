@@ -370,6 +370,39 @@ bool mos_internal_physical_format_parse(const uint8_t *buf, size_t len,
 bool mos_internal_copyright_mgmt_parse(const uint8_t *buf, size_t len,
                                        struct mos_physical_structure *out);
 
+/* ---- READ TRACK INFORMATION decode (mos_trackinfo.c) --------------- *
+ *
+ * The capacity / append-state surface of one track from READ TRACK
+ * INFORMATION (0x52): track start, next writable address, free blocks,
+ * track size, last recorded address, plus the track/data mode and
+ * blank/damage bits. next_writable and last_recorded are meaningful only
+ * when nwa_valid / lra_valid (the reply's own validity bits) are set.
+ * Read at CONSTANT offsets; the only device length (the Track
+ * Information Length header) can only shrink the trusted region. New
+ * fields append at the END. */
+struct mos_track_info {
+    uint16_t track_number;     /* byte 2 (+ byte 32 MSB on long replies) */
+    uint16_t session_number;   /* byte 3 (+ byte 33 MSB) */
+    uint8_t  track_mode;       /* byte 5 bits 3:0 (Q-channel control) */
+    uint8_t  data_mode;        /* byte 6 bits 3:0 */
+    bool     blank;            /* byte 6 bit 6 */
+    bool     damage;           /* byte 5 bit 5 */
+    bool     nwa_valid;        /* byte 7 bit 0 */
+    bool     lra_valid;        /* byte 7 bit 1 */
+    uint32_t track_start;      /* bytes 8..11  */
+    uint32_t next_writable;    /* bytes 12..15 (valid iff nwa_valid) */
+    uint32_t free_blocks;      /* bytes 16..19 */
+    uint32_t track_size;       /* bytes 24..27 */
+    uint32_t last_recorded;    /* bytes 28..31 (valid iff lra_valid) */
+};
+
+/* Parse a Track Information Block into *out. True only when the trusted
+ * region (min of `len` and the reply's declared length) reaches the Last
+ * Recorded Address (byte 31). Pure, fixed-offset, no-OOB — fuzz/ASan-
+ * gated. */
+bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
+                                   struct mos_track_info *out);
+
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
  * True for the four SAM-5 status values that mean "drive contended,

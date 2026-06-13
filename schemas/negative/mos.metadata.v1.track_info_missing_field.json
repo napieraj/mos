@@ -40,8 +40,7 @@
         "bca": false,
         "start_sector": 196608,
         "end_sector": 3842048,
-        "end_sector_l0": 2050047,
-        "extra": 1
+        "end_sector_l0": 2050047
       },
       "copyright": {
         "protection": 1,
@@ -50,6 +49,17 @@
       }
     },
     "volume_name": null,
-    "track_info": null
+    "track_info": {
+      "track_number": 1,
+      "session_number": 1,
+      "track_mode": 4,
+      "data_mode": 1,
+      "blank": false,
+      "damage": false,
+      "track_start": 0,
+      "next_writable": null,
+      "free_blocks": 0,
+      "last_recorded": 2298495
+    }
   }
 }

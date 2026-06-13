@@ -446,6 +446,39 @@ bool mos_internal_physical_format_parse(const uint8_t *buf, size_t len,
 bool mos_internal_copyright_mgmt_parse(const uint8_t *buf, size_t len,
                                        struct mos_physical_structure *out);
 
+/* ---- READ TRACK INFORMATION decode (mos_trackinfo.c) --------------- *
+ *
+ * The capacity / append-state surface of one track from READ TRACK
+ * INFORMATION (0x52): track start, next writable address, free blocks,
+ * track size, last recorded address, plus the track/data mode and
+ * blank/damage bits. next_writable and last_recorded are meaningful only
+ * when nwa_valid / lra_valid (the reply's own validity bits) are set.
+ * Read at CONSTANT offsets; the only device length (the Track
+ * Information Length header) can only shrink the trusted region. New
+ * fields append at the END. */
+struct mos_track_info {
+    uint16_t track_number;     /* byte 2 (+ byte 32 MSB on long replies) */
+    uint16_t session_number;   /* byte 3 (+ byte 33 MSB) */
+    uint8_t  track_mode;       /* byte 5 bits 3:0 (Q-channel control) */
+    uint8_t  data_mode;        /* byte 6 bits 3:0 */
+    bool     blank;            /* byte 6 bit 6 */
+    bool     damage;           /* byte 5 bit 5 */
+    bool     nwa_valid;        /* byte 7 bit 0 */
+    bool     lra_valid;        /* byte 7 bit 1 */
+    uint32_t track_start;      /* bytes 8..11  */
+    uint32_t next_writable;    /* bytes 12..15 (valid iff nwa_valid) */
+    uint32_t free_blocks;      /* bytes 16..19 */
+    uint32_t track_size;       /* bytes 24..27 */
+    uint32_t last_recorded;    /* bytes 28..31 (valid iff lra_valid) */
+};
+
+/* Parse a Track Information Block into *out. True only when the trusted
+ * region (min of `len` and the reply's declared length) reaches the Last
+ * Recorded Address (byte 31). Pure, fixed-offset, no-OOB — fuzz/ASan-
+ * gated. */
+bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
+                                   struct mos_track_info *out);
+
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
  * True for the four SAM-5 status values that mean "drive contended,
@@ -784,6 +817,9 @@ struct mos_handle {
     /* Handle-owned physical structure result (mos_query_physical_structure).
        Same terms; plain values, no borrowed pointers. */
     struct mos_physical_structure physical_structure;
+
+    /* Handle-owned track-info result (mos_query_track_info). Same terms. */
+    struct mos_track_info     track_info;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
@@ -1714,6 +1750,91 @@ bool mos_internal_copyright_mgmt_parse(const uint8_t *buf, size_t len,
     return true;
 }
 
+/* ==== src/mos_trackinfo.c ==== */
+/*
+ * mos_trackinfo.c — pure, bounds-safe decode of a READ TRACK INFORMATION
+ * (MMC 0x52) Track Information Block: the capacity / append-state surface
+ * (track start, next writable address, free blocks, track size, last
+ * recorded address) plus the track/data mode and blank/damage bits.
+ *
+ * No IOKit. The IOKit shell issues READ TRACK INFORMATION via the
+ * ReadTrackInformation convenience method into a fixed, zero-initialized
+ * buffer and hands that buffer plus its size here. Every length and
+ * value byte is device-reported and therefore hostile; this file keeps
+ * the declared length from steering a read outside [buf, buf+len) and
+ * reads only fixed offsets.
+ *
+ * Wire layout (the MMC Track Information Block; offsets taken VERBATIM
+ * from the Linux kernel's `struct track_information` in
+ * include/uapi/linux/cdrom.h, which the kernel reads directly off the
+ * 0x52 reply — a packed struct, so field order == byte order):
+ *   [0..1]  Track Information Length (BE) — bytes AFTER this field
+ *   [2]     Track Number (LSB)
+ *   [3]     Session Number (LSB)
+ *   [4]     reserved
+ *   [5]     reserved(7:6) | damage(5) | copy(4) | track_mode(3:0)
+ *   [6]     rt(7) | blank(6) | packet(5) | fp(4) | data_mode(3:0)
+ *   [7]     reserved(7:2) | lra_v(1) | nwa_v(0)
+ *   [8..11]  Track Start Address (BE)
+ *   [12..15] Next Writable Address (BE)   — valid iff nwa_v
+ *   [16..19] Free Blocks (BE)
+ *   [20..23] Fixed Packet Size (BE)
+ *   [24..27] Track Size (BE)
+ *   [28..31] Last Recorded Address (BE)   — valid iff lra_v
+ *   [32..33] Track / Session Number MSB   — MMC-6 longer reply, optional
+ *
+ * The NWA and LRA are surfaced only when their *_v validity bit is set
+ * (the kernel and libburn both gate on these); otherwise the *_valid
+ * accessor is false and the value is meaningless — the consumer must
+ * check. No payload byte is ever used as an offset. No-OOB property
+ * gated headless under ASan/UBSan by tests/test_trackinfo.c and
+ * tests/fuzz_pure.c.
+ */
+
+
+#define TI_MIN_LEN  32u   /* through Last Recorded Address (byte 31) */
+#define TI_MSB_LEN  34u   /* track/session MSB present (byte 33) */
+
+static uint32_t mos_internal_ti_be32(const uint8_t *p)
+{
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+           (uint32_t)p[2] << 8  | p[3];
+}
+
+bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
+                                   struct mos_track_info *out)
+{
+    if (!out) return false;
+    *out = (struct mos_track_info){0};
+    if (!buf || len < TI_MIN_LEN) return false;
+
+    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    size_t end = (len < declared) ? len : declared;
+    if (end < TI_MIN_LEN) return false;
+
+    out->track_number   = buf[2];
+    out->session_number = buf[3];
+    out->track_mode     = (uint8_t)(buf[5] & 0x0f);
+    out->damage         = (buf[5] >> 5) & 0x01;
+    out->data_mode      = (uint8_t)(buf[6] & 0x0f);
+    out->blank          = (buf[6] >> 6) & 0x01;
+    out->lra_valid      = (buf[7] >> 1) & 0x01;
+    out->nwa_valid      = buf[7] & 0x01;
+    out->track_start    = mos_internal_ti_be32(&buf[8]);
+    out->next_writable  = mos_internal_ti_be32(&buf[12]);
+    out->free_blocks    = mos_internal_ti_be32(&buf[16]);
+    out->track_size     = mos_internal_ti_be32(&buf[24]);
+    out->last_recorded  = mos_internal_ti_be32(&buf[28]);
+
+    /* MMC-6 longer reply folds the high byte of track/session number in
+       at 32/33; only if the trusted region reaches them. */
+    if (end >= TI_MSB_LEN) {
+        out->track_number   = (uint16_t)(out->track_number   | (buf[32] << 8));
+        out->session_number = (uint16_t)(out->session_number | (buf[33] << 8));
+    }
+    return true;
+}
+
 /* ==== src/mos_result.c ==== */
 /*
  * mos_result.c — accessors for the opaque mos_state_result and
@@ -2087,6 +2208,75 @@ uint8_t mos_physical_structure_protection(const mos_physical_structure *d)
 uint8_t mos_physical_structure_region(const mos_physical_structure *d)
 {
     return d ? d->region : 0;
+}
+
+/* ---- mos_track_info accessors (mos_query_track_info) ---------------- *
+ * Plain values, NULL-tolerant. next_writable/last_recorded are valid
+ * only when nwa_valid/lra_valid — the emitter gates on those. */
+
+uint16_t mos_track_info_track_number(const mos_track_info *t)
+{
+    return t ? t->track_number : 0;
+}
+
+uint16_t mos_track_info_session_number(const mos_track_info *t)
+{
+    return t ? t->session_number : 0;
+}
+
+uint8_t mos_track_info_track_mode(const mos_track_info *t)
+{
+    return t ? t->track_mode : 0;
+}
+
+uint8_t mos_track_info_data_mode(const mos_track_info *t)
+{
+    return t ? t->data_mode : 0;
+}
+
+bool mos_track_info_blank(const mos_track_info *t)
+{
+    return t ? t->blank : false;
+}
+
+bool mos_track_info_damage(const mos_track_info *t)
+{
+    return t ? t->damage : false;
+}
+
+bool mos_track_info_nwa_valid(const mos_track_info *t)
+{
+    return t ? t->nwa_valid : false;
+}
+
+bool mos_track_info_lra_valid(const mos_track_info *t)
+{
+    return t ? t->lra_valid : false;
+}
+
+uint32_t mos_track_info_track_start(const mos_track_info *t)
+{
+    return t ? t->track_start : 0;
+}
+
+uint32_t mos_track_info_next_writable(const mos_track_info *t)
+{
+    return t ? t->next_writable : 0;
+}
+
+uint32_t mos_track_info_free_blocks(const mos_track_info *t)
+{
+    return t ? t->free_blocks : 0;
+}
+
+uint32_t mos_track_info_track_size(const mos_track_info *t)
+{
+    return t ? t->track_size : 0;
+}
+
+uint32_t mos_track_info_last_recorded(const mos_track_info *t)
+{
+    return t ? t->last_recorded : 0;
 }
 
 /* ==== src/mos_state_core.c ==== */
@@ -5524,6 +5714,43 @@ mos_error mos_query_physical_structure(mos_handle_t *h,
         return MOS_ERR_IO;   /* neither format answered (non-DVD, or refused) */
     }
     *out = d;
+    return MOS_OK;
+}
+
+mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* READ TRACK INFORMATION (0x52) for the first track via the
+       convenience method. ADDRESS_TYPE = 01b (logical track number),
+       ADDRESS = 1 (the first track) — well-defined on any media with a
+       track. 64 bytes covers the Track Information Block (the core block
+       is 36 bytes; MMC-6 extends it slightly). sizeof buf is the trusted
+       length (O-4); the reply's Track Information Length only shrinks the
+       parse. No lock (convenience). SDK-verify the exact selector
+       signature against docs/apple/SCSITaskLib.h before shipping. */
+    uint8_t         buf[64] = {0};
+    SCSITaskStatus  st      = 0;
+    SCSI_Sense_Data sd      = {0};
+
+    IOReturn rc = (*h->mmc)->ReadTrackInformation(
+        h->mmc,
+        (UInt8)0x01,             /* ADDRESS_TYPE = logical track number */
+        (UInt32)1,               /* ADDRESS = first track               */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_track_info_parse(buf, sizeof(buf), &h->track_info)) {
+        return MOS_ERR_IO;   /* truncated/short reply — refused whole */
+    }
+    *out = &h->track_info;
     return MOS_OK;
 }
 

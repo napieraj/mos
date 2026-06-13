@@ -178,6 +178,14 @@ faithfully without classifying region semantics or reading any keys
 (scope doctrine). The structure is named `physical`, not `dvd`, because
 the same media-type-0 reply carries HD-DVD book types.
 
+`disc.track_info` adds the capacity / append-state of the first track
+from READ TRACK INFORMATION (`0x52`): track/data mode, blank/damage,
+track start, free blocks, track size, and the next-writable / last-
+recorded addresses (each null when the reply's NWA_V / LRA_V validity
+bit is clear). For a single-track pressed DVD/BD `track_size` is
+effectively the disc capacity; on a blank/appendable recordable
+`next_writable` is the append point.
+
 ### Drive (static facts)
 
 ```

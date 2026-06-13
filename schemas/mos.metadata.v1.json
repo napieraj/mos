@@ -46,7 +46,8 @@
         "toc",
         "disc_info",
         "volume_name",
-        "disc_structure"
+        "disc_structure",
+        "track_info"
       ],
       "additionalProperties": false,
       "properties": {
@@ -386,6 +387,90 @@
             "null"
           ],
           "description": "Mounted volume's name (DiskArbitration VolumeName), or null when not mounted or unlabeled. MOUNT-SOURCED ONLY: present-but-unmounted discs read null by design \u2014 sector-derived names are the consumer's to obtain and parse (scope doctrine). Volume names are disc-controlled bytes, emitted byte-faithfully under JSON string escaping; terminal quoting is the consumer's job."
+        },
+        "track_info": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "READ TRACK INFORMATION (0x52) for the first track (the track containing LBA 0) via the ReadTrackInformation convenience method \u2014 the capacity / append-state surface; null when the drive did not answer. For a single-track pressed DVD/BD, track_size is effectively the disc capacity; for a blank/appendable recordable, next_writable (when not null) is the append point. Offsets per the kernel struct track_information (include/uapi/linux/cdrom.h). next_writable and last_recorded are null when their reply validity bit (NWA_V / LRA_V) is clear \u2014 meaningless otherwise.",
+          "required": [
+            "track_number",
+            "session_number",
+            "track_mode",
+            "data_mode",
+            "blank",
+            "damage",
+            "track_start",
+            "next_writable",
+            "free_blocks",
+            "track_size",
+            "last_recorded"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "track_number": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Track number (byte 2, plus byte 32 MSB on long replies)."
+            },
+            "session_number": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Session number (byte 3, plus byte 33 MSB)."
+            },
+            "track_mode": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 15,
+              "description": "Track mode / Q-channel control nibble (byte 5 bits 3:0)."
+            },
+            "data_mode": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 15,
+              "description": "Data mode (byte 6 bits 3:0)."
+            },
+            "blank": {
+              "type": "boolean",
+              "description": "Track is blank (byte 6 bit 6)."
+            },
+            "damage": {
+              "type": "boolean",
+              "description": "Track is damaged (byte 5 bit 5)."
+            },
+            "track_start": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Track Start Address (bytes 8..11)."
+            },
+            "next_writable": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "description": "Next Writable Address (bytes 12..15), or null when NWA_V (byte 7 bit 0) is clear \u2014 the append point on recordable media."
+            },
+            "free_blocks": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Free Blocks remaining in the track (bytes 16..19)."
+            },
+            "track_size": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Track Size in blocks (bytes 24..27)."
+            },
+            "last_recorded": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "description": "Last Recorded Address (bytes 28..31), or null when LRA_V (byte 7 bit 1) is clear."
+            }
+          }
         }
       }
     }

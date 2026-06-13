@@ -523,6 +523,34 @@ static void fuzz_physstruct(uint64_t iters)
     }
 }
 
+/* READ TRACK INFORMATION (0x52) decode. No strings; the property is
+   no-OOB — the fixed-offset reads (through Last Recorded Address, byte
+   31, and the optional MSB at 32/33) must never read past
+   [buf, buf+len), whatever the planted Track Information Length claims. */
+static void fuzz_trackinfo(uint64_t iters)
+{
+    for (uint64_t i = 0; i < iters; i++) {
+        size_t   len = rng_below(72);                  /* 0..71: spans the 32/34 region */
+        uint8_t *buf = (uint8_t *)malloc(len ? len : 1);
+        for (size_t b = 0; b < len; b++) buf[b] = (uint8_t)rng();
+
+        if (len >= 2 && rng_below(2)) {
+            uint16_t til = (uint16_t)rng_below((uint64_t)len + 64);
+            buf[0] = (uint8_t)(til >> 8);
+            buf[1] = (uint8_t)(til & 0xFF);
+        }
+
+        struct mos_track_info t;
+        memset(&t, 0xA5, sizeof t);
+        (void)mos_internal_track_info_parse(buf, len, &t);
+        if ((i & 0xFFFF) == 0) {
+            (void)mos_internal_track_info_parse(NULL, len, &t);
+            (void)mos_internal_track_info_parse(buf, len, NULL);
+        }
+        free(buf);
+    }
+}
+
 int main(int argc, char **argv)
 {
     uint64_t seed = env_u64("MOS_FUZZ_SEED", 0x9E3779B97F4A7C15ULL);
@@ -538,6 +566,7 @@ int main(int argc, char **argv)
     uint64_t n_toc   = env_u64("MOS_FUZZ_TOC",      200000);
     uint64_t n_ds    = env_u64("MOS_FUZZ_DISCSTRUCT", 500000);
     uint64_t n_ps    = env_u64("MOS_FUZZ_PHYSSTRUCT", 500000);
+    uint64_t n_ti    = env_u64("MOS_FUZZ_TRACKINFO", 500000);
 
     fprintf(stderr,
             "mos fuzz_pure seed=0x%016llx sense=%llu esc=%llu bsd=%llu cfg=%llu di=%llu tl=%llu toc=%llu\n",
@@ -556,8 +585,9 @@ int main(int argc, char **argv)
     fuzz_toc(n_toc);
     fuzz_discstruct(n_ds);
     fuzz_physstruct(n_ps);
+    fuzz_trackinfo(n_ti);
 
     fprintf(stderr, "OK: fuzz_pure clean (%llu iterations total)\n",
-            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc + n_ds + n_ps));
+            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc + n_ds + n_ps + n_ti));
     return 0;
 }

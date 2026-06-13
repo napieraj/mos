@@ -147,6 +147,7 @@ add_library(mos_pure STATIC
     src/mos_discinfo.c
     src/mos_discstruct.c
     src/mos_physstruct.c
+    src/mos_trackinfo.c
     src/mos_result.c
 )
 
@@ -302,6 +303,7 @@ if(MOS_BUILD_TESTS)
         tests/test_discinfo.c
         tests/test_discstruct.c
         tests/test_physstruct.c
+        tests/test_trackinfo.c
         tests/test_result.c
     )
     # Tests link against mos_pure only — by design (plus cli/human.c,

@@ -532,6 +532,44 @@ const char *mos_track_path_name(uint8_t track_path);
    "aacs", or NULL for reserved/unknown codes. */
 const char *mos_protection_name(uint8_t protection);
 
+/* ---- Track information / capacity (v0.4 typed API) -------------------- */
+
+/* Result of a track-information query. Opaque, handle-owned; valid until
+   the next mos_query_track_info() call or mos_close(). */
+typedef struct mos_track_info mos_track_info;
+
+/*
+ * Query READ TRACK INFORMATION (0x52) for the first track (the track
+ * containing LBA 0) through the non-exclusive ReadTrackInformation
+ * convenience method: the capacity / append-state surface — track start,
+ * next writable address, free blocks, track size, last recorded address,
+ * plus the track/data mode and blank/damage bits. For a single-track
+ * pressed DVD/BD the track size is effectively the disc capacity; for a
+ * blank/appendable recordable, next_writable (when valid) is the append
+ * point. Meaningful with media present and the unit ready; a drive that
+ * rejects 0x52 returns MOS_ERR_IO. `out` REQUIRED (NULL =>
+ * MOS_ERR_INVALID_ARG); on success *out is valid until the next query or
+ * mos_close().
+ */
+mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out);
+
+/* Accessors. NULL-tolerant (NULL reads as 0/false). next_writable is
+   meaningful only when nwa_valid is true; last_recorded only when
+   lra_valid is true — the consumer MUST check the validity accessor. */
+uint16_t mos_track_info_track_number(const mos_track_info *t);
+uint16_t mos_track_info_session_number(const mos_track_info *t);
+uint8_t  mos_track_info_track_mode(const mos_track_info *t);
+uint8_t  mos_track_info_data_mode(const mos_track_info *t);
+bool     mos_track_info_blank(const mos_track_info *t);
+bool     mos_track_info_damage(const mos_track_info *t);
+bool     mos_track_info_nwa_valid(const mos_track_info *t);
+bool     mos_track_info_lra_valid(const mos_track_info *t);
+uint32_t mos_track_info_track_start(const mos_track_info *t);
+uint32_t mos_track_info_next_writable(const mos_track_info *t);
+uint32_t mos_track_info_free_blocks(const mos_track_info *t);
+uint32_t mos_track_info_track_size(const mos_track_info *t);
+uint32_t mos_track_info_last_recorded(const mos_track_info *t);
+
 /* ---- Feature enumeration (v0.4 typed API) ----------------------------- */
 
 /* One MMC feature descriptor's header facts. Opaque; valid only inside

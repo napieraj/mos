@@ -372,3 +372,72 @@ uint8_t mos_physical_structure_region(const mos_physical_structure *d)
 {
     return d ? d->region : 0;
 }
+
+/* ---- mos_track_info accessors (mos_query_track_info) ---------------- *
+ * Plain values, NULL-tolerant. next_writable/last_recorded are valid
+ * only when nwa_valid/lra_valid — the emitter gates on those. */
+
+uint16_t mos_track_info_track_number(const mos_track_info *t)
+{
+    return t ? t->track_number : 0;
+}
+
+uint16_t mos_track_info_session_number(const mos_track_info *t)
+{
+    return t ? t->session_number : 0;
+}
+
+uint8_t mos_track_info_track_mode(const mos_track_info *t)
+{
+    return t ? t->track_mode : 0;
+}
+
+uint8_t mos_track_info_data_mode(const mos_track_info *t)
+{
+    return t ? t->data_mode : 0;
+}
+
+bool mos_track_info_blank(const mos_track_info *t)
+{
+    return t ? t->blank : false;
+}
+
+bool mos_track_info_damage(const mos_track_info *t)
+{
+    return t ? t->damage : false;
+}
+
+bool mos_track_info_nwa_valid(const mos_track_info *t)
+{
+    return t ? t->nwa_valid : false;
+}
+
+bool mos_track_info_lra_valid(const mos_track_info *t)
+{
+    return t ? t->lra_valid : false;
+}
+
+uint32_t mos_track_info_track_start(const mos_track_info *t)
+{
+    return t ? t->track_start : 0;
+}
+
+uint32_t mos_track_info_next_writable(const mos_track_info *t)
+{
+    return t ? t->next_writable : 0;
+}
+
+uint32_t mos_track_info_free_blocks(const mos_track_info *t)
+{
+    return t ? t->free_blocks : 0;
+}
+
+uint32_t mos_track_info_track_size(const mos_track_info *t)
+{
+    return t ? t->track_size : 0;
+}
+
+uint32_t mos_track_info_last_recorded(const mos_track_info *t)
+{
+    return t ? t->last_recorded : 0;
+}

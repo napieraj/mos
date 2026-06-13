@@ -48,6 +48,19 @@
         "region": 2
       }
     },
-    "volume_name": null
+    "volume_name": null,
+    "track_info": {
+      "track_number": 1,
+      "session_number": 1,
+      "track_mode": 4,
+      "data_mode": 1,
+      "blank": false,
+      "damage": false,
+      "track_start": 0,
+      "next_writable": null,
+      "free_blocks": 0,
+      "track_size": 2298496,
+      "last_recorded": 2298495
+    }
   }
 }

@@ -47,6 +47,7 @@
         "region": 2
       }
     },
-    "volume_name": null
+    "volume_name": null,
+    "track_info": null
   }
 }
