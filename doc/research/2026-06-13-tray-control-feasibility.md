@@ -406,6 +406,178 @@ whether a given *mechanism* physically honors prevent (Part 6 item 3) and the
 per-drive cooperative-button matrix — both fixtures-and-falsification, neither
 a design input.
 
+## Appendix — Starter implementation stub (next-session pickup)
+
+Concrete enough to type against; exact API-shape micro-decisions are flagged
+inline. Built to the Part 4 derivation (fire-and-forget lock) and the repo's
+one-`ObtainExclusiveAccess`-call-site discipline (§3:130). **No behavior is
+shipped by this doc — this is a plan, not a patch.**
+
+### A.1 The two CDBs (6-byte, T10), as repo-idiom fixed arrays
+
+Mirror `mos_internal_mmc_get_tray_state`'s fixed-array style
+(`src/mos_scsi.c:482`). All `MOS_XFER_NONE`, `data_len 0`, `IMMED 0` (byte1
+bit0) so the call waits and returns the *honest* final status:
+
+```c
+/* START STOP UNIT — SPC-4 0x1B. byte4: PWRCND(7:4)=0 | LoEj(bit1) | START(bit0).
+   eject = LoEj 1, START 0 -> 0x02 ; close/load = LoEj 1, START 1 -> 0x03. */
+const uint8_t cdb_eject[6] = { 0x1B, 0x00, 0x00, 0x00, 0x02, 0x00 };
+const uint8_t cdb_close[6] = { 0x1B, 0x00, 0x00, 0x00, 0x03, 0x00 };
+
+/* PREVENT ALLOW MEDIUM REMOVAL — SPC-4 0x1E. byte4 Prevent field, read as
+   {bit1 PERSISTENT, bit0 PREVENT}. */
+const uint8_t cdb_unlock        [6] = { 0x1E, 0,0,0, 0x00, 0 }; /* allow            */
+const uint8_t cdb_lock          [6] = { 0x1E, 0,0,0, 0x01, 0 }; /* prevent          */
+const uint8_t cdb_unlock_persist[6] = { 0x1E, 0,0,0, 0x02, 0 }; /* persistent allow */
+const uint8_t cdb_lock_persist  [6] = { 0x1E, 0,0,0, 0x03, 0 }; /* persistent prevent */
+```
+
+> **Lookup-before-shipping (encoding ambiguity).** `ROADMAP.md:188` lumps
+> `10b/11b` together as "persistent prevent." Under the `{PERSISTENT,PREVENT}`
+> bit reading above, `10b` is persistent-*allow* and `11b` persistent-*prevent*,
+> and a `00b` allow does **not** release an `11b` lock — you need `10b`. This
+> changes which CDB `unlock` must issue to release a `--persistent` lock.
+> Confirm the field encoding against T10 04-349r1 before wiring `lock
+> --persistent` / its release; do not assume `00b` clears `11b`. (The earlier
+> in-repo note `doc/research/2026-04-26-hlds-silicon-and-mmc.md:218` already
+> hints at this: persistent prevent "survives until the same initiator issues
+> code 2" — i.e. `10b`, not `00b`.)
+
+Timeouts: prevent/allow are instant (2000 ms like GESN); eject/close are
+mechanical tray travel — start at ~5000 ms and let a fixture refine it.
+
+### A.2 Internal seam (new `src/mos_tray.c`, declared in `mos_internal.h`)
+
+Each verb is one `mos_raw_cdb` call — the GESN-wrapper shape
+(`src/mos_scsi.c:465-514`), sense check instead of payload decode. This keeps
+`mos_raw_cdb` the **single** `ObtainExclusiveAccess` call site (§3:130) — do
+not add a second.
+
+```c
+/* Issue one tray CDB; classify outcome from task status + sense. MOS_OK for
+   any drive that ANSWERED (including a 5/53/02 refusal — a reported fact,
+   ROADMAP:195); negative only on transport/lock failure (BUSY on a mounted
+   or contended drive, NO_DEVICE, IO). sense_out optional: {sk,asc,ascq}. */
+mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
+                                mos_tray_outcome *outcome, uint8_t sense_out[3]);
+
+/* body ≈ GESN wrapper: */
+uint32_t st = 0; uint8_t sense[18] = {0};
+mos_error e = mos_raw_cdb(h, cdb, 6, NULL, 0, MOS_XFER_NONE,
+                          5000, &st, sense, NULL);
+if (e != MOS_OK) return e;                              /* honest transport fail */
+uint8_t sk, asc, ascq;
+mos_internal_parse_sense(sense, &sk, &asc, &ascq);     /* mos_sense.c */
+*outcome = mos_internal_tray_classify(st, sk, asc, ascq);   /* pure, A.4 */
+/* ... copy sense_out, return MOS_OK ... */
+```
+
+**`eject --force` = unlock-then-eject**, two sequential `mos_internal_tray_cmd`
+calls (`cdb_unlock` then `cdb_eject`). The "round trip" it saves is the
+*caller's*: one `mos tray eject --force` replaces detect-`5/53/02` → `unlock`
+→ retry. Each `mos_raw_cdb` releases the lock on return, so there is a brief
+inter-CDB window where the drive is unlocked-but-not-yet-ejected — benign for
+the dedicated rig. Folding both CDBs under a *single* exclusive-access hold
+(the kernel's `EjectTheMedia` shape) would need a second
+`ObtainExclusiveAccess` call site → an ARCHITECTURE §3 amendment. **Out of
+scope for v0.4; keep the invariant.**
+
+### A.3 Public API (`include/mos.h`, append-only)
+
+```c
+typedef enum {
+    MOS_TRAY_DONE           = 0,  /* command completed GOOD */
+    MOS_TRAY_REFUSED_LOCKED = 1,  /* 5/53/02 MEDIA REMOVAL PREVENTED */
+    MOS_TRAY_REFUSED_OTHER  = 2,  /* CHECK CONDITION, other sense */
+} mos_tray_outcome;
+MOS_ABI_PIN_I32(mos_tray_outcome);
+
+mos_error mos_tray_eject (mos_handle_t *h, bool force,      mos_tray_outcome *out);
+mos_error mos_tray_close (mos_handle_t *h,                  mos_tray_outcome *out);
+mos_error mos_tray_lock  (mos_handle_t *h, bool persistent, mos_tray_outcome *out);
+mos_error mos_tray_unlock(mos_handle_t *h,                  mos_tray_outcome *out);
+const char *mos_tray_outcome_description(mos_tray_outcome o); /* stable tokens */
+```
+
+*Micro-decision:* keep the simple `mos_tray_outcome` out-param (smallest
+thing), or promote to an opaque `mos_tray_result` + accessors carrying the raw
+sense triple (like `mos_state_result`). Recommend the out-param first; promote
+only if a consumer needs the bytes. **Do not** promise a "current gating level"
+field — there is no cheap prevent-state read-back verb; `outcome` reports what
+the issued command did, and GESN EjectRequest (A.6) is the only lock-state
+signal the drive volunteers.
+
+### A.4 Pure outcome classifier (`mos_pure.{h,c}` — headless-testable)
+
+```c
+mos_tray_outcome mos_internal_tray_classify(uint32_t scsi_status,
+                                            uint8_t sk, uint8_t asc, uint8_t ascq)
+{
+    if (scsi_status == MOS_SCSI_STATUS_GOOD)        return MOS_TRAY_DONE;
+    if (sk == 0x05 && asc == 0x53 && ascq == 0x02)  return MOS_TRAY_REFUSED_LOCKED;
+    return MOS_TRAY_REFUSED_OTHER;
+}
+```
+
+No IOKit → `tests/test_tray.c` over the status×sk×asc×ascq corners (GOOD, the
+`5/53/02` refusal, an unrelated CHECK CONDITION), like
+`mos_internal_state_from_sense_closed`'s test.
+
+### A.5 CLI (`cli/tray.c`, dispatched from `cli/main.c`)
+
+`"tray"` is already reserved (`cli/main.c:22`, "not yet implemented" at
+`:232-240`). De-reserve it; add `run_tray()` mirroring `run_drive`
+(`cli/drive.c:100`): same selector block (`opt_bsd`/`opt_index`/`opt_registry`
+/`open_sole_drive`), parse the action word `{eject,close,lock,unlock}` + flags
+`--force` (eject only) / `--persistent` (lock only), emit `mos.tray.v1` (A.7)
+or a human line. Exit codes: `mos_error_sysexit` for transport failures; an
+*answered* command is `EX_OK` even when `REFUSED_LOCKED` (a reported fact, not
+a CLI failure — revisit only if a consumer wants nonzero-on-refused).
+
+**Cleanup obligation (CLI lock path):** a non-`--persistent` `mos tray lock`
+that should release on exit must register an `atexit`/signal `ALLOW`
+(`INTEGRATION_HARNESS.md:432`, "atexit cleanup on the PREVENT path is
+non-negotiable"). `--persistent` deliberately does **not** — the robot wants
+the lock to outlive the process (Part 4); recovery is a later `mos tray
+unlock` on the same single initiator.
+
+### A.6 Watch extension (optional follow-on) — `eject_requested`
+
+Persistent prevent turns a button press into a GESN Media **EjectRequest
+(code 1)**. The GESN Media decoder already exists (`src/mos_scsi.c:505`); a
+follow-on surfaces a new `MOS_EVENT_EJECT_REQUESTED` on the watch stream
+(additive enum value, forward-compatible per the schema ADR). Not required for
+the four verbs — it is what makes the locked button *cooperative* for the robot.
+
+### A.7 Schema `mos.tray.v1`
+
+New `schemas/mos.tray.v1.json`, `additionalProperties:false`, one positive
+example + ≥1 negative, wired into `schemas/validate.py`. Field sketch:
+`schema`, `bsd_node`, `registry_id`, `action`, `force`/`persistent`,
+`outcome` (done|refused_locked|refused_other), nullable `sense`
+`{key,asc,ascq}`. Pre-first-tag → mutable-in-place (schema ADR): schema +
+example + negative + emitter in one commit.
+
+### A.8 Pickup checklist (suggested order)
+
+1. `mos_internal_tray_classify` + `tests/test_tray.c` — pure, green in CI
+   immediately, no hardware.
+2. CDB arrays + `mos_internal_tray_cmd` (`src/mos_tray.c`); wire into
+   `CMakeLists.txt` (`mos_core`) + declare in `mos_internal.h`.
+3. Public `mos_tray_*` (`include/mos.h`) + thin definitions.
+4. Adapter-fake test pinning the four CDBs byte-for-byte and the `--force`
+   two-CDB order (mirror the GESN-CDB pin in `tests/fake/`).
+5. `cli/tray.c` + `mos.tray.v1` schema/fixtures + de-reserve in `main.c`.
+6. AGENTS.md controller-verbs ADR (Part 1) + README contract section.
+7. `atexit` ALLOW on the non-persistent CLI lock path.
+8. **Resolve the A.1 encoding ambiguity** against 04-349r1 before `lock
+   --persistent` ships.
+9. Leave for the rig (falsification only, Part 6): physical-retraction
+   honoring (item 3) and the per-drive persistent-button matrix.
+
+---
+
 ## Sources
 - `mos` tree: `ARCHITECTURE.md` §1, §3, §4.2, §5.5, §9.7, §9.9; `ROADMAP.md`
   ("Now — v0.4", "Open empirical questions"); `AGENTS.md` (scope doctrine
