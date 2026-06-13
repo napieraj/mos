@@ -598,6 +598,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0 (Node 24)
+        with:
+          # Pinned to 3.12 to match the schemas job: requirements-ci.txt
+          # hash-pins rpds-py 0.20.0, whose newest wheels stop at
+          # cp312/cp313. Used by the emit-and-validate step below.
+          python-version: '3.12'
+
       - name: Configure + build + run (ASan/UBSan)
         env:
           ASAN_OPTIONS: "abort_on_error=1"
@@ -629,6 +636,7 @@ jobs:
         run: |
           set -e
           cmake --build build-adapter --target mos_emit_fixtures
-          python3 -m pip install --quiet --break-system-packages jsonschema
+          # Same hash-pinned jsonschema the ubuntu schema job uses.
+          pip install --require-hashes -r schemas/requirements-ci.txt
           python3 tests/emit/validate_emitted.py \
             ./build-adapter/bin/mos_emit_fixtures schemas
