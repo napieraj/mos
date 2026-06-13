@@ -35,7 +35,7 @@ static void print_reserved_subcommands(FILE *f)
         fprintf(f, "%s%s", r == reserved_subcommands ? "" : ", ", *r);
 }
 
-void print_usage(FILE *f)
+void mos_cli_print_usage(FILE *f)
 {
     fprintf(f,
         "usage: %s [subcommand] [drive] [options]\n"
@@ -198,7 +198,7 @@ int main(int argc, char **argv)
         fprintf(stderr,
                 "%1$s: no subcommand (state is `%1$s status`; drives, `%1$s list`).\n\n",
                 progname);
-        print_usage(stderr);
+        mos_cli_print_usage(stderr);
         return EX_USAGE;
     }
 
@@ -294,11 +294,11 @@ int main(int argc, char **argv)
                 if (!reject_legacy_json_version(optarg)) return EX_USAGE;
                 flag_json = true;
                 break;
-            case 'h': print_usage(stdout); return EX_OK;
+            case 'h': mos_cli_print_usage(stdout); return EX_OK;
             case OPT_VERSION: print_version(); return EX_OK;
             case '?':
             default:
-                print_usage(stderr);
+                mos_cli_print_usage(stderr);
                 return EX_USAGE;
         }
     }
@@ -314,7 +314,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "%s: more than one drive argument: ", progname);
             mos_cli_safe_ascii(stderr, argv[optind + 1]);
             fputc('\n', stderr);
-            print_usage(stderr);
+            mos_cli_print_usage(stderr);
             return EX_USAGE;
         }
         if (opt_index || opt_bsd) {
@@ -417,12 +417,12 @@ int main(int argc, char **argv)
 #endif
 
 #ifdef MOS_CLI_PROBE
-    if (flag_probe) return run_probe();
+    if (flag_probe) return mos_cli_run_probe();
 #endif
-    if (flag_list)  return run_list();
-    if (flag_metadata) return run_metadata();
-    if (flag_drive) return run_drive();
-    if (flag_features) return run_features();
-    if (flag_watch) return run_watch();
-    return run_query();
+    if (flag_list)  return mos_cli_run_list();
+    if (flag_metadata) return mos_cli_run_metadata();
+    if (flag_drive) return mos_cli_run_drive();
+    if (flag_features) return mos_cli_run_features();
+    if (flag_watch) return mos_cli_run_watch();
+    return mos_cli_run_query();
 }

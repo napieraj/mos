@@ -199,7 +199,7 @@ static void emit_json(const mos_state_result *r, int index1,
 /* Map mos_error to its JSON contract code string. The set of codes is
    pinned in include/mos.h alongside the enum; downstream automation
    relying on the JSON contract pattern-matches on these strings. */
-int run_query(void)
+int mos_cli_run_query(void)
 {
     mos_error err = MOS_OK;
     mos_handle_t *h = NULL;
@@ -219,7 +219,7 @@ int run_query(void)
     } else {
         /* No selector: fine with exactly one drive; with several this
            is EX_USAGE — no first-burner magic (CLI design 2026-06-10).
-           open_sole_drive opens the lone drive inside the same
+           mos_cli_open_sole_drive opens the lone drive inside the same
            enumeration that counts, so the happy path probes ONCE (the
            pre-pivot collect-then-reopen double probe died with the DR
            pivot). The multi-drive failure still carries the mini-list
@@ -227,21 +227,21 @@ int run_query(void)
            they wanted, plus the retry path — the mini-list's probe
            pass only runs on this error path. */
         int total = 0;
-        h = open_sole_drive(&err, &total);
+        h = mos_cli_open_sole_drive(&err, &total);
         if (total > 1) {
-            static list_row rows[MOS_CLI_LIST_CAP];
+            static mos_cli_list_row rows[MOS_CLI_LIST_CAP];
             int n = 0;
-            (void)collect_and_query(rows, &n);
+            (void)mos_cli_collect_and_query(rows, &n);
             fprintf(stderr,
                     "%s: %d drives present; select one, e.g. `%s status 2`:\n",
                     progname, total, progname);
-            emit_list_table(stderr, rows, n, false);
+            mos_cli_emit_list_table(stderr, rows, n, false);
             return EX_USAGE;
         }
         index1 = 1;
     }
 
-    if (!h) return emit_unknown_and_fail("could not open drive", err, NULL);
+    if (!h) return mos_cli_emit_unknown_and_fail("could not open drive", err, NULL);
 
     const mos_state_result *r = NULL;
     mos_error qerr = mos_query_state(h, &r);
@@ -257,13 +257,13 @@ int run_query(void)
             bsd_buf[0] = 0;
         }
         mos_close(h);
-        return emit_unknown_and_fail("query failed", qerr,
+        return mos_cli_emit_unknown_and_fail("query failed", qerr,
                                      bsd_buf[0] ? bsd_buf : NULL);
     }
 
     /* Index for the emitters: explicit -i is authoritative; a bsd- or
        default-opened handle resolves via registry match (0 = "-"). */
-    if (!index1) index1 = resolve_index_of(mos_state_result_registry_id(r));
+    if (!index1) index1 = mos_cli_resolve_index_of(mos_state_result_registry_id(r));
 
     /* Emit before closing: r is a handle-owned object whose string fields
        point into h's internal buffers (see mos.h — "valid only until the
@@ -284,9 +284,9 @@ int run_query(void)
        exit status. unknown means "drive reachable, classification
        inconclusive" — an observation, not a failure.
        Reserve non-zero exit for cases where no observation was produced
-       (handled by emit_unknown_and_fail above). */
+       (handled by mos_cli_emit_unknown_and_fail above). */
     mos_close(h);
-    return finalize_oneshot_stdout(EX_OK);
+    return mos_cli_finalize_oneshot_stdout(EX_OK);
 }
 
 /* ---- Watch-mode implementation ---------------------------------------- */

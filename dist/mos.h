@@ -86,8 +86,8 @@ typedef enum {
                                   tell which this probe. Watch treats it as
                                   transitional so a re-poll resolves it once GESN
                                   is reachable. */
-} mos_state_enum;
-MOS_ABI_PIN_I32(mos_state_enum);
+} mos_state;
+MOS_ABI_PIN_I32(mos_state);
 
 /*
  * Error codes. mos_query_state() returns MOS_OK even when the reported
@@ -145,7 +145,7 @@ typedef struct mos_state_result mos_state_result;
 
 /* OPEN / EMPTY / LOADING / READY / BUSY / FORMATTING / MEDIA_UNREADABLE /
    DEVICE_FAULT / EMPTY_OR_OPEN / UNKNOWN. */
-mos_state_enum mos_state_result_state(const mos_state_result *r);
+mos_state mos_state_result_state(const mos_state_result *r);
 
 /* Whole-disk BSD unit (the N in "diskN"), or -1 when there is no media
    (empty/open tray) and hence no resolvable name. Render to "diskN" with
@@ -790,8 +790,8 @@ const char    *mos_watch_event_revision(const mos_watch_event *e);
 
 /* Current and previous state (prev is MOS_STATE_UNKNOWN on snapshot), and
    the current profile — meaningful for snapshot and state_changed events. */
-mos_state_enum mos_watch_event_state(const mos_watch_event *e);
-mos_state_enum mos_watch_event_prev_state(const mos_watch_event *e);
+mos_state mos_watch_event_state(const mos_watch_event *e);
+mos_state mos_watch_event_prev_state(const mos_watch_event *e);
 uint16_t       mos_watch_event_current_profile(const mos_watch_event *e);
 
 /* Sense data when relevant, all zero when not. Any out-param may be NULL. */
@@ -893,7 +893,7 @@ int64_t mos_watch_bsd_unit(const mos_watch_t *w);
 /* ---- String helpers -------------------------------------------------- */
 
 /* Static string table; do not free the returned pointer. */
-const char *mos_state_description(mos_state_enum s);
+const char *mos_state_description(mos_state s);
 const char *mos_error_description(mos_error e);
 
 /* Stable snake_case profile name for the MMC current-profile code (e.g.

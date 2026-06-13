@@ -16,7 +16,7 @@
 
 /* ---- mos_state_result --------------------------------------------- */
 
-mos_state_enum mos_state_result_state(const mos_state_result *r)
+mos_state mos_state_result_state(const mos_state_result *r)
 {
     return r ? r->state : MOS_STATE_UNKNOWN;
 }
@@ -106,12 +106,12 @@ const char *mos_watch_event_revision(const mos_watch_event *e)
     return e ? e->revision : NULL;
 }
 
-mos_state_enum mos_watch_event_state(const mos_watch_event *e)
+mos_state mos_watch_event_state(const mos_watch_event *e)
 {
     return e ? e->state : MOS_STATE_UNKNOWN;
 }
 
-mos_state_enum mos_watch_event_prev_state(const mos_watch_event *e)
+mos_state mos_watch_event_prev_state(const mos_watch_event *e)
 {
     return e ? e->prev_state : MOS_STATE_UNKNOWN;
 }

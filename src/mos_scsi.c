@@ -724,7 +724,7 @@ mos_error mos_enumerate_features(mos_handle_t *h,
     size_t             cursor = 8;
     mos_config_feature feat;
     while (mos_internal_config_next_feature(buf, sizeof buf, &cursor, &feat)) {
-        mos_feature_info info = {
+        mos_feature_info_t info = {
             .code       = feat.feature_code,
             .current    = feat.current,
             .persistent = feat.persistent,

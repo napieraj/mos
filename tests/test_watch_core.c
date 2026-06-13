@@ -68,7 +68,7 @@ typedef struct {
     /* Probe responses, indexed by call. After probe_count, probe
        returns MOS_OK with state=READY (sentinel; tests assert before
        reaching this). */
-    mos_state_enum probe_state[8];
+    mos_state probe_state[8];
     mos_error      probe_err[8];
     uint64_t       probe_media_id[8];   /* whole-disk registry id per probe; 0 default */
     uint16_t       probe_profile[8];    /* current_profile per probe; 0 → fixture default */
@@ -516,12 +516,12 @@ TEST(test_profile_fallback_after_late_profile)
 
 TEST(test_poll_class_pinned_for_every_state)
 {
-    /* Finding 2: pin the poll class of EVERY mos_state_enum value, so a new
+    /* Finding 2: pin the poll class of EVERY mos_state value, so a new
        state can't silently inherit "stable." The snapshot pump schedules the
        next poll by the observed state's class; with the mono clock not
        auto-advancing, the deadline is start + (transition|stable)_poll_ms. */
     const uint64_t STABLE = 2000, TRANS = 200, START = 1000;
-    struct { mos_state_enum s; bool transitional; } cases[] = {
+    struct { mos_state s; bool transitional; } cases[] = {
         { MOS_STATE_OPEN,             false },
         { MOS_STATE_EMPTY,            false },
         { MOS_STATE_LOADING,          true  },

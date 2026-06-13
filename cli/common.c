@@ -33,7 +33,7 @@ const char *progname = "mos";
    (Reconstructed 2026-06-10: the original pair was clipped by a blind
    edit during the CLI batch — caught by the cli/ restructure before
    macOS CI could.) */
-int finalize_oneshot_stdout(int success_code)
+int mos_cli_finalize_oneshot_stdout(int success_code)
 {
     switch (mos_cli_stdout_finalize()) {
         case MOS_CLI_STDOUT_OK:          return success_code;
@@ -47,7 +47,7 @@ int finalize_oneshot_stdout(int success_code)
    A closed pipe does not upgrade a failure to success — the command
    still failed; EX_IOERR only when writing the FAILURE itself failed
    for a non-pipe reason. */
-int finalize_failure_stdout(int fail_code)
+int mos_cli_finalize_failure_stdout(int fail_code)
 {
     switch (mos_cli_stdout_finalize()) {
         case MOS_CLI_STDOUT_OK:          return fail_code;
@@ -57,7 +57,7 @@ int finalize_failure_stdout(int fail_code)
     }
 }
 
-const char * mos_error_to_code(mos_error err)
+const char * mos_cli_error_to_code(mos_error err)
 {
     switch (err) {
         case MOS_OK:                   return "ok";
@@ -86,7 +86,7 @@ const char * mos_error_to_code(mos_error err)
    Envelope shape is mos.error.v1 (schemas/). Two fields beyond the schema's
    own docs: exit_code mirrors the process exit for consumers parsing JSON
    without gating on $?, and error.context names what mos was attempting. */
-int emit_unknown_and_fail(const char *context, mos_error err,
+int mos_cli_emit_unknown_and_fail(const char *context, mos_error err,
                                  const char *dev_node)
 {
     int exit_code = mos_error_sysexit(err);
@@ -120,7 +120,7 @@ int emit_unknown_and_fail(const char *context, mos_error err,
         fprintf(stdout, "%s\"exit_code\":%s%d,%s", i2, sp, exit_code, nl);
         fprintf(stdout, "%s\"error\":%s{%s", i2, sp, nl);
         fprintf(stdout, "%s\"code\":%s", i4, sp);
-        mos_cli_json_str(stdout, mos_error_to_code(err));
+        mos_cli_json_str(stdout, mos_cli_error_to_code(err));
         fprintf(stdout, ",%s%s\"message\":%s", nl, i4, sp);
         mos_cli_json_str(stdout, mos_error_description(err));
         fprintf(stdout, ",%s%s\"context\":%s", nl, i4, sp);
@@ -128,7 +128,7 @@ int emit_unknown_and_fail(const char *context, mos_error err,
         fprintf(stdout, ",%s%s\"recoverable\":%s%s", nl, i4, sp,
                 mos_error_is_recoverable(err) ? "true" : "false");
         fprintf(stdout, "%s%s}%s}\n", nl, i2, nl);
-        return finalize_failure_stdout(exit_code);
+        return mos_cli_finalize_failure_stdout(exit_code);
     }
     /* Plain-text mode: nothing on stdout. The stderr diagnostic above
        is the human-readable channel; sysexits exit code is the
@@ -149,7 +149,7 @@ int emit_unknown_and_fail(const char *context, mos_error err,
  * state "error" with identity dashes; one sick drive never kills the
  * rig overview. */
 
-/* id/unit collector — used by resolve_index_of's index lookup. */
+/* id/unit collector — used by mos_cli_resolve_index_of's index lookup. */
 typedef struct {
     int      count;                      /* total seen (may exceed cap) */
     int64_t  units[MOS_CLI_LIST_CAP];
@@ -171,7 +171,7 @@ static bool collect_cb(const mos_device_info_t *info, void *ctx)
 /* Probe one enumerated drive into a row. Runs INSIDE the enumeration
    callback (mos_open_device's lifetime contract) — the one-snapshot
    pattern: no per-row re-enumeration, no enumerate→open index race. */
-static void query_row(const mos_device_info_t *info, list_row *row)
+static void query_row(const mos_device_info_t *info, mos_cli_list_row *row)
 {
     memset(row, 0, sizeof *row);
     row->registry_id = mos_device_info_registry_id(info);
@@ -213,7 +213,7 @@ static void query_row(const mos_device_info_t *info, list_row *row)
 /* Render rows as the human table. with_volume=false is the EX_USAGE
    mini-list variant (CLI design: one table implementation). Cell
    strings must outlive the call — caller passes the row array. */
-void emit_list_table(FILE *f, const list_row *rows, int n,
+void mos_cli_emit_list_table(FILE *f, const mos_cli_list_row *rows, int n,
                             bool with_volume)
 {
     enum { MAXC = 7 };
@@ -264,7 +264,7 @@ void emit_list_table(FILE *f, const list_row *rows, int n,
                           with_volume ? ra_v : ra_nv);
 }
 
-void emit_list_json(const list_row *rows, int n)
+void mos_cli_emit_list_json(const mos_cli_list_row *rows, int n)
 {
     fputs("{\n  \"schema\": \"mos.list.v1\",\n  \"drives\": [\n", stdout);
     if (n > MOS_CLI_LIST_CAP) n = MOS_CLI_LIST_CAP;
@@ -298,7 +298,7 @@ void emit_list_json(const list_row *rows, int n)
 }
 
 typedef struct {
-    list_row *rows;
+    mos_cli_list_row *rows;
     int       n;      /* rows filled (≤ cap) */
     int       total;  /* drives seen (may exceed cap) */
 } caq_ctx;
@@ -314,7 +314,7 @@ static bool caq_cb(const mos_device_info_t *info, void *ctx)
     return true;
 }
 
-int collect_and_query(list_row *rows, int *out_n)
+int mos_cli_collect_and_query(mos_cli_list_row *rows, int *out_n)
 {
     caq_ctx c = { rows, 0, 0 };
     mos_enumerate_devices(caq_cb, &c);
@@ -347,7 +347,7 @@ static bool sole_cb(const mos_device_info_t *info, void *ctx)
     return true; /* keep counting — the EX_USAGE message reports the total */
 }
 
-mos_handle_t *open_sole_drive(mos_error *err, int *total)
+mos_handle_t *mos_cli_open_sole_drive(mos_error *err, int *total)
 {
     sole_ctx c = { NULL, MOS_ERR_NO_DEVICE, 0 };
     mos_enumerate_devices(sole_cb, &c);
@@ -387,7 +387,7 @@ bool mos_cli_unit_for_index(int index, int64_t *unit)
 /* Resolve the 1-based index of the drive the open handle refers to,
    by matching its registry id against a fresh enumeration. Returns 0
    when unresolvable (emitters render Index "-" / JSON index 0). */
-int resolve_index_of(uint64_t reg)
+int mos_cli_resolve_index_of(uint64_t reg)
 {
     if (!reg) return 0;
     collect_ctx c = { 0, {0}, {0} };

@@ -219,8 +219,8 @@ assert_contains "bad --bsd JSON has mos.error.v1" "$OUT" '"schema": "mos.error.v
 
 # Test 11: watch against a non-resolving --bsd exits 66 with a
 # mos.error.v1 envelope. Exercises the watch-open-failure path
-# (mos_watch_open_by_bsd_name returns NULL, run_watch routes through
-# emit_unknown_and_fail). This is the only watch path testable
+# (mos_watch_open_by_bsd_name returns NULL, mos_cli_run_watch routes through
+# mos_cli_emit_unknown_and_fail). This is the only watch path testable
 # without IOKit; the full event-stream behavior is exercised by the
 # pure watch_core unit tests and the hardware integration matrix.
 run_mos watch --bsd disk99 --json

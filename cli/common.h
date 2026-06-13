@@ -32,13 +32,13 @@ extern bool        flag_dump;     /* probe --dump one-shot DR capture */
 extern const char *progname;
 
 /* stdout finalization (shared one-shot/watch write-outcome fold). */
-int  finalize_oneshot_stdout(int success_code);
-int  finalize_failure_stdout(int fail_code);
+int  mos_cli_finalize_oneshot_stdout(int success_code);
+int  mos_cli_finalize_failure_stdout(int fail_code);
 
 /* mos.error.v1 envelope + stderr diagnostic; returns the exit code. */
-int  emit_unknown_and_fail(const char *context, mos_error err,
+int  mos_cli_emit_unknown_and_fail(const char *context, mos_error err,
                            const char *dev_node);
-const char *mos_error_to_code(mos_error err);
+const char *mos_cli_error_to_code(mos_error err);
 
 /* mos.state.v1 / mos.event.v1 suppression rule, in one place: 0x0000 is
    the SCSI sentinel "no current profile", and profile-derived fields
@@ -99,17 +99,17 @@ typedef struct {
        Volume cell as "name (path)". */
     char     volume_path[1024];
     uint64_t registry_id;
-} list_row;
+} mos_cli_list_row;
 
-int  collect_and_query(list_row *rows, int *out_n);  /* returns total seen */
-void emit_list_table(FILE *f, const list_row *rows, int n, bool with_volume);
-void emit_list_json(const list_row *rows, int n);
-int  resolve_index_of(uint64_t reg);
+int  mos_cli_collect_and_query(mos_cli_list_row *rows, int *out_n);  /* returns total seen */
+void mos_cli_emit_list_table(FILE *f, const mos_cli_list_row *rows, int n, bool with_volume);
+void mos_cli_emit_list_json(const mos_cli_list_row *rows, int n);
+int  mos_cli_resolve_index_of(uint64_t reg);
 
 /* status no-selector path: open the sole present drive in the same
    enumeration that counts (single probe; *total reports the count,
    handle is non-NULL only when *total == 1 and the open succeeded). */
-mos_handle_t *open_sole_drive(mos_error *err, int *total);
+mos_handle_t *mos_cli_open_sole_drive(mos_error *err, int *total);
 
 /* Count attached drives: one bare enumeration pass, no probe, no
    open. The watch no-selector path's sole-drive check. */
@@ -122,16 +122,16 @@ int mos_cli_count_drives(void);
 bool mos_cli_unit_for_index(int index, int64_t *unit);
 
 /* Command entry points. */
-int run_query(void);   /* status (default) */
-int run_metadata(void); /* disc identity (mos.metadata.v1) */
-int run_drive(void);    /* drive facts (mos.drive.v1) */
-int run_features(void); /* MMC feature list (mos.features.v1) */
-int run_list(void);
-int run_watch(void);
-int run_probe(void);   /* defined only in MOS_CLI_PROBE builds
+int mos_cli_run_query(void);   /* status (default) */
+int mos_cli_run_metadata(void); /* disc identity (mos.metadata.v1) */
+int mos_cli_run_drive(void);    /* drive facts (mos.drive.v1) */
+int mos_cli_run_features(void); /* MMC feature list (mos.features.v1) */
+int mos_cli_run_list(void);
+int mos_cli_run_watch(void);
+int mos_cli_run_probe(void);   /* defined only in MOS_CLI_PROBE builds
                           (cli/probe.c); the sole call site in main.c
                           is #ifdef-guarded to match. */
 
-void print_usage(FILE *f);
+void mos_cli_print_usage(FILE *f);
 
 #endif /* MOS_CLI_COMMON_H */

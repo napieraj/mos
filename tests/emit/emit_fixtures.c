@@ -116,7 +116,7 @@ int main(int argc, char **argv)
         uint8_t di[116]; build_bd_di(di);
         mos_fake_set_disc_structure_reply(0x00, di, sizeof di);
         /* BD video: typically unmounted -> no DA volume set. */
-        return run_metadata();
+        return mos_cli_run_metadata();
     }
     if (strcmp(verb, "metadata") == 0 && strcmp(scn, "cd_mounted") == 0) {
         common_drive_setup();
@@ -127,40 +127,40 @@ int main(int argc, char **argv)
         uint8_t toc[64]; mos_fake_set_toc_reply(0x00, toc, build_toc(toc, sizeof toc));
         /* non-BD: no DI -> disc_structure null. Mounted audio CD. */
         mos_fake_set_da_volume("Audio CD", "/Volumes/Audio CD");
-        return run_metadata();
+        return mos_cli_run_metadata();
     }
     if (strcmp(verb, "metadata") == 0 && strcmp(scn, "not_ready") == 0) {
         mos_fake_reset();
         mos_fake_set_bsd_unit(-1);
         uint8_t sense[18] = {0}; sense[2] = 0x02; sense[12] = 0x3A; /* not ready */
         mos_fake_set_tur(0x02 /*CHECK COND*/, sense);
-        return run_metadata();
+        return mos_cli_run_metadata();
     }
     if (strcmp(verb, "drive") == 0 && strcmp(scn, "aacs_bd") == 0) {
         common_drive_setup();
         mos_fake_set_getconfig_reply(0x00, cfg,
             build_getconfig(cfg, sizeof cfg, 0x0041, true));
-        return run_drive();
+        return mos_cli_run_drive();
     }
     if (strcmp(verb, "drive") == 0 && strcmp(scn, "plain_dvd") == 0) {
         common_drive_setup();
         mos_fake_set_identity("PIONEER", "BD-RW BDR-XS07", "1.01");
         mos_fake_set_getconfig_reply(0x00, cfg,
             build_getconfig(cfg, sizeof cfg, 0x0010, false));
-        return run_drive();
+        return mos_cli_run_drive();
     }
     if (strcmp(verb, "features") == 0 && strcmp(scn, "bd") == 0) {
         common_drive_setup();
         mos_fake_set_getconfig_reply(0x00, cfg,
             build_getconfig(cfg, sizeof cfg, 0x0041, true));
-        return run_features();
+        return mos_cli_run_features();
     }
     if (strcmp(verb, "status") == 0 && strcmp(scn, "ready_mounted") == 0) {
         common_drive_setup();
         mos_fake_set_getconfig_reply(0x00, cfg,
             build_getconfig(cfg, sizeof cfg, 0x0008, false));
         mos_fake_set_da_volume("Audio CD", "/Volumes/Audio CD");
-        return run_query();
+        return mos_cli_run_query();
     }
     if (strcmp(verb, "list") == 0 && strcmp(scn, "one_drive") == 0) {
         common_drive_setup();
@@ -170,7 +170,7 @@ int main(int argc, char **argv)
            emitted mos.list.v1 row (validate_emitted.py). */
         mos_fake_set_da_volume("ARRIVAL", "/Volumes/ARRIVAL");
         opt_index = 0;   /* list takes no selector */
-        return run_list();
+        return mos_cli_run_list();
     }
 
     fprintf(stderr, "unknown verb/scenario: %s %s\n", verb, scn);

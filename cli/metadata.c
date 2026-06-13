@@ -323,7 +323,7 @@ static void emit_human(const metadata_doc *d)
     (void)mos_cli_human_block(stdout, pairs, n);
 }
 
-int run_metadata(void)
+int mos_cli_run_metadata(void)
 {
     mos_error err = MOS_OK;
     mos_handle_t *h = NULL;
@@ -336,7 +336,7 @@ int run_metadata(void)
         h = mos_open_by_registry_id(opt_registry, &err);
     } else {
         int total = 0;
-        h = open_sole_drive(&err, &total);
+        h = mos_cli_open_sole_drive(&err, &total);
         if (total > 1) {
             fprintf(stderr,
                     "%s: %d drives present; select one, e.g. "
@@ -345,7 +345,7 @@ int run_metadata(void)
             return EX_USAGE;
         }
     }
-    if (!h) return emit_unknown_and_fail("could not open drive", err, NULL);
+    if (!h) return mos_cli_emit_unknown_and_fail("could not open drive", err, NULL);
 
     /* The state query is the gate: it proves the drive answers at all
        (and is the profile source). Media-level reads after it are
@@ -360,7 +360,7 @@ int run_metadata(void)
             bsd_buf[0] = 0;
         }
         mos_close(h);
-        return emit_unknown_and_fail("query failed", qerr,
+        return mos_cli_emit_unknown_and_fail("query failed", qerr,
                                      bsd_buf[0] ? bsd_buf : NULL);
     }
 
@@ -401,5 +401,5 @@ int run_metadata(void)
     else           emit_human(&d);
 
     mos_close(h);
-    return finalize_oneshot_stdout(EX_OK);
+    return mos_cli_finalize_oneshot_stdout(EX_OK);
 }

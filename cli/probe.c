@@ -333,7 +333,7 @@ static int run_dr_dump(void)
     printf("mos probe --dump %s\n", ts);
     printf("DRCopyDeviceArray: %ld device(s)%s\n", n,
            arr ? "" : " (NULL array)");
-    if (!arr) return finalize_failure_stdout(EX_UNAVAILABLE);
+    if (!arr) return mos_cli_finalize_failure_stdout(EX_UNAVAILABLE);
 
     for (long i = 0; i < n; ++i) {
         DRDeviceRef dev =
@@ -350,7 +350,7 @@ static int run_dr_dump(void)
         if (status) CFRelease(status);
     }
     CFRelease(arr);
-    return finalize_oneshot_stdout(EX_OK);
+    return mos_cli_finalize_oneshot_stdout(EX_OK);
 }
 
 static void general_interest_cb(void *refcon,
@@ -432,7 +432,7 @@ static io_service_t resolve_io_service_by_bsd(const char *bsd_name) {
 
 /* ---- Entry point --------------------------------------------------- */
 
-int run_probe(void)
+int mos_cli_run_probe(void)
 {
     if (flag_dump) {
         init_timebase();
@@ -441,7 +441,7 @@ int run_probe(void)
 
     init_timebase();
 
-    /* SIGINT/SIGTERM end the stream cleanly. Same shape as run_watch:
+    /* SIGINT/SIGTERM end the stream cleanly. Same shape as mos_cli_run_watch:
        sigaction without SA_RESTART so the run-loop slice below notices
        the flag promptly. */
     struct sigaction sa;
@@ -622,7 +622,7 @@ int run_probe(void)
         /* Clean write → EX_OK; consumer closed the pipe → still EX_OK
            (tail -f semantics, same fold as the watch); real write
            error → EX_IOERR. */
-        rc = finalize_oneshot_stdout(EX_OK);
+        rc = mos_cli_finalize_oneshot_stdout(EX_OK);
     } else {
         /* stdout failed mid-stream — the stream is dead, so no
            shutdown envelope; classify the latched failure. */

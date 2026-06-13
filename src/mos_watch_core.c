@@ -173,7 +173,7 @@ void mos_internal_watch_notify_wake(mos_watch_state *w)
 
 /* Whether the state is a "transition" state for backoff purposes.
    Loading / busy / unknown are transitional; the others are stable. */
-static bool watch_state_is_transitional(mos_state_enum s)
+static bool watch_state_is_transitional(mos_state s)
 {
     switch (s) {
         /* In-progress or degraded observations — poll fast to converge. */
@@ -191,7 +191,7 @@ static bool watch_state_is_transitional(mos_state_enum s)
         case MOS_STATE_DEVICE_FAULT:      /* drive fault; not self-resolving */
             return false;
     }
-    /* No default: a new mos_state_enum value trips -Wswitch under -Werror, so
+    /* No default: a new mos_state value trips -Wswitch under -Werror, so
        its poll class must be chosen deliberately rather than silently
        inheriting "stable." This trailing return only handles an out-of-range
        value (the enum is int32-wide). */
@@ -254,7 +254,7 @@ static uint32_t mos_watch_latency_ms(uint64_t start, uint64_t end)
    transition_poll_ms, stable states at stable_poll_ms. One site so the
    policy is audited in one place. */
 static uint32_t poll_ms_for_state(const mos_watch_state *w,
-                                  mos_state_enum state)
+                                  mos_state state)
 {
     return watch_state_is_transitional(state)
         ? w->transition_poll_ms

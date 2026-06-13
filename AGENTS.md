@@ -196,7 +196,7 @@ carrying type identity inside each message.
   rule explicitly tells parsers to handle unknown state strings as
   "unclassifiable."
 - New error code value (new `mos_error` enum variant surfaced
-  through `mos_error_to_code`): fine under `mos.error.v1`. Same
+  through `mos_cli_error_to_code`): fine under `mos.error.v1`. Same
   rationale; `.error.code` is a string the consumer pattern-matches
   against.
 
@@ -411,3 +411,33 @@ untouched. Cost was zero: pre-first-tag, no external consumers, so the
 JSON-schema ADR's mutable-in-place clause applied — the rename landed in
 `mos.*.v1` directly, no v2, schemas + examples + negatives + emitters +
 docs in one commit.
+
+### Addendum: `mos_cli_` scope narrowed; `_t` convention recorded; two
+### library renames (2026-06-13, corrects the "uniformly" clause above)
+
+A naming-consistency pass surfaced that the clause "CLI-layer
+identifiers carry the `mos_cli_` prefix uniformly (io, human, all of
+cli/)" was false at the time it was written: the cross-TU command and
+helper functions in `cli/common.h` (`run_*`, `emit_*`, `finalize_*`,
+`collect_and_query`, `open_sole_drive`, `resolve_index_of`,
+`mos_error_to_code`, `print_usage`) and the shared `list_row` type were
+all bare. They now carry the prefix (`mos_cli_run_*`,
+`mos_cli_emit_list_*`, `mos_cli_list_row`, …), which makes the claim
+true for what it should have meant: **every cross-translation-unit
+identifier in `cli/`**. Two categories stay bare, deliberately, and the
+clause is hereby read to exclude them — file-local `static` symbols (the
+prefix guards against cross-TU collision, which `static` cannot have)
+and the parse-state `extern` globals `opt_*` / `flag_*` / `progname` (a
+file-spanning argv-state block named for the options it holds, a
+different axis from the helper/command API). The canonical statement now
+lives in CONTRIBUTING.md §Symbol-naming, not here.
+
+Same pass recorded the previously-undocumented `_t` suffix convention in
+CONTRIBUTING.md §Symbol-naming ("`_t`" subsection) and made two library
+renames to fit it: `mos_state_enum` → `mos_state` (the lone enum named
+after its kind rather than a semantic noun, now matching `mos_error` /
+`mos_disc_status` / `mos_event_kind` / `mos_xfer_dir`), and the stray
+internal `typedef ... mos_feature_info` alias was dropped so the struct
+mirrors `struct mos_device_info` exactly — tagged internally, `_t` alias
+only in `include/mos.h`. Both pre-first-tag, no external consumers; the
+public `mos_state` enum value names (`MOS_STATE_*`) are unchanged.

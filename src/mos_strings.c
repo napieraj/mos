@@ -8,7 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-const char *mos_state_description(mos_state_enum s)
+const char *mos_state_description(mos_state s)
 {
     switch (s) {
         case MOS_STATE_OPEN:    return "open";

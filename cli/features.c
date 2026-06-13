@@ -83,7 +83,7 @@ static void emit_human(const feat_collect *c)
     }
 }
 
-int run_features(void)
+int mos_cli_run_features(void)
 {
     mos_error err = MOS_OK;
     mos_handle_t *h = NULL;
@@ -96,7 +96,7 @@ int run_features(void)
         h = mos_open_by_registry_id(opt_registry, &err);
     } else {
         int total = 0;
-        h = open_sole_drive(&err, &total);
+        h = mos_cli_open_sole_drive(&err, &total);
         if (total > 1) {
             fprintf(stderr,
                     "%s: %d drives present; select one, e.g. "
@@ -105,7 +105,7 @@ int run_features(void)
             return EX_USAGE;
         }
     }
-    if (!h) return emit_unknown_and_fail("could not open drive", err, NULL);
+    if (!h) return mos_cli_emit_unknown_and_fail("could not open drive", err, NULL);
 
     feat_collect c = {0};
     mos_error qerr = mos_enumerate_features(h, collect_cb, &c);
@@ -116,7 +116,7 @@ int run_features(void)
             bsd_buf[0] = 0;
         }
         mos_close(h);
-        return emit_unknown_and_fail("feature enumeration failed", qerr,
+        return mos_cli_emit_unknown_and_fail("feature enumeration failed", qerr,
                                      bsd_buf[0] ? bsd_buf : NULL);
     }
 
@@ -125,5 +125,5 @@ int run_features(void)
     else           emit_human(&c);
 
     mos_close(h);
-    return finalize_oneshot_stdout(EX_OK);
+    return mos_cli_finalize_oneshot_stdout(EX_OK);
 }

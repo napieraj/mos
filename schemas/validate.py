@@ -35,7 +35,7 @@ def schema_name_from_filename(name: str) -> str:
 
 def check_state_enum_drift(here: Path) -> int:
     """Guard against the C state-string table and the JSON schema state
-    enums drifting apart — the exact failure where a new mos_state_enum
+    enums drifting apart — the exact failure where a new mos_state
     value is emitted by the program but rejected by mos.event.v1. The
     source of truth is mos_state_description() in src/mos_strings.c; both
     schema enums (mos.state.v1 state, mos.event.v1 state + prev_state)
@@ -90,7 +90,7 @@ def check_cli_enum_drift(here: Path) -> int:
     string sets the CLI emits into schema-constrained fields. The C side
     is compile-time pinned (-Wswitch on the no-default switches), but
     nothing ties the SCHEMA enums to those switches — this check does.
-      - error codes:   cli/common.c mos_error_to_code() (minus the
+      - error codes:   cli/common.c mos_cli_error_to_code() (minus the
                        MOS_OK row: "ok" is unreachable in an error
                        envelope and excluded from the schema enums)
                        vs mos.error.v1 + mos.event.v1 error.code
@@ -127,8 +127,8 @@ def check_cli_enum_drift(here: Path) -> int:
     checks = []
 
     c_codes = switch_returns(root / "cli" / "common.c",
-                             "mos_error_to_code", "MOS_") - {"ok"}
-    checks.append(("error.code", c_codes, "cli/common.c mos_error_to_code()",
+                             "mos_cli_error_to_code", "MOS_") - {"ok"}
+    checks.append(("error.code", c_codes, "cli/common.c mos_cli_error_to_code()",
                    (("mos.error.v1.error.code",
                      enum_at(here / "mos.error.v1.json", "error", "code")),
                     ("mos.event.v1.error.code",
