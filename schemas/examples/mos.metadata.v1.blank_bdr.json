@@ -11,7 +11,9 @@
       "status": "blank",
       "erasable": false,
       "sessions": 1,
-      "tracks": 1
+      "tracks": 1,
+      "bg_format": 0,
+      "bg_format_name": "none"
     },
     "disc_structure": null,
     "volume_name": null,

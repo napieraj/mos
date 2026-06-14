@@ -45,7 +45,9 @@
       "status": "complete",
       "erasable": false,
       "sessions": 1,
-      "tracks": 4
+      "tracks": 4,
+      "bg_format": 0,
+      "bg_format_name": "none"
     },
     "disc_structure": null,
     "volume_name": "Audio CD",

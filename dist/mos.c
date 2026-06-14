@@ -361,6 +361,10 @@ struct mos_disc_info {
     uint16_t number_of_sessions;         /* byte 9 (MSB) : byte 4 (LSB) */
     uint16_t first_track_last_session;   /* byte 10 : byte 5 */
     uint16_t last_track_last_session;    /* byte 11 : byte 6 */
+    uint8_t  bg_format_status;           /* byte 7 bits 1:0: background-format
+                                            state — 0 none, 1 inactive,
+                                            2 active, 3 complete (Linux
+                                            CDM_MRW_* macros) */
 };
 
 /* Decode a READ DISC INFORMATION (0x51, data type 000b) response into
@@ -1728,6 +1732,13 @@ bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
     out->number_of_sessions       = (uint16_t)(((uint16_t)buf[9]  << 8) | buf[4]);
     out->first_track_last_session = (uint16_t)(((uint16_t)buf[10] << 8) | buf[5]);
     out->last_track_last_session  = (uint16_t)(((uint16_t)buf[11] << 8) | buf[6]);
+
+    /* BG Format Status (byte 7 bits 1:0): the background-format state of
+       DVD+RW / BD-RE / Mount Rainier media — none / inactive (started,
+       not running) / active (in progress) / complete. Byte 7 is inside
+       the through-byte-11 region already proven present above, so no
+       extra bound is needed. Values match Linux CDM_MRW_* (cdrom.h). */
+    out->bg_format_status = (uint8_t)(buf[7] & 0x03u);
     return true;
 }
 /* ==== src/mos_discstruct.c ==== */
@@ -2533,6 +2544,11 @@ uint16_t mos_disc_info_last_track_last_session(const mos_disc_info *d)
 uint8_t mos_disc_info_last_session_state(const mos_disc_info *d)
 {
     return d ? d->last_session_state : 0;
+}
+
+uint8_t mos_disc_info_bg_format_status(const mos_disc_info *d)
+{
+    return d ? d->bg_format_status : 0;
 }
 
 /* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
@@ -5020,6 +5036,23 @@ const char *mos_protection_name(uint8_t protection)
         case 0x02: return "cprm";
         case 0x03: return "aacs";
         default:   return NULL;
+    }
+}
+
+/* BG Format Status (READ DISC INFORMATION byte 7 bits 1:0). Stable
+   tokens for the four background-format states; the 2-bit field is total
+   so the default is unreachable from mos_disc_info_bg_format_status
+   (masked 0-3) but kept NULL for the out-of-range public-accessor call.
+   Names track the Linux CDM_MRW_* macros (cdrom.h). Explicit returns so
+   the validate.py drift guard harvests the tokens. */
+const char *mos_bg_format_status_name(uint8_t status)
+{
+    switch (status) {
+        case 0:  return "none";       /* CDM_MRW_NOTMRW            */
+        case 1:  return "inactive";   /* CDM_MRW_BGFORMAT_INACTIVE */
+        case 2:  return "active";     /* CDM_MRW_BGFORMAT_ACTIVE   */
+        case 3:  return "complete";   /* CDM_MRW_BGFORMAT_COMPLETE */
+        default: return NULL;
     }
 }
 

@@ -160,7 +160,11 @@ structure, not the filesystem: `blank` = unburned, ready to write;
 burned and readable; `complete` with Volume null = burned but the
 filesystem did not mount — possibly damaged (when even the TOC won't
 read, `mos status` reports `media_unreadable`). `erasable`
-distinguishes wipe-and-reuse media (RW/RE) from one-shot (R/M-DISC). The volume name/path
+distinguishes wipe-and-reuse media (RW/RE) from one-shot (R/M-DISC).
+`disc_info.bg_format` / `bg_format_name` report the background-format
+state of DVD+RW/BD-RE/Mount Rainier media (`none` / `inactive` /
+`active` / `complete`, matching Linux `CDM_MRW_*`): an `active` disc is
+still formatting and may not be reliably readable yet. The volume name/path
 are mount-sourced only (one synchronous DiskArbitration description
 read): a present-but-unmounted disc reads `null` by design — sector
 reads are the consumer's privilege and parsing burden. That null is

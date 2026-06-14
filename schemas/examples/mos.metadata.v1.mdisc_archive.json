@@ -24,7 +24,9 @@
       "status": "complete",
       "erasable": false,
       "sessions": 1,
-      "tracks": 1
+      "tracks": 1,
+      "bg_format": 0,
+      "bg_format_name": "none"
     },
     "disc_structure": {
       "disc_type": "BDR",

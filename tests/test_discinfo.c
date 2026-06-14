@@ -106,6 +106,38 @@ TEST(discinfo_status_is_byte2_low_two_bits)
     return 0;
 }
 
+TEST(discinfo_bg_format_status_byte7_low_two_bits)
+{
+    /* BG Format Status is byte 7 bits 1:0, isolated from the high
+       validity bits (DID_V/DBC_V/URU/DAC_V) that share the byte. */
+    uint8_t buf[12] = { 0,10, 0x00, 0,0,0,0, 0x00, 0,0,0,0 };
+    mos_disc_info di;
+
+    buf[7] = 0xFC;   /* every high bit set, bg bits clear */
+    EXPECT(mos_internal_disc_info_parse(buf, sizeof buf, &di));
+    EXPECT_EQ(di.bg_format_status, 0);
+    buf[7] = 0x01;
+    EXPECT(mos_internal_disc_info_parse(buf, sizeof buf, &di));
+    EXPECT_EQ(di.bg_format_status, 1);
+    buf[7] = 0xFE;   /* high bits set, bg = 10b */
+    EXPECT(mos_internal_disc_info_parse(buf, sizeof buf, &di));
+    EXPECT_EQ(di.bg_format_status, 2);
+    buf[7] = 0x03;
+    EXPECT(mos_internal_disc_info_parse(buf, sizeof buf, &di));
+    EXPECT_EQ(di.bg_format_status, 3);
+    return 0;
+}
+
+TEST(discinfo_bg_format_status_name_tokens)
+{
+    EXPECT(strcmp(mos_bg_format_status_name(0), "none") == 0);
+    EXPECT(strcmp(mos_bg_format_status_name(1), "inactive") == 0);
+    EXPECT(strcmp(mos_bg_format_status_name(2), "active") == 0);
+    EXPECT(strcmp(mos_bg_format_status_name(3), "complete") == 0);
+    EXPECT(mos_bg_format_status_name(4) == NULL);    /* out of range */
+    return 0;
+}
+
 TEST(discinfo_combines_session_count_msb_lsb)
 {
     /* Number of Sessions is split: LSB at byte 4, MSB at byte 9. */
@@ -171,6 +203,7 @@ TEST(discinfo_accessors_read_fixture_fields)
     EXPECT_EQ(1,                 mos_disc_info_session_count(&di));
     EXPECT_EQ(1,                 mos_disc_info_first_track_last_session(&di));
     EXPECT_EQ(1,                 mos_disc_info_last_track_last_session(&di));
+    EXPECT_EQ(0,                 mos_disc_info_bg_format_status(&di)); /* byte7=0x20 */
     return 0;
 }
 
@@ -183,6 +216,7 @@ TEST(discinfo_accessors_null_tolerant)
     EXPECT_EQ(0,              mos_disc_info_first_track_last_session(NULL));
     EXPECT_EQ(0,              mos_disc_info_last_track_last_session(NULL));
     EXPECT_EQ(0,              mos_disc_info_last_session_state(NULL));
+    EXPECT_EQ(0,              mos_disc_info_bg_format_status(NULL));
     return 0;
 }
 
@@ -237,6 +271,8 @@ void register_discinfo_tests(void)
     RUN(discinfo_complete_bdre_decodes_erasable);
     RUN(discinfo_complete_cdrom_decodes_complete);
     RUN(discinfo_status_is_byte2_low_two_bits);
+    RUN(discinfo_bg_format_status_byte7_low_two_bits);
+    RUN(discinfo_bg_format_status_name_tokens);
     RUN(discinfo_combines_session_count_msb_lsb);
     RUN(discinfo_short_buffer_is_rejected);
     RUN(discinfo_declared_length_shorter_than_fields_is_rejected);

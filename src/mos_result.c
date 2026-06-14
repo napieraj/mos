@@ -176,6 +176,11 @@ uint8_t mos_disc_info_last_session_state(const mos_disc_info *d)
     return d ? d->last_session_state : 0;
 }
 
+uint8_t mos_disc_info_bg_format_status(const mos_disc_info *d)
+{
+    return d ? d->bg_format_status : 0;
+}
+
 /* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
  * NULL- and range-tolerant like every accessor above; the entry index
  * is bounded by track_count, which the fail-closed parser proved

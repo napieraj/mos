@@ -155,7 +155,9 @@
             "status",
             "erasable",
             "sessions",
-            "tracks"
+            "tracks",
+            "bg_format",
+            "bg_format_name"
           ],
           "additionalProperties": false,
           "properties": {
@@ -179,6 +181,22 @@
               "type": "integer",
               "minimum": 0,
               "description": "Last track number in the last session \u2014 the track count under MMC's from-1 numbering."
+            },
+            "bg_format": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3,
+              "description": "BG Format Status (byte 7 bits 1:0): the background-format state of DVD+RW/BD-RE/Mount Rainier media. 0 none (not BG-formatted/blank), 1 inactive (started, not running), 2 active (in progress), 3 complete. Values match Linux CDM_MRW_* (cdrom.h)."
+            },
+            "bg_format_name": {
+              "enum": [
+                "none",
+                "inactive",
+                "active",
+                "complete",
+                null
+              ],
+              "description": "Stable token for bg_format (mos_bg_format_status_name), null only for an out-of-range code \u2014 drift-guarded in validate.py. The in-flight states (inactive/active) signal a disc that may not be reliably readable yet."
             }
           }
         },

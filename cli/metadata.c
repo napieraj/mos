@@ -104,13 +104,19 @@ static void emit_json(const metadata_doc *d)
 
     fputs(",\n    \"disc_info\": ", stdout);
     if (d->di) {
+        uint8_t bg = mos_disc_info_bg_format_status(d->di);
+        const char *bgn = mos_bg_format_status_name(bg);
         fprintf(stdout,
                 "{\"status\": \"%s\", \"erasable\": %s, "
-                "\"sessions\": %u, \"tracks\": %u}",
+                "\"sessions\": %u, \"tracks\": %u, "
+                "\"bg_format\": %u, \"bg_format_name\": ",
                 mos_disc_status_description(mos_disc_info_status(d->di)),
                 mos_disc_info_erasable(d->di) ? "true" : "false",
                 mos_disc_info_session_count(d->di),
-                mos_disc_info_last_track_last_session(d->di));
+                mos_disc_info_last_track_last_session(d->di),
+                bg);
+        if (bgn) mos_cli_json_str(stdout, bgn); else fputs("null", stdout);
+        fputs("}", stdout);
     } else {
         fputs("null", stdout);
     }
@@ -280,15 +286,23 @@ static void emit_human(const metadata_doc *d)
         pairs[n++] = (mos_cli_human_pair){ "Profile", NULL };
     }
 
-    char di_buf[64];
+    char di_buf[80];
     if (d->di) {
-        snprintf(di_buf, sizeof di_buf, "%s%s, %u session%s, %u track%s",
+        /* Surface only the in-flight BG-format states (inactive/active) —
+           the "is this disc still formatting" signal that bears on
+           readability; none/complete are the unremarkable common cases. */
+        uint8_t bg = mos_disc_info_bg_format_status(d->di);
+        const char *bgs = (bg == 1) ? ", bg-format inactive"
+                        : (bg == 2) ? ", bg-format active"
+                                    : "";
+        snprintf(di_buf, sizeof di_buf, "%s%s, %u session%s, %u track%s%s",
                  mos_disc_status_description(mos_disc_info_status(d->di)),
                  mos_disc_info_erasable(d->di) ? " (erasable)" : "",
                  mos_disc_info_session_count(d->di),
                  mos_disc_info_session_count(d->di) == 1 ? "" : "s",
                  mos_disc_info_last_track_last_session(d->di),
-                 mos_disc_info_last_track_last_session(d->di) == 1 ? "" : "s");
+                 mos_disc_info_last_track_last_session(d->di) == 1 ? "" : "s",
+                 bgs);
     }
     pairs[n++] = (mos_cli_human_pair){ "Disc", d->di ? di_buf : NULL };
 

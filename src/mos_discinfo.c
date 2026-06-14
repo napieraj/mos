@@ -61,5 +61,12 @@ bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
     out->number_of_sessions       = (uint16_t)(((uint16_t)buf[9]  << 8) | buf[4]);
     out->first_track_last_session = (uint16_t)(((uint16_t)buf[10] << 8) | buf[5]);
     out->last_track_last_session  = (uint16_t)(((uint16_t)buf[11] << 8) | buf[6]);
+
+    /* BG Format Status (byte 7 bits 1:0): the background-format state of
+       DVD+RW / BD-RE / Mount Rainier media — none / inactive (started,
+       not running) / active (in progress) / complete. Byte 7 is inside
+       the through-byte-11 region already proven present above, so no
+       extra bound is needed. Values match Linux CDM_MRW_* (cdrom.h). */
+    out->bg_format_status = (uint8_t)(buf[7] & 0x03u);
     return true;
 }

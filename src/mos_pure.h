@@ -285,6 +285,10 @@ struct mos_disc_info {
     uint16_t number_of_sessions;         /* byte 9 (MSB) : byte 4 (LSB) */
     uint16_t first_track_last_session;   /* byte 10 : byte 5 */
     uint16_t last_track_last_session;    /* byte 11 : byte 6 */
+    uint8_t  bg_format_status;           /* byte 7 bits 1:0: background-format
+                                            state — 0 none, 1 inactive,
+                                            2 active, 3 complete (Linux
+                                            CDM_MRW_* macros) */
 };
 
 /* Decode a READ DISC INFORMATION (0x51, data type 000b) response into

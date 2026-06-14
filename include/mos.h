@@ -346,10 +346,19 @@ uint16_t        mos_disc_info_last_track_last_session(const mos_disc_info *d);
    2 damaged, 3 complete. Raw on purpose — four values, no semantics
    mos adds; an enum here would be ceremony. */
 uint8_t         mos_disc_info_last_session_state(const mos_disc_info *d);
+/* BG Format Status, raw (byte 7 bits 1:0): 0 none, 1 inactive (started,
+   not running), 2 active (in progress), 3 complete — the background-
+   format state of DVD+RW / BD-RE / Mount Rainier media. Map to a token
+   with mos_bg_format_status_name(). */
+uint8_t         mos_disc_info_bg_format_status(const mos_disc_info *d);
 
 /* "blank" / "appendable" / "complete" / "other". Stable lowercase
    tokens, same contract as mos_state_description(). */
 const char     *mos_disc_status_description(mos_disc_status s);
+
+/* "none" / "inactive" / "active" / "complete" for BG Format Status
+   0..3; NULL for out-of-range. Tokens track Linux CDM_MRW_* (cdrom.h). */
+const char     *mos_bg_format_status_name(uint8_t status);
 
 /* ---- Table of contents (v0.4 typed API) ------------------------------ */
 

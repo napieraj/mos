@@ -681,3 +681,39 @@ applies at the first tag like every other field.
 REQUEST SENSE progress), and — within CD-TEXT itself — per-track titles,
 the other field types, and multi-language blocks, each a fresh argument
 to make here against an observed need, not a speculative expansion.
+
+## BG Format Status shipped — disc_info.bg_format (2026-06-14)
+
+Shipped the byte-7 half of the banked "BG format status (RDI byte 7 &
+3 + REQUEST SENSE progress)" item. The background-format state is
+already in the READ DISC INFORMATION reply `mos_query_disc_info`
+fetches, so this is a pure-decoder extension of `mos_discinfo.c` — **no
+new command, no new wire traffic**. Byte 7 sits inside the
+through-byte-11 region the decode already proves present, so no extra
+bound.
+
+**What ships.** `mos_disc_info.bg_format_status` = `buf[7] & 0x03`, the
+2-bit BG Format Status, surfaced in `mos.metadata.v1.disc.disc_info` as
+`bg_format` (0..3) + `bg_format_name` (token, drift-guarded). Values and
+tokens track the Linux `CDM_MRW_*` macros (verified against
+torvalds/linux `include/uapi/linux/cdrom.h`): 0 `none` (NOTMRW), 1
+`inactive` (BGFORMAT_INACTIVE — started, not running), 2 `active`
+(BGFORMAT_ACTIVE — in progress), 3 `complete` (BGFORMAT_COMPLETE). The
+human `Disc` row appends only the in-flight states (`inactive`/`active`)
+— the "is this disc still formatting" signal that bears on readability;
+`none`/`complete` are the unremarkable common cases.
+
+**What stays deferred.** The REQUEST SENSE **progress-percent** read
+(the `SKSV` progress indication available while a format is `active`)
+needs a new command path and only refines the `active` state with a
+percentage — banked, not built, pending an observed need. The 2-bit
+state is the load-bearing fact; the percentage is gravy.
+
+**Falsifier (per the hardware-role ADR).** No in-repo capture sets a
+non-zero BG Format Status yet — the existing RDI fixtures are CD/BD-R
+(write-once, always `none`). A real DVD+RW or BD-RE mid-background-format
+capture is the fixture-acquisition target; it lands as a `.bin` with a
+dated fixtures-README entry, and the decode is already built to the spec
+byte. The decode itself is exercised over the full byte-7 space in
+`tests/test_discinfo.c` and stays in-bounds under the discinfo fuzz
+phase.
