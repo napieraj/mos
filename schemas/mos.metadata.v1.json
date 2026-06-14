@@ -47,7 +47,8 @@
         "disc_info",
         "volume_name",
         "disc_structure",
-        "track_info"
+        "track_info",
+        "cdtext"
       ],
       "additionalProperties": false,
       "properties": {
@@ -154,7 +155,9 @@
             "status",
             "erasable",
             "sessions",
-            "tracks"
+            "tracks",
+            "bg_format",
+            "bg_format_name"
           ],
           "additionalProperties": false,
           "properties": {
@@ -178,6 +181,22 @@
               "type": "integer",
               "minimum": 0,
               "description": "Last track number in the last session \u2014 the track count under MMC's from-1 numbering."
+            },
+            "bg_format": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3,
+              "description": "BG Format Status (byte 7 bits 1:0): the background-format state of DVD+RW/BD-RE/Mount Rainier media. 0 none (not BG-formatted/blank), 1 inactive (started, not running), 2 active (in progress), 3 complete. Values match Linux CDM_MRW_* (cdrom.h)."
+            },
+            "bg_format_name": {
+              "enum": [
+                "none",
+                "inactive",
+                "active",
+                "complete",
+                null
+              ],
+              "description": "Stable token for bg_format (mos_bg_format_status_name), null only for an out-of-range code \u2014 drift-guarded in validate.py. The in-flight states (inactive/active) signal a disc that may not be reliably readable yet."
             }
           }
         },
@@ -387,6 +406,71 @@
             "null"
           ],
           "description": "Mounted volume's name (DiskArbitration VolumeName), or null when not mounted or unlabeled. MOUNT-SOURCED ONLY: present-but-unmounted discs read null by design \u2014 sector-derived names are the consumer's to obtain and parse (scope doctrine). Volume names are disc-controlled bytes, emitted byte-faithfully under JSON string escaping; terminal quoting is the consumer's job."
+        },
+        "cdtext": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "CD-TEXT, read via READ TOC/PMA/ATIP format 0101b through the ReadTableOfContents convenience method; null on non-CD media or a CD that publishes no CD-TEXT. The 'which album is in the drive' disambiguator (album title/performer) plus the per-track song titles (for rip file-naming). SCOPE: the FIRST language block's album Title/Performer and per-track TITLES in single-byte charset \u2014 a double-byte (DBCC) field reads null/absent rather than mis-decoded; per-track PERFORMER, the other CD-TEXT field types, and additional language blocks are not decoded (deferred). BEST-EFFORT DISPLAY TEXT, not a fingerprint: audio-CD dedup keys ride on disc.toc, the fail-closed identity primitive. All strings are disc-controlled bytes, emitted byte-faithfully under JSON string escaping; terminal quoting is the consumer's job. Required-and-nullable.",
+          "required": [
+            "title",
+            "performer",
+            "tracks"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Album title (CD-TEXT pack type 0x80, track 0, block 0), or null when absent/empty or double-byte."
+            },
+            "performer": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Album performer (CD-TEXT pack type 0x81, track 0, block 0), or null when absent/empty or double-byte."
+            },
+            "tracks": {
+              "type": "array",
+              "maxItems": 99,
+              "description": "Per-track CD-TEXT: song title (pack 0x80) and performer (pack 0x81), tracks 1..N, block 0. SPARSE and possibly empty: only tracks carrying a non-empty title OR performer appear, so track numbers may be non-contiguous and the array may be []. Within an entry, title and performer are independently nullable (a various-artists disc may carry a performer but no per-track title, or vice versa).",
+              "items": {
+                "type": "object",
+                "required": [
+                  "track",
+                  "title",
+                  "performer"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "track": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 99,
+                    "description": "Track number (1-based, MMC track numbering)."
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Track title, or null when this track carried no (non-empty) title."
+                  },
+                  "performer": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Track performer, or null when this track carried no (non-empty) performer."
+                  }
+                }
+              }
+            }
+          }
         },
         "track_info": {
           "type": [

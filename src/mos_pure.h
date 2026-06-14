@@ -285,6 +285,10 @@ struct mos_disc_info {
     uint16_t number_of_sessions;         /* byte 9 (MSB) : byte 4 (LSB) */
     uint16_t first_track_last_session;   /* byte 10 : byte 5 */
     uint16_t last_track_last_session;    /* byte 11 : byte 6 */
+    uint8_t  bg_format_status;           /* byte 7 bits 1:0: background-format
+                                            state — 0 none, 1 inactive,
+                                            2 active, 3 complete (Linux
+                                            CDM_MRW_* macros) */
 };
 
 /* Decode a READ DISC INFORMATION (0x51, data type 000b) response into
@@ -324,6 +328,46 @@ struct mos_disc_id {
  * tests/fuzz_pure.c and tests/test_discstruct.c. */
 bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
                                    struct mos_disc_id *out);
+
+/* ---- READ TOC/PMA/ATIP format 0101b (CD-TEXT) decode (mos_cdtext.c) --- *
+ *
+ * The disc-level (album) Title and Performer from a CD-TEXT reply — the
+ * "which album is in the drive" disambiguator, parallel to the mounted
+ * volume name for data discs. Decoded from the FIRST language block
+ * (block 0), single-byte charset; a double-byte (DBCC) album field reads
+ * as "" (absent), never mis-decoded. Disc-controlled bytes copied
+ * verbatim into fixed buffers (CLI escapes at emit); the only device
+ * length (CD-TEXT Data Length) can only shrink the trusted span. This is
+ * BEST-EFFORT DISPLAY TEXT, not a fingerprint — audio-CD dedup keys ride
+ * on the fail-closed TOC. Per-track titles, the other field types, and
+ * additional language blocks are deferred (design doc 2026-06-14). New
+ * fields append at the END (ABI-safe; accessors are the contract). */
+#define MOS_CDTEXT_STR_CAP        160u
+#define MOS_CDTEXT_MAX_TRACKS      99u
+#define MOS_CDTEXT_TRACK_TITLE_CAP 64u
+struct mos_cdtext {
+    bool    have;                       /* a non-empty album field present */
+    char    title[MOS_CDTEXT_STR_CAP];     /* album Title (track 0, block 0); "" if absent */
+    char    performer[MOS_CDTEXT_STR_CAP]; /* album Performer; "" if absent   */
+    /* Per-track titles (pack 0x80) and performers (pack 0x81), tracks
+       1..N, block 0, indexed by track number: track_titles[n-1] /
+       track_performers[n-1] are track n's strings ("" if that track had
+       none of that field — the arrays are independently sparse, e.g. a
+       various-artists disc carries per-track performers). track_count is
+       the highest track number carrying EITHER a non-empty title or
+       performer; entries above it are unset. */
+    uint8_t track_count;
+    char    track_titles[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
+    char    track_performers[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
+};
+
+/* Parse a CD-TEXT (format 0101b) reply into *out. True only when at
+ * least one non-empty album-level field (Title or Performer) was decoded
+ * within the trusted region (min of `len` and the reply's declared
+ * length); false (and *out emptied) otherwise. Pure, no-OOB, every
+ * string NUL-terminated — fuzz/ASan-gated by tests/test_cdtext.c. */
+bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
+                               struct mos_cdtext *out);
 
 /* ---- READ DISC STRUCTURE / physical structure decode (mos_physstruct.c) --- *
  *

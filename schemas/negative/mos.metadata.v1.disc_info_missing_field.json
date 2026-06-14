@@ -1,0 +1,22 @@
+{
+  "schema": "mos.metadata.v1",
+  "bsd_node": "/dev/disk4",
+  "captured_at": "2026-06-14T03:55:00.000Z",
+  "volume_path": null,
+  "disc": {
+    "profile": "0x0043",
+    "class": "bd",
+    "toc": null,
+    "disc_info": {
+      "status": "other",
+      "erasable": true,
+      "sessions": 1,
+      "tracks": 1,
+      "bg_format": 2
+    },
+    "disc_structure": null,
+    "volume_name": null,
+    "track_info": null,
+    "cdtext": null
+  }
+}

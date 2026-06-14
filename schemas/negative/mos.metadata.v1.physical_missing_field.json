@@ -47,7 +47,8 @@
       }
     },
     "volume_name": null,
-    "track_info": null
+    "track_info": null,
+    "cdtext": null
   },
   "bsd_node": "/dev/disk4"
 }

@@ -109,6 +109,11 @@ mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
     if (path_buf && path_cap) path_buf[0] = 0;
     if (!h) return MOS_ERR_INVALID_ARG;
 
+    /* Held-handle freshness: re-resolve so a handle held across an insert
+       sees the current disc's whole-disk node (the per-query analog of the
+       watch's reopen-per-probe — mos_internal_refresh_media_identity). */
+    mos_internal_refresh_media_identity(h);
+
     if (h->bsd_unit < 0) return MOS_OK;     /* no IOMedia node: unmounted */
 
     char bsd[24];

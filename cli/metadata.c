@@ -43,6 +43,7 @@ typedef struct {
     const mos_disc_id   *did;            /* NULL = non-BD or unavailable  */
     const mos_physical_structure *ps;    /* NULL = non-DVD/HD-DVD or unavail */
     const mos_track_info *ti;            /* NULL = unavailable          */
+    const mos_cdtext     *ct;            /* NULL = non-CD or no CD-TEXT   */
     bool                 mounted;
     char                 volume_name[256];
     char                 volume_path[1024];
@@ -103,13 +104,19 @@ static void emit_json(const metadata_doc *d)
 
     fputs(",\n    \"disc_info\": ", stdout);
     if (d->di) {
+        uint8_t bg = mos_disc_info_bg_format_status(d->di);
+        const char *bgn = mos_bg_format_status_name(bg);
         fprintf(stdout,
                 "{\"status\": \"%s\", \"erasable\": %s, "
-                "\"sessions\": %u, \"tracks\": %u}",
+                "\"sessions\": %u, \"tracks\": %u, "
+                "\"bg_format\": %u, \"bg_format_name\": ",
                 mos_disc_status_description(mos_disc_info_status(d->di)),
                 mos_disc_info_erasable(d->di) ? "true" : "false",
                 mos_disc_info_session_count(d->di),
-                mos_disc_info_last_track_last_session(d->di));
+                mos_disc_info_last_track_last_session(d->di),
+                bg);
+        if (bgn) mos_cli_json_str(stdout, bgn); else fputs("null", stdout);
+        fputs("}", stdout);
     } else {
         fputs("null", stdout);
     }
@@ -210,6 +217,42 @@ static void emit_json(const metadata_doc *d)
         fputs("null", stdout);
     }
 
+    /* cdtext carries the disc-level (album) Title/Performer for CDs that
+       publish CD-TEXT; null on non-CD media or a CD without it. Each
+       field is required-and-nullable (disc-controlled bytes, escaped). */
+    fputs(",\n    \"cdtext\": ", stdout);
+    if (d->ct) {
+        const char *ti = mos_cdtext_title(d->ct);
+        const char *pf = mos_cdtext_performer(d->ct);
+        fputs("{\n      \"title\": ", stdout);
+        if (ti) mos_cli_json_str(stdout, ti); else fputs("null", stdout);
+        fputs(",\n      \"performer\": ", stdout);
+        if (pf) mos_cli_json_str(stdout, pf); else fputs("null", stdout);
+        /* Per-track title + performer, sparse → only tracks carrying at
+           least one are emitted (each field null when absent). Empty
+           array when none. */
+        fputs(",\n      \"tracks\": [", stdout);
+        uint8_t tc = mos_cdtext_track_count(d->ct);
+        bool first = true;
+        for (uint8_t tn = 1; tn <= tc; tn++) {
+            const char *tt = mos_cdtext_track_title(d->ct, tn);
+            const char *tp = mos_cdtext_track_performer(d->ct, tn);
+            if (!tt && !tp) continue;
+            fprintf(stdout, "%s\n        {\"track\": %u, \"title\": ",
+                    first ? "" : ",", tn);
+            if (tt) mos_cli_json_str(stdout, tt); else fputs("null", stdout);
+            fputs(", \"performer\": ", stdout);
+            if (tp) mos_cli_json_str(stdout, tp); else fputs("null", stdout);
+            fputs("}", stdout);
+            first = false;
+        }
+        if (first) fputs("]", stdout);          /* no per-track entries */
+        else       fputs("\n      ]", stdout);
+        fputs("\n    }", stdout);
+    } else {
+        fputs("null", stdout);
+    }
+
     fputs(",\n    \"volume_name\": ", stdout);
     if (d->mounted && d->volume_name[0])
         mos_cli_json_str(stdout, d->volume_name);
@@ -221,7 +264,7 @@ static void emit_json(const metadata_doc *d)
 
 static void emit_human(const metadata_doc *d)
 {
-    mos_cli_human_pair pairs[10];
+    mos_cli_human_pair pairs[12];
     size_t n = 0;
 
     char bsd_buf[24];
@@ -263,15 +306,23 @@ static void emit_human(const metadata_doc *d)
         pairs[n++] = (mos_cli_human_pair){ "Profile", NULL };
     }
 
-    char di_buf[64];
+    char di_buf[80];
     if (d->di) {
-        snprintf(di_buf, sizeof di_buf, "%s%s, %u session%s, %u track%s",
+        /* Surface only the in-flight BG-format states (inactive/active) —
+           the "is this disc still formatting" signal that bears on
+           readability; none/complete are the unremarkable common cases. */
+        uint8_t bg = mos_disc_info_bg_format_status(d->di);
+        const char *bgs = (bg == 1) ? ", bg-format inactive"
+                        : (bg == 2) ? ", bg-format active"
+                                    : "";
+        snprintf(di_buf, sizeof di_buf, "%s%s, %u session%s, %u track%s%s",
                  mos_disc_status_description(mos_disc_info_status(d->di)),
                  mos_disc_info_erasable(d->di) ? " (erasable)" : "",
                  mos_disc_info_session_count(d->di),
                  mos_disc_info_session_count(d->di) == 1 ? "" : "s",
                  mos_disc_info_last_track_last_session(d->di),
-                 mos_disc_info_last_track_last_session(d->di) == 1 ? "" : "s");
+                 mos_disc_info_last_track_last_session(d->di) == 1 ? "" : "s",
+                 bgs);
     }
     pairs[n++] = (mos_cli_human_pair){ "Disc", d->di ? di_buf : NULL };
 
@@ -319,6 +370,38 @@ static void emit_human(const metadata_doc *d)
                      mos_toc_first_track(d->toc), mos_toc_last_track(d->toc));
     }
     pairs[n++] = (mos_cli_human_pair){ "TOC", d->toc ? toc_buf : NULL };
+
+    /* CD-TEXT album identity, "title - performer". Disc-controlled bytes,
+       so escape before the layout engine prints verbatim, same rule as
+       the Media/Volume rows. */
+    char cdt_buf[160];
+    char cdt_esc[MOS_CLI_ESC_CAP(160)];
+    cdt_esc[0] = 0;
+    const char *ct_title = d->ct ? mos_cdtext_title(d->ct) : NULL;
+    const char *ct_perf  = d->ct ? mos_cdtext_performer(d->ct) : NULL;
+    uint8_t cdt_ntracks = 0;            /* per-track entries present (sparse) */
+    if (d->ct) {
+        uint8_t tc = mos_cdtext_track_count(d->ct);
+        for (uint8_t tn = 1; tn <= tc; tn++)
+            if (mos_cdtext_track_title(d->ct, tn) ||
+                mos_cdtext_track_performer(d->ct, tn)) cdt_ntracks++;
+    }
+    if (ct_title || ct_perf || cdt_ntracks) {
+        char suffix[24];
+        suffix[0] = 0;
+        if (cdt_ntracks)
+            snprintf(suffix, sizeof suffix, "%s%u track entr%s",
+                     (ct_title || ct_perf) ? "  " : "",
+                     cdt_ntracks, cdt_ntracks == 1 ? "y" : "ies");
+        snprintf(cdt_buf, sizeof cdt_buf, "%s%s%s%s",
+                 ct_title ? ct_title : "",
+                 (ct_title && ct_perf) ? " - " : "",
+                 ct_perf ? ct_perf : "",
+                 suffix);
+        (void)mos_safe_ascii(cdt_buf, cdt_esc, sizeof cdt_esc);
+    }
+    pairs[n++] = (mos_cli_human_pair){
+        "CD-Text", (ct_title || ct_perf || cdt_ntracks) ? cdt_esc : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }
@@ -392,6 +475,12 @@ int mos_cli_run_metadata(void)
     if (pcls) {
         const mos_track_info *ti = NULL;
         if (mos_query_track_info(h, &ti) == MOS_OK) d.ti = ti;
+    }
+    /* CD-TEXT is CD-only (lead-in of CD media); gate on the cd class so
+       other media do not eat a guaranteed-failing format-0101b read. */
+    if (pcls && strcmp(pcls, "cd") == 0) {
+        const mos_cdtext *ct = NULL;
+        if (mos_query_cdtext(h, &ct) == MOS_OK) d.ct = ct;
     }
     (void)mos_query_volume(h, &d.mounted,
                            d.volume_name, sizeof d.volume_name,

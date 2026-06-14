@@ -361,6 +361,10 @@ struct mos_disc_info {
     uint16_t number_of_sessions;         /* byte 9 (MSB) : byte 4 (LSB) */
     uint16_t first_track_last_session;   /* byte 10 : byte 5 */
     uint16_t last_track_last_session;    /* byte 11 : byte 6 */
+    uint8_t  bg_format_status;           /* byte 7 bits 1:0: background-format
+                                            state — 0 none, 1 inactive,
+                                            2 active, 3 complete (Linux
+                                            CDM_MRW_* macros) */
 };
 
 /* Decode a READ DISC INFORMATION (0x51, data type 000b) response into
@@ -400,6 +404,46 @@ struct mos_disc_id {
  * tests/fuzz_pure.c and tests/test_discstruct.c. */
 bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
                                    struct mos_disc_id *out);
+
+/* ---- READ TOC/PMA/ATIP format 0101b (CD-TEXT) decode (mos_cdtext.c) --- *
+ *
+ * The disc-level (album) Title and Performer from a CD-TEXT reply — the
+ * "which album is in the drive" disambiguator, parallel to the mounted
+ * volume name for data discs. Decoded from the FIRST language block
+ * (block 0), single-byte charset; a double-byte (DBCC) album field reads
+ * as "" (absent), never mis-decoded. Disc-controlled bytes copied
+ * verbatim into fixed buffers (CLI escapes at emit); the only device
+ * length (CD-TEXT Data Length) can only shrink the trusted span. This is
+ * BEST-EFFORT DISPLAY TEXT, not a fingerprint — audio-CD dedup keys ride
+ * on the fail-closed TOC. Per-track titles, the other field types, and
+ * additional language blocks are deferred (design doc 2026-06-14). New
+ * fields append at the END (ABI-safe; accessors are the contract). */
+#define MOS_CDTEXT_STR_CAP        160u
+#define MOS_CDTEXT_MAX_TRACKS      99u
+#define MOS_CDTEXT_TRACK_TITLE_CAP 64u
+struct mos_cdtext {
+    bool    have;                       /* a non-empty album field present */
+    char    title[MOS_CDTEXT_STR_CAP];     /* album Title (track 0, block 0); "" if absent */
+    char    performer[MOS_CDTEXT_STR_CAP]; /* album Performer; "" if absent   */
+    /* Per-track titles (pack 0x80) and performers (pack 0x81), tracks
+       1..N, block 0, indexed by track number: track_titles[n-1] /
+       track_performers[n-1] are track n's strings ("" if that track had
+       none of that field — the arrays are independently sparse, e.g. a
+       various-artists disc carries per-track performers). track_count is
+       the highest track number carrying EITHER a non-empty title or
+       performer; entries above it are unset. */
+    uint8_t track_count;
+    char    track_titles[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
+    char    track_performers[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
+};
+
+/* Parse a CD-TEXT (format 0101b) reply into *out. True only when at
+ * least one non-empty album-level field (Title or Performer) was decoded
+ * within the trusted region (min of `len` and the reply's declared
+ * length); false (and *out emptied) otherwise. Pure, no-OOB, every
+ * string NUL-terminated — fuzz/ASan-gated by tests/test_cdtext.c. */
+bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
+                               struct mos_cdtext *out);
 
 /* ---- READ DISC STRUCTURE / physical structure decode (mos_physstruct.c) --- *
  *
@@ -892,11 +936,12 @@ struct mos_handle {
     int64_t                   bsd_unit;
     uint64_t                  media_id;        /* whole-disk IOMedia registry
                                                   entry ID, 0 == no media;
-                                                  captured at open alongside
-                                                  bsd_unit (F1 swap fingerprint) */
+                                                  re-resolved with bsd_unit per
+                                                  media-scoped query (F1 swap
+                                                  fingerprint) */
     uint64_t                  media_bytes;     /* kIOMediaSizeKey off the same
                                                   whole-disk node; 0 == absent
-                                                  (open-time, like bsd_unit) */
+                                                  (query-time, like bsd_unit) */
     uint32_t                  media_block_bytes; /* kIOMediaPreferredBlockSizeKey;
                                                     0 == absent */
     char                      vendor_str[9];   /* 8 chars + NUL */
@@ -920,6 +965,10 @@ struct mos_handle {
 
     /* Handle-owned disc-id result (mos_query_disc_id). Same terms. */
     struct mos_disc_id        disc_id;
+
+    /* Handle-owned CD-TEXT result (mos_query_cdtext). Same terms;
+       plain values into fixed buffers, no borrowed pointers. */
+    struct mos_cdtext         cdtext;
 
     /* Handle-owned physical structure result (mos_query_physical_structure).
        Same terms; plain values, no borrowed pointers. */
@@ -1021,6 +1070,14 @@ mos_error mos_internal_mmc_test_unit_ready    (mos_handle_t *h,
                                                uint32_t *status,
                                                uint8_t sense[18]);
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile);
+
+/* Re-resolve the handle's media-scoped identity (whole-disk bsd_unit,
+   media_id swap fingerprint, kernel-cached size/block bytes) from its
+   stable drive service — the per-query freshness the media-scoped queries
+   (state, capacity, volume) call first so a handle held across an
+   insert/eject reports current media. Local IORegistry walk off h->svc;
+   no SCSI command, no exclusive access. Defined in mos_scsi.c. */
+void mos_internal_refresh_media_identity(mos_handle_t *h);
 
 /* Issue one 6-byte tray CDB (START STOP UNIT 0x1B / PREVENT ALLOW MEDIUM
    REMOVAL 0x1E) on the mos_raw_cdb path and classify the result. Returns a
@@ -1696,6 +1753,13 @@ bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
     out->number_of_sessions       = (uint16_t)(((uint16_t)buf[9]  << 8) | buf[4]);
     out->first_track_last_session = (uint16_t)(((uint16_t)buf[10] << 8) | buf[5]);
     out->last_track_last_session  = (uint16_t)(((uint16_t)buf[11] << 8) | buf[6]);
+
+    /* BG Format Status (byte 7 bits 1:0): the background-format state of
+       DVD+RW / BD-RE / Mount Rainier media — none / inactive (started,
+       not running) / active (in progress) / complete. Byte 7 is inside
+       the through-byte-11 region already proven present above, so no
+       extra bound is needed. Values match Linux CDM_MRW_* (cdrom.h). */
+    out->bg_format_status = (uint8_t)(buf[7] & 0x03u);
     return true;
 }
 /* ==== src/mos_discstruct.c ==== */
@@ -1786,6 +1850,185 @@ bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
     mos_internal_di_copy(&buf[DI_MEDIA],    3, out->media_type);
     mos_internal_di_copy(&buf[DI_REVISION], 1, out->revision);
     return true;
+}
+
+/* ==== src/mos_cdtext.c ==== */
+/*
+ * mos_cdtext.c — pure, bounds-safe decode of the disc-level (album)
+ * Title and Performer from a READ TOC/PMA/ATIP format 0101b (CD-TEXT)
+ * reply.
+ *
+ * No IOKit. The IOKit shell issues READ TOC/PMA/ATIP with format 0101b
+ * via the non-exclusive ReadTableOfContents convenience method (the same
+ * wrapper the format-0000b TOC uses) into a fixed, zero-initialized
+ * buffer and hands that buffer plus its size here. Every length and text
+ * byte is disc-reported and therefore hostile; this file keeps the
+ * declared CD-TEXT Data Length from steering a read outside [buf,
+ * buf+len), and copies text bytes verbatim into fixed buffers (the CLI
+ * layer escapes them at emit, same as the volume name and INQUIRY
+ * identity). No payload byte is ever used as an offset or length.
+ *
+ * SCOPE — the album Title/Performer (the "which album is in the drive"
+ * disambiguator, parallel to the mounted volume name) plus the per-track
+ * TITLES (song names) and PERFORMERS (for various-artists discs). All
+ * from the FIRST language block (block 0) in single-byte charset.
+ * Deliberately NOT decoded here, deferred with named falsifiers (design
+ * doc 2026-06-14 addenda): the other field types (songwriter/composer/
+ * arranger/message/genre/ISRC/UPC/disc-id); additional language blocks
+ * (1..7); and double-byte (DBCC) text (MS-JIS / 16-bit) — a DBCC field
+ * reads as absent rather than being mis-decoded as Latin-1. CD-TEXT is
+ * BEST-EFFORT DISPLAY TEXT, not a fail-closed fingerprint: audio-CD
+ * dedup keys ride on the TOC (mos_internal_toc_parse), the fail-closed
+ * identity primitive.
+ *
+ * Stream model (MMC / Red Book): within one (pack-type, block) the
+ * per-track strings are concatenated NUL-separated and chopped across
+ * the 12-byte pack payloads; the first pack's Track Number field seeds
+ * the running index, so the stream is [track S, track S+1, ...] where S
+ * is that field (0 = album-level for the title/performer types). We walk
+ * the block-0 packs in buffer order, reconstruct that stream, and
+ * dispatch each string by its track number.
+ *
+ * Pack layout (READ TOC format 0101b, MMC-3 §6.27 / Red Book CD-TEXT;
+ * cross-verified against libcdio lib/driver/cdtext.c):
+ *   [0..1] CD-TEXT Data Length (BE) — bytes available AFTER this field;
+ *          the reply occupies 2 + value bytes.
+ *   [2..3] reserved
+ *   [4..]  a sequence of 18-byte CD-TEXT packs:
+ *            [0]      Pack Type (0x80 Title, 0x81 Performer, ...)
+ *            [1]      Track Number (bits 6:0; bit 7 reserved/extension)
+ *            [2]      Sequence Number
+ *            [3]      bit7 = double-byte (DBCC); bits 6:4 = Block Number
+ *                     (language, 0..7); bits 3:0 = Character Position
+ *            [4..15]  12 text bytes (NUL separates per-track strings)
+ *            [16..17] CRC (present; not verified here, as in libcdio)
+ *
+ * No-OOB / termination gated headless under ASan/UBSan by
+ * tests/test_cdtext.c and the fuzz_pure CD-TEXT phase.
+ */
+
+
+#include <string.h>
+
+#define CDTEXT_HDR        4u    /* 2-byte data length + 2 reserved        */
+#define CDTEXT_PACK_LEN  18u
+#define CDTEXT_TEXT_OFF   4u    /* text bytes within a pack: [4..15]      */
+#define CDTEXT_TEXT_LEN  12u
+
+#define CDTEXT_PACK_TITLE     0x80u
+#define CDTEXT_PACK_PERFORMER 0x81u
+
+/* Bounded NUL-terminated copy into a fixed buffer (truncates beyond
+   cap-1). Pure — no stdio in this layer. */
+static void cdtext_copy(char *dst, size_t cap, const char *src)
+{
+    size_t i = 0;
+    for (; src[i] && i + 1 < cap; i++) dst[i] = src[i];
+    dst[i] = '\0';
+}
+
+/* Dispatch one reconstructed string `s` to its destination by track
+   number: track 0 is the album field (`album_dst`); tracks 1..MAX go to
+   `tracks[track-1]` when `tracks` is non-NULL, bumping *max_track to the
+   highest track number that carried a NON-EMPTY title. */
+static void cdtext_store(const char *s, uint32_t track,
+                         char *album_dst, size_t album_cap,
+                         char tracks[][MOS_CDTEXT_TRACK_TITLE_CAP],
+                         uint8_t *max_track)
+{
+    if (track == 0) {
+        cdtext_copy(album_dst, album_cap, s);
+        return;
+    }
+    if (tracks && track >= 1 && track <= MOS_CDTEXT_MAX_TRACKS) {
+        cdtext_copy(tracks[track - 1], MOS_CDTEXT_TRACK_TITLE_CAP, s);
+        if (s[0] && (uint8_t)track > *max_track) *max_track = (uint8_t)track;
+    }
+}
+
+/* Walk the block-0 packs of `want_type` in buffer order, reconstruct the
+   NUL-separated per-track string stream, and store each string by its
+   track number (the first qualifying pack's Track Number field seeds the
+   running index). The album string (track 0) lands in `album_dst`;
+   per-track strings (track 1..) land in `tracks` when non-NULL. Single-
+   byte only: a double-byte (DBCC) STARTING pack decodes nothing (album
+   left ""), a mid-stream DBCC stops the walk keeping the prefix already
+   stored. */
+static void cdtext_decode_type(const uint8_t *buf, size_t span,
+                               uint8_t want_type,
+                               char *album_dst, size_t album_cap,
+                               char tracks[][MOS_CDTEXT_TRACK_TITLE_CAP],
+                               uint8_t *max_track)
+{
+    album_dst[0] = '\0';
+
+    char     cur[MOS_CDTEXT_STR_CAP];   /* current-string accumulator */
+    size_t   n       = 0;
+    uint32_t track   = 0;               /* track number of the current string */
+    bool     started = false;
+
+    for (size_t p = CDTEXT_HDR; p + CDTEXT_PACK_LEN <= span;
+         p += CDTEXT_PACK_LEN) {
+        if (buf[p] != want_type) continue;            /* wrong pack type   */
+        uint8_t b3 = buf[p + 3];
+        if (((b3 >> 4) & 0x07) != 0) continue;        /* first block only  */
+        bool dbcc = (b3 & 0x80) != 0;
+
+        if (!started) {
+            if (dbcc) return;                          /* double-byte: skip */
+            track   = (uint32_t)(buf[p + 1] & 0x7Fu);  /* starting track #  */
+            started = true;
+        } else if (dbcc) {
+            break;            /* charset flip mid-stream: keep what we have */
+        }
+
+        for (size_t j = 0; j < CDTEXT_TEXT_LEN; j++) {
+            uint8_t c = buf[p + CDTEXT_TEXT_OFF + j];
+            if (c == 0x00) {                           /* end of one string */
+                cur[n] = '\0';
+                cdtext_store(cur, track, album_dst, album_cap,
+                             tracks, max_track);
+                n = 0;
+                track++;
+                continue;
+            }
+            if (n + 1 < sizeof cur) cur[n++] = (char)c; /* else truncate    */
+        }
+    }
+    /* Trailing unterminated string (clamped data ended mid-string): keep
+       it, best-effort. */
+    if (started && n > 0) {
+        cur[n] = '\0';
+        cdtext_store(cur, track, album_dst, album_cap, tracks, max_track);
+    }
+}
+
+bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
+                               struct mos_cdtext *out)
+{
+    if (!out) return false;
+    memset(out, 0, sizeof *out);
+    if (!buf || len < CDTEXT_HDR) return false;
+
+    /* Device claim: CD-TEXT Data Length counts bytes AFTER its own two.
+       64-bit total, clamped by the trusted length (O-4) — a lying length
+       can only shrink the span, never extend a read. */
+    uint64_t claimed = 2u + (uint64_t)(((uint32_t)buf[0] << 8) | buf[1]);
+    size_t   span    = mos_internal_trusted_len(len, len, claimed);
+    if (span < CDTEXT_HDR + CDTEXT_PACK_LEN) return false;  /* no whole pack */
+
+    cdtext_decode_type(buf, span, CDTEXT_PACK_TITLE,
+                       out->title, sizeof out->title,
+                       out->track_titles, &out->track_count);
+    cdtext_decode_type(buf, span, CDTEXT_PACK_PERFORMER,
+                       out->performer, sizeof out->performer,
+                       out->track_performers, &out->track_count);
+
+    /* "have" is the useful-identity gate: an empty result (no album
+       field, no per-track title) is not identity. Return false → the
+       adapter reports no CD-TEXT (null), same as the other media reads. */
+    out->have = out->title[0] || out->performer[0] || out->track_count > 0;
+    return out->have;
 }
 
 /* ==== src/mos_physstruct.c ==== */
@@ -2378,6 +2621,11 @@ uint8_t mos_disc_info_last_session_state(const mos_disc_info *d)
     return d ? d->last_session_state : 0;
 }
 
+uint8_t mos_disc_info_bg_format_status(const mos_disc_info *d)
+{
+    return d ? d->bg_format_status : 0;
+}
+
 /* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
  * NULL- and range-tolerant like every accessor above; the entry index
  * is bounded by track_count, which the fail-closed parser proved
@@ -2483,6 +2731,40 @@ const char *mos_disc_id_media_type(const mos_disc_id *d)
 const char *mos_disc_id_revision(const mos_disc_id *d)
 {
     return (d && d->revision[0]) ? d->revision : NULL;
+}
+
+/* ---- mos_cdtext accessors (mos_query_cdtext) ----------------------- *
+ * Borrowed strings into the handle-owned result; "" reads as NULL so the
+ * emitters suppress empty fields uniformly. Disc-controlled bytes — the
+ * CLI layer escapes them. */
+
+const char *mos_cdtext_title(const mos_cdtext *c)
+{
+    return (c && c->title[0]) ? c->title : NULL;
+}
+
+const char *mos_cdtext_performer(const mos_cdtext *c)
+{
+    return (c && c->performer[0]) ? c->performer : NULL;
+}
+
+uint8_t mos_cdtext_track_count(const mos_cdtext *c)
+{
+    return c ? c->track_count : 0;
+}
+
+const char *mos_cdtext_track_title(const mos_cdtext *c, uint8_t track)
+{
+    if (!c || track < 1 || track > MOS_CDTEXT_MAX_TRACKS) return NULL;
+    const char *t = c->track_titles[track - 1];
+    return t[0] ? t : NULL;
+}
+
+const char *mos_cdtext_track_performer(const mos_cdtext *c, uint8_t track)
+{
+    if (!c || track < 1 || track > MOS_CDTEXT_MAX_TRACKS) return NULL;
+    const char *p = c->track_performers[track - 1];
+    return p[0] ? p : NULL;
 }
 
 /* ---- mos_physical_structure accessors (mos_query_physical_structure) - *
@@ -3601,6 +3883,13 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
 {
     if (out) *out = NULL;
     if (!h || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Held-handle freshness: re-resolve the whole-disk identity from the
+       stable drive service before the query, so a handle opened on an
+       empty drive reports the inserted disc's bsd_unit (and media_id) once
+       a query returns READY, instead of the open-time -1. The drive
+       service is pinned; only its IOMedia child changes with the media. */
+    mos_internal_refresh_media_identity(h);
 
     mos_state_env_t env = {
         .ops                 = &apple_mmc_ops,
@@ -4851,6 +5140,23 @@ const char *mos_protection_name(uint8_t protection)
     }
 }
 
+/* BG Format Status (READ DISC INFORMATION byte 7 bits 1:0). Stable
+   tokens for the four background-format states; the 2-bit field is total
+   so the default is unreachable from mos_disc_info_bg_format_status
+   (masked 0-3) but kept NULL for the out-of-range public-accessor call.
+   Names track the Linux CDM_MRW_* macros (cdrom.h). Explicit returns so
+   the validate.py drift guard harvests the tokens. */
+const char *mos_bg_format_status_name(uint8_t status)
+{
+    switch (status) {
+        case 0:  return "none";       /* CDM_MRW_NOTMRW            */
+        case 1:  return "inactive";   /* CDM_MRW_BGFORMAT_INACTIVE */
+        case 2:  return "active";     /* CDM_MRW_BGFORMAT_ACTIVE   */
+        case 3:  return "complete";   /* CDM_MRW_BGFORMAT_COMPLETE */
+        default: return NULL;
+    }
+}
+
 /* Loading-mechanism type (MODE SENSE page 0x2A byte 6 bits 7:5).
    Explicit returns so the validate.py drift guard harvests the tokens;
    unrecognized/reserved codes return NULL. */
@@ -5398,6 +5704,11 @@ mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
     if (path_buf && path_cap) path_buf[0] = 0;
     if (!h) return MOS_ERR_INVALID_ARG;
 
+    /* Held-handle freshness: re-resolve so a handle held across an insert
+       sees the current disc's whole-disk node (the per-query analog of the
+       watch's reopen-per-probe — mos_internal_refresh_media_identity). */
+    mos_internal_refresh_media_identity(h);
+
     if (h->bsd_unit < 0) return MOS_OK;     /* no IOMedia node: unmounted */
 
     char bsd[24];
@@ -5595,6 +5906,26 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
     return mos_internal_parse_bsd_unit(chosen);
 }
 
+/* Re-resolve the handle's MEDIA-SCOPED identity — whole-disk bsd_unit,
+   the media_id swap fingerprint, and the kernel-cached size/block bytes —
+   from its stable drive service. The drive service (h->svc) is fixed for
+   the handle's life; the IOMedia whole-disk child under it is NOT: it
+   appears on insert and vanishes on eject. A single open-time capture
+   therefore goes stale on a handle held across a media change (an empty
+   drive opened, then loaded, kept reporting -1). The media-scoped queries
+   call this first so they report CURRENT media — the held-handle analog
+   of the watch's reopen-per-probe, but without the reopen: a local
+   IORegistry walk off h->svc, no SCSI command, no exclusive access, the
+   same cost as the open-time resolve. Single-threaded by the handle
+   contract (same as every other handle mutation). */
+void mos_internal_refresh_media_identity(mos_handle_t *h)
+{
+    if (!h) return;
+    h->bsd_unit = mos_internal_bsd_unit(h->svc, &h->media_id,
+                                        &h->media_bytes,
+                                        &h->media_block_bytes);  /* -1 if no media */
+}
+
 /* ---- Enumeration ---------------------------------------------------- */
 
 #define MOS_ENUM_CAP 64
@@ -5660,13 +5991,12 @@ static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
         h->drive_registry_id = 0;
     }
     /* Best-effort, not a gate (same posture as the enumeration snapshot):
-       a nameless empty drive
-       opens fine since the MMC plug-in and queries run off `svc`. Must
-       assign unconditionally — the handle is calloc'd, so an unset bsd_unit
-       would read 0 ("disk0"), a valid unit, not "no media". */
-    h->bsd_unit = mos_internal_bsd_unit(svc, &h->media_id,
-                                        &h->media_bytes,
-                                        &h->media_block_bytes);  /* -1 if no media */
+       a nameless empty drive opens fine since the MMC plug-in and queries
+       run off `svc`. The resolve assigns unconditionally — the handle is
+       calloc'd, so an unset bsd_unit would read 0 ("disk0"), a valid unit,
+       not "no media". The media-scoped queries re-run this same resolve
+       per call so a handle held across an insert/eject stays current. */
+    mos_internal_refresh_media_identity(h);   /* sets bsd_unit/-1, media_id, size */
 
     SInt32 score = 0;
     kern_return_t kr = IOCreatePlugInInterfaceForService(
@@ -6116,6 +6446,39 @@ mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
     return MOS_OK;
 }
 
+mos_error mos_query_cdtext(mos_handle_t *h, const mos_cdtext **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* READ TOC/PMA/ATIP format 0101b (CD-TEXT). 256 packs (4612 bytes)
+       holds the album-level blocks of any real disc several times over;
+       a longer hostile reply is simply clamped — sizeof buf is the
+       trusted length (O-4), and the reply's own CD-TEXT Data Length only
+       ever shrinks the parse. Same convenience method and trust terms as
+       mos_query_toc above; non-exclusive, no lock. The track/session
+       parameter is reserved for format 0101b — passed 0. */
+    uint8_t         buf[4 + 256 * 18] = {0};
+    SCSITaskStatus  st                = 0;
+    SCSI_Sense_Data sd                = {0};
+
+    IOReturn rc = (*h->mmc)->ReadTableOfContents(
+        h->mmc, 0 /*LBA*/, 0x05 /*CD-TEXT*/, 0 /*reserved*/,
+        buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_cdtext_parse(buf, sizeof(buf), &h->cdtext)) {
+        return MOS_ERR_IO;   /* no CD-TEXT / no usable album field */
+    }
+    *out = &h->cdtext;
+    return MOS_OK;
+}
+
 mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
 {
     if (out) *out = NULL;
@@ -6332,10 +6695,15 @@ mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out)
     struct mos_capacity *c = &h->capacity;
     *c = (struct mos_capacity){0};
 
+    /* Refresh the media-scoped identity so a held handle reports the
+       CURRENT disc's size, not the open-time disc's (held-handle freshness
+       — see mos_internal_refresh_media_identity). */
+    mos_internal_refresh_media_identity(h);
+
     /* (a) The whole-disk byte capacity — the kernel's own attach-time
-       READ CAPACITY, cached on the IOMedia node and captured at open
-       (no command, no exclusive access, works on mounted media). 0 ==
-       absent: a blank/absent disc has no whole-disk node. */
+       READ CAPACITY, cached on the IOMedia node (no command, no exclusive
+       access, works on mounted media). 0 == absent: a blank/absent disc
+       has no whole-disk node. */
     c->media_bytes = h->media_bytes;
     c->block_bytes = h->media_block_bytes;
 

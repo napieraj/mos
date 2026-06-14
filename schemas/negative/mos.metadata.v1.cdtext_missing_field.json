@@ -1,0 +1,19 @@
+{
+  "schema": "mos.metadata.v1",
+  "bsd_node": "/dev/disk4",
+  "captured_at": "2026-06-14T03:25:00.000Z",
+  "volume_path": "/Volumes/Audio CD",
+  "disc": {
+    "profile": "0x0008",
+    "class": "cd",
+    "toc": null,
+    "disc_info": null,
+    "disc_structure": null,
+    "volume_name": "Audio CD",
+    "track_info": null,
+    "cdtext": {
+      "title": "Kind of Blue",
+      "tracks": []
+    }
+  }
+}

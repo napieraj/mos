@@ -200,6 +200,14 @@ def check_cli_enum_drift(here: Path) -> int:
                              "disc_structure", "copyright",
                              "protection_name") - {None}),)))
 
+    c_bg_format = fn_returns(root / "src" / "mos_strings.c",
+                             "mos_bg_format_status_name")
+    checks.append(("bg_format_name", c_bg_format,
+                   "src/mos_strings.c mos_bg_format_status_name()",
+                   (("mos.metadata.v1.disc.disc_info.bg_format_name",
+                     enum_at(here / "mos.metadata.v1.json", "disc",
+                             "disc_info", "bg_format_name") - {None}),)))
+
     c_loadmech = fn_returns(root / "src" / "mos_strings.c",
                             "mos_loading_mechanism_name")
     checks.append(("loading_mechanism", c_loadmech,

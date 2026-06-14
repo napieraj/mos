@@ -45,10 +45,22 @@
       "status": "complete",
       "erasable": false,
       "sessions": 1,
-      "tracks": 4
+      "tracks": 4,
+      "bg_format": 0,
+      "bg_format_name": "none"
     },
     "disc_structure": null,
     "volume_name": "Audio CD",
-    "track_info": null
+    "track_info": null,
+    "cdtext": {
+      "title": "Kind of Blue",
+      "performer": "Miles Davis",
+      "tracks": [
+        { "track": 1, "title": "So What", "performer": null },
+        { "track": 2, "title": "Freddie Freeloader", "performer": null },
+        { "track": 3, "title": "Blue in Green", "performer": null },
+        { "track": 4, "title": "All Blues", "performer": null }
+      ]
+    }
   }
 }

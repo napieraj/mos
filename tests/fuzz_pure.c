@@ -479,6 +479,64 @@ static void fuzz_discstruct(uint64_t iters)
     }
 }
 
+/* ---- phase: CD-TEXT (READ TOC format 0101b) decode ------------------ */
+static void fuzz_cdtext(uint64_t iters)
+{
+    for (uint64_t i = 0; i < iters; i++) {
+        size_t   len = rng_below(200);             /* 0..199: many packs    */
+        uint8_t *buf = (uint8_t *)malloc(len ? len : 1); /* EXACT size => ASan */
+        for (size_t b = 0; b < len; b++) buf[b] = (uint8_t)rng();
+
+        /* Half the time plant a CD-TEXT Data Length, sometimes huge (must
+           only shrink-clamp, never extend the pack walk past `len`). */
+        if (len >= 2 && rng_below(2)) {
+            uint16_t dl = (uint16_t)rng_below((uint64_t)len + 64);
+            buf[0] = (uint8_t)(dl >> 8);
+            buf[1] = (uint8_t)(dl & 0xFF);
+        }
+        /* Half the time plant a Title/Performer pack type at offset 4 so
+           the accept path runs as often as the reject paths. */
+        if (len >= 4 + 18 && rng_below(2)) {
+            buf[4] = rng_below(2) ? 0x80 : 0x81;   /* Title / Performer     */
+            buf[5] = (uint8_t)rng_below(2);        /* track 0 or 1          */
+            buf[7] = (uint8_t)(rng() & 0xF0);      /* block/DBCC nibble     */
+        }
+
+        struct mos_cdtext c;
+        memset(&c, 0xA5, sizeof c);
+        if (mos_internal_cdtext_parse(buf, len, &c)) {
+            /* Accepted => the album fields NUL-terminated within their
+               fixed buffers, track_count within range, and every
+               per-track row terminated (parse zero-inits the struct, so
+               no 0xA5 poison survives). */
+            if (c.title[sizeof c.title - 1] != 0 ||
+                c.performer[sizeof c.performer - 1] != 0) {
+                fprintf(stderr, "FUZZ FAIL: cdtext field not terminated "
+                        "(len=%zu)\n", len);
+                abort();
+            }
+            if (c.track_count > MOS_CDTEXT_MAX_TRACKS) {
+                fprintf(stderr, "FUZZ FAIL: cdtext track_count=%u "
+                        "(len=%zu)\n", c.track_count, len);
+                abort();
+            }
+            for (unsigned t = 0; t < MOS_CDTEXT_MAX_TRACKS; t++) {
+                if (c.track_titles[t][MOS_CDTEXT_TRACK_TITLE_CAP - 1] != 0 ||
+                    c.track_performers[t][MOS_CDTEXT_TRACK_TITLE_CAP - 1] != 0) {
+                    fprintf(stderr, "FUZZ FAIL: cdtext track row %u not "
+                            "terminated (len=%zu)\n", t, len);
+                    abort();
+                }
+            }
+        }
+        if ((i & 0xFFFF) == 0) {
+            (void)mos_internal_cdtext_parse(NULL, len, &c);
+            (void)mos_internal_cdtext_parse(buf, len, NULL);
+        }
+        free(buf);
+    }
+}
+
 /* READ DISC STRUCTURE physical (format 0x00) + copyright (format 0x01)
    decode. No strings to terminate; the property is purely no-OOB — the
    fixed-offset reads (through base[16] for physical, buf[5] for
@@ -629,6 +687,7 @@ int main(int argc, char **argv)
     uint64_t n_tl    = env_u64("MOS_FUZZ_TRUST",    200000);
     uint64_t n_toc   = env_u64("MOS_FUZZ_TOC",      200000);
     uint64_t n_ds    = env_u64("MOS_FUZZ_DISCSTRUCT", 500000);
+    uint64_t n_ct    = env_u64("MOS_FUZZ_CDTEXT", 500000);
     uint64_t n_ps    = env_u64("MOS_FUZZ_PHYSSTRUCT", 500000);
     uint64_t n_ti    = env_u64("MOS_FUZZ_TRACKINFO", 500000);
     uint64_t n_perf  = env_u64("MOS_FUZZ_PERF", 500000);
@@ -650,12 +709,13 @@ int main(int argc, char **argv)
     fuzz_trusted_len(n_tl);
     fuzz_toc(n_toc);
     fuzz_discstruct(n_ds);
+    fuzz_cdtext(n_ct);
     fuzz_physstruct(n_ps);
     fuzz_trackinfo(n_ti);
     fuzz_perf(n_perf);
     fuzz_modepage(n_mp);
 
     fprintf(stderr, "OK: fuzz_pure clean (%llu iterations total)\n",
-            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc + n_ds + n_ps + n_ti + n_perf + n_mp));
+            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc + n_ds + n_ct + n_ps + n_ti + n_perf + n_mp));
     return 0;
 }

@@ -166,15 +166,13 @@ mos_state mos_state_result_state(const mos_state_result *r);
    (empty/open tray) and hence no resolvable name. Render to "diskN" with
    mos_bsd_name_format().
 
-   OPEN-TIME SEMANTICS (v0.3, still current): for a held handle this is
-   captured once at mos_open* and NOT refreshed per query — a handle
-   opened on an empty drive keeps reporting -1 even after a query
-   returns READY for newly inserted media. Re-open the handle for fresh
-   naming, or use the watch API, whose events carry event-time units.
-   (The PLANNED v0.4 held-handle refresh — not yet implemented; the
-   DiscRecording substrate it builds on landed 2026-06-10 — will make
-   the field query-time via kDRDeviceMediaBSDNameKey; see ROADMAP
-   "Standing context".) */
+   QUERY-TIME SEMANTICS (v0.4): for a held handle this is re-resolved on
+   every mos_query_state from the drive's stable service, so a handle
+   opened on an empty drive reports the inserted disc's unit once a query
+   returns READY (and reverts to -1 after an eject). The re-resolve is a
+   local IORegistry walk off the drive node — no command, no exclusive
+   access. (mos_query_capacity and mos_query_volume refresh the same way;
+   the earlier v0.3 open-time-only behavior is retired.) */
 int64_t        mos_state_result_bsd_unit(const mos_state_result *r);
 
 /* The drive service's IORegistry entry ID — the attachment identity,
@@ -260,6 +258,20 @@ bool mos_bsd_name_format(int64_t unit, char *buf, size_t cap);
  * Open by 1-based index (matches drutil convention) or by BSD name.
  * Return value is a borrowed error code via *err_out when non-NULL.
  * On success returns a handle; on failure returns NULL and sets *err_out.
+ *
+ * SELECTOR STABILITY — mos_open_by_index is POSITIONAL, not durable.
+ * The index is a slot in a freshly enumerated snapshot (drutil-style
+ * convenience), so it is a TOCTOU against device hotplug: between the
+ * enumeration a caller read the index from and this open, a drive
+ * appearing or disappearing can shift every higher slot — the index may
+ * then open a DIFFERENT drive than intended, or return MOS_ERR_NO_DEVICE
+ * if the set shrank. Use it only for one-shot, single-drive,
+ * human-driven invocations. For programmatic selection that must survive
+ * hotplug, prefer mos_open_by_registry_id (the attachment identity every
+ * mos.state.v1 / mos.event.v1 document carries; atomic, never reused) or
+ * mos_open_by_bsd_name (more stable than position, though a "diskN" name
+ * can be recycled after an eject). The same positional caveat applies to
+ * mos_device_info_bsd_unit's index provenance.
  */
 mos_handle_t *mos_open_by_index(int one_based, mos_error *err_out);
 mos_handle_t *mos_open_by_bsd_name(const char *bsd_name, mos_error *err_out);
@@ -346,10 +358,19 @@ uint16_t        mos_disc_info_last_track_last_session(const mos_disc_info *d);
    2 damaged, 3 complete. Raw on purpose — four values, no semantics
    mos adds; an enum here would be ceremony. */
 uint8_t         mos_disc_info_last_session_state(const mos_disc_info *d);
+/* BG Format Status, raw (byte 7 bits 1:0): 0 none, 1 inactive (started,
+   not running), 2 active (in progress), 3 complete — the background-
+   format state of DVD+RW / BD-RE / Mount Rainier media. Map to a token
+   with mos_bg_format_status_name(). */
+uint8_t         mos_disc_info_bg_format_status(const mos_disc_info *d);
 
 /* "blank" / "appendable" / "complete" / "other". Stable lowercase
    tokens, same contract as mos_state_description(). */
 const char     *mos_disc_status_description(mos_disc_status s);
+
+/* "none" / "inactive" / "active" / "complete" for BG Format Status
+   0..3; NULL for out-of-range. Tokens track Linux CDM_MRW_* (cdrom.h). */
+const char     *mos_bg_format_status_name(uint8_t status);
 
 /* ---- Table of contents (v0.4 typed API) ------------------------------ */
 
@@ -393,12 +414,11 @@ uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i);
  * callbacks, no commands to the drive, no elevation. Gated on the
  * whole-disk IOMedia node existing: media absent or no nub means DA is
  * never consulted and *mounted is false. That nub is the handle's
- * OPEN-TIME bsd_unit (same open-time-capture semantics as
- * mos_state_result_bsd_unit above), NOT refreshed per query — so a
- * handle opened on an empty drive reports unmounted for its whole life
- * even after media is inserted and a later query returns READY. Re-open
- * the handle (or use the watch API) for a freshly-inserted disc's
- * volume. UNMOUNTED IS NOT AN ERROR — it is also the common case for
+ * bsd_unit, RE-RESOLVED per call (query-time semantics, same as
+ * mos_state_result_bsd_unit above) — so a handle opened on an empty
+ * drive correctly reports the inserted disc's volume once media is
+ * present, and reverts to unmounted after an eject. UNMOUNTED IS NOT AN
+ * ERROR — it is also the common case for
  * UDF video discs — so the result is MOS_OK with *mounted=false and
  * empty buffers; only a NULL handle returns
  * MOS_ERR_INVALID_ARG. Buffers are optional (NULL/0 skips that field)
@@ -487,6 +507,52 @@ const char *mos_disc_id_disc_type(const mos_disc_id *d);
 const char *mos_disc_id_manufacturer(const mos_disc_id *d);
 const char *mos_disc_id_media_type(const mos_disc_id *d);
 const char *mos_disc_id_revision(const mos_disc_id *d);
+
+/* ---- CD-TEXT album identity (v0.4 typed API) ------------------------- */
+
+/* Result of a CD-TEXT query. Opaque, handle-owned; valid until the next
+   mos_query_cdtext() call or mos_close(). */
+typedef struct mos_cdtext mos_cdtext;
+
+/*
+ * Query the disc-level (album) Title and Performer from CD-TEXT: READ
+ * TOC/PMA/ATIP format 0101b through the non-exclusive
+ * ReadTableOfContents convenience method (the same wrapper as
+ * mos_query_toc). The "which album is in the drive" disambiguator,
+ * parallel to mos_query_volume for data discs. CD-ONLY: CD-TEXT lives in
+ * the lead-in of CD media, so callers gate on a cd profile class; on
+ * other media (or a CD without CD-TEXT) this returns MOS_ERR_IO.
+ *
+ * SCOPE — this surfaces the FIRST language block's album Title and
+ * Performer plus the per-track TITLES and PERFORMERS, all single-byte
+ * charset; a double-byte (DBCC) field reads as NULL rather than
+ * mis-decoded. The other CD-TEXT field types (songwriter/composer/…) and
+ * additional language blocks are not decoded (deferred, design doc
+ * 2026-06-14). CD-TEXT is BEST-EFFORT DISPLAY TEXT, not a
+ * fingerprint: audio-CD dedup keys ride on mos_query_toc, the fail-closed
+ * identity primitive. Title/Performer are disc-controlled bytes — escape
+ * them before terminals or structured output. `out` REQUIRED (NULL =>
+ * MOS_ERR_INVALID_ARG); on success *out is valid until the next query or
+ * mos_close().
+ */
+mos_error mos_query_cdtext(mos_handle_t *h, const mos_cdtext **out);
+
+/* Accessors. NULL/absent reads as NULL (an empty field reads NULL so the
+   emitters suppress it uniformly). All are disc-controlled ASCII/Latin-1;
+   escape before display. */
+const char *mos_cdtext_title(const mos_cdtext *c);
+const char *mos_cdtext_performer(const mos_cdtext *c);
+
+/* Per-track titles (song names) and performers (various-artists discs).
+   mos_cdtext_track_count is the highest track number that carried a
+   non-empty title OR performer (0 = none); both are independently sparse,
+   so a track in 1..count may read NULL for either or both fields.
+   mos_cdtext_track_title / _track_performer return track n's string (n is
+   1-based, 1..MMC track max 99), or NULL when absent/empty or out of
+   range. */
+uint8_t     mos_cdtext_track_count(const mos_cdtext *c);
+const char *mos_cdtext_track_title(const mos_cdtext *c, uint8_t track);
+const char *mos_cdtext_track_performer(const mos_cdtext *c, uint8_t track);
 
 /* ---- Physical structure: DVD/HD-DVD (v0.4 typed API) ----------------- */
 
@@ -599,9 +665,9 @@ typedef struct mos_capacity mos_capacity;
  *     result of the kernel's own attach-time READ CAPACITY, a registry
  *     property read with NO SCSI command and NO exclusive access, so it
  *     works on MOUNTED media (where a raw READ CAPACITY would return
- *     BUSY); captured at open alongside the rest of the whole-disk
- *     identity (open-time semantics — see the held-handle note above);
- *     and
+ *     BUSY); re-resolved per call alongside the rest of the whole-disk
+ *     identity (query-time semantics — a held handle reports the current
+ *     disc's size, see mos_state_result_bsd_unit); and
  *   - the recordable / append-state view (free blocks, next writable
  *     address, first-track size) from READ TRACK INFORMATION, the same
  *     non-exclusive convenience read mos_query_track_info uses, issued

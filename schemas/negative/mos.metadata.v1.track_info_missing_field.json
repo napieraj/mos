@@ -59,7 +59,8 @@
       "next_writable": null,
       "free_blocks": 0,
       "last_recorded": 2298495
-    }
+    },
+    "cdtext": null
   },
   "bsd_node": "/dev/disk4"
 }

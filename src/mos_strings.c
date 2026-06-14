@@ -178,6 +178,23 @@ const char *mos_protection_name(uint8_t protection)
     }
 }
 
+/* BG Format Status (READ DISC INFORMATION byte 7 bits 1:0). Stable
+   tokens for the four background-format states; the 2-bit field is total
+   so the default is unreachable from mos_disc_info_bg_format_status
+   (masked 0-3) but kept NULL for the out-of-range public-accessor call.
+   Names track the Linux CDM_MRW_* macros (cdrom.h). Explicit returns so
+   the validate.py drift guard harvests the tokens. */
+const char *mos_bg_format_status_name(uint8_t status)
+{
+    switch (status) {
+        case 0:  return "none";       /* CDM_MRW_NOTMRW            */
+        case 1:  return "inactive";   /* CDM_MRW_BGFORMAT_INACTIVE */
+        case 2:  return "active";     /* CDM_MRW_BGFORMAT_ACTIVE   */
+        case 3:  return "complete";   /* CDM_MRW_BGFORMAT_COMPLETE */
+        default: return NULL;
+    }
+}
+
 /* Loading-mechanism type (MODE SENSE page 0x2A byte 6 bits 7:5).
    Explicit returns so the validate.py drift guard harvests the tokens;
    unrecognized/reserved codes return NULL. */

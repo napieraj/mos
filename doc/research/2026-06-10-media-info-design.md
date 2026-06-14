@@ -608,3 +608,162 @@ Surfaced in mos.metadata.v1 as a nullable `disc_structure` sub-object
 stays consumer-side (MILLEN => M-DISC), per the doctrine. DVD-side
 manufacturer ID (formats 0x0E/0x11, scattered offsets, no clean
 MILLEN/MR1 pair) remains deferred until a real M-DISC DVD capture.
+
+## CD-TEXT shipped — album-level disc.cdtext (2026-06-14)
+
+Implemented the stage-2 CD-TEXT item from the staging list above as the
+first deliberately-bounded slice: the disc-level (album) **Title** and
+**Performer**. Motivating gap: macOS labels every audio disc the generic
+`Audio CD` (the audio_cd fixture's volume_name), so before this an audio
+CD had no human identity at all — only a synthesized TOC, which is the
+fail-closed dedup primitive but not a name a person reads. CD-TEXT is
+that name.
+
+**What ships.** `mos_query_cdtext` issues READ TOC/PMA/ATIP **format
+0101b** via the same non-exclusive `ReadTableOfContents` convenience
+method the format-0000b TOC uses (layer-1 preferred form — kernel-
+authored, no raw CDB, the one-raw-CDB count stays at GESN + the two tray
+opcodes). The pure decoder (`mos_cdtext.c`) reconstructs the track-0
+(album) Title (pack 0x80) and Performer (pack 0x81) of the **first
+language block** (block 0). Surfaced in `mos.metadata.v1` as a nullable
+`disc.cdtext` sub-object (`{title, performer}`, each required-and-
+nullable), gated on a `cd` profile class in the verb. Byte layout cross-
+verified against libcdio `lib/driver/cdtext.c`: 18-byte packs after a
+4-byte header, byte3 = `DBCC<<7 | block<<4 | char_pos`, text bytes
+[4..15] with NUL separating per-track strings, 8 language blocks.
+
+**Scope boundary — the load-bearing half.** This is deliberately NOT a
+full CD-TEXT decode, and the omissions are the decision future instances
+will want to "complete":
+- **Album-level only.** Per-track titles are not decoded. The album
+  Title/Performer answer "which disc"; per-track text is a 99-entry
+  array this slice does not carry.
+- **Two field types only** (Title, Performer). Songwriter / composer /
+  arranger / message / genre / ISRC / UPC / disc-id packs are skipped.
+- **Block 0 only.** Additional language blocks (1..7) are ignored — the
+  first block is the default/primary language.
+- **Single-byte charset only.** A double-byte (DBCC) album field reads
+  as absent (null), never mis-decoded as Latin-1. Transcoding MS-JIS /
+  16-bit is not attempted; the CLI escapes single-byte bytes at emit
+  (mos_safe_ascii), same as the volume name and INQUIRY identity.
+
+**Why best-effort, not fail-closed.** Unlike the TOC (whose parser
+rejects any incoherent table because a half-parsed fingerprint would be
+falsely stable), CD-TEXT here is **display text**, not a dedup key. A
+malformed or truncated reply degrades to a bounded, escaped, possibly-
+empty string — `have=false` → the verb reports null, same convention as
+the other media reads. Audio-CD identity/dedup rides on `disc.toc`, the
+fail-closed primitive; CD-TEXT only puts a human name beside it. This is
+why the decoder trusts pack order and does not reject on disorder.
+
+**What hardware can falsify (not establish), per the hardware-role ADR.**
+There is no in-repo CD-TEXT capture yet — the unit tests build spec-
+derived packs (`tests/test_cdtext.c`), and the no-OOB/termination
+property is fuzz-gated (`fuzz_pure` CD-TEXT phase, 3M iters ASan/UBSan
+clean). A real audio-CD-with-CD-TEXT reply is a fixture-acquisition
+target: it lands as a committed `.bin` with a dated fixtures README
+entry, and the decoder is built to it — a surprise never becomes a per-
+drive special-case. Specific falsifiers a rig run could surface: a drive
+that returns CD-TEXT with the album string starting at a non-zero
+char_pos in the first pack; a block-0 charcode the per-pack DBCC bit
+disagrees with (the 0x8F Block Size pack, not parsed here, is the
+authority and would become the gate if observed); firmwares that reject
+format 0101b on a CD-TEXT-bearing disc (toc-style format support varies).
+
+**Pre-first-tag schema mutability used.** `disc.cdtext` landed directly
+in `mos.metadata.v1` (closed key set extended, additionalProperties
+false), with schema + 7 examples + a new `cdtext_missing_field` negative
++ emitter + README updated in one commit — the JSON-schema ADR's mutable-
+in-place clause (no external consumers before the first tag). The freeze
+applies at the first tag like every other field.
+
+**Remaining stage-2 after this:** BG format status (RDI byte 7 & 3 +
+REQUEST SENSE progress), and — within CD-TEXT itself — per-track titles,
+the other field types, and multi-language blocks, each a fresh argument
+to make here against an observed need, not a speculative expansion.
+
+### CD-TEXT per-track titles shipped (2026-06-14)
+
+Extended the album-level CD-TEXT decoder to also surface the **per-track
+song titles** (`disc.cdtext.tracks`) — the rip file-naming case. The
+single-string collector became a stream walker: within a (pack-type,
+block 0) it reconstructs the dense NUL-separated string stream the MMC /
+Red Book wire form actually uses (strings concatenated and chopped at
+12-byte pack boundaries, NOT one padded pack per string), seeds the
+running track index from the first pack's Track Number field, and
+dispatches each string by track — track 0 to the album field, tracks
+1..N into a sparse `track_titles[track-1]` array.
+
+**Robustness note (the padding subtlety, recorded because it bit the
+first test pass).** Trailing zero padding in the final pack of a block
+produces a run of empty strings; the decoder advances its track index on
+every NUL but only counts a track when its title is NON-empty
+(`track_count` = highest track with a non-empty title), so trailing pad
+yields empty trailing tracks that the accessor reads as NULL — harmless.
+The case that WOULD mis-assign is padding BETWEEN real strings, which the
+dense wire form does not contain; a non-conformant drive that pads each
+pack individually would mis-number, accepted as a best-effort limit (this
+is display text, not a fingerprint). Sparse mid-stream gaps (a double NUL
+= an untitled track between titled ones) are handled correctly: the empty
+slot reads NULL, the surrounding tracks keep their numbers.
+
+**Still deferred:** the other field types, and multi-language blocks.
+The 99×64 per-track buffer caps a title at 63 bytes — generous for song
+names; longer truncate. No in-repo CD-TEXT capture yet (spec-derived
+test packs); a real multi-track CD-TEXT reply remains the
+fixture-acquisition target.
+
+### CD-TEXT per-track performers shipped (2026-06-14)
+
+Symmetric completion of the per-track surface: the 0x81 (Performer)
+stream, already walked for its album-level track-0 string, now also
+stores its per-track strings into a second sparse array
+(`track_performers`), for various-artists discs. The two per-track
+arrays are independently sparse and share one `track_count` (the highest
+track carrying EITHER a title or a performer), so a consumer iterates
+1..count once and queries each field via
+`mos_cdtext_track_title` / `_track_performer` (either may be NULL at a
+given track). In the JSON `tracks` array an entry appears when it has a
+title OR a performer, with both fields independently nullable — so
+`title` lost its non-null guarantee within an item (a performer-only
+track emits `title: null`). The struct now holds two 99×64 byte arrays
+(~12.6 KB/handle), the dominant term in the handle's size; fixed arrays
+match house style (the TOC is the same shape). Remaining CD-TEXT work is
+the non-title/performer field types and multi-language blocks, each a
+fresh argument here against an observed need.
+
+## BG Format Status shipped — disc_info.bg_format (2026-06-14)
+
+Shipped the byte-7 half of the banked "BG format status (RDI byte 7 &
+3 + REQUEST SENSE progress)" item. The background-format state is
+already in the READ DISC INFORMATION reply `mos_query_disc_info`
+fetches, so this is a pure-decoder extension of `mos_discinfo.c` — **no
+new command, no new wire traffic**. Byte 7 sits inside the
+through-byte-11 region the decode already proves present, so no extra
+bound.
+
+**What ships.** `mos_disc_info.bg_format_status` = `buf[7] & 0x03`, the
+2-bit BG Format Status, surfaced in `mos.metadata.v1.disc.disc_info` as
+`bg_format` (0..3) + `bg_format_name` (token, drift-guarded). Values and
+tokens track the Linux `CDM_MRW_*` macros (verified against
+torvalds/linux `include/uapi/linux/cdrom.h`): 0 `none` (NOTMRW), 1
+`inactive` (BGFORMAT_INACTIVE — started, not running), 2 `active`
+(BGFORMAT_ACTIVE — in progress), 3 `complete` (BGFORMAT_COMPLETE). The
+human `Disc` row appends only the in-flight states (`inactive`/`active`)
+— the "is this disc still formatting" signal that bears on readability;
+`none`/`complete` are the unremarkable common cases.
+
+**What stays deferred.** The REQUEST SENSE **progress-percent** read
+(the `SKSV` progress indication available while a format is `active`)
+needs a new command path and only refines the `active` state with a
+percentage — banked, not built, pending an observed need. The 2-bit
+state is the load-bearing fact; the percentage is gravy.
+
+**Falsifier (per the hardware-role ADR).** No in-repo capture sets a
+non-zero BG Format Status yet — the existing RDI fixtures are CD/BD-R
+(write-once, always `none`). A real DVD+RW or BD-RE mid-background-format
+capture is the fixture-acquisition target; it lands as a `.bin` with a
+dated fixtures-README entry, and the decode is already built to the spec
+byte. The decode itself is exercised over the full byte-7 space in
+`tests/test_discinfo.c` and stays in-bounds under the discinfo fuzz
+phase.

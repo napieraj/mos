@@ -160,7 +160,11 @@ structure, not the filesystem: `blank` = unburned, ready to write;
 burned and readable; `complete` with Volume null = burned but the
 filesystem did not mount — possibly damaged (when even the TOC won't
 read, `mos status` reports `media_unreadable`). `erasable`
-distinguishes wipe-and-reuse media (RW/RE) from one-shot (R/M-DISC). The volume name/path
+distinguishes wipe-and-reuse media (RW/RE) from one-shot (R/M-DISC).
+`disc_info.bg_format` / `bg_format_name` report the background-format
+state of DVD+RW/BD-RE/Mount Rainier media (`none` / `inactive` /
+`active` / `complete`, matching Linux `CDM_MRW_*`): an `active` disc is
+still formatting and may not be reliably readable yet. The volume name/path
 are mount-sourced only (one synchronous DiskArbitration description
 read): a present-but-unmounted disc reads `null` by design — sector
 reads are the consumer's privilege and parsing burden. That null is
@@ -235,6 +239,33 @@ objects — `mos metadata 1 --json`):
 
 A blank BD-R instead shows `track_info.blank: true` with `next_writable`
 set to the append point and `free_blocks` to the writable remainder.
+
+For audio CDs, `disc.cdtext` carries the disc-level (album) Title and
+Performer from CD-TEXT (READ TOC/PMA/ATIP format 0101b) — the "which
+album is in the drive" disambiguator, since macOS labels every audio
+disc the generic `Audio CD`:
+
+```jsonc
+"cdtext": {                                         // READ TOC fmt 0101b, CD-only
+  "title": "Kind of Blue",                          // album (track 0, block 0)
+  "performer": "Miles Davis",
+  "tracks": [                                        // per-track, sparse
+    { "track": 1, "title": "So What", "performer": null },
+    { "track": 2, "title": "Freddie Freeloader", "performer": null }
+  ]
+}
+```
+
+It is `null` on non-CD media or a CD that publishes no CD-TEXT. Scope:
+the first language block's album Title/Performer and the per-track song
+`tracks` — title and performer each (the latter for various-artists
+discs), single-byte charset. A double-byte (MS-JIS/16-bit) field reads
+`null`/absent rather than mis-decoded, and the other CD-TEXT field types
+and additional language blocks are not decoded. `tracks` is sparse (a
+track appears only if it carries a title or performer; each field is
+independently nullable) and may be `[]`. CD-TEXT is best-effort display
+text, not a fingerprint: audio-CD dedup keys ride on `disc.toc`, the
+fail-closed identity primitive.
 
 ### Drive (static facts)
 

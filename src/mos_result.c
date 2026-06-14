@@ -176,6 +176,11 @@ uint8_t mos_disc_info_last_session_state(const mos_disc_info *d)
     return d ? d->last_session_state : 0;
 }
 
+uint8_t mos_disc_info_bg_format_status(const mos_disc_info *d)
+{
+    return d ? d->bg_format_status : 0;
+}
+
 /* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
  * NULL- and range-tolerant like every accessor above; the entry index
  * is bounded by track_count, which the fail-closed parser proved
@@ -281,6 +286,40 @@ const char *mos_disc_id_media_type(const mos_disc_id *d)
 const char *mos_disc_id_revision(const mos_disc_id *d)
 {
     return (d && d->revision[0]) ? d->revision : NULL;
+}
+
+/* ---- mos_cdtext accessors (mos_query_cdtext) ----------------------- *
+ * Borrowed strings into the handle-owned result; "" reads as NULL so the
+ * emitters suppress empty fields uniformly. Disc-controlled bytes — the
+ * CLI layer escapes them. */
+
+const char *mos_cdtext_title(const mos_cdtext *c)
+{
+    return (c && c->title[0]) ? c->title : NULL;
+}
+
+const char *mos_cdtext_performer(const mos_cdtext *c)
+{
+    return (c && c->performer[0]) ? c->performer : NULL;
+}
+
+uint8_t mos_cdtext_track_count(const mos_cdtext *c)
+{
+    return c ? c->track_count : 0;
+}
+
+const char *mos_cdtext_track_title(const mos_cdtext *c, uint8_t track)
+{
+    if (!c || track < 1 || track > MOS_CDTEXT_MAX_TRACKS) return NULL;
+    const char *t = c->track_titles[track - 1];
+    return t[0] ? t : NULL;
+}
+
+const char *mos_cdtext_track_performer(const mos_cdtext *c, uint8_t track)
+{
+    if (!c || track < 1 || track > MOS_CDTEXT_MAX_TRACKS) return NULL;
+    const char *p = c->track_performers[track - 1];
+    return p[0] ? p : NULL;
 }
 
 /* ---- mos_physical_structure accessors (mos_query_physical_structure) - *

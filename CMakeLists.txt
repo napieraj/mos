@@ -147,6 +147,7 @@ add_library(mos_pure STATIC
     src/mos_config.c
     src/mos_discinfo.c
     src/mos_discstruct.c
+    src/mos_cdtext.c
     src/mos_physstruct.c
     src/mos_trackinfo.c
     src/mos_perf.c
@@ -296,6 +297,7 @@ if(MOS_BUILD_TESTS)
     enable_testing()
     add_executable(mos_tests
         cli/human.c
+        cli/io.c
         tests/test_main.c
         tests/test_sense.c
         tests/test_bsd_name.c
@@ -308,12 +310,14 @@ if(MOS_BUILD_TESTS)
         tests/test_config.c
         tests/test_discinfo.c
         tests/test_discstruct.c
+        tests/test_cdtext.c
         tests/test_physstruct.c
         tests/test_trackinfo.c
         tests/test_perf.c
         tests/test_modepage.c
         tests/test_tray.c
         tests/test_result.c
+        tests/test_io.c
     )
     # Tests link against mos_pure only — by design (plus cli/human.c,
     # the IOKit-free layout engine that test_human.c pins; it is CLI
