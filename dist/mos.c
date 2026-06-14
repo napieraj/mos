@@ -3983,7 +3983,7 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
    callbacks and our CFRunLoopStop can't halt a run-loop invocation the host
    owns. The pump runs this same mode, so our sources fire only while
    mos_watch_next_event is waiting. (Caller-facing contract in mos.h.) */
-#define MOS_WATCH_RUN_LOOP_MODE CFSTR("io.github.napieraj.mac-optical-state.watch")
+#define MOS_WATCH_RUN_LOOP_MODE CFSTR("io.github.napieraj.mos.watch")
 
 /* ---- Public opaque type --------------------------------------------- */
 
