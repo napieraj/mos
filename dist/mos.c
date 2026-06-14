@@ -4722,8 +4722,21 @@ static mos_watch_t *watch_open_from_validated_handle(
     /* Capture the caller's run loop once so the IOKit and DiscRecording
        wake sources can be scheduled independently. Both are best-effort;
        either can succeed without the other, and both can fail to
-       poll-only without affecting correctness. */
+       poll-only without affecting correctness.
+
+       CFRunLoopGetCurrent() returns a BORROWED reference (Get rule), and
+       a thread's run loop is deallocated when that thread exits. If the
+       handle outlives its origin thread (an embedder wrapping the watch
+       behind a dispatch queue, thread pool, or actor), the borrowed
+       pointer dangles and the unconditional derefs in the callbacks,
+       teardown, and pump gate become use-after-free. Retain here / release
+       in mos_watch_close so the run loop object lives for the handle's
+       whole life. This makes the off-thread misuse a safe no-op
+       (CFRunLoopStop on a non-running loop does nothing; removing a source
+       from an idle loop is fine) — it does NOT make cross-thread use
+       functional, the documented single-thread contract still stands. */
     w->run_loop = CFRunLoopGetCurrent();
+    CFRetain(w->run_loop);
 
     setup_iokit_interest_wake(w);
     setup_dr_doorbell_wake(w);
@@ -4819,6 +4832,7 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
        reverse order left an unwatchable window — all-mode discovery
        has no poll floor (C2, doc/research/2026-06-11-review-triage.md). */
     w->run_loop = CFRunLoopGetCurrent();
+    CFRetain(w->run_loop);   /* borrowed Get-rule ref; released in close (see single-target path) */
     setup_dr_doorbell_wake(w);
     /* No kIOGeneralInterest in all mode: removal rides DR Disappeared
        (wake) + per-probe NO_DEVICE (floor). */
@@ -4865,6 +4879,14 @@ void mos_watch_close(mos_watch_t *w)
 
     teardown_dr_doorbell_wake(w);
     teardown_iokit_interest_wake(w);
+
+    /* Release the run loop retained at open AFTER both teardowns — they
+       call CFRunLoopRemoveSource(w->run_loop, …), so the object must
+       still be alive here. NULL only on a watch that never reached the
+       capture sites (no teardown touched it either). */
+    if (w->run_loop) {
+        CFRelease(w->run_loop);
+    }
 
     if (w->svc != IO_OBJECT_NULL) {
         IOObjectRelease(w->svc);
