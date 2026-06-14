@@ -16,10 +16,13 @@ schemas/
 ├── mos.metadata.v1.json  # disc-identity record from `mos metadata --json`
 ├── mos.drive.v1.json     # static drive facts from `mos drive --json`
 ├── mos.features.v1.json  # raw MMC feature list from `mos features --json`
+├── mos.capacity.v1.json  # capacity record from `mos capacity --json`
 ├── mos.tray.v1.json      # tray-control outcome from `mos tray <action> --json`
 ├── examples/             # positive fixtures (must validate)
 ├── negative/             # negative fixtures (must be rejected)
-└── validate.py           # validator script — used by CI, runnable locally
+├── validate.py           # validator script — used by CI, runnable locally
+├── check_readme.py       # checks the top-level README examples vs the emitters
+└── requirements-ci.txt   # pinned validator dependencies for CI
 ```
 
 All schemas use JSON Schema draft 2020-12.
