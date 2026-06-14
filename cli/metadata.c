@@ -371,6 +371,31 @@ static void emit_human(const metadata_doc *d)
     }
     pairs[n++] = (mos_cli_human_pair){ "TOC", d->toc ? toc_buf : NULL };
 
+    /* Track info — the first track's capacity / append-state, the human
+       half of disc.track_info. Fixed-vocabulary (numbers + flags), no
+       hostile bytes. blank/damage are the archival-readiness signals;
+       track_size is the recorded extent (≈ disc capacity on a single-
+       track pressed disc); NWA is the append point when its validity bit
+       is set (suppressed otherwise, same rule as the JSON null). Worst
+       case "track 4294967295, blank, damaged, 4294967295 blocks, NWA
+       4294967295" is 67 + NUL. */
+    char ti_buf[80];
+    if (d->ti) {
+        int off = snprintf(ti_buf, sizeof ti_buf, "track %u",
+                           mos_track_info_track_number(d->ti));
+        if (off > 0 && (size_t)off < sizeof ti_buf && mos_track_info_blank(d->ti))
+            off += snprintf(ti_buf + off, sizeof ti_buf - (size_t)off, ", blank");
+        if (off > 0 && (size_t)off < sizeof ti_buf && mos_track_info_damage(d->ti))
+            off += snprintf(ti_buf + off, sizeof ti_buf - (size_t)off, ", damaged");
+        if (off > 0 && (size_t)off < sizeof ti_buf)
+            off += snprintf(ti_buf + off, sizeof ti_buf - (size_t)off,
+                            ", %u blocks", mos_track_info_track_size(d->ti));
+        if (off > 0 && (size_t)off < sizeof ti_buf && mos_track_info_nwa_valid(d->ti))
+            snprintf(ti_buf + off, sizeof ti_buf - (size_t)off,
+                     ", NWA %u", mos_track_info_next_writable(d->ti));
+    }
+    pairs[n++] = (mos_cli_human_pair){ "Track", d->ti ? ti_buf : NULL };
+
     /* CD-TEXT album identity, "title - performer". Disc-controlled bytes,
        so escape before the layout engine prints verbatim, same rule as
        the Media/Volume rows. */
