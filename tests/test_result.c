@@ -107,6 +107,11 @@ TEST(watch_event_accessors_tolerate_null)
     EXPECT(mos_watch_event_stream_open_ms(NULL) == 0);
     EXPECT_EQ(mos_watch_event_bsd_unit(NULL), -1);
     EXPECT_EQ(mos_watch_event_state(NULL), MOS_STATE_UNKNOWN);
+    EXPECT_EQ(mos_watch_event_prev_state(NULL), MOS_STATE_UNKNOWN);
+    EXPECT(mos_watch_event_vendor(NULL) == NULL);
+    EXPECT(mos_watch_event_product(NULL) == NULL);
+    EXPECT(mos_watch_event_revision(NULL) == NULL);
+    EXPECT_EQ(mos_watch_event_current_profile(NULL), 0);
     EXPECT_EQ(mos_watch_event_error(NULL), MOS_OK);
     EXPECT_EQ(mos_watch_event_latency_ms(NULL), 0);
     return 0;
