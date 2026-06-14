@@ -513,10 +513,11 @@ typedef struct mos_cdtext mos_cdtext;
  * other media (or a CD without CD-TEXT) this returns MOS_ERR_IO.
  *
  * SCOPE — this surfaces the FIRST language block's album Title and
- * Performer in single-byte charset; a double-byte (DBCC) field reads as
- * NULL rather than mis-decoded. Per-track titles, the other CD-TEXT
- * field types, and additional language blocks are not decoded (deferred,
- * design doc 2026-06-14). CD-TEXT is BEST-EFFORT DISPLAY TEXT, not a
+ * Performer plus the per-track TITLES (song names), all single-byte
+ * charset; a double-byte (DBCC) field reads as NULL rather than
+ * mis-decoded. Per-track PERFORMER, the other CD-TEXT field types, and
+ * additional language blocks are not decoded (deferred, design doc
+ * 2026-06-14). CD-TEXT is BEST-EFFORT DISPLAY TEXT, not a
  * fingerprint: audio-CD dedup keys ride on mos_query_toc, the fail-closed
  * identity primitive. Title/Performer are disc-controlled bytes — escape
  * them before terminals or structured output. `out` REQUIRED (NULL =>
@@ -526,10 +527,19 @@ typedef struct mos_cdtext mos_cdtext;
 mos_error mos_query_cdtext(mos_handle_t *h, const mos_cdtext **out);
 
 /* Accessors. NULL/absent reads as NULL (an empty field reads NULL so the
-   emitters suppress it uniformly). Both are disc-controlled ASCII/Latin-1;
+   emitters suppress it uniformly). All are disc-controlled ASCII/Latin-1;
    escape before display. */
 const char *mos_cdtext_title(const mos_cdtext *c);
 const char *mos_cdtext_performer(const mos_cdtext *c);
+
+/* Per-track titles (song names). mos_cdtext_track_count is the highest
+   track number that carried a non-empty title (0 = none); track titles
+   are sparse, so a track in 1..count may still read NULL.
+   mos_cdtext_track_title(c, n) returns track n's title (n is 1-based,
+   1..MMC track max 99), or NULL when absent/empty or out of range.
+   Per-track PERFORMER is not decoded. */
+uint8_t     mos_cdtext_track_count(const mos_cdtext *c);
+const char *mos_cdtext_track_title(const mos_cdtext *c, uint8_t track);
 
 /* ---- Physical structure: DVD/HD-DVD (v0.4 typed API) ----------------- */
 

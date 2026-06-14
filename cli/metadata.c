@@ -228,6 +228,22 @@ static void emit_json(const metadata_doc *d)
         if (ti) mos_cli_json_str(stdout, ti); else fputs("null", stdout);
         fputs(",\n      \"performer\": ", stdout);
         if (pf) mos_cli_json_str(stdout, pf); else fputs("null", stdout);
+        /* Per-track titles (song names), sparse → only tracks with a
+           title are emitted. Empty array when none. */
+        fputs(",\n      \"tracks\": [", stdout);
+        uint8_t tc = mos_cdtext_track_count(d->ct);
+        bool first = true;
+        for (uint8_t tn = 1; tn <= tc; tn++) {
+            const char *tt = mos_cdtext_track_title(d->ct, tn);
+            if (!tt) continue;
+            fprintf(stdout, "%s\n        {\"track\": %u, \"title\": ",
+                    first ? "" : ",", tn);
+            mos_cli_json_str(stdout, tt);
+            fputs("}", stdout);
+            first = false;
+        }
+        if (first) fputs("]", stdout);          /* no per-track titles */
+        else       fputs("\n      ]", stdout);
         fputs("\n    }", stdout);
     } else {
         fputs("null", stdout);
@@ -359,15 +375,28 @@ static void emit_human(const metadata_doc *d)
     cdt_esc[0] = 0;
     const char *ct_title = d->ct ? mos_cdtext_title(d->ct) : NULL;
     const char *ct_perf  = d->ct ? mos_cdtext_performer(d->ct) : NULL;
-    if (ct_title || ct_perf) {
-        snprintf(cdt_buf, sizeof cdt_buf, "%s%s%s",
+    uint8_t cdt_ntitles = 0;            /* per-track titles present (sparse) */
+    if (d->ct) {
+        uint8_t tc = mos_cdtext_track_count(d->ct);
+        for (uint8_t tn = 1; tn <= tc; tn++)
+            if (mos_cdtext_track_title(d->ct, tn)) cdt_ntitles++;
+    }
+    if (ct_title || ct_perf || cdt_ntitles) {
+        char suffix[24];
+        suffix[0] = 0;
+        if (cdt_ntitles)
+            snprintf(suffix, sizeof suffix, "%s%u track title%s",
+                     (ct_title || ct_perf) ? "  " : "",
+                     cdt_ntitles, cdt_ntitles == 1 ? "" : "s");
+        snprintf(cdt_buf, sizeof cdt_buf, "%s%s%s%s",
                  ct_title ? ct_title : "",
                  (ct_title && ct_perf) ? " - " : "",
-                 ct_perf ? ct_perf : "");
+                 ct_perf ? ct_perf : "",
+                 suffix);
         (void)mos_safe_ascii(cdt_buf, cdt_esc, sizeof cdt_esc);
     }
     pairs[n++] = (mos_cli_human_pair){
-        "CD-Text", (ct_title || ct_perf) ? cdt_esc : NULL };
+        "CD-Text", (ct_title || ct_perf || cdt_ntitles) ? cdt_esc : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }

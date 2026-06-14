@@ -342,11 +342,20 @@ bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
  * on the fail-closed TOC. Per-track titles, the other field types, and
  * additional language blocks are deferred (design doc 2026-06-14). New
  * fields append at the END (ABI-safe; accessors are the contract). */
-#define MOS_CDTEXT_STR_CAP 160u
+#define MOS_CDTEXT_STR_CAP        160u
+#define MOS_CDTEXT_MAX_TRACKS      99u
+#define MOS_CDTEXT_TRACK_TITLE_CAP 64u
 struct mos_cdtext {
-    bool have;                          /* a non-empty album field present */
-    char title[MOS_CDTEXT_STR_CAP];     /* album Title (track 0, block 0); "" if absent */
-    char performer[MOS_CDTEXT_STR_CAP]; /* album Performer; "" if absent   */
+    bool    have;                       /* a non-empty album field present */
+    char    title[MOS_CDTEXT_STR_CAP];     /* album Title (track 0, block 0); "" if absent */
+    char    performer[MOS_CDTEXT_STR_CAP]; /* album Performer; "" if absent   */
+    /* Per-track titles (pack 0x80, tracks 1..N, block 0), indexed by
+       track number: track_titles[n-1] is track n's title ("" if that
+       track had none). track_count is the highest track number with a
+       non-empty title; entries above it are unset. Per-track PERFORMER
+       is deferred. */
+    uint8_t track_count;
+    char    track_titles[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
 };
 
 /* Parse a CD-TEXT (format 0101b) reply into *out. True only when at

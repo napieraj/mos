@@ -682,6 +682,38 @@ REQUEST SENSE progress), and — within CD-TEXT itself — per-track titles,
 the other field types, and multi-language blocks, each a fresh argument
 to make here against an observed need, not a speculative expansion.
 
+### CD-TEXT per-track titles shipped (2026-06-14)
+
+Extended the album-level CD-TEXT decoder to also surface the **per-track
+song titles** (`disc.cdtext.tracks`) — the rip file-naming case. The
+single-string collector became a stream walker: within a (pack-type,
+block 0) it reconstructs the dense NUL-separated string stream the MMC /
+Red Book wire form actually uses (strings concatenated and chopped at
+12-byte pack boundaries, NOT one padded pack per string), seeds the
+running track index from the first pack's Track Number field, and
+dispatches each string by track — track 0 to the album field, tracks
+1..N into a sparse `track_titles[track-1]` array.
+
+**Robustness note (the padding subtlety, recorded because it bit the
+first test pass).** Trailing zero padding in the final pack of a block
+produces a run of empty strings; the decoder advances its track index on
+every NUL but only counts a track when its title is NON-empty
+(`track_count` = highest track with a non-empty title), so trailing pad
+yields empty trailing tracks that the accessor reads as NULL — harmless.
+The case that WOULD mis-assign is padding BETWEEN real strings, which the
+dense wire form does not contain; a non-conformant drive that pads each
+pack individually would mis-number, accepted as a best-effort limit (this
+is display text, not a fingerprint). Sparse mid-stream gaps (a double NUL
+= an untitled track between titled ones) are handled correctly: the empty
+slot reads NULL, the surrounding tracks keep their numbers.
+
+**Still deferred:** per-track PERFORMER (the 0x81 stream is walked only
+for its album-level track-0 string; the per-track array is title-only),
+the other field types, and multi-language blocks. The 99×64 per-track
+buffer caps a title at 63 bytes — generous for song names; longer
+truncate. No in-repo CD-TEXT capture yet (spec-derived test packs); a
+real multi-track CD-TEXT reply remains the fixture-acquisition target.
+
 ## BG Format Status shipped — disc_info.bg_format (2026-06-14)
 
 Shipped the byte-7 half of the banked "BG format status (RDI byte 7 &

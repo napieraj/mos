@@ -412,10 +412,11 @@
             "object",
             "null"
           ],
-          "description": "Disc-level (album) CD-TEXT, read via READ TOC/PMA/ATIP format 0101b through the ReadTableOfContents convenience method; null on non-CD media or a CD that publishes no CD-TEXT. The 'which album is in the drive' disambiguator, parallel to volume_name for data discs. SCOPE: the FIRST language block's album Title and Performer in single-byte charset \u2014 a double-byte (DBCC) field reads null rather than mis-decoded; per-track titles, the other CD-TEXT field types, and additional language blocks are not decoded (deferred). BEST-EFFORT DISPLAY TEXT, not a fingerprint: audio-CD dedup keys ride on disc.toc, the fail-closed identity primitive. Both fields are disc-controlled bytes, emitted byte-faithfully under JSON string escaping; terminal quoting is the consumer's job. Required-and-nullable.",
+          "description": "CD-TEXT, read via READ TOC/PMA/ATIP format 0101b through the ReadTableOfContents convenience method; null on non-CD media or a CD that publishes no CD-TEXT. The 'which album is in the drive' disambiguator (album title/performer) plus the per-track song titles (for rip file-naming). SCOPE: the FIRST language block's album Title/Performer and per-track TITLES in single-byte charset \u2014 a double-byte (DBCC) field reads null/absent rather than mis-decoded; per-track PERFORMER, the other CD-TEXT field types, and additional language blocks are not decoded (deferred). BEST-EFFORT DISPLAY TEXT, not a fingerprint: audio-CD dedup keys ride on disc.toc, the fail-closed identity primitive. All strings are disc-controlled bytes, emitted byte-faithfully under JSON string escaping; terminal quoting is the consumer's job. Required-and-nullable.",
           "required": [
             "title",
-            "performer"
+            "performer",
+            "tracks"
           ],
           "additionalProperties": false,
           "properties": {
@@ -432,6 +433,31 @@
                 "null"
               ],
               "description": "Album performer (CD-TEXT pack type 0x81, track 0, block 0), or null when absent/empty or double-byte."
+            },
+            "tracks": {
+              "type": "array",
+              "maxItems": 99,
+              "description": "Per-track song titles (CD-TEXT pack type 0x80, tracks 1..N, block 0). SPARSE and possibly empty: only tracks that carried a non-empty title appear, so track numbers may be non-contiguous and the array may be []. Per-track performer is not decoded.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "track",
+                  "title"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "track": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 99,
+                    "description": "Track number (1-based, MMC track numbering)."
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "Track title (non-empty; absent titles are omitted from the array)."
+                  }
+                }
+              }
             }
           }
         },

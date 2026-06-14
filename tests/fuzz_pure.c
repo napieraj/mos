@@ -505,13 +505,27 @@ static void fuzz_cdtext(uint64_t iters)
         struct mos_cdtext c;
         memset(&c, 0xA5, sizeof c);
         if (mos_internal_cdtext_parse(buf, len, &c)) {
-            /* Accepted => both fields NUL-terminated within their fixed
-               buffers (no 0xA5 poison survived as an unterminated copy). */
+            /* Accepted => the album fields NUL-terminated within their
+               fixed buffers, track_count within range, and every
+               per-track row terminated (parse zero-inits the struct, so
+               no 0xA5 poison survives). */
             if (c.title[sizeof c.title - 1] != 0 ||
                 c.performer[sizeof c.performer - 1] != 0) {
                 fprintf(stderr, "FUZZ FAIL: cdtext field not terminated "
                         "(len=%zu)\n", len);
                 abort();
+            }
+            if (c.track_count > MOS_CDTEXT_MAX_TRACKS) {
+                fprintf(stderr, "FUZZ FAIL: cdtext track_count=%u "
+                        "(len=%zu)\n", c.track_count, len);
+                abort();
+            }
+            for (unsigned t = 0; t < MOS_CDTEXT_MAX_TRACKS; t++) {
+                if (c.track_titles[t][MOS_CDTEXT_TRACK_TITLE_CAP - 1] != 0) {
+                    fprintf(stderr, "FUZZ FAIL: cdtext track title %u not "
+                            "terminated (len=%zu)\n", t, len);
+                    abort();
+                }
             }
         }
         if ((i & 0xFFFF) == 0) {

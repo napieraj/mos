@@ -12,7 +12,8 @@
     "volume_name": "Audio CD",
     "track_info": null,
     "cdtext": {
-      "title": "Kind of Blue"
+      "title": "Kind of Blue",
+      "tracks": []
     }
   }
 }

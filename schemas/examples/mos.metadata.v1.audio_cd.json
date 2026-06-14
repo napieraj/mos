@@ -54,7 +54,13 @@
     "track_info": null,
     "cdtext": {
       "title": "Kind of Blue",
-      "performer": "Miles Davis"
+      "performer": "Miles Davis",
+      "tracks": [
+        { "track": 1, "title": "So What" },
+        { "track": 2, "title": "Freddie Freeloader" },
+        { "track": 3, "title": "Blue in Green" },
+        { "track": 4, "title": "All Blues" }
+      ]
     }
   }
 }

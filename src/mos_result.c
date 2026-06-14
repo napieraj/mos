@@ -303,6 +303,18 @@ const char *mos_cdtext_performer(const mos_cdtext *c)
     return (c && c->performer[0]) ? c->performer : NULL;
 }
 
+uint8_t mos_cdtext_track_count(const mos_cdtext *c)
+{
+    return c ? c->track_count : 0;
+}
+
+const char *mos_cdtext_track_title(const mos_cdtext *c, uint8_t track)
+{
+    if (!c || track < 1 || track > MOS_CDTEXT_MAX_TRACKS) return NULL;
+    const char *t = c->track_titles[track - 1];
+    return t[0] ? t : NULL;
+}
+
 /* ---- mos_physical_structure accessors (mos_query_physical_structure) - *
  * Plain values, NULL-tolerant. Physical fields read 0/false unless
  * have_physical; copyright fields unless have_copyright — the emitters

@@ -99,10 +99,10 @@ it). What remains:
 - **Stage-2 media info** (deferred with named falsifiers in the design
   addendum): UDF volume names; the BG-format REQUEST SENSE
   progress-percent (the 2-bit BG Format Status itself shipped
-  2026-06-14); and — within CD-TEXT, whose album-level Title/Performer
-  shipped 2026-06-14 — per-track titles, the other field types, and
-  multi-language blocks. Third-party ids (MusicBrainz / AccurateRip /
-  dvdid / BDMV) are permanently consumer-side.
+  2026-06-14); and — within CD-TEXT, whose album Title/Performer and
+  per-track titles shipped 2026-06-14 — per-track performer, the other
+  field types, and multi-language blocks. Third-party ids (MusicBrainz /
+  AccurateRip / dvdid / BDMV) are permanently consumer-side.
 
 - **Parked test/robustness remainders:**
   - *EPIPE-path CLI tests* — `mos_cli_stdout_finalize`'s errno-freshness
