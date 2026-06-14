@@ -47,6 +47,13 @@ int  mos_cli_emit_unknown_and_fail(const char *context, mos_error err,
                            const char *dev_node);
 const char *mos_cli_error_to_code(mos_error err);
 
+/* One mos.event.v1 NDJSON line (compact object + newline). The watch
+   loop's renderer, kept in cli/common.c (not the adapter-bound
+   cli/watch.c) so the headless emit harness can validate its real output
+   against the schema. Returns the stdout write outcome, shared with the
+   one-shot finalizers. */
+mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e);
+
 /* mos.state.v1 / mos.event.v1 suppression rule, in one place: 0x0000 is
    the SCSI sentinel "no current profile", and profile-derived fields
    (current_profile_name, media_class, the human Profile row) are

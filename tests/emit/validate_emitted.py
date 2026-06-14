@@ -36,6 +36,7 @@ SCENARIOS = [
     ("features", "bd",            "mos.features.v1"),
     ("status",   "ready_mounted", "mos.state.v1"),
     ("list",     "one_drive",     "mos.list.v1"),
+    ("error",    "no_drive",        "mos.error.v1"),
     ("tray",     "eject_done",      "mos.tray.v1"),
     ("tray",     "lock_persistent", "mos.tray.v1"),
     ("tray",     "refused_locked",  "mos.tray.v1"),
@@ -43,7 +44,13 @@ SCENARIOS = [
     ("capacity", "pressed_bd",      "mos.capacity.v1"),
     ("capacity", "blank_bdr",       "mos.capacity.v1"),
     ("capacity", "empty",           "mos.capacity.v1"),
+    # mos.event.v1 is an NDJSON stream: validated line by line below.
+    ("watch",    "stream",          "mos.event.v1"),
 ]
+
+# Schemas emitted as NDJSON (one JSON object per line) rather than a
+# single pretty document. Validated per-line against the same schema.
+NDJSON_SCHEMAS = {"mos.event.v1"}
 
 
 def main() -> int:
@@ -62,39 +69,66 @@ def main() -> int:
             validators[name] = Draft202012Validator(schema)
         return validators[name]
 
+    def validate_doc(doc: object, expect: str) -> list[str]:
+        """Return a list of failure messages for one emitted document
+        (empty == ok): the document must name the expected schema in its
+        own `schema` field and validate against it."""
+        msgs: list[str] = []
+        got = doc.get("schema") if isinstance(doc, dict) else None
+        if got != expect:
+            return [f"schema field {got!r}, expected {expect!r}"]
+        for e in sorted(validator_for(expect).iter_errors(doc),
+                        key=lambda e: list(e.path))[:5]:
+            loc = "/".join(str(p) for p in e.path) or "(root)"
+            msgs.append(f"{loc}: {e.message}")
+        return msgs
+
     failures = 0
     for verb, scn, expect in SCENARIOS:
         proc = subprocess.run([binary, verb, scn], capture_output=True, text=True)
+        # A non-zero exit means a crash/abort (e.g. ASan): the emit
+        # harness masks expected sysexit codes to 0, so any non-zero here
+        # is a real failure regardless of stdout.
         if proc.returncode != 0:
             print(f"  FAIL {verb}/{scn}: binary exited {proc.returncode}\n"
                   f"    stderr: {proc.stderr.strip()}")
             failures += 1
             continue
-        try:
-            doc = json.loads(proc.stdout)
-        except json.JSONDecodeError as e:
-            print(f"  FAIL {verb}/{scn}: emitted invalid JSON: {e}\n"
-                  f"    output: {proc.stdout[:200]!r}")
-            failures += 1
-            continue
 
-        got = doc.get("schema")
-        if got != expect:
-            print(f"  FAIL {verb}/{scn}: schema field {got!r}, expected {expect!r}")
-            failures += 1
-            continue
+        # NDJSON schemas emit one object per line; every line is validated.
+        # Single-document schemas emit one pretty object.
+        if expect in NDJSON_SCHEMAS:
+            lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+            if not lines:
+                print(f"  FAIL {verb}/{scn}: no NDJSON lines emitted")
+                failures += 1
+                continue
+        else:
+            lines = [proc.stdout]
 
-        errs = sorted(validator_for(expect).iter_errors(doc), key=lambda e: e.path)
-        if errs:
-            print(f"  FAIL {verb}/{scn}: {len(errs)} schema violation(s) "
-                  f"against {expect}:")
-            for e in errs[:5]:
-                loc = "/".join(str(p) for p in e.path) or "(root)"
-                print(f"    - {loc}: {e.message}")
-            failures += 1
-            continue
+        scn_failed = False
+        for i, raw in enumerate(lines, 1):
+            tag = f"{verb}/{scn} line {i}" if expect in NDJSON_SCHEMAS else f"{verb}/{scn}"
+            try:
+                doc = json.loads(raw)
+            except json.JSONDecodeError as e:
+                print(f"  FAIL {tag}: emitted invalid JSON: {e}\n"
+                      f"    output: {raw[:200]!r}")
+                scn_failed = True
+                continue
+            msgs = validate_doc(doc, expect)
+            if msgs:
+                print(f"  FAIL {tag}: {len(msgs)} schema problem(s) against {expect}:")
+                for m in msgs:
+                    print(f"    - {m}")
+                scn_failed = True
 
-        print(f"  ok   {verb}/{scn} -> {expect}")
+        if scn_failed:
+            failures += 1
+        elif expect in NDJSON_SCHEMAS:
+            print(f"  ok   {verb}/{scn} -> {expect} ({len(lines)} NDJSON line(s))")
+        else:
+            print(f"  ok   {verb}/{scn} -> {expect}")
 
     print()
     if failures:
