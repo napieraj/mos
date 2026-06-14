@@ -1,0 +1,19 @@
+# yamllint config — tuned for GitHub Actions workflows.
+#
+# Keeps the rules that catch real structural breakage (indentation — which
+# in YAML changes meaning — duplicate keys, tabs, trailing whitespace,
+# syntax) and disables the cosmetic ones that fight the GHA format:
+#   - truthy `check-keys`: GHA uses `on:` as a mapping key, not a boolean.
+#   - document-start: workflow files don't begin with `---`.
+#   - line-length: CI run-blocks and pinned-action comments run long.
+extends: default
+
+rules:
+  line-length: disable
+  document-start: disable
+  truthy:
+    check-keys: false
+  comments:
+    # `uses: action@sha # vX.Y.Z` is single-space by convention.
+    min-spaces-from-content: 1
+  comments-indentation: disable

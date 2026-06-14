@@ -527,6 +527,35 @@ jobs:
       - name: Grep live docs for known-stale markers
         run: sh scripts/doc-staleness.sh
 
+  lint-scripts:
+    # Lint the shell scripts and workflow YAML — the build-system surface
+    # that has no compiler to catch its mistakes. shellcheck guards the
+    # scripts (unquoted vars, the fragile shell that the dist/preflight
+    # gates are themselves made of); yamllint guards this file and the
+    # other YAML (indentation — which in YAML changes meaning — duplicate
+    # keys, tabs, trailing space) under the GHA-tuned .yamllint config.
+    #
+    # Supply-chain posture matches the rest of the repo: no new marketplace
+    # action; shellcheck is the runner-provided system tool (like cc and
+    # cmake, which this repo also takes from the image); yamllint is a
+    # Python package, so it is hash-pinned with --require-hashes exactly
+    # like jsonschema in the schemas job.
+    name: Lint shell + YAML
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
+      - name: shellcheck (runner-provided)
+        run: shellcheck scripts/*.sh .githooks/pre-push
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0 (Node 24)
+        with:
+          python-version: '3.12'
+      - name: Install yamllint (hash-pinned)
+        run: pip install --require-hashes -r .github/requirements-lint.txt
+      - name: yamllint workflow + config YAML
+        run: yamllint -c .yamllint .github/workflows/ci.yml .github/dependabot.yml .yamllint
+
   fuzz-pure:
     # Run the pure-layer fuzz harness under ASan+UBSan on Linux. The
     # harness links mos_pure only (no IOKit), so it builds and runs here.

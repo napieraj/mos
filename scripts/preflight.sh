@@ -19,7 +19,7 @@
 set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-cd "$ROOT"
+cd "$ROOT" || exit 1
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }
@@ -40,6 +40,24 @@ step "README <-> schema/code contract"
 # check_readme.py self-skips (prints a note, exits 0) when jsonschema is
 # absent, so this is best-effort locally and authoritative in CI.
 run python3 ./schemas/check_readme.py
+
+# The script + YAML linters CI runs (the lint-scripts job). Mirror them
+# locally when installed; skip-with-note otherwise (CI is the backstop,
+# same convention as the cmake check below). [Comment kept off the leading
+# "shellcheck" word — that prefix is parsed as a shellcheck directive.]
+step "shell scripts (shellcheck)"
+if command -v shellcheck >/dev/null 2>&1; then
+    run shellcheck scripts/*.sh .githooks/pre-push
+else
+    echo "SKIP: shellcheck not installed — CI's lint-scripts job runs it"
+fi
+
+step "workflow YAML (yamllint)"
+if command -v yamllint >/dev/null 2>&1; then
+    run yamllint -c .yamllint .github/workflows/ci.yml .github/dependabot.yml .yamllint
+else
+    echo "SKIP: yamllint not installed — CI's lint-scripts job runs it"
+fi
 
 step "pure unit tests"
 if command -v cmake >/dev/null 2>&1; then

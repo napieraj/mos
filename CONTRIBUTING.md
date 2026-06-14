@@ -329,9 +329,13 @@ make hooks        # (once) run preflight automatically on `git push`
 
 `make preflight` mirrors the CI gates that don't need macOS — dist/
 amalgamation sync, test registration, doc staleness, the README contract,
-and the pure unit suite — so an operator slip (most often a `src/` edit
-without a `dist/` regen) is caught before the push instead of after a CI
-round-trip. `make hooks` wires `.githooks/pre-push` in for this clone so
+shell + YAML lint (shellcheck / yamllint, when installed), and the pure
+unit suite — so an operator slip (most often a `src/` edit without a
+`dist/` regen) is caught before the push instead of after a CI round-trip.
+The CI lint job (`lint-scripts`) hash-pins yamllint via
+`.github/requirements-lint.txt` (`--require-hashes`, the same supply-chain
+posture as `schemas/requirements-ci.txt`); shellcheck is the
+runner-provided system tool, no marketplace action. `make hooks` wires `.githooks/pre-push` in for this clone so
 it runs on every push; it is opt-in because git never auto-runs cloned
 hooks. CI is still the authoritative gate, and the only place the
 macOS-only legs (CLI compile, strict-adapter `-Werror`, amalgamated macOS
