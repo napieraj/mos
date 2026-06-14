@@ -125,7 +125,8 @@ target_compile_options(mos_warnings INTERFACE
 #               execution doesn't need
 #               an Apple framework path.
 #
-#   mos_core  — IOKit shell (mos_scsi.c, mos_state.c, mos_watch.c) on
+#   mos_core  — IOKit shell (mos_scsi.c, mos_query.c, mos_state.c,
+#               mos_watch.c) on
 #               top of mos_pure. This is what downstream embedders
 #               (HandBrake, VLC, ARM) link against. Pulls in IOKit,
 #               CoreFoundation, and DiscRecording as transitive
@@ -180,6 +181,7 @@ if(APPLE)
 
 add_library(mos_core STATIC
     src/mos_scsi.c
+    src/mos_query.c
     src/mos_tray.c
     src/mos_da.c
     src/mos_state.c
@@ -404,6 +406,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         tests/test_adapter_oneshot.c
         tests/fake/mos_fake_apple.c
         src/mos_scsi.c
+        src/mos_query.c
         src/mos_tray.c
         src/mos_state.c
         src/mos_dr.c
@@ -438,6 +441,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         tests/emit/emit_fixtures.c
         tests/fake/mos_fake_apple.c
         src/mos_scsi.c
+        src/mos_query.c
         src/mos_tray.c
         src/mos_state.c
         src/mos_dr.c
@@ -474,6 +478,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         tests/fake/mos_fake_apple.c
         tests/fake/mos_fake_watch.c
         src/mos_scsi.c
+        src/mos_query.c
         src/mos_state.c
         src/mos_dr.c
         src/mos_da.c

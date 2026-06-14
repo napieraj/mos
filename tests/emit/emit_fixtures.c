@@ -16,6 +16,8 @@
  */
 #include "common.h"
 #include "mos_fake_apple.h"
+#include "mos_pure.h"   /* struct mos_watch_event layout — same as the pure
+                           core fills and the adapter hands to the emitter */
 
 #include <string.h>
 #include <stdio.h>
@@ -265,6 +267,74 @@ int main(int argc, char **argv)
         mos_fake_set_bsd_unit(-1);
         mos_fake_set_media_size(0, 0);
         return mos_cli_run_capacity();
+    }
+
+    /* error: the mos.error.v1 failure envelope through the REAL path
+       (mos_cli_emit_unknown_and_fail). No drive present -> the open fails
+       and run_query emits the envelope on stdout, returning a non-zero
+       sysexit (66, EX_NOINPUT). We mask that to 0: this harness validates
+       the EMITTED DOCUMENT only — the process exit code is the ci.yml
+       smoke check's job — and an ASan abort still kills the process and
+       trips validate_emitted.py's return-code check. */
+    if (strcmp(verb, "error") == 0 && strcmp(scn, "no_drive") == 0) {
+        mos_fake_reset();
+        mos_fake_set_no_drive();
+        opt_index = 0;               /* no selector: the bare `mos --json` path */
+        (void)mos_cli_run_query();   /* flag_json already true (set above) */
+        return 0;
+    }
+
+    /* watch: mos.event.v1 is NDJSON, one object per line. Drive the REAL
+       line emitter (mos_cli_emit_watch_ndjson — lifted out of the
+       adapter-bound watch loop so it links here without IOKit) once per
+       event shape, covering all four oneOf branches of the schema. Events
+       are built by value: the same internal layout the pure watch core
+       fills and the adapter hands to this emitter on a live drive. */
+    if (strcmp(verb, "watch") == 0 && strcmp(scn, "stream") == 0) {
+        mos_watch_event e;
+        const uint64_t reg = 4294967552ULL;        /* >= 2^32+256: a real id */
+        const uint64_t open_ms = 1750000000000ULL; /* session wall epoch ms  */
+
+        /* 1) snapshot, READY: full media payload (profile + identity). */
+        memset(&e, 0, sizeof e);
+        e.kind = MOS_EVENT_SNAPSHOT; e.seq = 1;
+        snprintf(e.ts, sizeof e.ts, "2026-06-14T10:32:21Z");
+        e.registry_id = reg; e.stream_open_wall_ms = open_ms; e.bsd_unit = 4;
+        e.vendor = "HL-DT-ST"; e.product = "BD-RE WH16NS40"; e.revision = "1.05";
+        e.state = MOS_STATE_READY; e.prev_state = MOS_STATE_UNKNOWN;
+        e.current_profile = 0x0040;                /* BD-ROM */
+        mos_cli_emit_watch_ndjson(&e);
+
+        /* 2) state_changed -> media_unreadable: no current profile (0x0000),
+              carries a sense triple and a latency_ms. */
+        memset(&e, 0, sizeof e);
+        e.kind = MOS_EVENT_STATE_CHANGED; e.seq = 2;
+        snprintf(e.ts, sizeof e.ts, "2026-06-14T10:32:25Z");
+        e.registry_id = reg; e.stream_open_wall_ms = open_ms; e.bsd_unit = 4;
+        e.vendor = "HL-DT-ST"; e.product = "BD-RE WH16NS40"; e.revision = "1.05";
+        e.state = MOS_STATE_MEDIA_UNREADABLE; e.prev_state = MOS_STATE_READY;
+        e.current_profile = 0x0000;
+        e.sense_key = 0x03; e.asc = 0x11; e.ascq = 0x00; /* unrecovered read */
+        e.latency_ms = 7;
+        mos_cli_emit_watch_ndjson(&e);
+
+        /* 3) error: error object only, no media fields permitted. */
+        memset(&e, 0, sizeof e);
+        e.kind = MOS_EVENT_ERROR; e.seq = 3;
+        snprintf(e.ts, sizeof e.ts, "2026-06-14T10:32:30Z");
+        e.registry_id = reg; e.stream_open_wall_ms = open_ms; e.bsd_unit = 4;
+        e.state = MOS_STATE_UNKNOWN; e.prev_state = MOS_STATE_MEDIA_UNREADABLE;
+        e.error = MOS_ERR_IO;
+        mos_cli_emit_watch_ndjson(&e);
+
+        /* 4) device_removed: terminal, prev_state only, null bsd_node. */
+        memset(&e, 0, sizeof e);
+        e.kind = MOS_EVENT_DEVICE_REMOVED; e.seq = 4;
+        snprintf(e.ts, sizeof e.ts, "2026-06-14T10:32:35Z");
+        e.registry_id = reg; e.stream_open_wall_ms = open_ms; e.bsd_unit = -1;
+        e.prev_state = MOS_STATE_UNKNOWN;
+        mos_cli_emit_watch_ndjson(&e);
+        return 0;
     }
 
     fprintf(stderr, "unknown verb/scenario: %s %s\n", verb, scn);

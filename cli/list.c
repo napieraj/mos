@@ -12,6 +12,3 @@ int mos_cli_run_list(void)
     else           mos_cli_emit_list_table(stdout, rows, n, true);
     return mos_cli_finalize_oneshot_stdout(EX_OK);
 }
-
-/* ---- Query-mode implementation ----------------------------------------- */
-

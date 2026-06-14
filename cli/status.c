@@ -288,10 +288,3 @@ int mos_cli_run_query(void)
     mos_close(h);
     return mos_cli_finalize_oneshot_stdout(EX_OK);
 }
-
-/* ---- Watch-mode implementation ---------------------------------------- */
-
-/* Emit a single mos.event.v1 NDJSON line. Each event is a complete
-   compact JSON object terminated with newline and flushed — JSON Lines
-   convention, so consumers parse one line at a time without state. The
-   field set per event kind is defined by schemas/mos.event.v1.json. */

@@ -94,7 +94,7 @@ def check_cli_enum_drift(here: Path) -> int:
                        MOS_OK row: "ok" is unreachable in an error
                        envelope and excluded from the schema enums)
                        vs mos.error.v1 + mos.event.v1 error.code
-      - event kinds:   cli/watch.c event_kind_string() case arms
+      - event kinds:   cli/common.c event_kind_string() case arms
                        (the post-switch "unknown" fallback is not a
                        schema value) vs mos.event.v1 event
       - media classes: src/mos_strings.c mos_profile_class()
@@ -134,9 +134,9 @@ def check_cli_enum_drift(here: Path) -> int:
                     ("mos.event.v1.error.code",
                      enum_at(here / "mos.event.v1.json", "error", "code")))))
 
-    c_events = switch_returns(root / "cli" / "watch.c",
+    c_events = switch_returns(root / "cli" / "common.c",
                               "event_kind_string", "MOS_EVENT_")
-    checks.append(("event", c_events, "cli/watch.c event_kind_string()",
+    checks.append(("event", c_events, "cli/common.c event_kind_string()",
                    (("mos.event.v1.event",
                      enum_at(here / "mos.event.v1.json", "event")),)))
 

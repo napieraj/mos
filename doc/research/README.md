@@ -171,6 +171,17 @@ in `AGENTS.md`. The chain of files is the audit trail.
   deferred behind a stated need + the layer-1 showing. Includes the
   no-new-command `mos.capacity.v1` surface sketch and pickup checklist.
 
+- `2026-06-14-mos-scsi-split.md` — Refactor-feasibility pass for splitting
+  the tree's largest TU (`src/mos_scsi.c`, ~1295 lines) into device-handle
+  + transport vs. a new `src/mos_query.c` holding the typed `mos_query_*`
+  verb surface. Confirms the seam is clean: `struct mos_handle` already
+  lives in `src/mos_internal.h`, so the lift needs exactly one static
+  exposed (`mos_internal_ioreturn_to_mos_error`) and `mos_raw_cdb` stays
+  put as the single `ObtainExclusiveAccess` site (AGENTS §3). Pure
+  relocation, no API/schema/ADR change. Includes the build-graph touch-list
+  (four CMake targets, `amalgamate.sh`, the strict-adapter CI leg) and a
+  ready-to-paste handoff prompt for the executing session.
+
 (An entry for a `2026-04-26-doctrine-review.md` note previously
 appeared in this index; that file was never committed and the entry
 was removed 2026-06-10.)

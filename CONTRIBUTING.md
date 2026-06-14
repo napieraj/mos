@@ -46,7 +46,8 @@ mac-optical-state/
 │   ├── mos_watch_core.c         # pure watch state machine (testable without IOKit)
 │   ├── mos_state.c              # adapter: fills env from handle, calls core
 │   ├── mos_watch.c              # IOKit watch adapter (poll pump + DR doorbell)
-│   └── mos_scsi.c               # IOKit lifecycle, MMC wrappers, raw CDB
+│   ├── mos_scsi.c               # IOKit lifecycle, MMC convenience primitives, raw CDB
+│   └── mos_query.c              # typed mos_query_* verbs (decode MMC replies)
 ├── cli/
 │   ├── main.c                   # argument parsing + dispatch
 │   ├── common.c / .h            # shared CLI state, list rows, envelopes
@@ -212,10 +213,17 @@ is `doc/research/2026-06-11-comment-refactor-plan.md`):
   Never calls `ObtainExclusiveAccess` directly.
 
 - **`src/mos_scsi.c`** — IOKit lifecycle (`mos_open_*`, `mos_close`),
-  enumeration, MMC convenience-method wrappers, raw CDB path. The
-  only file that links against `IOKit.framework` and
-  `CoreFoundation.framework`. Pure helpers were extracted to
-  `mos_pure.c` during the v0.2 library split.
+  enumeration, the MMC convenience primitives the state core uses
+  (TUR / current-profile / tray-state), and the raw CDB path
+  (`mos_raw_cdb` — the sole `ObtainExclusiveAccess` site). Links against
+  `IOKit.framework` and `CoreFoundation.framework`. Pure helpers were
+  extracted to `mos_pure.c` during the v0.2 library split.
+
+- **`src/mos_query.c`** — the typed `mos_query_*` verb surface (disc
+  info, TOC, CD-TEXT, drive caps, features, disc id, physical structure,
+  track info, capacity, perf, mode pages): each verb issues one MMC
+  convenience command and hands the reply to a pure decoder. Split out
+  of `mos_scsi.c`; every verb is non-exclusive, so it takes no lock.
 
 - **`cli/`** — the CLI front-end, one file per command over a shared
   layer (`main.c` parses with `getopt_long` and dispatches;

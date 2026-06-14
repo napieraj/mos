@@ -141,6 +141,125 @@ int mos_cli_emit_unknown_and_fail(const char *context, mos_error err,
     return exit_code;
 }
 
+/* ---- Watch NDJSON line emitter ----------------------------------------- *
+ *
+ * Lives here, not in cli/watch.c, on purpose: rendering a mos.event.v1
+ * line needs only the public mos_watch_event_* accessors plus the shared
+ * CLI writers — no Apple-side symbol — while the watch PUMP (mos_watch.c)
+ * does. Keeping the emitter out of that adapter-bound TU lets the headless
+ * emit harness (tests/emit) link and validate its real output against the
+ * schema without dragging in IOKit / DiscRecording and the time seam. */
+
+static const char *event_kind_string(mos_event_kind k)
+{
+    switch (k) {
+        case MOS_EVENT_SNAPSHOT:       return "snapshot";
+        case MOS_EVENT_STATE_CHANGED:  return "state_changed";
+        case MOS_EVENT_MEDIA_CHANGED:  return "media_changed";
+        case MOS_EVENT_ERROR:          return "error";
+        case MOS_EVENT_DEVICE_REMOVED: return "device_removed";
+        case MOS_EVENT_DEVICE_APPEARED: return "device_appeared";
+    }
+    return "unknown";
+}
+
+mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
+{
+    mos_event_kind kind_e = mos_watch_event_kind(e);
+    uint16_t    profile  = mos_watch_event_current_profile(e);
+    const char *kind  = event_kind_string(kind_e);
+    const char *state = mos_state_description(mos_watch_event_state(e));
+    const char *prev  = mos_state_description(mos_watch_event_prev_state(e));
+    const char *pname = mos_profile_name(profile);
+    const char *vendor   = mos_watch_event_vendor(e);
+    const char *product  = mos_watch_event_product(e);
+    const char *revision = mos_watch_event_revision(e);
+    mos_error   err      = mos_watch_event_error(e);
+    uint32_t    latency  = mos_watch_event_latency_ms(e);
+    uint8_t     sk, asc, ascq;
+    mos_watch_event_sense(e, &sk, &asc, &ascq);
+
+    fputs("{", stdout);
+    fputs("\"schema\":\"mos.event.v1\"", stdout);
+    fputs(",\"event\":\"", stdout); fputs(kind, stdout); fputc('"', stdout);
+    /* Session identity as two plain JSON numbers — no composite token;
+       consumers wanting one key concatenate. Both fit IEEE doubles for
+       any realistic uptime (registry IDs start at 2^32+256 and epoch ms
+       is ~2^41), so no string-quoting workaround is needed. */
+    fprintf(stdout, ",\"registry_id\":%llu",
+            (unsigned long long)mos_watch_event_registry_id(e));
+    fprintf(stdout, ",\"stream_open_ms\":%llu",
+            (unsigned long long)mos_watch_event_stream_open_ms(e));
+    fprintf(stdout, ",\"seq\":%llu", (unsigned long long)mos_watch_event_seq(e));
+    fputs(",\"ts\":", stdout); mos_cli_json_str(stdout, mos_watch_event_ts(e));
+    /* bsd is required by mos.event.v1 and nullable: emit it
+       unconditionally. mos_cli_bsd_dev_node renders unit < 0 as `null`, so an
+       empty-drive event keeps the required field present as null rather
+       than dropping it (which would fail schema validation), and a real
+       unit as "diskN" — the JSON wire shape is unchanged. */
+    fputs(",\"bsd_node\":", stdout); mos_cli_bsd_dev_node(stdout, mos_watch_event_bsd_unit(e));
+
+    /* device_removed carries only prev_state; every other kind also carries
+       the current state. prev_state is written unconditionally either way. */
+    if (kind_e != MOS_EVENT_DEVICE_REMOVED) {
+        fputs(",\"state\":\"", stdout); fputs(state, stdout); fputc('"', stdout);
+    }
+    fputs(",\"prev_state\":\"", stdout); fputs(prev, stdout); fputc('"', stdout);
+
+    if (kind_e == MOS_EVENT_SNAPSHOT || kind_e == MOS_EVENT_STATE_CHANGED ||
+        kind_e == MOS_EVENT_MEDIA_CHANGED ||
+        kind_e == MOS_EVENT_DEVICE_APPEARED) {
+        fprintf(stdout, ",\"current_profile\":\"0x%04x\"", profile);
+        /* Match emit_json's suppression: skip current_profile_name when
+           current_profile is the SCSI sentinel 0x0000. See emit_json
+           comment for rationale. */
+        if (mos_cli_profile_present(profile) && pname) {
+            fputs(",\"current_profile_name\":", stdout);
+            mos_cli_json_str(stdout, pname);
+        }
+        /* Same derivation + suppression as emit_json's media_class. */
+        {
+            const char *mclass = mos_profile_class(profile);
+            if (mos_cli_profile_present(profile) && mclass) {
+                fputs(",\"media_class\":", stdout);
+                mos_cli_json_str(stdout, mclass);
+            }
+        }
+        if (vendor && *vendor) {
+            fputs(",\"vendor\":", stdout);  mos_cli_json_str(stdout, vendor);
+        }
+        if (product && *product) {
+            fputs(",\"product\":", stdout); mos_cli_json_str(stdout, product);
+        }
+        if (revision && *revision) {
+            fputs(",\"revision\":", stdout); mos_cli_json_str(stdout, revision);
+        }
+        if (sk != 0 || asc != 0 || ascq != 0) {
+            fprintf(stdout,
+                ",\"sense\":{\"key\":\"0x%02x\","
+                "\"asc\":\"0x%02x\",\"ascq\":\"0x%02x\"}",
+                sk, asc, ascq);
+        }
+    }
+
+    if (kind_e == MOS_EVENT_ERROR) {
+        fputs(",\"error\":{\"code\":", stdout);
+        mos_cli_json_str(stdout, mos_cli_error_to_code(err));
+        fputs(",\"message\":", stdout);
+        mos_cli_json_str(stdout, mos_error_description(err));
+        fputs(",\"recoverable\":", stdout);
+        fputs(mos_error_is_recoverable(err) ? "true" : "false", stdout);
+        fputc('}', stdout);
+    }
+
+    if (latency > 0) {
+        fprintf(stdout, ",\"latency_ms\":%u", latency);
+    }
+
+    fputs("}\n", stdout);
+    return mos_cli_stdout_finalize();
+}
+
 /* ---- List-mode implementation ------------------------------------------ */
 
 /* ---- List: one snapshot, probe in-callback ---------------------------- *

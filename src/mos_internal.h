@@ -173,6 +173,13 @@ mos_error mos_internal_mmc_test_unit_ready    (mos_handle_t *h,
                                                uint8_t sense[18]);
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile);
 
+/* Thin shim over the pure IOReturn→mos_error map (mos_pure.c). Defined in
+   mos_scsi.c; exposed so the typed query surface (mos_query.c) maps
+   transport failures identically to the convenience wrappers and
+   mos_raw_cdb. CHECK CONDITION rides task status/sense, not IOReturn, so
+   this maps only transport-layer failures. */
+mos_error mos_internal_ioreturn_to_mos_error(IOReturn rc);
+
 /* Re-resolve the handle's media-scoped identity (whole-disk bsd_unit,
    media_id swap fingerprint, kernel-cached size/block bytes) from its
    stable drive service — the per-query freshness the media-scoped queries
