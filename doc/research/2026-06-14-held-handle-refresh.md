@@ -62,10 +62,19 @@ the exact resolver the open path and the watch's reopen-per-probe already
 trust. Cost is a local IORegistry walk — no SCSI command, no exclusive
 access, cheaper than the watch's per-probe full reopen this mirrors.
 
-A maintainer who prefers the ROADMAP's DR-named form could adopt it; the
-only real cost is that hybrid two-source read. It is a legitimate
-alternative, not a forbidden one — the earlier drafts that implied
-otherwise were overreach.
+**On efficiency — the test that settles it.** A switch to DR would only
+pay off if it RETIRED the IOMedia walk. It can't: `media_id` (the IOMedia
+node's entry ID) and `media_bytes` (`kIOMediaSizeKey`) are facts of that
+node, and DR's status dict carries neither — only the media BSD *name*.
+So the walk stays regardless; a DR read for `bsd_unit` would run
+*alongside* it, never instead of it — strictly more work for the same
+result. (Even resolving the node from DR's name via
+`IOServiceGetMatchingService` is two ops where the walk is one, since the
+walk yields the name and the node in a single traversal.) The DR form is
+therefore not a competing alternative here, only an additive one — which
+is why the walk stays. This is the narrow, efficiency-grounded
+conclusion; it does not rest on the doctrine claim the earlier drafts
+overreached into.
 
 **What hardware can falsify.** A USB-SATA bridge whose IOMedia child
 lags the drive's READY (so a query briefly reports READY with `-1` until
