@@ -936,11 +936,12 @@ struct mos_handle {
     int64_t                   bsd_unit;
     uint64_t                  media_id;        /* whole-disk IOMedia registry
                                                   entry ID, 0 == no media;
-                                                  captured at open alongside
-                                                  bsd_unit (F1 swap fingerprint) */
+                                                  re-resolved with bsd_unit per
+                                                  media-scoped query (F1 swap
+                                                  fingerprint) */
     uint64_t                  media_bytes;     /* kIOMediaSizeKey off the same
                                                   whole-disk node; 0 == absent
-                                                  (open-time, like bsd_unit) */
+                                                  (query-time, like bsd_unit) */
     uint32_t                  media_block_bytes; /* kIOMediaPreferredBlockSizeKey;
                                                     0 == absent */
     char                      vendor_str[9];   /* 8 chars + NUL */
@@ -1069,6 +1070,14 @@ mos_error mos_internal_mmc_test_unit_ready    (mos_handle_t *h,
                                                uint32_t *status,
                                                uint8_t sense[18]);
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile);
+
+/* Re-resolve the handle's media-scoped identity (whole-disk bsd_unit,
+   media_id swap fingerprint, kernel-cached size/block bytes) from its
+   stable drive service — the per-query freshness the media-scoped queries
+   (state, capacity, volume) call first so a handle held across an
+   insert/eject reports current media. Local IORegistry walk off h->svc;
+   no SCSI command, no exclusive access. Defined in mos_scsi.c. */
+void mos_internal_refresh_media_identity(mos_handle_t *h);
 
 /* Issue one 6-byte tray CDB (START STOP UNIT 0x1B / PREVENT ALLOW MEDIUM
    REMOVAL 0x1E) on the mos_raw_cdb path and classify the result. Returns a
@@ -3875,6 +3884,13 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
     if (out) *out = NULL;
     if (!h || !out) return MOS_ERR_INVALID_ARG;
 
+    /* Held-handle freshness: re-resolve the whole-disk identity from the
+       stable drive service before the query, so a handle opened on an
+       empty drive reports the inserted disc's bsd_unit (and media_id) once
+       a query returns READY, instead of the open-time -1. The drive
+       service is pinned; only its IOMedia child changes with the media. */
+    mos_internal_refresh_media_identity(h);
+
     mos_state_env_t env = {
         .ops                 = &apple_mmc_ops,
         .ctx                 = h,
@@ -5688,6 +5704,11 @@ mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
     if (path_buf && path_cap) path_buf[0] = 0;
     if (!h) return MOS_ERR_INVALID_ARG;
 
+    /* Held-handle freshness: re-resolve so a handle held across an insert
+       sees the current disc's whole-disk node (the per-query analog of the
+       watch's reopen-per-probe — mos_internal_refresh_media_identity). */
+    mos_internal_refresh_media_identity(h);
+
     if (h->bsd_unit < 0) return MOS_OK;     /* no IOMedia node: unmounted */
 
     char bsd[24];
@@ -5885,6 +5906,26 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
     return mos_internal_parse_bsd_unit(chosen);
 }
 
+/* Re-resolve the handle's MEDIA-SCOPED identity — whole-disk bsd_unit,
+   the media_id swap fingerprint, and the kernel-cached size/block bytes —
+   from its stable drive service. The drive service (h->svc) is fixed for
+   the handle's life; the IOMedia whole-disk child under it is NOT: it
+   appears on insert and vanishes on eject. A single open-time capture
+   therefore goes stale on a handle held across a media change (an empty
+   drive opened, then loaded, kept reporting -1). The media-scoped queries
+   call this first so they report CURRENT media — the held-handle analog
+   of the watch's reopen-per-probe, but without the reopen: a local
+   IORegistry walk off h->svc, no SCSI command, no exclusive access, the
+   same cost as the open-time resolve. Single-threaded by the handle
+   contract (same as every other handle mutation). */
+void mos_internal_refresh_media_identity(mos_handle_t *h)
+{
+    if (!h) return;
+    h->bsd_unit = mos_internal_bsd_unit(h->svc, &h->media_id,
+                                        &h->media_bytes,
+                                        &h->media_block_bytes);  /* -1 if no media */
+}
+
 /* ---- Enumeration ---------------------------------------------------- */
 
 #define MOS_ENUM_CAP 64
@@ -5950,13 +5991,12 @@ static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
         h->drive_registry_id = 0;
     }
     /* Best-effort, not a gate (same posture as the enumeration snapshot):
-       a nameless empty drive
-       opens fine since the MMC plug-in and queries run off `svc`. Must
-       assign unconditionally — the handle is calloc'd, so an unset bsd_unit
-       would read 0 ("disk0"), a valid unit, not "no media". */
-    h->bsd_unit = mos_internal_bsd_unit(svc, &h->media_id,
-                                        &h->media_bytes,
-                                        &h->media_block_bytes);  /* -1 if no media */
+       a nameless empty drive opens fine since the MMC plug-in and queries
+       run off `svc`. The resolve assigns unconditionally — the handle is
+       calloc'd, so an unset bsd_unit would read 0 ("disk0"), a valid unit,
+       not "no media". The media-scoped queries re-run this same resolve
+       per call so a handle held across an insert/eject stays current. */
+    mos_internal_refresh_media_identity(h);   /* sets bsd_unit/-1, media_id, size */
 
     SInt32 score = 0;
     kern_return_t kr = IOCreatePlugInInterfaceForService(
@@ -6655,10 +6695,15 @@ mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out)
     struct mos_capacity *c = &h->capacity;
     *c = (struct mos_capacity){0};
 
+    /* Refresh the media-scoped identity so a held handle reports the
+       CURRENT disc's size, not the open-time disc's (held-handle freshness
+       — see mos_internal_refresh_media_identity). */
+    mos_internal_refresh_media_identity(h);
+
     /* (a) The whole-disk byte capacity — the kernel's own attach-time
-       READ CAPACITY, cached on the IOMedia node and captured at open
-       (no command, no exclusive access, works on mounted media). 0 ==
-       absent: a blank/absent disc has no whole-disk node. */
+       READ CAPACITY, cached on the IOMedia node (no command, no exclusive
+       access, works on mounted media). 0 == absent: a blank/absent disc
+       has no whole-disk node. */
     c->media_bytes = h->media_bytes;
     c->block_bytes = h->media_block_bytes;
 

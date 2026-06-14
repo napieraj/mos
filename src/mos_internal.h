@@ -38,11 +38,12 @@ struct mos_handle {
     int64_t                   bsd_unit;
     uint64_t                  media_id;        /* whole-disk IOMedia registry
                                                   entry ID, 0 == no media;
-                                                  captured at open alongside
-                                                  bsd_unit (F1 swap fingerprint) */
+                                                  re-resolved with bsd_unit per
+                                                  media-scoped query (F1 swap
+                                                  fingerprint) */
     uint64_t                  media_bytes;     /* kIOMediaSizeKey off the same
                                                   whole-disk node; 0 == absent
-                                                  (open-time, like bsd_unit) */
+                                                  (query-time, like bsd_unit) */
     uint32_t                  media_block_bytes; /* kIOMediaPreferredBlockSizeKey;
                                                     0 == absent */
     char                      vendor_str[9];   /* 8 chars + NUL */
@@ -171,6 +172,14 @@ mos_error mos_internal_mmc_test_unit_ready    (mos_handle_t *h,
                                                uint32_t *status,
                                                uint8_t sense[18]);
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile);
+
+/* Re-resolve the handle's media-scoped identity (whole-disk bsd_unit,
+   media_id swap fingerprint, kernel-cached size/block bytes) from its
+   stable drive service — the per-query freshness the media-scoped queries
+   (state, capacity, volume) call first so a handle held across an
+   insert/eject reports current media. Local IORegistry walk off h->svc;
+   no SCSI command, no exclusive access. Defined in mos_scsi.c. */
+void mos_internal_refresh_media_identity(mos_handle_t *h);
 
 /* Issue one 6-byte tray CDB (START STOP UNIT 0x1B / PREVENT ALLOW MEDIUM
    REMOVAL 0x1E) on the mos_raw_cdb path and classify the result. Returns a

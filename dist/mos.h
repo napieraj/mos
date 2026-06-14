@@ -166,15 +166,13 @@ mos_state mos_state_result_state(const mos_state_result *r);
    (empty/open tray) and hence no resolvable name. Render to "diskN" with
    mos_bsd_name_format().
 
-   OPEN-TIME SEMANTICS (v0.3, still current): for a held handle this is
-   captured once at mos_open* and NOT refreshed per query — a handle
-   opened on an empty drive keeps reporting -1 even after a query
-   returns READY for newly inserted media. Re-open the handle for fresh
-   naming, or use the watch API, whose events carry event-time units.
-   (The PLANNED v0.4 held-handle refresh — not yet implemented; the
-   DiscRecording substrate it builds on landed 2026-06-10 — will make
-   the field query-time via kDRDeviceMediaBSDNameKey; see ROADMAP
-   "Standing context".) */
+   QUERY-TIME SEMANTICS (v0.4): for a held handle this is re-resolved on
+   every mos_query_state from the drive's stable service, so a handle
+   opened on an empty drive reports the inserted disc's unit once a query
+   returns READY (and reverts to -1 after an eject). The re-resolve is a
+   local IORegistry walk off the drive node — no command, no exclusive
+   access. (mos_query_capacity and mos_query_volume refresh the same way;
+   the earlier v0.3 open-time-only behavior is retired.) */
 int64_t        mos_state_result_bsd_unit(const mos_state_result *r);
 
 /* The drive service's IORegistry entry ID — the attachment identity,
@@ -402,12 +400,11 @@ uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i);
  * callbacks, no commands to the drive, no elevation. Gated on the
  * whole-disk IOMedia node existing: media absent or no nub means DA is
  * never consulted and *mounted is false. That nub is the handle's
- * OPEN-TIME bsd_unit (same open-time-capture semantics as
- * mos_state_result_bsd_unit above), NOT refreshed per query — so a
- * handle opened on an empty drive reports unmounted for its whole life
- * even after media is inserted and a later query returns READY. Re-open
- * the handle (or use the watch API) for a freshly-inserted disc's
- * volume. UNMOUNTED IS NOT AN ERROR — it is also the common case for
+ * bsd_unit, RE-RESOLVED per call (query-time semantics, same as
+ * mos_state_result_bsd_unit above) — so a handle opened on an empty
+ * drive correctly reports the inserted disc's volume once media is
+ * present, and reverts to unmounted after an eject. UNMOUNTED IS NOT AN
+ * ERROR — it is also the common case for
  * UDF video discs — so the result is MOS_OK with *mounted=false and
  * empty buffers; only a NULL handle returns
  * MOS_ERR_INVALID_ARG. Buffers are optional (NULL/0 skips that field)
@@ -654,9 +651,9 @@ typedef struct mos_capacity mos_capacity;
  *     result of the kernel's own attach-time READ CAPACITY, a registry
  *     property read with NO SCSI command and NO exclusive access, so it
  *     works on MOUNTED media (where a raw READ CAPACITY would return
- *     BUSY); captured at open alongside the rest of the whole-disk
- *     identity (open-time semantics — see the held-handle note above);
- *     and
+ *     BUSY); re-resolved per call alongside the rest of the whole-disk
+ *     identity (query-time semantics — a held handle reports the current
+ *     disc's size, see mos_state_result_bsd_unit); and
  *   - the recordable / append-state view (free blocks, next writable
  *     address, first-track size) from READ TRACK INFORMATION, the same
  *     non-exclusive convenience read mos_query_track_info uses, issued

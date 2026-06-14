@@ -39,6 +39,13 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
     if (out) *out = NULL;
     if (!h || !out) return MOS_ERR_INVALID_ARG;
 
+    /* Held-handle freshness: re-resolve the whole-disk identity from the
+       stable drive service before the query, so a handle opened on an
+       empty drive reports the inserted disc's bsd_unit (and media_id) once
+       a query returns READY, instead of the open-time -1. The drive
+       service is pinned; only its IOMedia child changes with the media. */
+    mos_internal_refresh_media_identity(h);
+
     mos_state_env_t env = {
         .ops                 = &apple_mmc_ops,
         .ctx                 = h,

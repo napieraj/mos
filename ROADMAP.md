@@ -78,12 +78,12 @@ it). What remains:
   the kernel's own GESN poll. Design + the rig-check-first build order:
   `doc/research/2026-06-13-eject-request-watch-event.md`.
 
-- **Held-handle identity refresh** — v0.3-line handles capture
-  `bsd_unit`/`media_id` once at open, so a handle held across an insert
-  reports READY with the open-time -1 (documented as open-time semantics in
-  `mos.h`). Under DR, per-query freshness is a dictionary lookup
-  (`kDRDeviceMediaBSDNameKey` in the `DRDeviceCopyStatus` media-info dict —
-  `doc/dr-field-mapping.md`), not a registry walk.
+  (Held-handle identity refresh — `bsd_unit`/`media_id`/size now
+  re-resolved per media-scoped query, not captured once at open —
+  shipped 2026-06-14; decision record:
+  `doc/research/2026-06-14-held-handle-refresh.md`. The DR-dictionary
+  lookup the earlier plan named remains an unbuilt optimization, not a
+  correctness need.)
 
 - **Transitional-state poll escalation** (contingent on hardware evidence).
   A drive persistently classifying EMPTY_OR_OPEN/UNKNOWN (GESN failing through
