@@ -8,6 +8,7 @@
  */
 
 #include "mos_internal.h"
+#include "mos_scsi_status.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
@@ -514,6 +515,15 @@ _Static_assert((int)MOS_XFER_FROM_TARGET == (int)kSCSIDataTransfer_FromTargetToI
                "MOS_XFER_FROM_TARGET no longer matches "
                "kSCSIDataTransfer_FromTargetToInitiator — see MOS_XFER_NONE "
                "assertion above for the rationale.");
+
+/* mos_raw_cdb returns the raw SDK task status (uint32_t) which the pure
+   tray classifier (mos_pure.c) compares against MOS_SCSI_STATUS_GOOD. The
+   pure layer can't include the SDK to check the values agree, so pin it
+   here — the one TU that sees both names — exactly as the IOReturn map is
+   pinned above. */
+_Static_assert((int)MOS_SCSI_STATUS_GOOD == (int)kSCSITaskStatus_GOOD,
+               "MOS_SCSI_STATUS_GOOD no longer matches kSCSITaskStatus_GOOD "
+               "— the pure tray classifier would misclassify GOOD status.");
 
 /* Thin shim over the pure mapping in mos_pure.c (int32_t in, so it can be
    fixture-tested without IOKit — tests/test_ioreturn.c covers every code).

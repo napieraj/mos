@@ -60,18 +60,30 @@ bool mos_internal_da_volume(const char *bsd_name,
            than a truncated path a consumer might chdir into. */
         CFTypeRef path = CFDictionaryGetValue(
             desc, kDADiskDescriptionVolumePathKey);
-        if (path && CFGetTypeID(path) == CFURLGetTypeID() &&
-            path_buf && path_cap &&
-            CFURLGetFileSystemRepresentation((CFURLRef)path, true,
-                                             (UInt8 *)path_buf,
-                                             (CFIndex)path_cap)) {
+        bool is_url = path && CFGetTypeID(path) == CFURLGetTypeID();
+        if (is_url && path_buf && path_cap) {
+            /* Path requested: render it. A path that exceeds the buffer
+               yields not-mounted rather than a truncated path a consumer
+               might chdir into. */
+            if (CFURLGetFileSystemRepresentation((CFURLRef)path, true,
+                                                 (UInt8 *)path_buf,
+                                                 (CFIndex)path_cap)) {
+                mounted = true;
+            } else {
+                path_buf[0] = 0;
+            }
+        } else if (is_url) {
+            /* Name-only caller (no path buffer): VolumePath presence is
+               the mount proof on its own — rendering the path is not
+               required to know the volume is mounted. Without this branch
+               a name-only caller (e.g. `mos status`) could never observe
+               a mounted volume. */
             mounted = true;
+        }
+        if (mounted)
             mos_internal_dr_copy_string(
                 CFDictionaryGetValue(desc, kDADiskDescriptionVolumeNameKey),
                 name_buf, name_cap);
-        } else if (path_buf && path_cap) {
-            path_buf[0] = 0;
-        }
         CFRelease(desc);
     }
 

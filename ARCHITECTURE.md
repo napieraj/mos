@@ -29,18 +29,21 @@ where drivers each made their own opinionated choices about tray
 management, the kernel settled on exposing those as user-controllable
 options (`autoclose`, `autoeject`, `lockdoor` module parameters) with
 all of them defaulting to "don't act unless asked." Restraint is a
-feature. mos applies the same principle one layer up: even the
-choice to expose tray control is deferred to v0.3, separately from
-the query path, because the v0.2 reporter-only contract is
-genuinely useful by itself and adding control verbs introduces a
-different class of failure mode (locked drives, surprised users,
-cleanup-on-process-death obligations). The decided surface, when it lands, is
+feature. mos applies the same principle one layer up: tray control is
+exposed only as a distinct verb, separately from the query path,
+because the reporter-only contract is genuinely useful by itself and
+adding control verbs introduces a different class of failure mode
+(locked drives, surprised users, cleanup-on-process-death
+obligations). The control surface, shipped in v0.4, is
 `mos tray {eject, close, lock, unlock}` (`eject --force` = unlock-then-eject).
-Whether each verb is issued through a no-exclusive-access MMC convenience
-method or a raw CDB that needs exclusive access — and is therefore BUSY on a
-mounted disc — is an open implementation question (§9.9), not settled here.
-The contract states mechanism facts only — no application or safety
-editorialising; the consumer derives suitability.
+Each verb is issued as a raw CDB that needs exclusive access — and is
+therefore BUSY on a mounted disc (§3, §9.9); the convenience methods
+are structurally sense-blind (§9.7/§9.9), so the raw path is the only
+one that can honor the mechanism-facts contract. The query path is
+unchanged: it still issues no control command and keeps its
+no-lock-on-ready guarantee. The contract states mechanism facts only —
+no application or safety editorialising; the consumer derives
+suitability.
 
 mos's vocabulary is *drive-handling state* — `OPEN / EMPTY /
 LOADING / READY / BUSY`, plus the finer not-ready distinctions
@@ -901,7 +904,7 @@ the SCSITaskUserClient interface is blocked at the `iokit-open` mach
 lookup. This is out of scope — distribute via Homebrew or embed into a
 non-sandboxed app.
 
-### 9.9 Tray control-verb behaviour (for the deferred control surface, §1)
+### 9.9 Tray control-verb behaviour (for the tray control surface, §1)
 
 Spec-guaranteed (T10): START STOP UNIT eject, PREVENT ALLOW MEDIUM REMOVAL
 prevent codes 0/1/2/3, the `0x53,02` "medium removal prevented" failure, and
@@ -929,11 +932,14 @@ signature-identical to the modern SDK:**
   there too, the lock/unlock and speed-set verbs are raw-CDB-only and
   the exclusive-access question below partially answers itself.
 
-To be validated on hardware before the verbs ship: (0) **which API surface**
-each verb uses — an `MMCDeviceInterface` convenience method, which needs no
-exclusive access but cannot surface sense (above), versus a raw
-START STOP UNIT / PREVENT ALLOW CDB, which needs exclusive access and can
-(§3); (1) **does the prevent bit survive
+Question (0) — **which API surface** each verb uses — is now settled and
+shipped (v0.4, AGENTS.md controller-verbs ADR 2026-06-13): the verbs are raw
+START STOP UNIT / PREVENT ALLOW CDBs (which need exclusive access and CAN
+surface sense, §3), precisely because the `MMCDeviceInterface` convenience
+methods are sense-blind (above) and cannot honor the mechanism-facts
+contract. The remaining items stay hardware-falsifiable per the
+hardware-role ADR — a run can refute them but never steered the design:
+(1) **does the prevent bit survive
 `SCSITaskUserClient` close** — some stacks clear it on last close, which would
 force a held session instead of the fast open-CDB-close model; (2) whether the
 exclusive access (if the raw path is used) contends with another application holding the
@@ -1017,11 +1023,12 @@ opcode-enumerative register would imply a different product.
 
 The wire-level form of each schema family is machine-checkable. See
 `schemas/` for JSON Schema documents covering `mos.state.v1`,
-`mos.error.v1`, `mos.list.v1`, and `mos.event.v1`, plus positive
-example fixtures and negative-case fixtures. CI runs
-`schemas/validate.py` against both directions on every commit. When
-the emit code in `tools/mos.c` changes, the schema and at least one
-fixture should change in the same commit.
+`mos.error.v1`, `mos.list.v1`, `mos.event.v1`, `mos.metadata.v1`,
+`mos.drive.v1`, `mos.features.v1`, `mos.capacity.v1`, and
+`mos.tray.v1`, plus positive example fixtures and negative-case
+fixtures. CI runs `schemas/validate.py` against both directions on
+every commit. When the emit code in `cli/` changes, the schema and at
+least one fixture should change in the same commit.
 
 ## 11. Prior art and references
 

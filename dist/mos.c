@@ -5682,18 +5682,30 @@ bool mos_internal_da_volume(const char *bsd_name,
            than a truncated path a consumer might chdir into. */
         CFTypeRef path = CFDictionaryGetValue(
             desc, kDADiskDescriptionVolumePathKey);
-        if (path && CFGetTypeID(path) == CFURLGetTypeID() &&
-            path_buf && path_cap &&
-            CFURLGetFileSystemRepresentation((CFURLRef)path, true,
-                                             (UInt8 *)path_buf,
-                                             (CFIndex)path_cap)) {
+        bool is_url = path && CFGetTypeID(path) == CFURLGetTypeID();
+        if (is_url && path_buf && path_cap) {
+            /* Path requested: render it. A path that exceeds the buffer
+               yields not-mounted rather than a truncated path a consumer
+               might chdir into. */
+            if (CFURLGetFileSystemRepresentation((CFURLRef)path, true,
+                                                 (UInt8 *)path_buf,
+                                                 (CFIndex)path_cap)) {
+                mounted = true;
+            } else {
+                path_buf[0] = 0;
+            }
+        } else if (is_url) {
+            /* Name-only caller (no path buffer): VolumePath presence is
+               the mount proof on its own — rendering the path is not
+               required to know the volume is mounted. Without this branch
+               a name-only caller (e.g. `mos status`) could never observe
+               a mounted volume. */
             mounted = true;
+        }
+        if (mounted)
             mos_internal_dr_copy_string(
                 CFDictionaryGetValue(desc, kDADiskDescriptionVolumeNameKey),
                 name_buf, name_cap);
-        } else if (path_buf && path_cap) {
-            path_buf[0] = 0;
-        }
         CFRelease(desc);
     }
 
@@ -6263,6 +6275,15 @@ _Static_assert((int)MOS_XFER_FROM_TARGET == (int)kSCSIDataTransfer_FromTargetToI
                "MOS_XFER_FROM_TARGET no longer matches "
                "kSCSIDataTransfer_FromTargetToInitiator — see MOS_XFER_NONE "
                "assertion above for the rationale.");
+
+/* mos_raw_cdb returns the raw SDK task status (uint32_t) which the pure
+   tray classifier (mos_pure.c) compares against MOS_SCSI_STATUS_GOOD. The
+   pure layer can't include the SDK to check the values agree, so pin it
+   here — the one TU that sees both names — exactly as the IOReturn map is
+   pinned above. */
+_Static_assert((int)MOS_SCSI_STATUS_GOOD == (int)kSCSITaskStatus_GOOD,
+               "MOS_SCSI_STATUS_GOOD no longer matches kSCSITaskStatus_GOOD "
+               "— the pure tray classifier would misclassify GOOD status.");
 
 /* Thin shim over the pure mapping in mos_pure.c (int32_t in, so it can be
    fixture-tested without IOKit — tests/test_ioreturn.c covers every code).

@@ -2,5 +2,7 @@
   "schema": "mos.state.v1",
   "state": "spinning",
   "bsd_node": "/dev/disk4",
-  "current_profile": "0x0040"
+  "current_profile": "0x0040",
+  "registry_id": 4295032831,
+  "index": 1
 }

@@ -4,5 +4,7 @@
   "state": "empty",
   "bsd_node": "/dev/disk4",
   "current_profile": "0x0000",
-  "current_profile_name": "bd_rom"
+  "current_profile_name": "bd_rom",
+  "registry_id": 4295032831,
+  "index": 1
 }

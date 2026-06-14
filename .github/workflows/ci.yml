@@ -71,7 +71,7 @@ jobs:
              -I include tests/test_watch_lifetime.c \
              build/libmos.a build/libmos_pure.a \
              -framework IOKit -framework CoreFoundation \
-             -framework DiscRecording \
+             -framework DiscRecording -framework DiskArbitration \
              -o /tmp/test_watch_lifetime
           ASAN_OPTIONS=abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
              /tmp/test_watch_lifetime
@@ -90,7 +90,7 @@ jobs:
              -I include tests/test_dr_doorbell.c \
              build/libmos.a build/libmos_pure.a \
              -framework IOKit -framework CoreFoundation \
-             -framework DiscRecording \
+             -framework DiscRecording -framework DiskArbitration \
              -o /tmp/test_dr_doorbell
           ASAN_OPTIONS=abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
              /tmp/test_dr_doorbell
