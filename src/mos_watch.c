@@ -487,20 +487,25 @@ static void dr_status_changed_callback(DRNotificationCenterRef center,
     }
 
     if (w->all_mode) {
+        bool woke = false;
         int slot = (id != 0) ? mos_internal_watch_all_find(&w->all, id) : -1;
         if (slot >= 0) {
             mos_internal_watch_notify_wake(&w->all.cores[slot]);
+            woke = true;
         } else if (id == 0) {
             for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
                 if (w->all.active[i]) {
                     mos_internal_watch_notify_wake(&w->all.cores[i]);
+                    woke = true;
                 }
             }
         }
         /* id resolved but unknown: a device we are not watching (cap
            overflow) or one Appeared hasn't delivered yet — the
-           Appeared handler owns joins; nothing to wake. */
-        if (w->run_loop) CFRunLoopStop(w->run_loop);
+           Appeared handler owns joins; nothing to wake. Only break the
+           pump's sleep when we actually pulled a poll forward; stopping
+           with no wake spends a redundant pump cycle for no state change. */
+        if (woke && w->run_loop) CFRunLoopStop(w->run_loop);
         return;
     }
 
