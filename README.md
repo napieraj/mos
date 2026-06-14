@@ -236,6 +236,26 @@ objects — `mos metadata 1 --json`):
 A blank BD-R instead shows `track_info.blank: true` with `next_writable`
 set to the append point and `free_blocks` to the writable remainder.
 
+For audio CDs, `disc.cdtext` carries the disc-level (album) Title and
+Performer from CD-TEXT (READ TOC/PMA/ATIP format 0101b) — the "which
+album is in the drive" disambiguator, since macOS labels every audio
+disc the generic `Audio CD`:
+
+```jsonc
+"cdtext": {                                         // READ TOC fmt 0101b, CD-only
+  "title": "Kind of Blue",                          // album (track 0, block 0)
+  "performer": "Miles Davis"
+}
+```
+
+It is `null` on non-CD media or a CD that publishes no CD-TEXT. Scope:
+the first language block's album Title and Performer in single-byte
+charset — a double-byte (MS-JIS/16-bit) field reads `null` rather than
+mis-decoded, and per-track titles, the other CD-TEXT field types, and
+additional language blocks are not decoded. CD-TEXT is best-effort
+display text, not a fingerprint: audio-CD dedup keys ride on `disc.toc`,
+the fail-closed identity primitive.
+
 ### Drive (static facts)
 
 ```

@@ -608,3 +608,76 @@ Surfaced in mos.metadata.v1 as a nullable `disc_structure` sub-object
 stays consumer-side (MILLEN => M-DISC), per the doctrine. DVD-side
 manufacturer ID (formats 0x0E/0x11, scattered offsets, no clean
 MILLEN/MR1 pair) remains deferred until a real M-DISC DVD capture.
+
+## CD-TEXT shipped — album-level disc.cdtext (2026-06-14)
+
+Implemented the stage-2 CD-TEXT item from the staging list above as the
+first deliberately-bounded slice: the disc-level (album) **Title** and
+**Performer**. Motivating gap: macOS labels every audio disc the generic
+`Audio CD` (the audio_cd fixture's volume_name), so before this an audio
+CD had no human identity at all — only a synthesized TOC, which is the
+fail-closed dedup primitive but not a name a person reads. CD-TEXT is
+that name.
+
+**What ships.** `mos_query_cdtext` issues READ TOC/PMA/ATIP **format
+0101b** via the same non-exclusive `ReadTableOfContents` convenience
+method the format-0000b TOC uses (layer-1 preferred form — kernel-
+authored, no raw CDB, the one-raw-CDB count stays at GESN + the two tray
+opcodes). The pure decoder (`mos_cdtext.c`) reconstructs the track-0
+(album) Title (pack 0x80) and Performer (pack 0x81) of the **first
+language block** (block 0). Surfaced in `mos.metadata.v1` as a nullable
+`disc.cdtext` sub-object (`{title, performer}`, each required-and-
+nullable), gated on a `cd` profile class in the verb. Byte layout cross-
+verified against libcdio `lib/driver/cdtext.c`: 18-byte packs after a
+4-byte header, byte3 = `DBCC<<7 | block<<4 | char_pos`, text bytes
+[4..15] with NUL separating per-track strings, 8 language blocks.
+
+**Scope boundary — the load-bearing half.** This is deliberately NOT a
+full CD-TEXT decode, and the omissions are the decision future instances
+will want to "complete":
+- **Album-level only.** Per-track titles are not decoded. The album
+  Title/Performer answer "which disc"; per-track text is a 99-entry
+  array this slice does not carry.
+- **Two field types only** (Title, Performer). Songwriter / composer /
+  arranger / message / genre / ISRC / UPC / disc-id packs are skipped.
+- **Block 0 only.** Additional language blocks (1..7) are ignored — the
+  first block is the default/primary language.
+- **Single-byte charset only.** A double-byte (DBCC) album field reads
+  as absent (null), never mis-decoded as Latin-1. Transcoding MS-JIS /
+  16-bit is not attempted; the CLI escapes single-byte bytes at emit
+  (mos_safe_ascii), same as the volume name and INQUIRY identity.
+
+**Why best-effort, not fail-closed.** Unlike the TOC (whose parser
+rejects any incoherent table because a half-parsed fingerprint would be
+falsely stable), CD-TEXT here is **display text**, not a dedup key. A
+malformed or truncated reply degrades to a bounded, escaped, possibly-
+empty string — `have=false` → the verb reports null, same convention as
+the other media reads. Audio-CD identity/dedup rides on `disc.toc`, the
+fail-closed primitive; CD-TEXT only puts a human name beside it. This is
+why the decoder trusts pack order and does not reject on disorder.
+
+**What hardware can falsify (not establish), per the hardware-role ADR.**
+There is no in-repo CD-TEXT capture yet — the unit tests build spec-
+derived packs (`tests/test_cdtext.c`), and the no-OOB/termination
+property is fuzz-gated (`fuzz_pure` CD-TEXT phase, 3M iters ASan/UBSan
+clean). A real audio-CD-with-CD-TEXT reply is a fixture-acquisition
+target: it lands as a committed `.bin` with a dated fixtures README
+entry, and the decoder is built to it — a surprise never becomes a per-
+drive special-case. Specific falsifiers a rig run could surface: a drive
+that returns CD-TEXT with the album string starting at a non-zero
+char_pos in the first pack; a block-0 charcode the per-pack DBCC bit
+disagrees with (the 0x8F Block Size pack, not parsed here, is the
+authority and would become the gate if observed); firmwares that reject
+format 0101b on a CD-TEXT-bearing disc (toc-style format support varies).
+
+**Pre-first-tag schema mutability used.** `disc.cdtext` landed directly
+in `mos.metadata.v1` (closed key set extended, additionalProperties
+false), with schema + 7 examples + a new `cdtext_missing_field` negative
++ emitter + README updated in one commit — the JSON-schema ADR's mutable-
+in-place clause (no external consumers before the first tag). The freeze
+applies at the first tag like every other field.
+
+**Remaining stage-2 after this:** BG format status (RDI byte 7 & 3 +
+REQUEST SENSE progress), and — within CD-TEXT itself — per-track titles,
+the other field types, and multi-language blocks, each a fresh argument
+to make here against an observed need, not a speculative expansion.

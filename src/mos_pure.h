@@ -325,6 +325,34 @@ struct mos_disc_id {
 bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
                                    struct mos_disc_id *out);
 
+/* ---- READ TOC/PMA/ATIP format 0101b (CD-TEXT) decode (mos_cdtext.c) --- *
+ *
+ * The disc-level (album) Title and Performer from a CD-TEXT reply — the
+ * "which album is in the drive" disambiguator, parallel to the mounted
+ * volume name for data discs. Decoded from the FIRST language block
+ * (block 0), single-byte charset; a double-byte (DBCC) album field reads
+ * as "" (absent), never mis-decoded. Disc-controlled bytes copied
+ * verbatim into fixed buffers (CLI escapes at emit); the only device
+ * length (CD-TEXT Data Length) can only shrink the trusted span. This is
+ * BEST-EFFORT DISPLAY TEXT, not a fingerprint — audio-CD dedup keys ride
+ * on the fail-closed TOC. Per-track titles, the other field types, and
+ * additional language blocks are deferred (design doc 2026-06-14). New
+ * fields append at the END (ABI-safe; accessors are the contract). */
+#define MOS_CDTEXT_STR_CAP 160u
+struct mos_cdtext {
+    bool have;                          /* a non-empty album field present */
+    char title[MOS_CDTEXT_STR_CAP];     /* album Title (track 0, block 0); "" if absent */
+    char performer[MOS_CDTEXT_STR_CAP]; /* album Performer; "" if absent   */
+};
+
+/* Parse a CD-TEXT (format 0101b) reply into *out. True only when at
+ * least one non-empty album-level field (Title or Performer) was decoded
+ * within the trusted region (min of `len` and the reply's declared
+ * length); false (and *out emptied) otherwise. Pure, no-OOB, every
+ * string NUL-terminated — fuzz/ASan-gated by tests/test_cdtext.c. */
+bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
+                               struct mos_cdtext *out);
+
 /* ---- READ DISC STRUCTURE / physical structure decode (mos_physstruct.c) --- *
  *
  * Physical Format Information (READ DISC STRUCTURE 0xAD, DVD/HD-DVD media

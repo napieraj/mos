@@ -283,6 +283,21 @@ const char *mos_disc_id_revision(const mos_disc_id *d)
     return (d && d->revision[0]) ? d->revision : NULL;
 }
 
+/* ---- mos_cdtext accessors (mos_query_cdtext) ----------------------- *
+ * Borrowed strings into the handle-owned result; "" reads as NULL so the
+ * emitters suppress empty fields uniformly. Disc-controlled bytes — the
+ * CLI layer escapes them. */
+
+const char *mos_cdtext_title(const mos_cdtext *c)
+{
+    return (c && c->title[0]) ? c->title : NULL;
+}
+
+const char *mos_cdtext_performer(const mos_cdtext *c)
+{
+    return (c && c->performer[0]) ? c->performer : NULL;
+}
+
 /* ---- mos_physical_structure accessors (mos_query_physical_structure) - *
  * Plain values, NULL-tolerant. Physical fields read 0/false unless
  * have_physical; copyright fields unless have_copyright — the emitters

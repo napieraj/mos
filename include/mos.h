@@ -488,6 +488,40 @@ const char *mos_disc_id_manufacturer(const mos_disc_id *d);
 const char *mos_disc_id_media_type(const mos_disc_id *d);
 const char *mos_disc_id_revision(const mos_disc_id *d);
 
+/* ---- CD-TEXT album identity (v0.4 typed API) ------------------------- */
+
+/* Result of a CD-TEXT query. Opaque, handle-owned; valid until the next
+   mos_query_cdtext() call or mos_close(). */
+typedef struct mos_cdtext mos_cdtext;
+
+/*
+ * Query the disc-level (album) Title and Performer from CD-TEXT: READ
+ * TOC/PMA/ATIP format 0101b through the non-exclusive
+ * ReadTableOfContents convenience method (the same wrapper as
+ * mos_query_toc). The "which album is in the drive" disambiguator,
+ * parallel to mos_query_volume for data discs. CD-ONLY: CD-TEXT lives in
+ * the lead-in of CD media, so callers gate on a cd profile class; on
+ * other media (or a CD without CD-TEXT) this returns MOS_ERR_IO.
+ *
+ * SCOPE — this surfaces the FIRST language block's album Title and
+ * Performer in single-byte charset; a double-byte (DBCC) field reads as
+ * NULL rather than mis-decoded. Per-track titles, the other CD-TEXT
+ * field types, and additional language blocks are not decoded (deferred,
+ * design doc 2026-06-14). CD-TEXT is BEST-EFFORT DISPLAY TEXT, not a
+ * fingerprint: audio-CD dedup keys ride on mos_query_toc, the fail-closed
+ * identity primitive. Title/Performer are disc-controlled bytes — escape
+ * them before terminals or structured output. `out` REQUIRED (NULL =>
+ * MOS_ERR_INVALID_ARG); on success *out is valid until the next query or
+ * mos_close().
+ */
+mos_error mos_query_cdtext(mos_handle_t *h, const mos_cdtext **out);
+
+/* Accessors. NULL/absent reads as NULL (an empty field reads NULL so the
+   emitters suppress it uniformly). Both are disc-controlled ASCII/Latin-1;
+   escape before display. */
+const char *mos_cdtext_title(const mos_cdtext *c);
+const char *mos_cdtext_performer(const mos_cdtext *c);
+
 /* ---- Physical structure: DVD/HD-DVD (v0.4 typed API) ----------------- */
 
 /* Result of a physical-structure query. Opaque, handle-owned; valid

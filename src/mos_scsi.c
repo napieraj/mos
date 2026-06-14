@@ -705,6 +705,39 @@ mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
     return MOS_OK;
 }
 
+mos_error mos_query_cdtext(mos_handle_t *h, const mos_cdtext **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* READ TOC/PMA/ATIP format 0101b (CD-TEXT). 256 packs (4612 bytes)
+       holds the album-level blocks of any real disc several times over;
+       a longer hostile reply is simply clamped — sizeof buf is the
+       trusted length (O-4), and the reply's own CD-TEXT Data Length only
+       ever shrinks the parse. Same convenience method and trust terms as
+       mos_query_toc above; non-exclusive, no lock. The track/session
+       parameter is reserved for format 0101b — passed 0. */
+    uint8_t         buf[4 + 256 * 18] = {0};
+    SCSITaskStatus  st                = 0;
+    SCSI_Sense_Data sd                = {0};
+
+    IOReturn rc = (*h->mmc)->ReadTableOfContents(
+        h->mmc, 0 /*LBA*/, 0x05 /*CD-TEXT*/, 0 /*reserved*/,
+        buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_cdtext_parse(buf, sizeof(buf), &h->cdtext)) {
+        return MOS_ERR_IO;   /* no CD-TEXT / no usable album field */
+    }
+    *out = &h->cdtext;
+    return MOS_OK;
+}
+
 mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
 {
     if (out) *out = NULL;

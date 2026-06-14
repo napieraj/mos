@@ -49,6 +49,10 @@
     },
     "disc_structure": null,
     "volume_name": "Audio CD",
-    "track_info": null
+    "track_info": null,
+    "cdtext": {
+      "title": "Kind of Blue",
+      "performer": "Miles Davis"
+    }
   }
 }
