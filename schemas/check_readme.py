@@ -28,6 +28,12 @@ mos-sim self-gen kit lifts from the source):
     label order — which tolerates the rows a given example suppresses while
     catching a relabelled, reordered, or deleted row.
 
+  * the `$ mos list` table HEADER row vs the column-header arrays in
+    cli/common.c (with / without the Volume column). The header must equal one
+    variant exactly — columns aren't individually suppressed. Only the header
+    is checked: the body is whitespace-aligned with space-bearing,
+    dynamically-widthed cells, so it isn't round-trippable.
+
 Exit: 0 if every checkable block validates, 1 on any failure, 2 on setup error.
 Runnable locally with `python3 schemas/check_readme.py`; meant for CI alongside
 validate.py.
@@ -115,6 +121,32 @@ def c_human_labels(verb: str):
         if not out or out[-1] != lab:
             out.append(lab)
     return out
+
+
+def c_list_headers():
+    """The list table's column-header arrays from cli/common.c — two variants
+    (with / without the Volume column), each a plain string-literal array. Only
+    the HEADER ROW is contract: the body is whitespace-aligned with space-
+    bearing, dynamically-widthed cells, so it isn't round-trippable and isn't
+    checked."""
+    src = (ROOT / "cli" / "common.c").read_text()
+    arrs = re.findall(r'headers_(?:v|nv)\[[^\]]*\]\s*=\s*\{([^}]*)\}', src)
+    return [re.findall(r'"([^"]+)"', a) for a in arrs] or None
+
+
+def list_block(raw: str):
+    """If raw is the `$ mos list` table (not --json), return its header row as
+    a column-label list; else None. The header tokens are single words, so the
+    first output line splits cleanly on runs of 2+ spaces."""
+    lines = raw.splitlines()
+    if not any(re.match(r'\$\s*mos\s+list\b', ln) for ln in lines) or "--json" in raw:
+        return None
+    for ln in lines:
+        if ln.lstrip().startswith("$"):
+            continue
+        if ln.strip():
+            return re.split(r"\s{2,}", ln.strip())
+    return None
 
 
 def human_block(raw: str):
@@ -250,6 +282,18 @@ def main() -> int:
             else:
                 print(f"  ok   {loc}: {label}")
                 checked += 1
+
+        cols = list_block(raw)
+        if cols:
+            variants = c_list_headers()
+            if not variants:
+                print(f"  SKIP {loc}: list headers not found in cli/common.c")
+                skipped += 1
+            else:
+                report("list table header",
+                       [] if cols in variants else
+                       [f"header {cols} matches no cli/common.c variant {variants}"])
+            continue
 
         hb = human_block(raw)
         if hb:
