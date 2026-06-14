@@ -28,6 +28,17 @@ Two unrelated-looking ergonomic facts, one root cause.
 Both dissolve if the default verb is `state` and a bare selector routes
 straight to it.
 
+3. **`state` under-sells what is free.** `mos list` is N drives × a
+   *slice* of each drive's state; `state` of one drive already shows a
+   SUPERSET of that slice (Index, State, Volume, BSD, Vendor, Product,
+   Revision — plus Sense, Profile, Registry). But mos copies two
+   kernel-cached DR dicts per device (`DRDeviceCopyInfo` +
+   `DRDeviceCopyStatus`, src/mos_dr.c:163-175) and reads only FOUR keys
+   out of them (identity ×3 + media BSD name). The rest of those dicts —
+   blank/erasable, session/track counts, capacity blocks, physical
+   interconnect — is sitting there at zero device I/O, and `state` is the
+   verb that should fuse it.
+
 ## Decision
 
 **D1 — rename the verb `status` → `state`, clean break (no alias).**
@@ -47,6 +58,58 @@ scope. Do not let the grep noise pull them into the rename.
 early-return (usage + hint, EX_USAGE, no hardware touched — the
 2026-06-12 "an intent-free invocation must not touch hardware" rule).
 The distinction is intent: a selector IS the intent, bare `mos` is not.
+
+**D3 — `state` is the canonical cheap dashboard: enrich from the kernel
+cache, never from new commands.** This RESOLVES the previously-deferred
+cost-boundedness fork. `state` becomes the fused quick-look that surfaces
+the popular facts other verbs charge MMC commands for — but ONLY the ones
+the kernel already caches, read off the DR Info/Status dicts mos already
+copies. The cost line, crisp and enforceable: **`state` issues no device
+command beyond the state core's own (TUR ⊕ at most one GESN); every
+enrichment field is a kernel-cached dict read with zero device
+round-trip.** No new MMC walk, no new exclusive lock, no disc sector
+read. The deep, authoritative forms stay in their command-paying sources
+(`metadata`, `capacity`, `drive`, `features`); a cached fact in `state`
+and its commanded twin in `metadata` is projection-vs-source, and the
+staleness gap — DR's Status dict is "the kernel's GESN-fed snapshot, not
+guaranteed current" (2026-06-10-media-info-design.md:282) — is the honest
+price of cheapness, stated, with the subcommand as where ground truth is
+paid for. This is the TOC call inverted by intent, not contradicted: TOC
+stays on the convenience COMMAND because `metadata` is the authoritative
+record; `state`'s job is the cheap snapshot, so for `state` the cache is
+the correct source.
+
+### Enrichment inventory — cache-available (fold in) vs command-only (stays)
+
+| Fact | Kernel-cached? | Today's source | `state` action |
+|---|---|---|---|
+| vendor / product / revision | yes (Info) | state core (DR) | already shown |
+| media_class | derived from profile | state core | already shown |
+| **physical interconnect** (USB/SATA/TB) | yes (Info) | nowhere in mos | **ADD** — popular, currently unsurfaced |
+| **is_blank / is_erasable** | yes (Status MediaInfo) | `metadata` READ DISC INFO | **ADD** (snapshot) |
+| **session_count / track_count** | yes (Status MediaInfo) | `metadata` READ DISC INFO | **ADD** (snapshot) |
+| **blocks_used / free / overwritable** | yes (Status MediaInfo) | `capacity` (READ CAPACITY / RTI) | **ADD** (snapshot) |
+| tray_open | yes (Status, stale-able) | state core GESN | already encoded in the `state` enum — no separate field |
+| full disc_status (complete/appendable) | partial | `metadata` READ DISC INFO | NO — needs the command |
+| toc / disc_structure / cdtext / track_info | no | `metadata` commands | NO |
+| AACS / speeds / mechanical / error_recovery / serial | no | `drive` commands | NO |
+| full MMC feature list | no | `features` GET CONFIG | NO |
+
+Exact JSON shape of the added fields (a `media` sub-object? top-level
+scalars? a `cache_snapshot` envelope to mark them snapshot-not-commanded)
+is a v1-schema decision to settle when this lands — pre-tag mutable, so it
+costs schema + examples + negatives + emitter + README in one commit. The
+key design constraint: a consumer must be able to tell a snapshot field
+from a commanded one, so the staleness contract is legible (candidate:
+group them so their provenance is structural, not per-field prose).
+
+Verify items (Mac, falsifier-class per the hardware-role ADR): which
+Status MediaInfo keys populate in which media states (blank vs pressed vs
+unmounted); whether the single-open `state` path holds the Status dict or
+needs one extra `DRDeviceCopyStatus` (still zero device I/O); the
+staleness envelope per field (how stale `blocks_free` can read
+mid-format). Each surprise lands as a fixture + dated note, never a
+per-drive special-case.
 
 ## The dispatch rule: digit-gated, no verb-table lookup
 
@@ -90,14 +153,16 @@ handles them under the default verb.
 
 ## What does NOT change
 
-- **Cost-boundedness of `state` is a SEPARATE, still-open decision.**
-  This note renames the verb and adds the default subject; it does NOT
-  decide whether `state` may issue disc reads to enrich the dashboard
-  (the original fork). Recommendation stands: keep `state` cost-bounded
-  (one open + state query + one DA volume read, zero disc/capability
-  walks) — richer disc detail is `mos metadata`. Decide after the rename.
-- **No field, schema, or library-API change.** `mos.state.v1` is
-  byte-identical. This is verb-name + dispatch + help text only.
+- **`state` issues no new device command.** D3 enriches from the kernel
+  cache only — no MMC walk, no lock, no sector read. The state core's
+  command budget (TUR ⊕ at most one GESN) is unchanged; the deep records
+  (`metadata`, `capacity`, `drive`, `features`) remain the command-paying
+  authoritative sources.
+- **The rename + dispatch (D1/D2) carry NO schema change** — that slice
+  is verb-name + dispatch + help text only, `mos.state.v1` byte-identical.
+  The D3 enrichment IS a `mos.state.v1` field addition (pre-tag mutable)
+  and should land as its own commit AFTER D1/D2, so the rename is not
+  entangled with a schema change.
 - **Bare `mos` still errors** (no probing on intent-free invocation).
 - **The multi-drive default is unchanged**: `mos state` with no selector
   and >1 drive → EX_USAGE mini-list (cli/status.c:231); with exactly one
@@ -162,7 +227,18 @@ of misreading them as BSD names. Bare `mos` (zero args) is unchanged: it
 still errors without touching hardware (the 2026-06-12 no-probe-on-
 intent-free-invocation rule) — a selector is intent, bare `mos` is not.
 
-No field/schema/library-API change. The library's `*_status`
-identifiers (`mos_disc_status`, `mos_scsi_status`, the tray outcome) are
-a different axis and are untouched. Whether `state` may issue disc reads
-to enrich the dashboard is a separate, deliberately-deferred decision.
+The rename + dispatch carry no schema or library-API change. The
+library's `*_status` identifiers (`mos_disc_status`, `mos_scsi_status`,
+the tray outcome) are a different axis and are untouched.
+
+Coupled direction (D3, separate commit): `state` becomes the canonical
+cheap dashboard. It already shows a superset of `mos list`'s per-drive
+slice; it gains the popular facts other verbs charge MMC commands for —
+but only those the kernel already caches (blank/erasable, session/track
+counts, capacity blocks, physical interconnect — read off the DR
+Info/Status dicts mos already copies, src/mos_dr.c:163-175). Hard cost
+boundary: `state` issues no device command beyond the state core's own;
+all enrichment is zero-device-I/O cache reads. `metadata`/`capacity`/
+`drive`/`features` stay the command-paying authoritative sources; the
+cached-vs-commanded duplication is projection-vs-source with the DR
+snapshot's staleness stated, not hidden.
