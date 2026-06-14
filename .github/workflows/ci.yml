@@ -478,16 +478,27 @@ jobs:
 
   strict-adapter-build:
     # macOS adapter TUs compiled with stricter -Werror flags than the
-    # default CMake mos_warnings interface. As of v0.4.0-dev the list
-    # is: src/mos_scsi.c, src/mos_query.c, src/mos_watch.c, src/mos_state.c, src/mos_dr.c, src/mos_da.c,
-    # and the ADAPTER-FACING cli/ sources (cli/probe.c compiled with
-    # -DMOS_CLI_PROBE, the ON preprocessor path; the OFF path is compiled
-    # by the build-and-test job's MOS_CLI_PROBE=OFF leg). The pure-API
-    # CLI verbs (cli/metadata.c, cli/drive.c, cli/features.c) are
-    # deliberately NOT here: they reach the adapter only through the
+    # default CMake mos_warnings interface. The cli/ sources are GLOBBED
+    # (cli/*.c in the loop below), not hand-listed: the verb set's source
+    # of truth is main.c's dispatch table (and the cli/ directory itself),
+    # so a verb added or renamed there is picked up here with no edit —
+    # there is no second copy of the file list to keep in sync. The src/
+    # ADAPTER set is the one thing still listed explicitly, on purpose: it
+    # is the IOKit-linked layer (mos_scsi/query/watch/state/dr/da) that
+    # Linux CI cannot compile, and it changes only on a deliberate
+    # architectural event, unlike verbs which are added routinely.
+    #
+    # The glob also sweeps in the pure-API verbs (cli/metadata.c,
+    # cli/drive.c, cli/features.c, cli/tray.c, cli/capacity.c). That is
+    # safe, not a regression: they reach the adapter only through the
     # public mos.h API and contain no Apple SDK types, so this leg's
-    # SDK-signature -Werror classes cannot fire in them; they build under
-    # the default -Wall -Wextra in the build-and-test job.
+    # SDK-signature -Werror classes structurally cannot fire in them — and
+    # every -Werror here is a specific `-Werror=<class>`, never a blanket
+    # -Werror, so a stray -Wextra/-Wpedantic remark is a warning, not a
+    # failure. Compiling them is a few cheap standalone -c invocations that
+    # replace a curated exclude-list nobody could mechanically verify.
+    # cli/probe.c gets -DMOS_CLI_PROBE (the ON preprocessor path; the OFF
+    # path is compiled by the build-and-test job's MOS_CLI_PROBE=OFF leg).
     # The extra
     # flags target classes of bug that Linux CI can never see because
     # they involve Apple SDK signatures:
@@ -526,8 +537,7 @@ jobs:
           mkdir -p /tmp/strict-adapter
           for src in src/mos_scsi.c src/mos_query.c src/mos_watch.c src/mos_state.c \
                      src/mos_dr.c src/mos_da.c \
-                     cli/main.c cli/common.c cli/state.c cli/list.c \
-                     cli/watch.c cli/human.c cli/io.c cli/probe.c \
+                     cli/*.c \
                      tests/test_watch_lifetime.c; do
             obj="/tmp/strict-adapter/$(basename "$src" .c).o"
             echo "--- $src ---"
