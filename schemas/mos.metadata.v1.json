@@ -437,12 +437,13 @@
             "tracks": {
               "type": "array",
               "maxItems": 99,
-              "description": "Per-track song titles (CD-TEXT pack type 0x80, tracks 1..N, block 0). SPARSE and possibly empty: only tracks that carried a non-empty title appear, so track numbers may be non-contiguous and the array may be []. Per-track performer is not decoded.",
+              "description": "Per-track CD-TEXT: song title (pack 0x80) and performer (pack 0x81), tracks 1..N, block 0. SPARSE and possibly empty: only tracks carrying a non-empty title OR performer appear, so track numbers may be non-contiguous and the array may be []. Within an entry, title and performer are independently nullable (a various-artists disc may carry a performer but no per-track title, or vice versa).",
               "items": {
                 "type": "object",
                 "required": [
                   "track",
-                  "title"
+                  "title",
+                  "performer"
                 ],
                 "additionalProperties": false,
                 "properties": {
@@ -453,8 +454,18 @@
                     "description": "Track number (1-based, MMC track numbering)."
                   },
                   "title": {
-                    "type": "string",
-                    "description": "Track title (non-empty; absent titles are omitted from the array)."
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Track title, or null when this track carried no (non-empty) title."
+                  },
+                  "performer": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Track performer, or null when this track carried no (non-empty) performer."
                   }
                 }
               }

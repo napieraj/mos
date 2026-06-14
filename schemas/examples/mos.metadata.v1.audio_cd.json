@@ -56,10 +56,10 @@
       "title": "Kind of Blue",
       "performer": "Miles Davis",
       "tracks": [
-        { "track": 1, "title": "So What" },
-        { "track": 2, "title": "Freddie Freeloader" },
-        { "track": 3, "title": "Blue in Green" },
-        { "track": 4, "title": "All Blues" }
+        { "track": 1, "title": "So What", "performer": null },
+        { "track": 2, "title": "Freddie Freeloader", "performer": null },
+        { "track": 3, "title": "Blue in Green", "performer": null },
+        { "track": 4, "title": "All Blues", "performer": null }
       ]
     }
   }

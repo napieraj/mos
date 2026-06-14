@@ -349,13 +349,16 @@ struct mos_cdtext {
     bool    have;                       /* a non-empty album field present */
     char    title[MOS_CDTEXT_STR_CAP];     /* album Title (track 0, block 0); "" if absent */
     char    performer[MOS_CDTEXT_STR_CAP]; /* album Performer; "" if absent   */
-    /* Per-track titles (pack 0x80, tracks 1..N, block 0), indexed by
-       track number: track_titles[n-1] is track n's title ("" if that
-       track had none). track_count is the highest track number with a
-       non-empty title; entries above it are unset. Per-track PERFORMER
-       is deferred. */
+    /* Per-track titles (pack 0x80) and performers (pack 0x81), tracks
+       1..N, block 0, indexed by track number: track_titles[n-1] /
+       track_performers[n-1] are track n's strings ("" if that track had
+       none of that field — the arrays are independently sparse, e.g. a
+       various-artists disc carries per-track performers). track_count is
+       the highest track number carrying EITHER a non-empty title or
+       performer; entries above it are unset. */
     uint8_t track_count;
     char    track_titles[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
+    char    track_performers[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
 };
 
 /* Parse a CD-TEXT (format 0101b) reply into *out. True only when at

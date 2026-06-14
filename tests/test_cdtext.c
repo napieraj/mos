@@ -129,6 +129,58 @@ TEST(cdtext_decodes_per_track_titles)
     return 0;
 }
 
+TEST(cdtext_decodes_per_track_performers)
+{
+    /* Various-artists shape: a Title stream gives per-track titles and a
+       Performer stream (0x81) gives per-track performers. track_count is
+       the max over both; each field is independently sparse. */
+    static const uint8_t titles[] = {
+        'C','o','m','p', 0,            /* album title (track 0) */
+        'H','i','t',' ','1', 0,        /* track 1 */
+        'H','i','t',' ','2', 0,        /* track 2 */
+    };
+    static const uint8_t performers[] = {
+        'V','a','r', 0,                /* album performer (track 0) */
+        'B','a','n','d',' ','A', 0,    /* track 1 */
+        'B','a','n','d',' ','B', 0,    /* track 2 */
+    };
+    uint8_t b[4 + 6 * 18] = {0};
+    size_t off = put_stream(b, 4, 0x80, 0, titles, sizeof titles);
+    off = put_stream(b, off, 0x81, 0, performers, sizeof performers);
+    finalize(b, off - 4);
+
+    struct mos_cdtext c;
+    EXPECT(mos_internal_cdtext_parse(b, off, &c));
+    EXPECT(strcmp(c.title, "Comp") == 0);
+    EXPECT(strcmp(c.performer, "Var") == 0);
+    EXPECT_EQ(mos_cdtext_track_count(&c), 2);
+    EXPECT(strcmp(mos_cdtext_track_title(&c, 1), "Hit 1") == 0);
+    EXPECT(strcmp(mos_cdtext_track_performer(&c, 1), "Band A") == 0);
+    EXPECT(strcmp(mos_cdtext_track_performer(&c, 2), "Band B") == 0);
+    EXPECT(mos_cdtext_track_performer(&c, 3) == NULL);
+    return 0;
+}
+
+TEST(cdtext_per_track_performer_without_title)
+{
+    /* A track carrying a performer but no title still appears: count
+       covers either field, and the title accessor reads NULL there. */
+    static const uint8_t performers[] = {
+        0,                             /* album performer empty (track 0) */
+        'S','o','l','o', 0,            /* track 1 performer */
+    };
+    uint8_t b[4 + 2 * 18] = {0};
+    size_t off = put_stream(b, 4, 0x81, 0, performers, sizeof performers);
+    finalize(b, off - 4);
+
+    struct mos_cdtext c;
+    EXPECT(mos_internal_cdtext_parse(b, off, &c));    /* have via track perf */
+    EXPECT_EQ(mos_cdtext_track_count(&c), 1);
+    EXPECT(mos_cdtext_track_title(&c, 1) == NULL);     /* no title */
+    EXPECT(strcmp(mos_cdtext_track_performer(&c, 1), "Solo") == 0);
+    return 0;
+}
+
 TEST(cdtext_per_track_titles_without_album)
 {
     /* No album title: the stream starts at track 1 (first pack's Track
@@ -214,6 +266,8 @@ void register_cdtext_tests(void)
     RUN(cdtext_decodes_album_title_and_performer);
     RUN(cdtext_title_spans_two_packs);
     RUN(cdtext_decodes_per_track_titles);
+    RUN(cdtext_decodes_per_track_performers);
+    RUN(cdtext_per_track_performer_without_title);
     RUN(cdtext_per_track_titles_without_album);
     RUN(cdtext_double_byte_field_not_decoded);
     RUN(cdtext_non_zero_block_ignored);

@@ -425,13 +425,16 @@ struct mos_cdtext {
     bool    have;                       /* a non-empty album field present */
     char    title[MOS_CDTEXT_STR_CAP];     /* album Title (track 0, block 0); "" if absent */
     char    performer[MOS_CDTEXT_STR_CAP]; /* album Performer; "" if absent   */
-    /* Per-track titles (pack 0x80, tracks 1..N, block 0), indexed by
-       track number: track_titles[n-1] is track n's title ("" if that
-       track had none). track_count is the highest track number with a
-       non-empty title; entries above it are unset. Per-track PERFORMER
-       is deferred. */
+    /* Per-track titles (pack 0x80) and performers (pack 0x81), tracks
+       1..N, block 0, indexed by track number: track_titles[n-1] /
+       track_performers[n-1] are track n's strings ("" if that track had
+       none of that field — the arrays are independently sparse, e.g. a
+       various-artists disc carries per-track performers). track_count is
+       the highest track number carrying EITHER a non-empty title or
+       performer; entries above it are unset. */
     uint8_t track_count;
     char    track_titles[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
+    char    track_performers[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
 };
 
 /* Parse a CD-TEXT (format 0101b) reply into *out. True only when at
@@ -1858,10 +1861,10 @@ bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
  *
  * SCOPE — the album Title/Performer (the "which album is in the drive"
  * disambiguator, parallel to the mounted volume name) plus the per-track
- * TITLES (song names, for rip file-naming). All from the FIRST language
- * block (block 0) in single-byte charset. Deliberately NOT decoded here,
- * deferred with named falsifiers (design doc 2026-06-14 addenda):
- * per-track PERFORMER; the other field types (songwriter/composer/
+ * TITLES (song names) and PERFORMERS (for various-artists discs). All
+ * from the FIRST language block (block 0) in single-byte charset.
+ * Deliberately NOT decoded here, deferred with named falsifiers (design
+ * doc 2026-06-14 addenda): the other field types (songwriter/composer/
  * arranger/message/genre/ISRC/UPC/disc-id); additional language blocks
  * (1..7); and double-byte (DBCC) text (MS-JIS / 16-bit) — a DBCC field
  * reads as absent rather than being mis-decoded as Latin-1. CD-TEXT is
@@ -2010,7 +2013,7 @@ bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
                        out->track_titles, &out->track_count);
     cdtext_decode_type(buf, span, CDTEXT_PACK_PERFORMER,
                        out->performer, sizeof out->performer,
-                       NULL, NULL);     /* per-track performer not decoded */
+                       out->track_performers, &out->track_count);
 
     /* "have" is the useful-identity gate: an empty result (no album
        field, no per-track title) is not identity. Return false → the
@@ -2746,6 +2749,13 @@ const char *mos_cdtext_track_title(const mos_cdtext *c, uint8_t track)
     if (!c || track < 1 || track > MOS_CDTEXT_MAX_TRACKS) return NULL;
     const char *t = c->track_titles[track - 1];
     return t[0] ? t : NULL;
+}
+
+const char *mos_cdtext_track_performer(const mos_cdtext *c, uint8_t track)
+{
+    if (!c || track < 1 || track > MOS_CDTEXT_MAX_TRACKS) return NULL;
+    const char *p = c->track_performers[track - 1];
+    return p[0] ? p : NULL;
 }
 
 /* ---- mos_physical_structure accessors (mos_query_physical_structure) - *

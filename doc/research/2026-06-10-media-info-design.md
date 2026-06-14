@@ -707,12 +707,30 @@ is display text, not a fingerprint). Sparse mid-stream gaps (a double NUL
 = an untitled track between titled ones) are handled correctly: the empty
 slot reads NULL, the surrounding tracks keep their numbers.
 
-**Still deferred:** per-track PERFORMER (the 0x81 stream is walked only
-for its album-level track-0 string; the per-track array is title-only),
-the other field types, and multi-language blocks. The 99×64 per-track
-buffer caps a title at 63 bytes — generous for song names; longer
-truncate. No in-repo CD-TEXT capture yet (spec-derived test packs); a
-real multi-track CD-TEXT reply remains the fixture-acquisition target.
+**Still deferred:** the other field types, and multi-language blocks.
+The 99×64 per-track buffer caps a title at 63 bytes — generous for song
+names; longer truncate. No in-repo CD-TEXT capture yet (spec-derived
+test packs); a real multi-track CD-TEXT reply remains the
+fixture-acquisition target.
+
+### CD-TEXT per-track performers shipped (2026-06-14)
+
+Symmetric completion of the per-track surface: the 0x81 (Performer)
+stream, already walked for its album-level track-0 string, now also
+stores its per-track strings into a second sparse array
+(`track_performers`), for various-artists discs. The two per-track
+arrays are independently sparse and share one `track_count` (the highest
+track carrying EITHER a title or a performer), so a consumer iterates
+1..count once and queries each field via
+`mos_cdtext_track_title` / `_track_performer` (either may be NULL at a
+given track). In the JSON `tracks` array an entry appears when it has a
+title OR a performer, with both fields independently nullable — so
+`title` lost its non-null guarantee within an item (a performer-only
+track emits `title: null`). The struct now holds two 99×64 byte arrays
+(~12.6 KB/handle), the dominant term in the handle's size; fixed arrays
+match house style (the TOC is the same shape). Remaining CD-TEXT work is
+the non-title/performer field types and multi-language blocks, each a
+fresh argument here against an observed need.
 
 ## BG Format Status shipped — disc_info.bg_format (2026-06-14)
 

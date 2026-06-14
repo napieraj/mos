@@ -228,21 +228,25 @@ static void emit_json(const metadata_doc *d)
         if (ti) mos_cli_json_str(stdout, ti); else fputs("null", stdout);
         fputs(",\n      \"performer\": ", stdout);
         if (pf) mos_cli_json_str(stdout, pf); else fputs("null", stdout);
-        /* Per-track titles (song names), sparse → only tracks with a
-           title are emitted. Empty array when none. */
+        /* Per-track title + performer, sparse → only tracks carrying at
+           least one are emitted (each field null when absent). Empty
+           array when none. */
         fputs(",\n      \"tracks\": [", stdout);
         uint8_t tc = mos_cdtext_track_count(d->ct);
         bool first = true;
         for (uint8_t tn = 1; tn <= tc; tn++) {
             const char *tt = mos_cdtext_track_title(d->ct, tn);
-            if (!tt) continue;
+            const char *tp = mos_cdtext_track_performer(d->ct, tn);
+            if (!tt && !tp) continue;
             fprintf(stdout, "%s\n        {\"track\": %u, \"title\": ",
                     first ? "" : ",", tn);
-            mos_cli_json_str(stdout, tt);
+            if (tt) mos_cli_json_str(stdout, tt); else fputs("null", stdout);
+            fputs(", \"performer\": ", stdout);
+            if (tp) mos_cli_json_str(stdout, tp); else fputs("null", stdout);
             fputs("}", stdout);
             first = false;
         }
-        if (first) fputs("]", stdout);          /* no per-track titles */
+        if (first) fputs("]", stdout);          /* no per-track entries */
         else       fputs("\n      ]", stdout);
         fputs("\n    }", stdout);
     } else {
@@ -375,19 +379,20 @@ static void emit_human(const metadata_doc *d)
     cdt_esc[0] = 0;
     const char *ct_title = d->ct ? mos_cdtext_title(d->ct) : NULL;
     const char *ct_perf  = d->ct ? mos_cdtext_performer(d->ct) : NULL;
-    uint8_t cdt_ntitles = 0;            /* per-track titles present (sparse) */
+    uint8_t cdt_ntracks = 0;            /* per-track entries present (sparse) */
     if (d->ct) {
         uint8_t tc = mos_cdtext_track_count(d->ct);
         for (uint8_t tn = 1; tn <= tc; tn++)
-            if (mos_cdtext_track_title(d->ct, tn)) cdt_ntitles++;
+            if (mos_cdtext_track_title(d->ct, tn) ||
+                mos_cdtext_track_performer(d->ct, tn)) cdt_ntracks++;
     }
-    if (ct_title || ct_perf || cdt_ntitles) {
+    if (ct_title || ct_perf || cdt_ntracks) {
         char suffix[24];
         suffix[0] = 0;
-        if (cdt_ntitles)
-            snprintf(suffix, sizeof suffix, "%s%u track title%s",
+        if (cdt_ntracks)
+            snprintf(suffix, sizeof suffix, "%s%u track entr%s",
                      (ct_title || ct_perf) ? "  " : "",
-                     cdt_ntitles, cdt_ntitles == 1 ? "" : "s");
+                     cdt_ntracks, cdt_ntracks == 1 ? "y" : "ies");
         snprintf(cdt_buf, sizeof cdt_buf, "%s%s%s%s",
                  ct_title ? ct_title : "",
                  (ct_title && ct_perf) ? " - " : "",
@@ -396,7 +401,7 @@ static void emit_human(const metadata_doc *d)
         (void)mos_safe_ascii(cdt_buf, cdt_esc, sizeof cdt_esc);
     }
     pairs[n++] = (mos_cli_human_pair){
-        "CD-Text", (ct_title || ct_perf || cdt_ntitles) ? cdt_esc : NULL };
+        "CD-Text", (ct_title || ct_perf || cdt_ntracks) ? cdt_esc : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }

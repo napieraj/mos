@@ -15,10 +15,10 @@
  *
  * SCOPE — the album Title/Performer (the "which album is in the drive"
  * disambiguator, parallel to the mounted volume name) plus the per-track
- * TITLES (song names, for rip file-naming). All from the FIRST language
- * block (block 0) in single-byte charset. Deliberately NOT decoded here,
- * deferred with named falsifiers (design doc 2026-06-14 addenda):
- * per-track PERFORMER; the other field types (songwriter/composer/
+ * TITLES (song names) and PERFORMERS (for various-artists discs). All
+ * from the FIRST language block (block 0) in single-byte charset.
+ * Deliberately NOT decoded here, deferred with named falsifiers (design
+ * doc 2026-06-14 addenda): the other field types (songwriter/composer/
  * arranger/message/genre/ISRC/UPC/disc-id); additional language blocks
  * (1..7); and double-byte (DBCC) text (MS-JIS / 16-bit) — a DBCC field
  * reads as absent rather than being mis-decoded as Latin-1. CD-TEXT is
@@ -168,7 +168,7 @@ bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
                        out->track_titles, &out->track_count);
     cdtext_decode_type(buf, span, CDTEXT_PACK_PERFORMER,
                        out->performer, sizeof out->performer,
-                       NULL, NULL);     /* per-track performer not decoded */
+                       out->track_performers, &out->track_count);
 
     /* "have" is the useful-identity gate: an empty result (no album
        field, no per-track title) is not identity. Return false → the

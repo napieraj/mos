@@ -249,22 +249,23 @@ disc the generic `Audio CD`:
 "cdtext": {                                         // READ TOC fmt 0101b, CD-only
   "title": "Kind of Blue",                          // album (track 0, block 0)
   "performer": "Miles Davis",
-  "tracks": [                                        // per-track song titles (sparse)
-    { "track": 1, "title": "So What" },
-    { "track": 2, "title": "Freddie Freeloader" }
+  "tracks": [                                        // per-track, sparse
+    { "track": 1, "title": "So What", "performer": null },
+    { "track": 2, "title": "Freddie Freeloader", "performer": null }
   ]
 }
 ```
 
 It is `null` on non-CD media or a CD that publishes no CD-TEXT. Scope:
 the first language block's album Title/Performer and the per-track song
-`tracks` (for rip file-naming), single-byte charset — a double-byte
-(MS-JIS/16-bit) field reads `null`/absent rather than mis-decoded, and
-per-track performer, the other CD-TEXT field types, and additional
-language blocks are not decoded. `tracks` is sparse (only titled tracks
-appear) and may be `[]`. CD-TEXT is best-effort display text, not a
-fingerprint: audio-CD dedup keys ride on `disc.toc`, the fail-closed
-identity primitive.
+`tracks` — title and performer each (the latter for various-artists
+discs), single-byte charset. A double-byte (MS-JIS/16-bit) field reads
+`null`/absent rather than mis-decoded, and the other CD-TEXT field types
+and additional language blocks are not decoded. `tracks` is sparse (a
+track appears only if it carries a title or performer; each field is
+independently nullable) and may be `[]`. CD-TEXT is best-effort display
+text, not a fingerprint: audio-CD dedup keys ride on `disc.toc`, the
+fail-closed identity primitive.
 
 ### Drive (static facts)
 

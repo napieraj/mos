@@ -521,8 +521,9 @@ static void fuzz_cdtext(uint64_t iters)
                 abort();
             }
             for (unsigned t = 0; t < MOS_CDTEXT_MAX_TRACKS; t++) {
-                if (c.track_titles[t][MOS_CDTEXT_TRACK_TITLE_CAP - 1] != 0) {
-                    fprintf(stderr, "FUZZ FAIL: cdtext track title %u not "
+                if (c.track_titles[t][MOS_CDTEXT_TRACK_TITLE_CAP - 1] != 0 ||
+                    c.track_performers[t][MOS_CDTEXT_TRACK_TITLE_CAP - 1] != 0) {
+                    fprintf(stderr, "FUZZ FAIL: cdtext track row %u not "
                             "terminated (len=%zu)\n", t, len);
                     abort();
                 }
