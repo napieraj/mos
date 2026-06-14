@@ -113,27 +113,48 @@ open question. Everything below stays the command-paying source's.
 `media_class` is already shown (derived from profile); `tray_open` is
 already encoded in the `state` enum, not a separate field.
 
-### The cost-line fork (the one real open decision in D3)
+### Cost line — RESOLVED: `state` already commands and locks, so enrich eagerly (one-shot)
 
-How cheap must `state` stay?
+The a/b/c fork drafted here rested on a false premise — that `state` has a
+"zero-command, one-open" hot path worth protecting. It does not.
+`mos_state_core.c` ALWAYS issues a convenience TUR (`:72`, the single-shot
+presence probe) and, on the not-ready branch, takes exclusive access and
+fires the **raw GESN** tray probe (`:13-14`, `:136` — the one raw CDB,
+under the §5.5 lock). So `state` is already a command-issuing,
+sometimes-locking verb; the Tier-1 lock-free convenience reads are
+INCREMENTAL within a modality it already uses, and strictly CHEAPER than
+the GESN branch it already runs (no lock).
 
-- **(a) Strict** — Tier 0 only. Zero device commands beyond the state
-  core's own; thin but instant, every field a cache read.
-- **(b) Eager-rich** — Tier 0 + always issue the Tier-1 lock-free reads.
-  Fuses capacity/speeds/mechanical into every `state`, at ~3–4 extra
-  no-lock commands per call — abandons the "hot path is one open" property
-  the original cli-design deliberately kept (state.v1 = "static capability
-  facts deliberately excluded").
-- **(c) Cheap-by-default, opt-in rich** — Tier 0 always; a flag
-  (`--full` / `--enrich`) adds Tier 1. Default `state` stays instant; the
-  fused dashboard is one flag away. (Recommended.)
+**Decision: one-shot `mos state` enriches EAGERLY.** It issues the
+applicable Tier-1 reads (capacity/NWA, speeds, mechanical), profile-class-
+gated exactly as `metadata.c` gates today (no read fired against media
+that must reject it), each fail-soft to null (the standing enrichment
+doctrine — a failed read is a null field, never an error). **No `--full`
+flag:** the categorical reason to hide enrichment behind a flag is gone,
+and a latency escape hatch is not worth a second output mode pre-tag.
 
-Whichever wins: the JSON must let a consumer tell a snapshot field from a
-commanded one (candidate: group by provenance so it is structural, not
-per-field prose), and `metadata`/`capacity`/`drive` stay the authoritative
-sources — the cached-vs-commanded duplication is projection-vs-source with
-DR's staleness ("the kernel's GESN-fed snapshot, not guaranteed current",
+The one real residual is LATENCY (each read is a device round-trip), and
+it is handled by the VERB SPLIT, not a flag: **`watch` / `mos.event.v1`
+stays Tier-0** (state-core/cache only). The event stream is the actual hot
+loop — polled every `MOS_WATCH_STABLE_MS` — and must not multiply
+round-trips or bloat the event schema. Enrichment is a property of the
+on-demand `state` SNAPSHOT, not the stream: rich one-shot `state`, lean
+`watch`.
+
+Independent of the tier decision: the JSON must let a consumer tell a
+snapshot (cached) field from a commanded one (candidate: group by
+provenance so it is structural, not per-field prose), and
+`metadata`/`capacity`/`drive` stay the authoritative sources — the
+cached-vs-commanded duplication is projection-vs-source with DR's
+staleness ("the kernel's GESN-fed snapshot, not guaranteed current",
 media-info-design.md:282) stated, not hidden.
+
+**CD cached full-TOC (`kIOCDMediaTOCKey`): BANKED, not built** (owner's
+call). Survey §6 rates it CD-only, stale-able, fallback-grade, and it
+needs a separate CDTOC + MSF→LBA parser; the universal convenience RTOC
+stays the TOC route. It is the kernel-authored fallback to reach for only
+if the convenience RTOC disappoints on real hardware — a hardware-
+contingent option, not a stage deliverable.
 
 Verify items (Mac, falsifier-class per the hardware-role ADR): which DR
 Status MediaInfo keys populate in which media states (blank vs pressed vs
@@ -186,11 +207,14 @@ handles them under the default verb.
 
 ## What does NOT change
 
-- **`state` never takes a lock, needs no elevation, reads no sectors.**
-  Tier-0 enrichment is zero-command cache; whether `state` also issues the
-  Tier-1 lock-free convenience reads is the open cost-line fork (D3,
-  options a/b/c). Either way `metadata`/`capacity`/`drive`/`features`
-  remain the command-paying authoritative sources.
+- **`state` reads no sectors and needs no elevation** — but it is NOT
+  command-free or lock-free: it already issues a convenience TUR every
+  query and takes exclusive access for the raw GESN on the not-ready tray
+  fork (`mos_state_core.c`). One-shot `state` enriches eagerly with the
+  Tier-1 lock-free reads (profile-gated, fail-soft) — incremental within
+  that modality and cheaper than the GESN branch. `watch`/`event.v1` stays
+  Tier-0; `metadata`/`capacity`/`drive`/`features` stay the authoritative
+  sources.
 - **The rename + dispatch (D1/D2) carry NO schema change** — that slice
   is verb-name + dispatch + help text only, `mos.state.v1` byte-identical.
   The D3 enrichment IS a `mos.state.v1` field addition (pre-tag mutable)
@@ -267,12 +291,14 @@ the tray outcome) are a different axis and are untouched.
 Coupled direction (D3, separate commit): `state` becomes the canonical
 cheap dashboard. It already shows a superset of `mos list`'s per-drive
 slice. Tier 0 (zero command) folds in the DR-cache fields — interconnect,
-blank/erasable, session/track counts, capacity blocks — plus the CD-only
-cached full-TOC (`kIOCDMediaTOCKey`/`IOCDMedia`, richer than the
-convenience RTOC but CD-only and fallback-grade per survey §6). Tier 1 —
+blank/erasable, session/track counts, capacity blocks. Tier 1 —
 capacity/NWA, speeds, mechanical via the lock-free convenience methods
-(`ReadTrackInformation`/`GetPerformance`/`ModeSense10`) — is the open
-cost-line fork (strict / eager / opt-in `--full`). `metadata`/`capacity`/
-`drive`/`features` stay the command-paying authoritative sources; the
-cached-vs-commanded duplication is projection-vs-source with the DR
-snapshot's staleness stated, not hidden.
+(`ReadTrackInformation`/`GetPerformance`/`ModeSense10`) — lands EAGERLY in
+one-shot `state` (profile-gated, fail-soft): `state` already issues TUR +
+the raw GESN tray probe, so the lock-free Tier-1 reads are incremental and
+cheaper than the GESN branch, and no `--full` flag is needed.
+`watch`/`event.v1` stays Tier-0 (the hot loop). The CD cached full-TOC
+(`kIOCDMediaTOCKey`) is banked as a fallback, not built. `metadata`/
+`capacity`/`drive`/`features` stay the command-paying authoritative
+sources; the cached-vs-commanded duplication is projection-vs-source with
+the DR snapshot's staleness stated, not hidden.
