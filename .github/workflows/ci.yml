@@ -479,7 +479,7 @@ jobs:
   strict-adapter-build:
     # macOS adapter TUs compiled with stricter -Werror flags than the
     # default CMake mos_warnings interface. As of v0.4.0-dev the list
-    # is: src/mos_scsi.c, src/mos_watch.c, src/mos_state.c, src/mos_dr.c, src/mos_da.c,
+    # is: src/mos_scsi.c, src/mos_query.c, src/mos_watch.c, src/mos_state.c, src/mos_dr.c, src/mos_da.c,
     # and the ADAPTER-FACING cli/ sources (cli/probe.c compiled with
     # -DMOS_CLI_PROBE, the ON preprocessor path; the OFF path is compiled
     # by the build-and-test job's MOS_CLI_PROBE=OFF leg). The pure-API
@@ -524,7 +524,7 @@ jobs:
         run: |
           set -e
           mkdir -p /tmp/strict-adapter
-          for src in src/mos_scsi.c src/mos_watch.c src/mos_state.c \
+          for src in src/mos_scsi.c src/mos_query.c src/mos_watch.c src/mos_state.c \
                      src/mos_dr.c src/mos_da.c \
                      cli/main.c cli/common.c cli/status.c cli/list.c \
                      cli/watch.c cli/human.c cli/io.c cli/probe.c \

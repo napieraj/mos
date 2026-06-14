@@ -1071,6 +1071,13 @@ mos_error mos_internal_mmc_test_unit_ready    (mos_handle_t *h,
                                                uint8_t sense[18]);
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile);
 
+/* Thin shim over the pure IOReturn→mos_error map (mos_pure.c). Defined in
+   mos_scsi.c; exposed so the typed query surface (mos_query.c) maps
+   transport failures identically to the convenience wrappers and
+   mos_raw_cdb. CHECK CONDITION rides task status/sense, not IOReturn, so
+   this maps only transport-layer failures. */
+mos_error mos_internal_ioreturn_to_mos_error(IOReturn rc);
+
 /* Re-resolve the handle's media-scoped identity (whole-disk bsd_unit,
    media_id swap fingerprint, kernel-cached size/block bytes) from its
    stable drive service — the per-query freshness the media-scoped queries
@@ -5761,8 +5768,10 @@ mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
 
 /* ==== src/mos_scsi.c ==== */
 /*
- * mos_scsi.c — IOKit lifecycle, enumeration, MMC convenience wrappers.
- * The only IOKit-linked file in the library.
+ * mos_scsi.c — IOKit lifecycle, enumeration, the MMC convenience
+ * primitives the state core uses (TUR / current-profile / tray-state),
+ * and the one raw-CDB path (mos_raw_cdb — the sole ObtainExclusiveAccess
+ * site). The typed mos_query_* verb surface lives in mos_query.c.
  *
  * All internal functions must be `static` or `mos_internal_`-prefixed;
  * this library is statically linked into downstream projects (HandBrake
@@ -6289,7 +6298,7 @@ _Static_assert((int)MOS_SCSI_STATUS_GOOD == (int)kSCSITaskStatus_GOOD,
    fixture-tested without IOKit — tests/test_ioreturn.c covers every code).
    CHECK CONDITION rides taskStatus/sense, not IOReturn, so this maps only
    transport-layer failures. */
-static mos_error mos_internal_ioreturn_to_mos_error(IOReturn rc)
+mos_error mos_internal_ioreturn_to_mos_error(IOReturn rc)
 {
     return mos_internal_ioreturn_to_error((int32_t)rc);
 }
@@ -6424,6 +6433,182 @@ mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profil
     *profile = parsed;
     return MOS_OK;
 }
+
+/* Open-time directory identity, exposed for the drive verb: zero
+   commands, same borrowed-string terms as the state result's copies
+   (which point into these same buffers). */
+const char *mos_handle_vendor(const mos_handle_t *h)
+{
+    return (h && h->vendor_str[0]) ? h->vendor_str : NULL;
+}
+
+const char *mos_handle_product(const mos_handle_t *h)
+{
+    return (h && h->product_str[0]) ? h->product_str : NULL;
+}
+
+const char *mos_handle_revision(const mos_handle_t *h)
+{
+    return (h && h->revision_str[0]) ? h->revision_str : NULL;
+}
+
+uint64_t mos_handle_registry_id(const mos_handle_t *h)
+{
+    return h ? h->drive_registry_id : 0;
+}
+
+/* The open-time INQUIRY (and its fixed-width SPC-4 string copier with
+   per-call-site _Static_assert width pins) retired with the DR pivot:
+   identity is directory data from DRDeviceCopyInfo — the same INQUIRY
+   bytes, pre-parsed by the framework — copied through the bounded
+   truncating seam in mos_dr.c. The output layer's escaping
+   (mos_cli_json_str / mos_cli_safe_ascii) is unchanged: it guards the
+   terminal and the JSON encoding against hostile bytes regardless of
+   which substrate produced the string. */
+
+/* ---- Raw CDB (diagnostic only) ------------------------------------- */
+
+mos_error mos_raw_cdb(mos_handle_t *h,
+                      const uint8_t *cdb, size_t cdb_len,
+                      void *data_buf, size_t data_len,
+                      mos_xfer_dir direction,
+                      uint32_t timeout_ms,
+                      uint32_t *scsi_task_status,
+                      uint8_t   sense[18],
+                      uint64_t *bytes_transferred)
+{
+    /* SetCommandDescriptorBlock only accepts 6, 10, 12, or 16 (see
+       kSCSICDBSize_* in SCSITask.h). Reject other lengths at the API
+       boundary so callers get MOS_ERR_INVALID_ARG instead of an opaque
+       execute-time failure. */
+    if (!h || !h->mmc || !cdb || !scsi_task_status || !sense)
+        return MOS_ERR_INVALID_ARG;
+    if (cdb_len != 6 && cdb_len != 10 && cdb_len != 12 && cdb_len != 16)
+        return MOS_ERR_INVALID_ARG;
+    if (direction != MOS_XFER_NONE &&
+        direction != MOS_XFER_FROM_TARGET &&
+        direction != MOS_XFER_TO_TARGET)
+        return MOS_ERR_INVALID_ARG;
+    if (direction == MOS_XFER_NONE) {
+        if (data_len != 0) return MOS_ERR_INVALID_ARG;
+    } else {
+        if (data_len == 0 || data_buf == NULL) return MOS_ERR_INVALID_ARG;
+    }
+    /* Reject timeout 0 — SetTimeoutDuration reads it as "Wait Forever",
+       which would hang on a non-responsive command. */
+    if (timeout_ms == 0)
+        return MOS_ERR_INVALID_ARG;
+
+    /* Zero outputs after arg validation: any error path below returns non-OK
+       but leaves consumers who inspect buffers without checking the return a
+       deterministic zero state. Validation failures above leave outputs
+       untouched — "never started", caller's buffers presumed uninitialized. */
+    *scsi_task_status = 0;
+    memset(sense, 0, 18);
+    if (bytes_transferred) *bytes_transferred = 0;
+
+    /* Lazily acquire the SCSITaskDeviceInterface. */
+    if (!h->std) {
+        h->std = (*h->mmc)->GetSCSITaskDeviceInterface(h->mmc);
+        if (!h->std) return MOS_ERR_DRIVER_REJECTED;
+    }
+
+    /* Raw CDB requires exclusive access. Route the IOReturn through the
+       shared mapper, like every other site in this file. */
+    if (!h->have_exclusive) {
+        IOReturn rx = (*h->std)->ObtainExclusiveAccess(h->std);
+        if (rx != kIOReturnSuccess)
+            return mos_internal_ioreturn_to_mos_error(rx);
+        h->have_exclusive = true;
+    }
+
+    SCSITaskInterface **t = (*h->std)->CreateSCSITask(h->std);
+    if (!t) {
+        /* Release the lock — by the function's invariant it was
+           acquired above (every exit path below clears have_exclusive,
+           so it is always false on entry; the conditional acquire
+           exists for that documented invariant, not for a held-lock
+           entry case). Holding it serves no purpose without a task. */
+        (*h->std)->ReleaseExclusiveAccess(h->std);
+        h->have_exclusive = false;
+        return MOS_ERR_IO;
+    }
+
+    /* Check each Set* IOReturn — ignoring them ships a malformed task and
+       turns into a baffling execute-time error. Cleanup is identical, so
+       all three converge on one label. */
+    IOReturn sr;
+    sr = (*t)->SetCommandDescriptorBlock(t, (UInt8 *)cdb, (UInt8)cdb_len);
+    if (sr != kIOReturnSuccess) goto setup_failed;
+
+    IOVirtualRange sg = { (IOVirtualAddress)data_buf, (IOByteCount)data_len };
+    sr = (*t)->SetScatterGatherEntries(t,
+        data_len ? &sg : NULL,
+        (UInt8)(data_len ? 1 : 0),
+        (UInt64)data_len,
+        (UInt8)direction);
+    if (sr != kIOReturnSuccess) goto setup_failed;
+
+    sr = (*t)->SetTimeoutDuration(t, timeout_ms);
+    if (sr != kIOReturnSuccess) goto setup_failed;
+
+    /* sense was already zeroed in the zero-outputs block after arg
+       validation; nothing between there and here writes it. */
+    SCSI_Sense_Data sense_struct = {0};
+    SCSITaskStatus   st           = 0;
+    UInt64           xferred      = 0;
+
+    IOReturn er = (*t)->ExecuteTaskSync(t, &sense_struct, &st, &xferred);
+    (*t)->Release(t);
+
+    /* Release before returning: a diagnostic command must not hold the drive
+       locked for the handle's lifetime (would block Finder / MakeMKV / DA
+       mounts). Released on both success and IO-failure paths; only the
+       InvalidArg exits skip it, having never acquired. */
+    (*h->std)->ReleaseExclusiveAccess(h->std);
+    h->have_exclusive = false;
+
+    /* On transport failure, outputs stay at the zeros set above (defined,
+       not stack garbage); st/sense/xferred are not copied. Whether the API
+       populates anything useful before a non-success IOReturn is undocumented
+       — revisit under the v0.4 hardware-gate fixtures. */
+    if (er != kIOReturnSuccess) {
+        return mos_internal_ioreturn_to_mos_error(er);
+    }
+
+    *scsi_task_status = (uint32_t)st;
+    memcpy(sense, &sense_struct, 18);
+    if (bytes_transferred) *bytes_transferred = (uint64_t)xferred;
+
+    return MOS_OK;
+
+setup_failed:
+    (*t)->Release(t);
+    (*h->std)->ReleaseExclusiveAccess(h->std);
+    h->have_exclusive = false;
+    return mos_internal_ioreturn_to_mos_error(sr);
+}
+
+/* ==== src/mos_query.c ==== */
+/*
+ * mos_query.c — the typed MMC query surface. Each mos_query_* verb issues
+ * one MMCDeviceInterface convenience command, hands the raw reply to a pure
+ * decoder in src/mos_<feature>.c, caches the result on the handle, and
+ * returns a borrowed pointer. Split out of mos_scsi.c (which keeps the
+ * device handle, enumeration, open/close, the MMC convenience primitives
+ * the state core uses, and the one raw-CDB path) so the file that owns the
+ * wire stays separate from the verb catalogue.
+ *
+ * Every command here is a NON-EXCLUSIVE convenience method: none takes
+ * ObtainExclusiveAccess. That call site stays solely in mos_scsi.c's
+ * mos_raw_cdb (AGENTS scope-doctrine layer 1 / §3) — this file adds none.
+ *
+ * Internal symbols are `static` or `mos_internal_`-prefixed; same
+ * static-link hygiene as the rest of the library (see mos_scsi.c).
+ */
+
+
+#include <string.h>
 
 mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out)
 {
@@ -6897,161 +7082,6 @@ mos_error mos_query_error_recovery(mos_handle_t *h,
     }
     *out = &h->error_recovery;
     return MOS_OK;
-}
-
-/* Open-time directory identity, exposed for the drive verb: zero
-   commands, same borrowed-string terms as the state result's copies
-   (which point into these same buffers). */
-const char *mos_handle_vendor(const mos_handle_t *h)
-{
-    return (h && h->vendor_str[0]) ? h->vendor_str : NULL;
-}
-
-const char *mos_handle_product(const mos_handle_t *h)
-{
-    return (h && h->product_str[0]) ? h->product_str : NULL;
-}
-
-const char *mos_handle_revision(const mos_handle_t *h)
-{
-    return (h && h->revision_str[0]) ? h->revision_str : NULL;
-}
-
-uint64_t mos_handle_registry_id(const mos_handle_t *h)
-{
-    return h ? h->drive_registry_id : 0;
-}
-
-/* The open-time INQUIRY (and its fixed-width SPC-4 string copier with
-   per-call-site _Static_assert width pins) retired with the DR pivot:
-   identity is directory data from DRDeviceCopyInfo — the same INQUIRY
-   bytes, pre-parsed by the framework — copied through the bounded
-   truncating seam in mos_dr.c. The output layer's escaping
-   (mos_cli_json_str / mos_cli_safe_ascii) is unchanged: it guards the
-   terminal and the JSON encoding against hostile bytes regardless of
-   which substrate produced the string. */
-
-/* ---- Raw CDB (diagnostic only) ------------------------------------- */
-
-mos_error mos_raw_cdb(mos_handle_t *h,
-                      const uint8_t *cdb, size_t cdb_len,
-                      void *data_buf, size_t data_len,
-                      mos_xfer_dir direction,
-                      uint32_t timeout_ms,
-                      uint32_t *scsi_task_status,
-                      uint8_t   sense[18],
-                      uint64_t *bytes_transferred)
-{
-    /* SetCommandDescriptorBlock only accepts 6, 10, 12, or 16 (see
-       kSCSICDBSize_* in SCSITask.h). Reject other lengths at the API
-       boundary so callers get MOS_ERR_INVALID_ARG instead of an opaque
-       execute-time failure. */
-    if (!h || !h->mmc || !cdb || !scsi_task_status || !sense)
-        return MOS_ERR_INVALID_ARG;
-    if (cdb_len != 6 && cdb_len != 10 && cdb_len != 12 && cdb_len != 16)
-        return MOS_ERR_INVALID_ARG;
-    if (direction != MOS_XFER_NONE &&
-        direction != MOS_XFER_FROM_TARGET &&
-        direction != MOS_XFER_TO_TARGET)
-        return MOS_ERR_INVALID_ARG;
-    if (direction == MOS_XFER_NONE) {
-        if (data_len != 0) return MOS_ERR_INVALID_ARG;
-    } else {
-        if (data_len == 0 || data_buf == NULL) return MOS_ERR_INVALID_ARG;
-    }
-    /* Reject timeout 0 — SetTimeoutDuration reads it as "Wait Forever",
-       which would hang on a non-responsive command. */
-    if (timeout_ms == 0)
-        return MOS_ERR_INVALID_ARG;
-
-    /* Zero outputs after arg validation: any error path below returns non-OK
-       but leaves consumers who inspect buffers without checking the return a
-       deterministic zero state. Validation failures above leave outputs
-       untouched — "never started", caller's buffers presumed uninitialized. */
-    *scsi_task_status = 0;
-    memset(sense, 0, 18);
-    if (bytes_transferred) *bytes_transferred = 0;
-
-    /* Lazily acquire the SCSITaskDeviceInterface. */
-    if (!h->std) {
-        h->std = (*h->mmc)->GetSCSITaskDeviceInterface(h->mmc);
-        if (!h->std) return MOS_ERR_DRIVER_REJECTED;
-    }
-
-    /* Raw CDB requires exclusive access. Route the IOReturn through the
-       shared mapper, like every other site in this file. */
-    if (!h->have_exclusive) {
-        IOReturn rx = (*h->std)->ObtainExclusiveAccess(h->std);
-        if (rx != kIOReturnSuccess)
-            return mos_internal_ioreturn_to_mos_error(rx);
-        h->have_exclusive = true;
-    }
-
-    SCSITaskInterface **t = (*h->std)->CreateSCSITask(h->std);
-    if (!t) {
-        /* Release the lock — by the function's invariant it was
-           acquired above (every exit path below clears have_exclusive,
-           so it is always false on entry; the conditional acquire
-           exists for that documented invariant, not for a held-lock
-           entry case). Holding it serves no purpose without a task. */
-        (*h->std)->ReleaseExclusiveAccess(h->std);
-        h->have_exclusive = false;
-        return MOS_ERR_IO;
-    }
-
-    /* Check each Set* IOReturn — ignoring them ships a malformed task and
-       turns into a baffling execute-time error. Cleanup is identical, so
-       all three converge on one label. */
-    IOReturn sr;
-    sr = (*t)->SetCommandDescriptorBlock(t, (UInt8 *)cdb, (UInt8)cdb_len);
-    if (sr != kIOReturnSuccess) goto setup_failed;
-
-    IOVirtualRange sg = { (IOVirtualAddress)data_buf, (IOByteCount)data_len };
-    sr = (*t)->SetScatterGatherEntries(t,
-        data_len ? &sg : NULL,
-        (UInt8)(data_len ? 1 : 0),
-        (UInt64)data_len,
-        (UInt8)direction);
-    if (sr != kIOReturnSuccess) goto setup_failed;
-
-    sr = (*t)->SetTimeoutDuration(t, timeout_ms);
-    if (sr != kIOReturnSuccess) goto setup_failed;
-
-    /* sense was already zeroed in the zero-outputs block after arg
-       validation; nothing between there and here writes it. */
-    SCSI_Sense_Data sense_struct = {0};
-    SCSITaskStatus   st           = 0;
-    UInt64           xferred      = 0;
-
-    IOReturn er = (*t)->ExecuteTaskSync(t, &sense_struct, &st, &xferred);
-    (*t)->Release(t);
-
-    /* Release before returning: a diagnostic command must not hold the drive
-       locked for the handle's lifetime (would block Finder / MakeMKV / DA
-       mounts). Released on both success and IO-failure paths; only the
-       InvalidArg exits skip it, having never acquired. */
-    (*h->std)->ReleaseExclusiveAccess(h->std);
-    h->have_exclusive = false;
-
-    /* On transport failure, outputs stay at the zeros set above (defined,
-       not stack garbage); st/sense/xferred are not copied. Whether the API
-       populates anything useful before a non-success IOReturn is undocumented
-       — revisit under the v0.4 hardware-gate fixtures. */
-    if (er != kIOReturnSuccess) {
-        return mos_internal_ioreturn_to_mos_error(er);
-    }
-
-    *scsi_task_status = (uint32_t)st;
-    memcpy(sense, &sense_struct, 18);
-    if (bytes_transferred) *bytes_transferred = (uint64_t)xferred;
-
-    return MOS_OK;
-
-setup_failed:
-    (*t)->Release(t);
-    (*h->std)->ReleaseExclusiveAccess(h->std);
-    h->have_exclusive = false;
-    return mos_internal_ioreturn_to_mos_error(sr);
 }
 
 /* ==== src/mos_tray.c ==== */

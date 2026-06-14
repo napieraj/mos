@@ -192,6 +192,9 @@ strip_file() {
     echo "/* ==== src/mos_scsi.c ==== */"
     strip_file "$SRC/mos_scsi.c"
     echo
+    echo "/* ==== src/mos_query.c ==== */"
+    strip_file "$SRC/mos_query.c"
+    echo
     echo "/* ==== src/mos_tray.c ==== */"
     strip_file "$SRC/mos_tray.c"
 } >> "$H"
