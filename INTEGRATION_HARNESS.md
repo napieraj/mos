@@ -35,7 +35,7 @@ instead and why.
 ## States to exercise
 
 For each drive, induce each of these physical situations and record
-what `mos --json` prints.
+what `mos status --json` prints.
 
 ### Open
 
@@ -112,22 +112,22 @@ Validation should:
 
 1. Full CMake build + `ctest` on an Apple-toolchain host.
 2. Manual smoke per matrix drive in each state:
-   - `mos --json`: confirm `"schema": "mos.state.v1"`,
-     `"bsd"` (full dev node since the 2026-06-10 CLI redesign; was `"bsd_name"`), `"current_profile"`,
+   - `mos status --json`: confirm `"schema": "mos.state.v1"`,
+     `"bsd_node"` (full dev node), `"current_profile"`,
      `"current_profile_name"` populated.
-   - `mos --json --index 99` (no-drive): confirm
+   - `mos status --json --index 99` (no-drive): confirm
      `mos.error.v1` envelope with nested
      `error.{code, message, context, recoverable}` and
      `exit_code: 66`.
-   - Bare `mos --index 99`: confirm empty stdout, stderr
-     diagnostic, exit 66.
-   - `mos --json --watch --bsd diskN`: confirm initial
+   - `mos status --index 99` (no `--json`): confirm empty stdout,
+     stderr diagnostic, exit 66.
+   - `mos watch --json --bsd diskN`: confirm initial
      `snapshot` event, then `state_changed` on tray / media
      transitions, then `device_removed` on detach.
 3. If a query-failure can be deliberately induced, confirm
-   partial-failure `mos.error.v1` envelope surfaces `bsd_name`
+   partial-failure `mos.error.v1` envelope surfaces `bsd_node`
    correctly.
-4. `mos --json=v2` (or any `=value`): confirm `EX_USAGE` (64)
+4. `mos status --json=v2` (or any `=value`): confirm `EX_USAGE` (64)
    with diagnostic naming `mos.state.v1`.
 5. Capture per-drive fixtures via
    `mos status --json > fixtures/<drive>/<state>.json` (plus
@@ -175,10 +175,10 @@ the §5.5 nub invariant, TUR exclusivity, IOReturn pins, the GESN CDB
      adapter fake's registry model) scripts unit and state together,
      so the real-kext coupling is untestable headlessly.
 
-1. **Insert-under-watch** (pass/fail): `mos --watch` at default rates
+1. **Insert-under-watch** (pass/fail): `mos watch` at default rates
    during a real insert; compare mount latency to a no-watch baseline,
    watch IORegistry for repeated nub teardown. Retires the §5.5
-   backward-flip and UA slivers. While there: two rapid `mos --watch`
+   backward-flip and UA slivers. While there: two rapid `mos watch`
    opens on the same drive must show distinct `stream_open_ms` values.
    *(2026-06-11: the monotonicization mechanism itself is now pinned
    headless — adapter-fake phase 2's replug scenario asserts distinct
@@ -260,7 +260,7 @@ mos v0.2 issues exactly one TUR per `mos_query_state` call, which is
 one per CLI invocation — the v0.2 hardware test pass won't trip this.
 v0.3 `--watch` will be the first scenario where mos issues TUR
 repeatedly against the same handle. Hardware fixture capture should
-include "100 consecutive `mos --json` invocations against a closed
+include "100 consecutive `mos status --json` invocations against a closed
 empty drive within 10 seconds" as a smoke test before `--watch`
 work begins. If any drive in the matrix locks up, we have an
 empirically-measured upper bound on poll frequency rather than
@@ -466,13 +466,13 @@ cmake -B build
 cmake --build build
 
 # Query the default (first) drive in JSON
-./build/bin/mos --json
+./build/bin/mos status --json
 
 # List all drives, JSON envelope
-./build/bin/mos --list --json
+./build/bin/mos list --json
 
 # Watch a specific drive (NDJSON stream)
-./build/bin/mos --watch --bsd diskN --json
+./build/bin/mos watch --bsd diskN --json
 
 # One-shot DiscRecording Info/Status dictionary capture
 ./build/bin/mos probe --dump

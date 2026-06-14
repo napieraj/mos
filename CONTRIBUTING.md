@@ -3,7 +3,7 @@
 ## Code layout
 
 Idiomatic C: public headers in `include/`, implementation in `src/`,
-executables that link the library in `tools/`, unit tests in `tests/`.
+the CLI that links the library in `cli/`, unit tests in `tests/`.
 
 ```
 mac-optical-state/
@@ -264,14 +264,14 @@ is `doc/research/2026-06-11-comment-refactor-plan.md`):
    into the handle's internal buffers — they go stale the moment
    `mos_close()` is called or
    `mos_query_state()` is invoked again. Emit / copy first, close
-   after. This was a P1 bug in early v0.2 code; the tools/CLI shows
+   after. This was a P1 bug in early v0.2 code; the `cli/` code shows
    the correct ordering.
 
 ## Testing
 
 ```sh
 make test         # pure-data unit tests (no hardware)
-make probe        # hardware smoke test (requires an optical drive)
+mos probe         # hardware smoke test subcommand (requires an optical drive)
 ```
 
 Unit tests use a tiny `TEST / RUN / EXPECT / EXPECT_EQ / EXPECT_STREQ`
