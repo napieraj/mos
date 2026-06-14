@@ -243,7 +243,7 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
  *
  * Enumeration yields bsd_unit + registry_id only; the State / Vendor /
  * Product / Rev columns each need one open + query, the same probe
- * `mos status` runs, done in-callback via mos_open_device (no selection-
+ * `mos state` runs, done in-callback via mos_open_device (no selection-
  * time TOCTOU). A drive whose open/query fails shows state "error" with
  * dashes — one sick drive never kills the overview. */
 

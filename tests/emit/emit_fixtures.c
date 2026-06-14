@@ -176,12 +176,12 @@ int main(int argc, char **argv)
             build_getconfig(cfg, sizeof cfg, 0x0041, true));
         return mos_cli_run_features();
     }
-    if (strcmp(verb, "status") == 0 && strcmp(scn, "ready_mounted") == 0) {
+    if (strcmp(verb, "state") == 0 && strcmp(scn, "ready_mounted") == 0) {
         common_drive_setup();
         mos_fake_set_getconfig_reply(0x00, cfg,
             build_getconfig(cfg, sizeof cfg, 0x0008, false));
         mos_fake_set_da_volume("Audio CD", "/Volumes/Audio CD");
-        return mos_cli_run_query();
+        return mos_cli_run_state();
     }
     if (strcmp(verb, "list") == 0 && strcmp(scn, "one_drive") == 0) {
         common_drive_setup();
@@ -267,14 +267,14 @@ int main(int argc, char **argv)
     }
 
     /* error: the mos.error.v1 envelope through the REAL path. No drive ->
-       open fails, run_query emits the envelope and returns EX_NOINPUT (66).
+       open fails, run_state emits the envelope and returns EX_NOINPUT (66).
        We mask to 0: this harness validates the DOCUMENT only, not the exit
        code (an ASan abort still kills the process and trips the caller). */
     if (strcmp(verb, "error") == 0 && strcmp(scn, "no_drive") == 0) {
         mos_fake_reset();
         mos_fake_set_no_drive();
         opt_index = 0;               /* no selector: the bare `mos --json` path */
-        (void)mos_cli_run_query();   /* flag_json already true (set above) */
+        (void)mos_cli_run_state();   /* flag_json already true (set above) */
         return 0;
     }
 

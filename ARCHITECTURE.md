@@ -986,9 +986,9 @@ auxiliary.
 The forward CLI shape:
 
 ```
-mos                              # implicit: status of first drive
-mos status                       # explicit form of the same
-mos status --bsd disk4 --json
+mos 4                            # state of drive 4 (bare selector, default verb)
+mos state 4                      # explicit verb form of the same
+mos state --bsd disk4 --json
 mos list                         # shipped (alias of --list)
 mos list --json
 mos watch --bsd disk4 --json     # shipped (alias of --watch)
@@ -1005,7 +1005,7 @@ Each subcommand extends the schema family
 (`mos.capacity.v1`, `mos.identity.v1`, `mos.tray.v1`, `mos.speed.v1`,
 `mos.features.v1`) without adding executables to the Homebrew tap.
 `--watch` remains a flag — it is a *mode of operation* applicable
-across subcommands, not a distinct operation: `mos status --watch`
+across subcommands, not a distinct operation: `mos state --watch`
 works today, and `mos features --watch` (future) describes over-time
 observation of that query. The shipped `mos watch` subcommand is an
 additive *alias* of the flag form (CLI contract test 15), kept because

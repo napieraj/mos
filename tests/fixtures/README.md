@@ -90,7 +90,7 @@ If you have an optical drive and want to add realism:
 
 1. Build `mos` (default configure; the diagnostic `probe` subcommand
    rides it under `MOS_CLI_PROBE`, default ON).
-2. Run `mos status --json` in each tray/media state (plus one
+2. Run `mos state --json` in each tray/media state (plus one
    `mos probe --dump` per drive for the DiscRecording dictionaries)
    and submit the output with the integration-harness PR.
 3. For raw byte capture, write a small C program that calls

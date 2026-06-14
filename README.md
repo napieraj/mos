@@ -23,14 +23,19 @@ and track counts) are available on demand via `mos_query_disc_info()`.
 mos [subcommand [drive]] [options]
 ```
 
-The drive subject is positional after a subcommand, like
-`diskutil info disk4`: an Index from `mos list`, a `registry_id`
-(pasteable from any JSON output — the two digit forms cannot collide,
-xnu starts registry IDs above 2^32), or a BSD form (`disk4`,
-`rdisk4`, `/dev/disk4`). With one drive attached it may be omitted
-(`mos status`); with several, `mos status` without a subject exits 64
-and prints the drive table to stderr — no first-drive guessing. Bare
-`mos` prints a hint and the usage text to stderr and exits 64. The
+The drive subject is positional, like `diskutil info disk4`: an Index
+from `mos list`, a `registry_id` (pasteable from any JSON output — the
+two digit forms cannot collide, xnu starts registry IDs above 2^32), or
+a BSD form (`disk4`, `rdisk4`, `/dev/disk4`). It follows a subcommand
+(`mos state 2`, `mos metadata 2`) or stands alone — a bare selector runs
+the default `state` verb, so `mos 2` and `mos disk4` report that drive's
+state with no verb word. (The dispatch is unambiguous: every selector
+carries a digit and no subcommand name does, so `mos 2` is a drive and
+`mos list` is a verb.) With one drive attached the subject may be omitted
+(`mos state`); with several, `mos state` without a subject exits 64 and
+prints the drive table to stderr — no first-drive guessing. Bare `mos`
+(no subject at all) prints a hint and the usage text to stderr and exits
+64. The
 diagnostic `probe` subcommand is the one exception to the selector
 grammar: it resolves its drive by index or BSD form only (it subscribes
 to the drive's IOKit service by BSD name), so a `registry_id` selector
@@ -48,10 +53,10 @@ valid drive argument when non-null (an empty drive has none). The
 human surfaces keep the short `BSD` label and the `--bsd` selector
 flag — input ergonomics, unchanged.
 
-### Status (default)
+### State (default)
 
 ```
-$ mos status 1
+$ mos state 1
 Registry ID:  4295032831
         BSD:  /dev/disk4
       State:  ready
@@ -62,7 +67,7 @@ Registry ID:  4295032831
 ```
 
 ```
-$ mos status 1 --json
+$ mos state 1 --json
 {
   "schema": "mos.state.v1",
   "state": "ready",
@@ -82,7 +87,7 @@ An open tray is resolved as exactly that — no media, no BSD node,
 no guessing:
 
 ```
-$ mos status 1
+$ mos state 1
 Registry ID:  4295032831
         BSD:  -
       State:  open
@@ -160,7 +165,7 @@ structure, not the filesystem: `blank` = unburned, ready to write;
 `appendable` = open session; `complete` plus a mounted Volume =
 burned and readable; `complete` with Volume null = burned but the
 filesystem did not mount — possibly damaged (when even the TOC won't
-read, `mos status` reports `media_unreadable`). `erasable`
+read, `mos state` reports `media_unreadable`). `erasable`
 distinguishes wipe-and-reuse media (RW/RE) from one-shot (R/M-DISC).
 `disc_info.bg_format` / `bg_format_name` report the background-format
 state of DVD+RW/BD-RE/Mount Rainier media (`none` / `inactive` /
@@ -410,7 +415,7 @@ done
 One event per transition drives the loop: inserting a disc fires it
 once, swapping discs fires `media_changed`, a drive plugged in
 mid-run joins the stream live, and an ejected drive doesn't end it.
-For a one-shot answer, `mos status <drive> --json` is the same
+For a one-shot answer, `mos state <drive> --json` is the same
 contract in a single document. Everything else composes from
 tools that already exist: tray control is `mos tray` (or `drutil tray
 eject` / `drutil tray close` if you want its unmount-first policy),

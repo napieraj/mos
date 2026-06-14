@@ -34,7 +34,7 @@ SCENARIOS = [
     ("drive",    "aacs_bd",       "mos.drive.v1"),
     ("drive",    "plain_dvd",     "mos.drive.v1"),
     ("features", "bd",            "mos.features.v1"),
-    ("status",   "ready_mounted", "mos.state.v1"),
+    ("state",    "ready_mounted", "mos.state.v1"),
     ("list",     "one_drive",     "mos.list.v1"),
     ("error",    "no_drive",        "mos.error.v1"),
     ("tray",     "eject_done",      "mos.tray.v1"),

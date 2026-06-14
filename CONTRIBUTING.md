@@ -51,7 +51,7 @@ mos/
 ├── cli/
 │   ├── main.c                   # argument parsing + dispatch
 │   ├── common.c / .h            # shared CLI state, list rows, envelopes
-│   ├── status.c / list.c / watch.c  # one file per command
+│   ├── state.c / list.c / watch.c  # one file per command
 │   ├── probe.c                  # diagnostic substrate observer ('mos probe', MOS_CLI_PROBE)
 │   ├── io.c / .h                # output/escaping helpers
 │   └── human.c / .h             # human-readable layout engine
@@ -111,7 +111,7 @@ two-tier split rationale). Non-`mos_` symbols fail the build.
 The `nm` check covers the library archives only; the `mos` CLI is a
 separate binary. Within `cli/`, every cross-translation-unit identifier
 (header-declared functions and types) carries a `mos_cli_` prefix —
-`mos_cli_run_query`, `mos_cli_emit_list_table`, `mos_cli_list_row`,
+`mos_cli_run_state`, `mos_cli_emit_list_table`, `mos_cli_list_row`,
 `mos_cli_human_pair`, the `mos_cli_stdout_*` family. File-local `static`
 symbols and the parse-state `extern` globals (`opt_*`, `flag_*`,
 `progname`) are exempt: the prefix exists to keep cross-TU names from
@@ -251,13 +251,13 @@ is `doc/research/2026-06-15-comment-purge-plan.md`):
 
 - **`cli/`** — the CLI front-end, one file per command over a shared
   layer (`main.c` parses with `getopt_long` and dispatches;
-  `status.c`/`list.c`/`watch.c`/`probe.c` implement the verbs; JSON
+  `state.c`/`list.c`/`watch.c`/`probe.c` implement the verbs; JSON
   emission is hand-rolled; the output contract is consumed by
   downstream automation). Links `mos_core`; does not include private
   headers (exception: `cli/probe.c`, a diagnostic compiled in under
   `MOS_CLI_PROBE`, includes `src/mos_pure.h` for the BSD-unit parse).
 
-  On a new machine, `mos list` then `mos status --json` exercise the
+  On a new machine, `mos list` then `mos state --json` exercise the
   full library path; `mos probe --dump` captures the raw DiscRecording
   dictionaries when enumeration disagrees with expectation. (The
   standalone `tools/` probes were consolidated into `mos probe` on

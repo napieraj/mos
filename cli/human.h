@@ -5,7 +5,7 @@
  *
  * SANITIZATION CONTRACT: keys/values/cells print verbatim (fputs), so any
  * drive-controlled bytes (identity strings) must arrive pre-escaped via
- * mos_safe_ascii — done in cli/status.c emit_human and cli/common.c
+ * mos_safe_ascii — done in cli/state.c emit_human and cli/common.c
  * query_row. Library vocabulary is printable ASCII by construction.
  */
 #ifndef MOS_CLI_HUMAN_H

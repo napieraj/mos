@@ -35,7 +35,7 @@ instead and why.
 ## States to exercise
 
 For each drive, induce each of these physical situations and record
-what `mos status --json` prints.
+what `mos state --json` prints.
 
 ### Open
 
@@ -112,14 +112,14 @@ Validation should:
 
 1. Full CMake build + `ctest` on an Apple-toolchain host.
 2. Manual smoke per matrix drive in each state:
-   - `mos status --json`: confirm `"schema": "mos.state.v1"`,
+   - `mos state --json`: confirm `"schema": "mos.state.v1"`,
      `"bsd_node"` (full dev node), `"current_profile"`,
      `"current_profile_name"` populated.
-   - `mos status --json --index 99` (no-drive): confirm
+   - `mos state --json --index 99` (no-drive): confirm
      `mos.error.v1` envelope with nested
      `error.{code, message, context, recoverable}` and
      `exit_code: 66`.
-   - `mos status --index 99` (no `--json`): confirm empty stdout,
+   - `mos state --index 99` (no `--json`): confirm empty stdout,
      stderr diagnostic, exit 66.
    - `mos watch --json --bsd diskN`: confirm initial
      `snapshot` event, then `state_changed` on tray / media
@@ -127,10 +127,10 @@ Validation should:
 3. If a query-failure can be deliberately induced, confirm
    partial-failure `mos.error.v1` envelope surfaces `bsd_node`
    correctly.
-4. `mos status --json=v2` (or any `=value`): confirm `EX_USAGE` (64)
+4. `mos state --json=v2` (or any `=value`): confirm `EX_USAGE` (64)
    with diagnostic naming `mos.state.v1`.
 5. Capture per-drive fixtures via
-   `mos status --json > fixtures/<drive>/<state>.json` (plus
+   `mos state --json > fixtures/<drive>/<state>.json` (plus
    `mos probe --dump` for the DR dictionaries).
 
 Once 1-4 pass, the first tag is cuttable. Step 5 informs the
@@ -198,7 +198,7 @@ the §5.5 nub invariant, TUR exclusivity, IOReturn pins, the GESN CDB
 4. **Multi-drive `mos watch` guard** (2026-06-11 fix, not headless-
    testable): with two drives attached and no selector, `mos watch`
    must print the mini-list to stderr and exit 64 — same contract as
-   `mos status`. One drive: implied, as before.
+   `mos state`. One drive: implied, as before.
 
 5. **`bsd_unit` fallback branch on real bridges** (2026-06-11 fix):
    does any owned bridge actually expose its BSD name on a non-IOMedia
@@ -260,7 +260,7 @@ mos v0.2 issues exactly one TUR per `mos_query_state` call, which is
 one per CLI invocation — the v0.2 hardware test pass won't trip this.
 v0.3 `--watch` will be the first scenario where mos issues TUR
 repeatedly against the same handle. Hardware fixture capture should
-include "100 consecutive `mos status --json` invocations against a closed
+include "100 consecutive `mos state --json` invocations against a closed
 empty drive within 10 seconds" as a smoke test before `--watch`
 work begins. If any drive in the matrix locks up, we have an
 empirically-measured upper bound on poll frequency rather than
@@ -466,7 +466,7 @@ cmake -B build
 cmake --build build
 
 # Query the default (first) drive in JSON
-./build/bin/mos status --json
+./build/bin/mos state --json
 
 # List all drives, JSON envelope
 ./build/bin/mos list --json
@@ -489,9 +489,9 @@ dictionaries (registry path, identity byte-shape).
 
 ```sh
 # Each of these with the appropriate physical state
-./build/bin/mos status --json 2>&1 | tee tray_open_$(hostname -s).log
+./build/bin/mos state --json 2>&1 | tee tray_open_$(hostname -s).log
 drutil tray close
-./build/bin/mos status --json 2>&1 | tee tray_closed_empty_$(hostname -s).log
+./build/bin/mos state --json 2>&1 | tee tray_closed_empty_$(hostname -s).log
 # ... insert CD, DVD, BD in turn, repeat
 
 # DR dictionary capture (once per drive/media combination)

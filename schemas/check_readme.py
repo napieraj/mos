@@ -9,7 +9,7 @@ in cli/<verb>.c — and the README left showing the old name. This catches both.
 JSON blocks, checked against schemas/mos.*.v*.json:
 
   * complete documents  — a fenced block carrying a top-level "schema" key
-    (e.g. the `mos status --json` example). Validated in full against
+    (e.g. the `mos state --json` example). Validated in full against
     schemas/<schema>.json: required fields, types, enums, additionalProperties.
 
   * abridged fragments  — the `jsonc` subtrees (disc_structure, track_info,
@@ -23,7 +23,7 @@ JSON blocks, checked against schemas/mos.*.v*.json:
 Human blocks, checked against cli/<verb>.c emit_human (the same parse the
 mos-sim self-gen kit lifts from the source):
 
-  * the `$ mos <verb>` pair blocks (status / drive / metadata / capacity).
+  * the `$ mos <verb>` pair blocks (state / drive / metadata / capacity).
     The labels shown must be an in-order SUBSEQUENCE of emit_human's pairs[]
     label order — which tolerates the rows a given example suppresses while
     catching a relabelled, reordered, or deleted row.

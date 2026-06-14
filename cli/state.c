@@ -1,4 +1,5 @@
-/* cli/status.c — the status command (default verb). */
+/* cli/state.c — the state command (the default verb; also the target of
+ * a bare drive selector, e.g. `mos 2` / `mos disk4`). */
 #include "common.h"
 
 #include <string.h>
@@ -181,7 +182,7 @@ static void emit_json(const mos_state_result *r, int index1,
     fputs("\n}\n", stdout);
 }
 
-int mos_cli_run_query(void)
+int mos_cli_run_state(void)
 {
     mos_error err = MOS_OK;
     mos_handle_t *h = NULL;
@@ -209,7 +210,7 @@ int mos_cli_run_query(void)
             int n = 0;
             (void)mos_cli_collect_and_query(rows, &n);
             fprintf(stderr,
-                    "%s: %d drives present; select one, e.g. `%s status 2`:\n",
+                    "%s: %d drives present; select one, e.g. `%s 2`:\n",
                     progname, total, progname);
             mos_cli_emit_list_table(stderr, rows, n, false);
             return EX_USAGE;

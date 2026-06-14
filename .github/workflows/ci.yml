@@ -526,7 +526,7 @@ jobs:
           mkdir -p /tmp/strict-adapter
           for src in src/mos_scsi.c src/mos_query.c src/mos_watch.c src/mos_state.c \
                      src/mos_dr.c src/mos_da.c \
-                     cli/main.c cli/common.c cli/status.c cli/list.c \
+                     cli/main.c cli/common.c cli/state.c cli/list.c \
                      cli/watch.c cli/human.c cli/io.c cli/probe.c \
                      tests/test_watch_lifetime.c; do
             obj="/tmp/strict-adapter/$(basename "$src" .c).o"

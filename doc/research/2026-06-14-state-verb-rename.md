@@ -1,9 +1,12 @@
 # `status` → `state`, and the digit-gated default subject
 
-Status: PLANNED 2026-06-14. Pre-first-tag, no external consumers — the
-verb surface is mutable in place (same window the JSON-schema ADR's
-mutable-in-place clause relies on). This note is the plan + the ADR text
-to append to AGENTS.md when the code lands.
+Status: **D1/D2 IMPLEMENTED 2026-06-14** (verb rename `status`→`state` +
+digit-gated default subject, across cli/, CMakeLists, .github/workflows/
+ci.yml, the emit-fixtures harness, tests/cli/test_cli.sh, README +
+ARCHITECTURE + CONTRIBUTING + INTEGRATION_HARNESS + schemas docs, and the
+AGENTS.md ADR). **D3 (state enrichment) PLANNED.** Pre-first-tag, no
+external consumers — the verb surface is mutable in place (same window the
+JSON-schema ADR's mutable-in-place clause relies on).
 
 ## The gap
 
