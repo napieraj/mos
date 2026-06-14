@@ -48,7 +48,7 @@
 /* Must mirror MOS_WATCH_RUN_LOOP_MODE in src/mos_watch.c. Drift is
    caught loudly: an interposed CFRunLoopRunInMode call in any other
    mode while the fake clock is enabled aborts below. */
-#define FAKE_WATCH_MODE CFSTR("io.github.napieraj.mac-optical-state.watch")
+#define FAKE_WATCH_MODE CFSTR("io.github.napieraj.mos.watch")
 
 /* The DR device sentinel delivered as the notification `object`. A
    per-TU CFSTR is fine: mos_fake_apple.c's DRDeviceCopyInfo/CopyStatus
