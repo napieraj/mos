@@ -50,7 +50,7 @@ define require_cmake
 	fi
 endef
 
-.PHONY: help configure build build-universal test \
+.PHONY: help configure build build-universal test check-readme \
         sign sign-universal notarize staple dist release \
         install install-signed uninstall clean
 
@@ -59,6 +59,7 @@ help:
 	@echo "  build            Native release build (CMake)"
 	@echo "  build-universal  Universal (arm64 + x86_64) release build"
 	@echo "  test             Build + run pure-data unit tests"
+	@echo "  check-readme     Verify README examples track schemas + emit_human"
 	@echo "  install          Install locally (ad-hoc signed by linker)"
 	@echo "  clean            Remove build artifacts"
 	@echo ""
@@ -118,6 +119,16 @@ build-universal:
 test: $(BUILD)/CMakeCache.txt
 	cmake --build $(BUILD) --target mos_tests
 	$(BUILD)/bin/mos_tests
+
+# ---- Docs drift --------------------------------------------------------
+#
+# README examples are hand-written; this checks they still match the
+# source of truth — JSON blocks against schemas/mos.*.v*.json, the
+# `$ mos <verb>` human pair blocks against cli/<verb>.c emit_human.
+# Pure Python (needs jsonschema); runs anywhere, no IOKit, no build.
+
+check-readme:
+	python3 schemas/check_readme.py
 
 # ---- Signing -----------------------------------------------------------
 #
