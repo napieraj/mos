@@ -143,6 +143,7 @@ $ mos metadata 1            # pressed dual-layer DVD-Video (CSS) — these genui
     Disc:  -
    Media:  dvd_rom, 2 layers, protected
      TOC:  tracks 1-1, lead-out LBA 3824640
+   Track:  track 1, 3824640 blocks
 ```
 
 `mos metadata --json` emits one `mos.metadata.v1` document. Its `disc`
