@@ -99,21 +99,21 @@ overview):
 
 ```
 $ mos list
- Index  State  Volume                      BSD         Vendor    Product         Revision
-     1  ready  ARRIVAL (/Volumes/ARRIVAL)  /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00
-     2  open   -                           -           PIONEER   BD-RW BDR-XS07  1.01
+ Index  State  Volume            BSD         Vendor    Product         Revision
+     1  ready  /Volumes/ARRIVAL  /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00
+     2  open   -                 -           PIONEER   BD-RW BDR-XS07  1.01
 ```
 
-A mounted disc shows its DA label and mount point folded into the one
-`Volume` column as `name (path)` — the path is where the full fusion
-shows itself per row (DiscRecording enumeration/identity, IOKit MMC down
-to the raw GESN state probe, and the DiscArbitration mount lookup). The
-label and the mount-point basename are distinct (macOS disambiguates a
-second `ARRIVAL` to `/Volumes/ARRIVAL 1`), so both earn their place.
+A mounted disc shows its mount point in the `Volume` column. The path
+is the one row carries because its basename already absorbs macOS's
+disambiguation (a second `ARRIVAL` mounts at `/Volumes/ARRIVAL 1`), so
+it identifies the volume without the DA label crowding the row. The
+label is not lost — `mos metadata` keeps it on its own `Volume` line,
+and `--json` carries it as `volume_name`.
 
 `mos list --json` emits `mos.list.v1` with the same fields per entry,
 carrying `volume_name` and `volume_path` as separate keys (both `null`
-when unmounted); the human column is the only place they're folded.
+when unmounted); the human column shows the path alone.
 
 ### Watch
 

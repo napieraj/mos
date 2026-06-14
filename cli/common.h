@@ -58,24 +58,19 @@ static inline bool mos_cli_profile_present(uint16_t profile)
     return profile != 0x0000;
 }
 
-/* The list "Volume" cell, RAW (the caller escapes at emit). The two DA
-   facts — volume label and mount path — fold into one column as "name
-   (path)" so list stays one row per drive while metadata keeps them on
-   separate lines. Both present => "name (path)"; mounted-but-unlabeled
-   (path, empty name) => "path"; unmounted (no path) => the label if any,
-   else empty (rendered "-"). name/path are bounded so a hostile or merely
-   long label/path cannot wreck the table; the JSON carries the faithful
-   form. */
-static inline void mos_cli_list_volume_cell(const char *name,
-                                            const char *path,
+/* The list "Volume" cell, RAW (the caller escapes at emit). Shows the
+   mount PATH only — its basename already carries macOS's disambiguation
+   (/Volumes/ARRIVAL vs /Volumes/ARRIVAL 1), so the DA label adds no
+   identifying information the path lacks in the one-row list view. The
+   label is not dropped: it stays in --json (volume_name) and on `mos
+   metadata`'s separate Volume row. Empty (rendered "-") when unmounted.
+   Bounded so a hostile or merely long path cannot wreck the table; the
+   JSON carries the faithful form. */
+static inline void mos_cli_list_volume_cell(const char *path,
                                             char *out, size_t cap)
 {
     if (!out || !cap) return;
-    const char *n = name ? name : "";
-    const char *p = path ? path : "";
-    if (n[0] && p[0])      snprintf(out, cap, "%.24s (%.64s)", n, p);
-    else if (p[0])         snprintf(out, cap, "%.64s", p);
-    else                   snprintf(out, cap, "%.24s", n);
+    snprintf(out, cap, "%.64s", path ? path : "");
 }
 
 /* Enumeration collection + per-drive query rows (the list command and

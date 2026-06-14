@@ -486,6 +486,30 @@ JSON-schema ADR's mutable-in-place clause applied — the rename landed in
 `mos.*.v1` directly, no v2, schemas + examples + negatives + emitters +
 docs in one commit.
 
+### Addendum: list `Volume` column shows the path only
+### (2026-06-14, supersedes the "name (path)" fold above)
+
+The 2026-06-13 entry said list "folds it into the same cell as `name
+(path)`", and the README argued "both earn their place" because the
+label and the mount-point basename diverge. The owner's call today: the
+list `Volume` column shows the mount **path only** — `mos_cli_list_volume_cell`
+(cli/common.h) renders `volume_path`, not the fold.
+
+What changed in the argument, not the facts: volume_name and volume_path
+are still two independent, divergent facts. But the divergence the fold
+existed to surface — `ARRIVAL` vs `ARRIVAL 1` — is carried by the path's
+own basename (`/Volumes/ARRIVAL 1`), so the path ALONE shows it; the
+label was redundant with the basename in the one-row view, and pairing
+them only widened the column. The label is not dropped: `mos metadata`
+keeps it on its own `Volume` row and `--json` carries it as
+`volume_name` (the list JSON is unchanged — both keys, separate). Scope
+is the human list table only. Cost was zero: pre-first-tag, the human
+table is not a frozen schema, so the change is the cell renderer + its
+test + the README example in one commit. If a future case shows a label
+that the path basename CANNOT carry (a sanitization that drops
+information rather than appending to it), that is a fresh argument to
+make here before re-folding.
+
 ### Addendum: `mos_cli_` scope narrowed; `_t` convention recorded; two
 ### library renames (2026-06-13, corrects the "uniformly" clause above)
 

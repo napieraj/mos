@@ -237,10 +237,10 @@ void mos_cli_emit_list_table(FILE *f, const mos_cli_list_row *rows, int n,
     char v_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];
     char p_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
     char r_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];
-    /* Volume column folds label and mount path into "name (path)"
-       (mos_cli_list_volume_cell), each part bounded so a hostile or
-       merely long value can't wreck the table; the JSON is the faithful
-       form. Worst case: 24 (name) + " (" + 64 (path) + ")" + NUL. */
+    /* Volume column shows the mount path only (mos_cli_list_volume_cell);
+       the label stays in --json and on metadata's Volume row. Bounded so
+       a hostile or merely long path can't wreck the table; the JSON is the
+       faithful form. Worst case: 64 (path) + NUL. */
     char vol_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(96)];
     const char *cells[MOS_CLI_LIST_CAP * MAXC];
     for (int r = 0; r < n; r++) {
@@ -249,16 +249,14 @@ void mos_cli_emit_list_table(FILE *f, const mos_cli_list_row *rows, int n,
         (void)mos_safe_ascii(rows[r].product,  p_esc[r], sizeof p_esc[r]);
         (void)mos_safe_ascii(rows[r].revision, r_esc[r], sizeof r_esc[r]);
         char vol_cell[96];
-        mos_cli_list_volume_cell(rows[r].volume, rows[r].volume_path,
-                                 vol_cell, sizeof vol_cell);
+        mos_cli_list_volume_cell(rows[r].volume_path, vol_cell, sizeof vol_cell);
         (void)mos_safe_ascii(vol_cell, vol_esc[r], sizeof vol_esc[r]);
         size_t c = 0;
         cells[r * ncols + c++] = idx[r];
         cells[r * ncols + c++] = rows[r].state;
         if (with_volume)
             cells[r * ncols + c++] =
-                (rows[r].volume[0] || rows[r].volume_path[0]) ? vol_esc[r]
-                                                              : NULL;
+                rows[r].volume_path[0] ? vol_esc[r] : NULL;
         cells[r * ncols + c++] = rows[r].bsd_node[0] ? rows[r].bsd_node : NULL;
         cells[r * ncols + c++] = rows[r].vendor[0]   ? v_esc[r] : NULL;
         cells[r * ncols + c++] = rows[r].product[0]  ? p_esc[r] : NULL;
