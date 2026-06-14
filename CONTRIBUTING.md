@@ -6,7 +6,7 @@ Idiomatic C: public headers in `include/`, implementation in `src/`,
 the CLI that links the library in `cli/`, unit tests in `tests/`.
 
 ```
-mac-optical-state/
+mos/
 ├── README.md
 ├── ARCHITECTURE.md              # single source of truth for design
 ├── ROADMAP.md                   # version arcs and deferred work
