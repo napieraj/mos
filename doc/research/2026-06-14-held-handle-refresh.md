@@ -25,47 +25,47 @@ named.** The ROADMAP said per-query freshness "under DR is a dictionary
 lookup (`kDRDeviceMediaBSDNameKey` in `DRDeviceCopyStatus`), not a
 registry walk."
 
-*Correction (2026-06-14, same day — a reviewer caught the original
-rationale here overstating the cost of the DR form).* DR is already
-linked and used, and the DR media-BSD read already exists:
+*Correction (2026-06-14, same day — this rationale was wrong twice and
+is rewritten here; the wrong drafts are described so the audit trail
+shows what was rejected and why.)*
+
+DR is already linked and used, and the DR media-BSD read already exists:
 `mos_internal_dr_bsd_unit_from_status` (`mos_dr.c`) pulls exactly
 `kDRDeviceMediaInfoKey → kDRDeviceMediaBSDNameKey` out of
-`DRDeviceCopyStatus`, feeding enumeration today. So the `bsd_unit` half
-of the DR plan is NOT new surface — the first draft of this note framed
-it as such and was wrong. The registry re-resolve is still the right
-choice, for two reasons that survive that correction:
+`DRDeviceCopyStatus`, feeding enumeration today. Two rejected arguments:
 
-1. **DR can't supply `media_id`, so a DR refresh would be a HYBRID.**
-   `media_id` (the F1 swap fingerprint) has no DR equivalent —
-   `doc/dr-field-mapping.md` records that DR carries the registry *path*,
-   not the entry ID, so it still needs an IOKit step
-   (`IORegistryEntryFromPath → GetRegistryEntryID`). A DR-based refresh
-   would read `bsd_unit` from the DR status dict and `media_id`/size from
-   IOKit — two sources that can skew. The single IOMedia walk yields all
-   four fields (bsd_unit, media_id, media_bytes, media_block) from one
-   traversal of the same kernel node, consistently.
-2. **The synchronous query path must not consume DR's snapshot — the
-   no-DR-passthrough constraint.** Standing rule (ROADMAP "Standing
-   constraints"; AGENTS division-of-labour): DR hands over "a passive,
-   GESN-fed snapshot, *not guaranteed current*"; "the MMC state engine
-   must not become a DR passthrough." `bsd_unit` feeds `mos_query_state`,
-   the synchronous, fully-checked path — pulling its identity from DR's
-   not-guaranteed-current status dict is exactly that passthrough. The
-   IOMedia node is the kernel's current media object; the walk reads
-   truth, not a cached snapshot. (DR's status dict is the right source
-   for the *enumeration* snapshot, where coarse + possibly-stale is the
-   stated contract — which is why `mos_internal_dr_bsd_unit_from_status`
-   lives on that path and not this one.)
+- **Draft 1 — "DR is new surface."** Wrong: see the helper above. DR and
+  the media-BSD read are already in the tree.
+- **Draft 2 — "the no-DR-passthrough constraint forbids DR here."** Also
+  wrong. That constraint (ROADMAP "Standing constraints"; ARCHITECTURE
+  §9.7) is specifically about the **synchronous STATE classification**
+  not deferring to DR's stale **tray / media-present bits** — the
+  `GetTrayState` masking lineage, where DR's GESN-fed snapshot "may
+  PRE-ANSWER, never OVERRULES a fresh mos GESN" (media-info-design
+  signal-stack). It is scoped to the tray/state bits, NOT to identity
+  fields like the media BSD name — which mos already sources from
+  `DRDeviceCopyStatus` on the enumeration path. There is no doctrinal bar
+  to reading `bsd_unit` from DR.
 
-Reuse also keeps risk low: `mos_internal_bsd_unit` is the exact resolver
-the open path and the watch's reopen-per-probe already trust, and adapter
-code is macOS-CI-compile-gated only. Cost is a local IORegistry walk off
-the drive node — no SCSI command, no exclusive access, cheaper than the
-watch's per-probe full reopen this mirrors; short on an empty drive.
+**The one reason that actually holds.** `media_id` (the F1 swap
+fingerprint) has no DR equivalent — `doc/dr-field-mapping.md` records
+that DR carries the registry *path*, not the entry ID, so refreshing it
+needs an IOKit step regardless (`IORegistryEntryFromPath →
+GetRegistryEntryID`). The IOMedia whole-disk node yields `bsd_unit`,
+`media_id`, `media_bytes`, and `media_block` together from one atomic
+traversal. Since IOKit is unavoidable for `media_id`, sourcing `bsd_unit`
+from DR's status dict would add a *second* source for a field the one
+walk already returns — a redundant hybrid that can skew the
+(bsd_unit, media_id) pair across a swap, not a saving. So the choice is
+single-source pragmatics, not doctrine: reuse `mos_internal_bsd_unit`,
+the exact resolver the open path and the watch's reopen-per-probe already
+trust. Cost is a local IORegistry walk — no SCSI command, no exclusive
+access, cheaper than the watch's per-probe full reopen this mirrors.
 
-So the DR-dictionary form is not a deferred optimization with a cost edge
-— for the synchronous identity path it is the *wrong* source by the
-project's own division of labour. It stays where it belongs: enumeration.
+A maintainer who prefers the ROADMAP's DR-named form could adopt it; the
+only real cost is that hybrid two-source read. It is a legitimate
+alternative, not a forbidden one — the earlier drafts that implied
+otherwise were overreach.
 
 **What hardware can falsify.** A USB-SATA bridge whose IOMedia child
 lags the drive's READY (so a query briefly reports READY with `-1` until
