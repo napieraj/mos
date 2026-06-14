@@ -258,6 +258,20 @@ bool mos_bsd_name_format(int64_t unit, char *buf, size_t cap);
  * Open by 1-based index (matches drutil convention) or by BSD name.
  * Return value is a borrowed error code via *err_out when non-NULL.
  * On success returns a handle; on failure returns NULL and sets *err_out.
+ *
+ * SELECTOR STABILITY — mos_open_by_index is POSITIONAL, not durable.
+ * The index is a slot in a freshly enumerated snapshot (drutil-style
+ * convenience), so it is a TOCTOU against device hotplug: between the
+ * enumeration a caller read the index from and this open, a drive
+ * appearing or disappearing can shift every higher slot — the index may
+ * then open a DIFFERENT drive than intended, or return MOS_ERR_NO_DEVICE
+ * if the set shrank. Use it only for one-shot, single-drive,
+ * human-driven invocations. For programmatic selection that must survive
+ * hotplug, prefer mos_open_by_registry_id (the attachment identity every
+ * mos.state.v1 / mos.event.v1 document carries; atomic, never reused) or
+ * mos_open_by_bsd_name (more stable than position, though a "diskN" name
+ * can be recycled after an eject). The same positional caveat applies to
+ * mos_device_info_bsd_unit's index provenance.
  */
 mos_handle_t *mos_open_by_index(int one_based, mos_error *err_out);
 mos_handle_t *mos_open_by_bsd_name(const char *bsd_name, mos_error *err_out);

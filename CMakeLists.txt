@@ -297,6 +297,7 @@ if(MOS_BUILD_TESTS)
     enable_testing()
     add_executable(mos_tests
         cli/human.c
+        cli/io.c
         tests/test_main.c
         tests/test_sense.c
         tests/test_bsd_name.c
@@ -316,6 +317,7 @@ if(MOS_BUILD_TESTS)
         tests/test_modepage.c
         tests/test_tray.c
         tests/test_result.c
+        tests/test_io.c
     )
     # Tests link against mos_pure only — by design (plus cli/human.c,
     # the IOKit-free layout engine that test_human.c pins; it is CLI

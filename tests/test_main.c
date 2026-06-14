@@ -38,6 +38,7 @@ void register_perf_tests        (void);
 void register_modepage_tests    (void);
 void register_tray_tests        (void);
 void register_result_tests      (void);
+void register_io_tests          (void);
 
 int main(void)
 {
@@ -94,6 +95,9 @@ int main(void)
 
     printf("\nOpaque result/event accessors:\n");
     register_result_tests();
+
+    printf("\nCLI stdout finalize (EPIPE vs write-error classification):\n");
+    register_io_tests();
 
     return test_summary();
 }

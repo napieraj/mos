@@ -106,10 +106,15 @@ it). What remains:
   permanently consumer-side.
 
 - **Parked test/robustness remainders:**
-  - *EPIPE-path CLI tests* — `mos_cli_stdout_finalize`'s errno-freshness
-    argument (cli/io.c) is reasoned, not tested: force EPIPE and non-EPIPE
-    stdout failures on the one-shot and watch paths and pin the EX_IOERR
-    vs pipe-closed exit split. Harness work, no behavior change.
+  - *EPIPE-path CLI tests* — the `mos_cli_stdout_finalize` classification
+    (cli/io.c) now has fork-isolated unit coverage of both branches
+    (EPIPE → pipe-closed, other errno → write-error), pinning the
+    errno-freshness argument; `tests/test_io.c`, runs on Linux too. What
+    remains untested is the trivial exit-split SWITCH in cli/common.c
+    (`mos_cli_finalize_oneshot_stdout`: pipe-closed → EX_OK, write-error →
+    EX_IOERR) — it lives in an IOKit-dependent TU, so pinning it needs the
+    macOS CLI contract test (`test_cli.sh`), where forcing a non-EPIPE
+    write error portably is the fiddly part left.
   - *All-watch directory-rescan fallback* — `mos_watch_open_all` fails
     honestly when the DR doorbell can't be set up. If hardware sessions ever
     observe `DRNotificationCenterCreate` failing in practice, add a
@@ -144,9 +149,12 @@ the nexus on close.)
   is filling any matrix gaps the rig surfaces.
 
 - **Documentation polish.** A fresh root `CHANGELOG.md` (Keep-a-Changelog)
-  generated from git tags at tag time; `mos_open_by_index` race documented as
-  a known limitation with `mos_open_by_bsd` marked preferred; the
-  lock-composability property made explicit in `ARCHITECTURE.md`.
+  generated from git tags at tag time. (Done 2026-06-14: the
+  `mos_open_by_index` positional-selector race is documented in `mos.h`
+  with `mos_open_by_registry_id` / `mos_open_by_bsd_name` marked preferred
+  for hotplug-stable selection; the lock-composability property — acquire-
+  on-call / release-on-return, coexists with other drive users — is
+  explicit in `ARCHITECTURE.md` §3.)
 
 ---
 

@@ -131,6 +131,36 @@ The design uses both, gated by what we need and when:
 is ever called — both the tray-bit GESN and caller-issued diagnostics route
 through it.
 
+**Lock composability (acquire-on-call / release-on-return).** The two
+facts above — the lock lives at exactly one call site, and that call site
+acquires and releases per CDB — compose into the property mos is built
+for: **it coexists with other applications holding the drive, and never
+holds the lock between API calls.** A `mos_handle_t` carries no lock
+across its lifetime; exclusive access exists only for the microseconds of
+a single raw CDB, on the rare not-ready GESN branch (or an embedder
+diagnostic). So:
+
+- **mos does not starve other drive users.** A ripper or burner
+  (MakeMKV, `drutil`) can hold the drive while a mos handle is open and
+  querying; the common query path is the non-exclusive convenience
+  `TestUnitReady` (§3 above), which takes no lock at all, and the rare
+  exclusive moment is released before the call returns. mos never sits on
+  the lock waiting for input or across queries.
+- **mos is not starved into incorrectness by other users.** When another
+  application *is* holding exclusive access and mos reaches the one branch
+  that needs it, `ObtainExclusiveAccess` returns `kIOReturnBusy`, which
+  mos surfaces as `MOS_ERR_BUSY` / a `BUSY` classification — a reported
+  fact, not a hang or a fabricated answer. It does not block, and it does
+  not retry behind the caller's back.
+
+This is the concrete meaning of the scope-doctrine line "mos's
+acquire-on-call / release-on-return lock discipline is built to coexist
+with [higher-layer media libraries], not host them" (AGENTS.md): the
+discipline is what makes a long-lived mos handle safe to keep open
+alongside a tool that owns the drive. The §5.5 nub invariant is the other
+half — it bounds the one exclusive moment so it cannot collide with a
+mounted volume even on the branch that does take the lock.
+
 ## 4. The MMC commands we issue (three on the state path)
 
 Byte-exact CDB layouts. All fields are big-endian unless noted.
