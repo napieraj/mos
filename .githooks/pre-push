@@ -1,0 +1,13 @@
+#!/bin/sh
+# pre-push hook — run the local preflight gates before a push is allowed,
+# so operator slips (stale dist/, README/code drift, doc staleness,
+# unregistered or failing tests) are caught here instead of by CI after a
+# round-trip.
+#
+# This hook is NOT active until you opt in per clone (git never auto-runs
+# cloned hooks, by design):
+#
+#     git config core.hooksPath .githooks      # or: make hooks
+#
+# CI remains the authoritative gate — this only shortens the feedback loop.
+exec "$(git rev-parse --show-toplevel)/scripts/preflight.sh"

@@ -86,7 +86,12 @@ mos/
 │   └── mos.rb                  # tap formula (HEAD-only between tags)
 └── scripts/
     ├── amalgamate.sh            # stb-style single-file drop-in build
+    │                            #   (--check: diff vs committed, no write)
+    ├── preflight.sh             # run all OS-independent CI gates locally
+    ├── check-test-registration.sh # TEST() <-> RUN() gate (CI + preflight)
     └── release-preflight.sh     # archive hygiene gate
+.githooks/
+└── pre-push                    # runs preflight.sh; enable with `make hooks`
 ```
 
 ## Symbol-naming conventions
@@ -311,7 +316,26 @@ macro set in `tests/test_harness.h`. No framework dependency.
 
 To add a new test: append a `TEST(name) { ... }` function to the
 appropriate `test_*.c`, register it in that file's
-`register_*_tests()`, and re-run `make test`.
+`register_*_tests()`, and re-run `make test`. (Forgetting the
+registration is caught by `scripts/check-test-registration.sh`, run in
+CI and in `make preflight`.)
+
+### Before you push
+
+```sh
+make preflight    # run every OS-independent CI gate locally
+make hooks        # (once) run preflight automatically on `git push`
+```
+
+`make preflight` mirrors the CI gates that don't need macOS — dist/
+amalgamation sync, test registration, doc staleness, the README contract,
+and the pure unit suite — so an operator slip (most often a `src/` edit
+without a `dist/` regen) is caught before the push instead of after a CI
+round-trip. `make hooks` wires `.githooks/pre-push` in for this clone so
+it runs on every push; it is opt-in because git never auto-runs cloned
+hooks. CI is still the authoritative gate, and the only place the
+macOS-only legs (CLI compile, strict-adapter `-Werror`, amalgamated macOS
+test) run.
 
 ## Amalgamated single-file distribution
 

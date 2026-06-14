@@ -210,68 +210,29 @@ jobs:
           echo "OK: all exported symbols across both archives are mos_-prefixed"
 
       - name: Verify no orphaned tests
-        # For each tests/test_*.c file that defines TEST() fixtures,
-        # every defined fixture name must also appear in a RUN(name)
-        # invocation within that same file. Catches the class of bug
-        # where a test fixture is defined, compiles, gets included in
-        # the test binary's source list, and silently does nothing
-        # because nothing calls RUN() on it. Surfaced empirically:
-        # tests/test_sense.c::sense_04_04_maps_to_loading shipped in
-        # this state and ran zero times for several iterations.
-        #
-        # The check is per-file, not project-wide: a fixture in
-        # test_sense.c registered from register_sense_tests() should
-        # not need cross-file lookup. Test_main.c is exempt from the
-        # TEST() side because it only calls register functions.
-        run: |
-          set -e
-          FAIL=0
-          for f in tests/test_*.c; do
-            # Skip test_main.c — it dispatches to register functions
-            # but defines no TEST() fixtures itself.
-            if [ "$(basename "$f")" = "test_main.c" ]; then
-              continue
-            fi
-            DEFINED=$(grep -E '^TEST\(' "$f" | sed -E 's/^TEST\(([^)]+)\).*/\1/')
-            if [ -z "$DEFINED" ]; then
-              continue
-            fi
-            for name in $DEFINED; do
-              # RUN() invocations live inside register_*_tests() in
-              # the same file. The match is on the exact RUN(name);
-              # pattern, indented under register_*_tests().
-              if ! grep -qE "[[:space:]]+RUN\($name\);" "$f"; then
-                echo "Orphaned test in $f: TEST($name) defined but not registered with RUN()"
-                FAIL=1
-              fi
-            done
-          done
-          if [ "$FAIL" -eq 1 ]; then
-            echo ""
-            echo "Each TEST() fixture must be invoked by a RUN() call in"
-            echo "the same file's register_*_tests() function. See"
-            echo "tests/test_sense.c::register_sense_tests for the pattern."
-            exit 1
-          fi
-          echo "OK: all TEST() fixtures are registered"
+        # Every TEST() fixture must be RUN()-registered in the same file's
+        # register_*_tests(). Catches a fixture that compiles, links, and
+        # silently never runs (surfaced empirically:
+        # tests/test_sense.c::sense_04_04_maps_to_loading ran zero times for
+        # several iterations). The logic lives in one script so CI and the
+        # local pre-push preflight (scripts/preflight.sh) run the identical
+        # gate.
+        run: ./scripts/check-test-registration.sh
 
       - name: Amalgamation script produces compilable output
         run: |
-          ./scripts/amalgamate.sh
+          # Content staleness: regenerate to a scratch dir and diff against
+          # the committed dist/. Single source of truth for this gate — the
+          # local pre-push preflight (scripts/preflight.sh) runs the same
+          # `--check`, so a stale dist/ is normally caught before the push.
+          ./scripts/amalgamate.sh --check
 
-          # Committed dist/ must be byte-identical to regeneration. dist/
-          # is the documented embedder artifact, so a stale committed copy
-          # ships wrong code even while CI compiles a fresh one. Untracked
-          # or gitignore-suppressed dist files fail too — the artifact
-          # contract requires them committed.
-          if [ -n "$(git status --porcelain --ignored=matching -- dist/)" ]; then
-            git status --ignored=matching -- dist/
-            git --no-pager diff -- dist/ | head -60
-            echo "ERROR: dist/ is stale or untracked relative to scripts/amalgamate.sh output."
-            echo "Run ./scripts/amalgamate.sh and commit the result."
-            exit 1
-          fi
-          echo "OK: committed dist/ matches regeneration"
+          # Tracked-ness: the content diff above can't see a dist/ that has
+          # been gitignored or never committed (the file may exist on disk
+          # and match). The embedder contract requires these committed, so
+          # assert git tracks all three.
+          git ls-files --error-unmatch dist/mos.c dist/mos.h dist/MANIFEST.txt >/dev/null
+          echo "OK: committed dist/ matches regeneration and is tracked"
 
           # (a) Compile-only check: source parses and type-checks.
           # -mmacosx-version-min=12.0 matches the documented direct-consumer

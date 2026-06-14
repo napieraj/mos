@@ -19,7 +19,27 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 INC="$ROOT/include"
 SRC="$ROOT/src"
-OUT="$ROOT/dist"
+DIST="$ROOT/dist"
+
+# --check: regenerate into a scratch dir and DIFF against the committed
+# dist/ instead of writing in place — side-effect-free, so the pre-push
+# hook and scripts/preflight.sh can run it without dirtying the tree.
+# Exit 1 on any drift (a src/ edit not followed by a regen — the common
+# operator slip), exit 0 when in sync. Plain regeneration (no arg) is the
+# in-place write the release/commit step uses.
+CHECK=0
+case "${1:-}" in
+    --check) CHECK=1 ;;
+    "")      : ;;
+    *)       echo "usage: $0 [--check]" >&2; exit 2 ;;
+esac
+
+if [ "$CHECK" -eq 1 ]; then
+    OUT=$(mktemp -d "${TMPDIR:-/tmp}/mos-amalgamate.XXXXXX")
+    trap 'rm -rf "$OUT"' EXIT
+else
+    OUT="$DIST"
+fi
 mkdir -p "$OUT"
 
 # -- Public header: verbatim copy --------------------------------------
@@ -225,6 +245,24 @@ MOS_VERSION=$(sed -n 's/^#define MOS_VERSION_STRING "\(.*\)"$/\1/p' "$INC/mos.h"
     echo "License: 0BSD (see repository)"
     echo "Source:  https://github.com/napieraj/mos"
 } > "$OUT/MANIFEST.txt"
+
+if [ "$CHECK" -eq 1 ]; then
+    drift=0
+    for f in mos.h mos.c MANIFEST.txt; do
+        if ! diff -q "$DIST/$f" "$OUT/$f" >/dev/null 2>&1; then
+            drift=1
+            echo "  drift: dist/$f" >&2
+            diff -u "$DIST/$f" "$OUT/$f" 2>/dev/null | sed -n '1,40p' >&2 || true
+        fi
+    done
+    if [ "$drift" -eq 1 ]; then
+        echo "ERROR: dist/ is stale relative to src/ + scripts/amalgamate.sh." >&2
+        echo "Run ./scripts/amalgamate.sh and commit the result." >&2
+        exit 1
+    fi
+    echo "OK: committed dist/ matches regeneration"
+    exit 0
+fi
 
 echo "Wrote:"
 echo "  $OUT/mos.h"
