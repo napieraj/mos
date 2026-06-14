@@ -694,15 +694,17 @@ int main(int argc, char **argv)
     uint64_t n_mp    = env_u64("MOS_FUZZ_MODEPAGE", 500000);
 
     fprintf(stderr,
-            "mos fuzz_pure seed=0x%016llx sense=%llu esc=%llu bsd=%llu cfg=%llu "
-            "di=%llu tl=%llu toc=%llu ds=%llu ct=%llu ps=%llu ti=%llu perf=%llu mp=%llu\n",
+            "mos fuzz_pure seed=0x%016llx sense=%llu esc=%llu bsd=%llu "
+            "cfg=%llu di=%llu tl=%llu toc=%llu ds=%llu ct=%llu ps=%llu "
+            "ti=%llu perf=%llu mp=%llu\n",
             (unsigned long long)seed, (unsigned long long)n_sense,
             (unsigned long long)n_esc, (unsigned long long)n_bsd,
             (unsigned long long)n_cfg, (unsigned long long)n_di,
-            (unsigned long long)n_tl, (unsigned long long)n_toc,
-            (unsigned long long)n_ds, (unsigned long long)n_ct,
-            (unsigned long long)n_ps, (unsigned long long)n_ti,
-            (unsigned long long)n_perf, (unsigned long long)n_mp);
+            (unsigned long long)n_tl,
+            (unsigned long long)n_toc, (unsigned long long)n_ds,
+            (unsigned long long)n_ct, (unsigned long long)n_ps,
+            (unsigned long long)n_ti, (unsigned long long)n_perf,
+            (unsigned long long)n_mp);
 
     fuzz_sense(n_sense);
     fuzz_escapers(n_esc);
