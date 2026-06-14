@@ -54,8 +54,15 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 README = ROOT / "README.md"
 
-# verbs whose emit_human builds a pairs[] block (matches the self-gen kit).
-PAIR_VERBS = ("status", "drive", "metadata", "capacity", "tray")
+
+def c_verbs():
+    """The CLI's verb set, parsed from main.c's dispatch table (the
+    `strcmp(cmd, "<verb>")` chain — the file's own header calls a dispatch
+    line the way you add a verb). Derived, not hardcoded, so a new verb is
+    picked up automatically; which of these is a pair verb is then decided by
+    c_human_labels() returning labels vs None (no emit_human pairs[])."""
+    src = (ROOT / "cli" / "main.c").read_text()
+    return set(re.findall(r'strcmp\(cmd,\s*"([a-z]+)"\)', src))
 
 
 def fenced_blocks(md: str):
@@ -149,11 +156,12 @@ def list_block(raw: str):
     return None
 
 
-def human_block(raw: str):
-    """If raw is a `$ mos <verb>` pair block (not --json), return
-    (verb, [labels shown]); else None."""
+def human_block(raw: str, verbs):
+    """If raw is a `$ mos <verb>` pair block (not --json) for a known verb,
+    return (verb, [labels shown]); else None. Pair-ness is confirmed later by
+    c_human_labels()."""
     m = re.search(r'\$\s*mos\s+(\w+)', raw)
-    if not m or m.group(1) not in PAIR_VERBS or "--json" in raw:
+    if not m or m.group(1) not in verbs or "--json" in raw:
         return None
     labels = []
     for ln in raw.splitlines():
@@ -265,6 +273,7 @@ def main() -> int:
         return 2
     schemas = {p.name: json.loads(p.read_text())
                for p in HERE.glob("mos.*.v*.json")}
+    verbs = c_verbs()
 
     md = README.read_text()
     checked = skipped = failures = 0
@@ -295,7 +304,7 @@ def main() -> int:
                        [f"header {cols} matches no cli/common.c variant {variants}"])
             continue
 
-        hb = human_block(raw)
+        hb = human_block(raw, verbs)
         if hb:
             verb, shown = hb
             c_labels = c_human_labels(verb)
