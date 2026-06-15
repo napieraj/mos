@@ -649,3 +649,72 @@ jobs:
           pip install --require-hashes -r schemas/requirements-ci.txt
           python3 tests/emit/validate_emitted.py \
             ./build-adapter/bin/mos_emit_fixtures schemas
+
+  coverage:
+    # Line/branch coverage of the pure library layer, measured by the
+    # host-independent `unit` ctest suite under gcov. This is the
+    # measurement leg AGENTS/CLAUDE doctrine asks for: it turns "I think
+    # X is uncovered" into a number, so the next test-gap decision is made
+    # on data instead of a reading of the tree.
+    #
+    # SCOPE — read before reacting to a low number. This measures ONLY
+    # what the Linux `unit` suite exercises (mos_pure + cli/human.c +
+    # cli/io.c), filtered to src/. The IOKit core layer (mos_scsi.c,
+    # mos_query.c, mos_state.c, mos_watch.c, mos_dr.c, mos_da.c, the tray
+    # verbs) and the CLI verb emitters are driven by the macOS adapter-fake
+    # job, NOT here, so their lines read as uncovered in this report. A
+    # file that looks bare (e.g. mos_result.c's JSON emitters) may be fully
+    # covered on the macOS leg. A macOS llvm-cov leg over the adapter tests
+    # is the natural follow-on; MOS_COVERAGE is already platform-agnostic.
+    #
+    # REPORT, NOT GATE — deliberately no --fail-under-* floor yet. The
+    # sequence is measure-then-set-floor: a threshold picked before a
+    # baseline is observed is a guess, and the project's rule is to
+    # escalate rigor on evidence. Add the floor in a follow-up once the
+    # baseline number has settled. gcovr comes from apt (not hash-pinned
+    # like the schema validators) because this leg is observational — it
+    # asserts no correctness property, so a pinned-bytes supply chain buys
+    # nothing here.
+    name: Coverage (pure layer, Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
+
+      - name: Install gcovr
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y gcovr
+
+      - name: Configure + build with coverage instrumentation
+        # Debug + MOS_COVERAGE=ON; the option forces -O0 -g --coverage on
+        # every target that links mos_warnings (mos_pure, mos_tests).
+        run: |
+          set -e
+          cmake -B build-cov -DCMAKE_BUILD_TYPE=Debug -DMOS_COVERAGE=ON
+          cmake --build build-cov --parallel
+
+      - name: Run unit tests (generates .gcda counters)
+        working-directory: build-cov
+        run: ctest --output-on-failure
+
+      - name: Report coverage
+        # Filter to src/ — the library proper. The table goes to the job
+        # log and to the run's Summary tab so the number is visible without
+        # opening logs. No threshold: see the job-header note.
+        run: |
+          set -e
+          gcovr --root . --object-directory build-cov \
+            --filter 'src/' --print-summary 2>&1 | tee coverage.txt
+          {
+            echo '### Pure-layer coverage (Linux `unit` suite)';
+            echo '';
+            echo 'Scope: src/ via the host-independent unit tests only — the';
+            echo 'IOKit core + CLI verbs are measured by the macOS adapter job.';
+            echo '';
+            echo '```';
+            cat coverage.txt;
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
