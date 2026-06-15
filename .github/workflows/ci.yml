@@ -707,8 +707,6 @@ jobs:
         # opening logs. No threshold: see the job-header note.
         run: |
           set -eo pipefail
-          # pipefail so a gcovr crash fails the step instead of being
-          # masked by the `| tee` returning tee's (zero) exit code.
           gcovr --root . --object-directory build-cov \
             --filter 'src/' --print-summary 2>&1 | tee coverage.txt
           {
@@ -824,12 +822,8 @@ jobs:
           # probe TU (CMakeCCompilerId.c) also emits counters gcovr can't
           # resolve to a source. Skip those rather than fail the report;
           # the src/ + cli/ filter already scopes what's counted.
-          # `xcrun llvm-cov gcov`: Apple ships llvm-cov inside the Xcode
-          # toolchain, not on the bare PATH, so a plain `llvm-cov` is not
-          # found on the runner — xcrun resolves it from the active Xcode.
-          # pipefail (above) is load-bearing: without it the `| tee` would
-          # return tee's exit code and a gcovr crash would pass as green
-          # while producing no report (the failure mode this job hit once).
+          # xcrun, not bare llvm-cov: Apple ships it inside the Xcode
+          # toolchain, off the default PATH.
           gcovr --root . --object-directory build-cov \
             --gcov-executable 'xcrun llvm-cov gcov' \
             --gcov-ignore-errors=no_working_dir_found \
