@@ -1,6 +1,6 @@
-/* cli/main.c — argument parsing, usage, dispatch. One file per
- * command over cli/common; adding a verb = a new cli/<verb>.c + a
- * dispatch line below. */
+/* cli/main.c — argument parsing, usage, dispatch. One file per command
+ * over cli/common; adding a verb = a new cli/<verb>.c + a dispatch line
+ * below. */
 #include "common.h"
 #include "mos_pure.h"   /* mos_internal_value_is_registry_id (selector floor) */
 
@@ -156,12 +156,11 @@ int main(int argc, char **argv)
     /* CLI-only (never in libmos — a library must not change global signal
        disposition). Default SIGPIPE kills the process on a closed
        downstream pipe; ignoring it makes writes return EPIPE instead, which
-       the watch emitters detect (fflush + ferror) and turn into a clean
-       EX_OK exit. Installed for all subcommands, not just watch: even
+       the emitters detect (fflush + ferror) and turn into a clean EX_OK
+       exit. Installed for all subcommands, not just watch: even
        `mos --json | head -c0` can race SIGPIPE between printf and flush.
-       Invariant: the emit paths must keep honoring fflush return values —
-       discarding them reintroduces the kill-on-pipe-close bug. signal()
-       here cannot fail (SIG_IGN is always installable). */
+       The emit paths must keep honoring fflush return values — discarding
+       them reintroduces the kill-on-pipe-close bug. */
     signal(SIGPIPE, SIG_IGN);
 
     /* Bare `mos` is an entry point, not an implicit status — and not a
@@ -232,13 +231,11 @@ int main(int argc, char **argv)
                   ".\n", stderr);
             return EX_USAGE;
         }
-        /* Shift past the subcommand word so getopt parses the
-           remaining args from position 1. Copy the real program name
-           into the slot getopt will see as argv[0] first: getopt's
-           own diagnostics keep the real progname on every libc
-           (glibc prints argv[0]; Apple's warnx/getprogname never
-           reads it). The subcommand word was already consumed by the
-           dispatch above — nothing references it past this point. */
+        /* Shift past the subcommand word so getopt parses the remaining
+           args from position 1. Copy the real program name into the slot
+           getopt sees as argv[0] first, so getopt's own diagnostics keep
+           the real progname (glibc prints argv[0]; Apple's
+           warnx/getprogname never reads it). */
         argv[1] = argv[0];
         argc--;
         argv++;
@@ -369,9 +366,8 @@ int main(int argc, char **argv)
        subject also lands — one guard, one message.) */
 
 #ifdef MOS_CLI_PROBE
-    /* (Verb-vs-verb contradictions are unrepresentable since verbs come
-       only from the one-word dispatch — flags-as-commands retired
-       2026-06-12.) */
+    /* Verb-vs-verb contradictions are unrepresentable: verbs come only
+       from the one-word dispatch. */
     if (flag_dump && !flag_probe) {
         fprintf(stderr, "%s: --dump requires the probe subcommand\n",
                 progname);

@@ -34,10 +34,7 @@ const char *progname = "mos";
                                  stop reading — not our failure)
      - real write error       -> EX_IOERR (ENOSPC on a redirect, EIO, ...)
 
-   Shares the single classifier in cli/io with the watch path.
-   (Reconstructed 2026-06-10: the original pair was clipped by a blind
-   edit during the CLI batch — caught by the cli/ restructure before
-   macOS CI could.) */
+   Shares the single classifier in cli/io with the watch path. */
 int mos_cli_finalize_oneshot_stdout(int success_code)
 {
     switch (mos_cli_stdout_finalize()) {
@@ -102,15 +99,12 @@ int mos_cli_emit_unknown_and_fail(const char *context, mos_error err,
             progname, context, mos_error_description(err));
 
     if (flag_json) {
-        /* Framing follows the mode: watch mode's documented contract is
-           NDJSON — one object per line — and a multi-line error envelope
-           breaks any line-framed consumer at exactly the moment it's
-           reporting a failure (third review, finding 1; the open-failure
-           path is reachable today via `watch --bsd <absent>`,
-           the mid-stream pump-failure path is defensively unreachable
-           but rendered correctly anyway). One-shot mode keeps the
-           pretty-printed envelope. Same bytes-as-JSON either way: only
-           whitespace differs, so the schema fixtures cover both. */
+        /* Framing follows the mode: watch's contract is NDJSON — one
+           object per line — and a multi-line error envelope would break a
+           line-framed consumer at exactly the moment it's reporting a
+           failure. One-shot mode keeps the pretty-printed envelope. Same
+           bytes-as-JSON either way: only whitespace differs, so the schema
+           fixtures cover both. */
         const char *nl  = flag_watch ? ""  : "\n";
         const char *i2  = flag_watch ? ""  : "  ";
         const char *i4  = flag_watch ? ""  : "    ";
@@ -145,10 +139,10 @@ int mos_cli_emit_unknown_and_fail(const char *context, mos_error err,
  *
  * Lives here, not in cli/watch.c, on purpose: rendering a mos.event.v1
  * line needs only the public mos_watch_event_* accessors plus the shared
- * CLI writers — no Apple-side symbol — while the watch PUMP (mos_watch.c)
- * does. Keeping the emitter out of that adapter-bound TU lets the headless
- * emit harness (tests/emit) link and validate its real output against the
- * schema without dragging in IOKit / DiscRecording and the time seam. */
+ * CLI writers — no Apple-side symbol. Keeping it out of the adapter-bound
+ * watch TU lets the headless emit harness (tests/emit) link and validate
+ * its real output against the schema without dragging in IOKit /
+ * DiscRecording and the time seam. */
 
 static const char *event_kind_string(mos_event_kind k)
 {
@@ -265,13 +259,11 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
 /* ---- List: one snapshot, probe in-callback ---------------------------- *
  *
  * Enumeration yields bsd_unit + registry_id only; the State / Vendor /
- * Product / Rev columns of the list contract
- * (doc/research/2026-06-10-cli-design.md) need one open + query per
- * drive — the same probe `mos status` runs, opened in-callback via
- * mos_open_device (atomic registry-ID resolve, no selection-time
- * TOCTOU). Per-entry containment: a drive whose open/query fails shows
- * state "error" with identity dashes; one sick drive never kills the
- * rig overview. */
+ * Product / Rev columns need one open + query per drive — the same probe
+ * `mos status` runs, opened in-callback via mos_open_device (atomic
+ * registry-ID resolve, no selection-time TOCTOU). Per-entry containment:
+ * a drive whose open/query fails shows state "error" with identity
+ * dashes; one sick drive never kills the rig overview. */
 
 /* id/unit collector — used by mos_cli_resolve_index_of's index lookup. */
 typedef struct {
@@ -324,7 +316,7 @@ static void query_row(const mos_device_info_t *info, mos_cli_list_row *row)
     const char *v = mos_state_result_vendor(r);
     const char *p = mos_state_result_product(r);
     const char *rv = mos_state_result_revision(r);
-    /* RAW bytes; escaping is per-surface, at emit time (E1). */
+    /* RAW bytes; escaping is per-surface, at emit time. */
     if (v)  snprintf(row->vendor,   sizeof row->vendor,   "%s", v);
     if (p)  snprintf(row->product,  sizeof row->product,  "%s", p);
     if (rv) snprintf(row->revision, sizeof row->revision, "%s", rv);
@@ -335,8 +327,8 @@ static void query_row(const mos_device_info_t *info, mos_cli_list_row *row)
 }
 
 /* Render rows as the human table. with_volume=false is the EX_USAGE
-   mini-list variant (CLI design: one table implementation). Cell
-   strings must outlive the call — caller passes the row array. */
+   mini-list variant (one table implementation). Cell strings must outlive
+   the call — caller passes the row array. */
 void mos_cli_emit_list_table(FILE *f, const mos_cli_list_row *rows, int n,
                             bool with_volume)
 {
@@ -357,8 +349,8 @@ void mos_cli_emit_list_table(FILE *f, const mos_cli_list_row *rows, int n,
     char p_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
     char r_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];
     /* Volume column shows the mount path only (mos_cli_list_volume_cell);
-       the label stays in --json and on metadata's Volume row. Bounded so
-       a hostile or merely long path can't wreck the table; the JSON is the
+       the label stays in --json and on metadata's Volume row. Bounded so a
+       hostile or merely long path can't wreck the table; JSON is the
        faithful form. Worst case: 64 (path) + NUL. */
     char vol_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(96)];
     const char *cells[MOS_CLI_LIST_CAP * MAXC];

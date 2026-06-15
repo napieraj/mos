@@ -8,10 +8,10 @@ static void emit_human(const mos_state_result *r, int index1,
                        bool invoked_by_index, bool invoked_by_registry,
                        const char *volume_name)
 {
-    /* Five-tier order (doc/research/2026-06-10-cli-design.md): answer,
-       evidence, media, addressing, identity. Suppression mirrors the
-       JSON contract (pairs the schema suppresses are not in the array);
-       structural addressing/identity rows show "-" via NULL instead. */
+    /* Five-tier order: answer, evidence, media, addressing, identity.
+       Suppression mirrors the JSON contract (pairs the schema suppresses
+       are not in the array); structural addressing/identity rows show "-"
+       via NULL instead. */
     mos_cli_human_pair pairs[11];
     size_t n = 0;
 
