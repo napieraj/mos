@@ -6,15 +6,13 @@
  *
  * No IOKit. The IOKit shell issues READ TRACK INFORMATION via the
  * ReadTrackInformation convenience method into a fixed, zero-initialized
- * buffer and hands that buffer plus its size here. Every length and
- * value byte is device-reported and therefore hostile; this file keeps
- * the declared length from steering a read outside [buf, buf+len) and
- * reads only fixed offsets.
+ * buffer and hands it plus its size here. Every length and value byte is
+ * device-reported and therefore hostile; this file keeps the declared
+ * length from steering a read outside [buf, buf+len) and reads only fixed
+ * offsets.
  *
- * Wire layout (the MMC Track Information Block; offsets taken VERBATIM
- * from the Linux kernel's `struct track_information` in
- * include/uapi/linux/cdrom.h, which the kernel reads directly off the
- * 0x52 reply — a packed struct, so field order == byte order):
+ * Wire layout (the MMC Track Information Block; offsets match the Linux
+ * kernel's packed `struct track_information`, include/uapi/linux/cdrom.h):
  *   [0..1]  Track Information Length (BE) — bytes AFTER this field
  *   [2]     Track Number (LSB)
  *   [3]     Session Number (LSB)
@@ -30,12 +28,9 @@
  *   [28..31] Last Recorded Address (BE)   — valid iff lra_v
  *   [32..33] Track / Session Number MSB   — MMC-6 longer reply, optional
  *
- * The NWA and LRA are surfaced only when their *_v validity bit is set
- * (the kernel and libburn both gate on these); otherwise the *_valid
- * accessor is false and the value is meaningless — the consumer must
- * check. No payload byte is ever used as an offset. No-OOB property
- * gated headless under ASan/UBSan by tests/test_trackinfo.c and
- * tests/fuzz_pure.c.
+ * NWA and LRA are surfaced only when their *_v validity bit is set;
+ * otherwise the *_valid accessor is false and the value is meaningless —
+ * the consumer must check. No payload byte is ever used as an offset.
  */
 
 #include "mos_pure.h"

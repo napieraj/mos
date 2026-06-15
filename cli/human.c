@@ -1,6 +1,9 @@
 /*
- * cli/human.c — see human.h. Layout only; vocabulary and
- * suppression belong to the caller.
+ * cli/human.c — see human.h. Layout only; vocabulary and suppression
+ * belong to the caller. The exact bytes (alignment, two-space gutters,
+ * NULL -> "-", right-aligned columns and their headers) are pinned by
+ * the golden-string tests in tests/test_human.c against the design
+ * mocks (doc/research/2026-06-10-cli-design.md).
  */
 #include "human.h"
 
@@ -57,9 +60,9 @@ bool mos_cli_human_table(FILE *f,
         }
     }
 
-    /* One line: leading space, cells padded to w[c], two-space
-       gutters, no trailing whitespace (last column unpadded when
-       left-aligned). */
+    /* Leading space, cells padded to w[c], two-space gutters, no
+       trailing whitespace (last column unpadded when left-aligned).
+       The golden-string tests pin these exact bytes. */
     for (size_t r = 0; r <= nrows; r++) {
         const bool header_row = (r == 0);
         fputc(' ', f);

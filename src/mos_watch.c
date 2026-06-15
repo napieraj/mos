@@ -1,39 +1,14 @@
 /*
- * mos_watch.c — Apple-side adapter for the pure watch state machine.
- *
- * The state machine lives in src/mos_watch_core.c (pure, no IOKit).
- * This file does three things:
- *
- *   1. Implements the public watch API (mos_watch_open_by_bsd_name,
- *      mos_watch_open_by_index, mos_watch_next_event, mos_watch_close).
- *
- *   2. Wires the mos_watch_ops_t vtable to real implementations:
- *      - probe()    → open mos_handle_t, query state, close handle
- *      - mono_ms()  → CLOCK_MONOTONIC in milliseconds (scheduling)
- *      - wall_ms()  → CLOCK_REALTIME in milliseconds (stream_open_ms / ts)
- *
- *   3. Registers kIOGeneralInterest notifications on the watched drive
- *      so device removal wakes the run loop and triggers a clean
- *      terminal event without waiting for the next scheduled poll.
- *
- * The per-probe open/close cycle is deliberate: a held handle keeps the
- * drive reserved for the whole watch, conflicting with DiskArbitration,
- * Finder, and other tools. A fresh handle per probe also tolerates a
- * transient driver detach without poisoning later polls. The retained
- * io_service_t we hold for the notification is just an IOKit reference,
- * not an active client connection.
- *
- * Threading: single-threaded by contract. The notification callback
- * fires on the run loop thread, which is the same thread calling
- * mos_watch_next_event. No locking needed.
+ * mos_watch.c — Apple-side adapter for the pure watch state machine
+ * (state machine in src/mos_watch_core.c). Single-threaded by contract:
+ * the notification callbacks fire on the same run-loop thread that calls
+ * mos_watch_next_event, so no locking.
  */
 
 /* Must precede any system header so BSD extensions stay visible on
-   Apple's SDK. The strlcpy call sites this originally served moved to
-   mos_scsi.c during the string-copy normalization; the define stays
-   because the amalgamation concatenates the adapter TUs into one
-   feature-macro environment (scripts/amalgamate.sh adds a prologue copy of these (the per-TU defines stay as #ifndef no-ops) for its
-   prologue), and dropping it here would make the standalone-TU and
+   Apple's SDK. Kept even though no strlcpy call site remains here: the
+   amalgamation concatenates the adapter TUs into one feature-macro
+   environment, so dropping it would make the standalone-TU and
    amalgamated builds see different SDK surfaces. */
 #ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE 1
@@ -61,7 +36,7 @@
    kCFRunLoopDefaultMode — so a host's default-mode work can't dispatch our
    callbacks and our CFRunLoopStop can't halt a run-loop invocation the host
    owns. The pump runs this same mode, so our sources fire only while
-   mos_watch_next_event is waiting. (Caller-facing contract in mos.h.) */
+   mos_watch_next_event is waiting. */
 #define MOS_WATCH_RUN_LOOP_MODE CFSTR("io.github.napieraj.mos.watch")
 
 /* ---- Public opaque type --------------------------------------------- */
@@ -78,9 +53,9 @@ struct mos_watch {
 
     /* IORegistry entry ID of the physical drive this watch is bound to,
        captured at construction. watch_probe reopens the SAME drive every
-       poll via mos_internal_open_by_registry_id, regardless of any BSD-name
-       reassignment — so a session bound to drive A keeps probing A even if
-       A's name is later recycled to a drive B on the same port. When A is
+       poll via mos_internal_open_by_registry_id, immune to BSD-name
+       reassignment: a session bound to drive A keeps probing A even if A's
+       name is later recycled to another drive on the same port. When A is
        terminated the reopen returns NO_DEVICE → terminal device_removed.
        registry_id (not the BSD name) is the single probe-identity authority. */
     uint64_t registry_id;
@@ -96,17 +71,14 @@ struct mos_watch {
     CFRunLoopSourceRef    notify_source;
     CFRunLoopRef          run_loop;
 
-    /* DiscRecording doorbell for media/tray-change wake-up (Phase 2a of
-       the DR pivot: replaced the DiskArbitration session — DR's
+    /* DiscRecording doorbell for media/tray-change wake-up. DR's
        StatusChanged is device-scoped, so it also wakes on tray-open /
-       no-media drives where DA's media-scoped, bsd_unit-filtered wake
-       matched nothing). The callback calls
-       mos_internal_watch_notify_wake() to pull the next poll forward
-       and CFRunLoopStop() to break the pump's current sleep. Both
-       fields NULL on poll-only fallback (center or run-loop source
-       creation failed at open time) — polling is the correctness
-       floor, the doorbell is latency only. SINGLE-TARGET ONLY: in all
-       mode arrival discovery rides the doorbell with no poll floor,
+       no-media drives. The callback calls mos_internal_watch_notify_wake()
+       to pull the next poll forward and CFRunLoopStop() to break the
+       pump's current sleep. Both fields NULL on poll-only fallback (center
+       or run-loop source creation failed at open time) — polling is the
+       correctness floor, the doorbell is latency only. SINGLE-TARGET ONLY:
+       in all mode arrival discovery rides the doorbell with no poll floor,
        so mos_watch_open_all fails instead of falling back. */
     DRNotificationCenterRef dr_center;
     CFRunLoopSourceRef      dr_source;
@@ -120,11 +92,9 @@ struct mos_watch {
 
     /* Device-static identity, captured ONCE from the validated open
        handle (whose strings come from the DR directory) and owned by
-       the watch for its whole life. Events point here; per-probe
-       handles never contribute identity (the per-probe re-home this
-       replaced — and the v0.3.2 use-after-free class it existed to
-       contain — retired with DR pivot Phase 2a). Widths are the SPC-4
-       INQUIRY field widths the directory data is parsed from:
+       the watch for its whole life. Events point here; per-probe handles
+       never contribute identity. Widths are the SPC-4 INQUIRY field
+       widths the directory data is parsed from:
          vendor[9]    VENDOR_IDENTIFICATION   ( 8 + NUL)
          product[17]  PRODUCT_IDENTIFICATION  (16 + NUL)
          revision[5]  PRODUCT_REVISION_LEVEL  ( 4 + NUL, SPC-4 §6.4.2) */
@@ -132,7 +102,7 @@ struct mos_watch {
     char product[17];
     char revision[5];
 
-    /* ---- Watch-all mode (DR pivot Phase 2b) ------------------------ *
+    /* ---- Watch-all mode -------------------------------------------- *
      * all_mode selects the multiplexer path: `all` is the pure fan-in
      * over per-slot cores, `slots` is the adapter-side per-device probe
      * context (registry id + watch-static identity) each core's ctx
@@ -161,8 +131,8 @@ struct mos_watch {
 
 /* ---- Time --------------------------------------------------------- */
 
-/* Monotonic milliseconds. CLOCK_MONOTONIC is available on macOS 10.12+;
-   we're already floor 12.0 (Monterey) so this is unconditional. */
+/* Monotonic milliseconds. CLOCK_MONOTONIC is unconditional at our 12.0
+   floor. */
 static uint64_t monotonic_ms(void)
 {
     struct timespec ts = {0, 0};
@@ -180,15 +150,14 @@ static uint64_t wall_clock_ms(void)
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000);
 }
 
-/* Per-process monotonicized wall ms for the session-open timestamp
-   (P4). Two watches opened on the same drive in the same wall-clock
-   millisecond would otherwise share a (registry_id, stream_open_ms)
-   pair, since per-drive uniqueness rides on the wall component.
-   Bumping a same-or-earlier reading to last+1 keeps the value
-   epoch-ms-shaped — rough cross-run orderability preserved — while
-   guaranteeing per-process uniqueness even across NTP step-backs.
-   Event `ts` is unaffected: it reads wall_clock_ms() fresh at every
-   emit. */
+/* Per-process monotonicized wall ms for the session-open timestamp.
+   Two watches opened on the same drive in the same wall-clock millisecond
+   would otherwise share a (registry_id, stream_open_ms) pair, since
+   per-drive uniqueness rides on the wall component. Bumping a same-or-
+   earlier reading to last+1 keeps the value epoch-ms-shaped — rough
+   cross-run orderability preserved — while guaranteeing per-process
+   uniqueness even across NTP step-backs. Event `ts` is unaffected: it
+   reads wall_clock_ms() fresh at every emit. */
 static uint64_t stream_epoch_wall_ms(void)
 {
     static _Atomic uint64_t last = 0;
@@ -218,13 +187,12 @@ static uint64_t stream_epoch_wall_ms(void)
    before any mos_close(h), every handle-borrowed pointer field of the
    escaping struct must be REPLACED — identity fields point at the
    watch-static buffers captured at open (w->vendor / w->product /
-   w->revision; device-static data, so per-probe refresh carried no
+   w->revision; device-static data, so per-probe refresh carries no new
    information) — or set NULL. The footgun is `*out = *qr;` — it copies
    every pointer verbatim, so "forgot one" is the default, not the
-   exception (the v0.3.2 revision use-after-free was exactly this: it
-   rode the struct copy un-replaced). Any NEW borrowed pointer added to
-   mos_watch_event / mos_state_result needs a watch-lifetime backing
-   store and a replacement below. (bsd_unit is a value, never replaced.) */
+   exception. Any NEW borrowed pointer added to mos_watch_event /
+   mos_state_result needs a watch-lifetime backing store and a replacement
+   below. (bsd_unit is a value, never replaced.) */
 static mos_error watch_probe(void *ctx, mos_state_result *out)
 {
     mos_watch_t *w = (mos_watch_t *)ctx;
@@ -255,21 +223,15 @@ static mos_error watch_probe(void *ctx, mos_state_result *out)
 
     /* The drive is pinned by registry ID, but the media's BSD unit is not
        stable (-1 when empty at open; changes across eject/reinsert). Refresh
-       the ADAPTER's copy (it feeds the mos_watch_bsd_unit accessor; the DR
-       doorbell filters by registry ID, so no wake filter reads it); the pure
-       core adopts the probe's unit itself on every successful pump
-       (mos_watch_core.c), so the error/device_removed fallback no
-       longer depends on this adapter
-       — a layering obligation retired by the third review. media_id (the
-       F1 swap fingerprint) needs no manual tracking — it rides the
+       the ADAPTER's copy (it feeds the mos_watch_bsd_unit accessor). The
+       media_id swap fingerprint needs no manual tracking — it rides the
        *out = *qr copy and the core reads it from the result. */
     w->bsd_unit = out->bsd_unit;
     /* Replace the three handle-borrowed identity pointers with the
        watch-static identity captured at open (the lifetime invariant
        above): they must not survive the mos_close(h) below. Identity is
        device-static directory data, so the per-probe handle's copy is
-       byte-identical to the open-time capture — repointing loses
-       nothing and removes the per-probe re-home entirely. */
+       byte-identical to the open-time capture — repointing loses nothing. */
     out->vendor   = w->vendor[0]   ? w->vendor   : NULL;
     out->product  = w->product[0]  ? w->product  : NULL;
     out->revision = w->revision[0] ? w->revision : NULL;
@@ -338,7 +300,7 @@ static const mos_watch_ops_t apple_watch_slot_ops = {
 
 /* Add one device from a DR snapshot. Dedupe by registry_id BEFORE
    touching slot storage; the slot is claimed by the same first-free
-   scan add() uses (single-thread contract keeps the scans agreeing). */
+   scan add() uses (the single-thread contract keeps the scans agreeing). */
 static void watch_all_add_device(mos_watch_t *w,
                                  const mos_internal_dr_snapshot *snap,
                                  bool mid_stream)
@@ -353,8 +315,7 @@ static void watch_all_add_device(mos_watch_t *w,
         return; /* full and genuinely new — documented drop until a slot frees */
     }
     /* Width-agreement pins: source and destination both carry the
-       SPC-4 identity widths, so these copies can never truncate.
-       Successor of the retired INQUIRY path's per-site asserts. */
+       SPC-4 identity widths, so these copies can never truncate. */
     _Static_assert(sizeof w->slots[i].vendor   == sizeof snap->vendor,
                    "slot vendor width must match the DR snapshot's");
     _Static_assert(sizeof w->slots[i].product  == sizeof snap->product,
@@ -390,8 +351,7 @@ static void watch_all_add_device(mos_watch_t *w,
  *      per-probe MMC user-client open/close — safe to wake on.
  *   3. Everything else IGNORED — including IsAttemptingOpen / WasClosed /
  *      BusyStateChange, which fire on ANY user-client open/close (our own
- *      probes included) and would self-trigger. Whether they can be used
- *      safely is deferred to v0.4 pending the empirical probe.
+ *      probes included) and would self-trigger.
  *
  * messageType is natural_t here vs uint32_t in the SDK's
  * IOServiceInterestCallback typedef; both are `unsigned int`, so the
@@ -424,8 +384,7 @@ static void watch_interest_callback(void *refcon,
         /* IGNORED. Other messages (IsRequestingClose, power-state
            transitions, system sleep notifications, AND the
            IsAttemptingOpen/WasClosed/BusyStateChange family that
-           self-trigger on our own probe handles — see header
-           comment for the deferred-v0.4 plan). */
+           self-trigger on our own probe handles — see header comment). */
         return;
     }
 
@@ -446,15 +405,14 @@ static void watch_interest_callback(void *refcon,
  * (dr_center/dr_source stay NULL; close treats NULL as a no-op).
  *
  * DR's notification is DEVICE-scoped (not media-scoped), so this
- * doorbell also rings for tray-open / no-media drives (DR pivot
- * Phase 2a, doc/research/2026-06-10-dr-pivot-implementation-plan.md).
+ * doorbell also rings for tray-open / no-media drives.
  *
  * The callback filters by registry ID — a parameter, not a structural
- * assumption, so a future watch-all mode widens the filter rather than
- * rewiring the pump (plan, Phase 2b). Filtering is fail-OPEN: if the
- * event's device can't be resolved to an ID, wake anyway — a false
- * wake is one cheap probe, a missed wake is stable_poll_ms of latency.
- * DR data never decides state; the wake only schedules the MMC probe.
+ * assumption, so watch-all mode widens the filter rather than rewiring
+ * the pump. Filtering is fail-OPEN: if the event's device can't be
+ * resolved to an ID, wake anyway — a false wake is one cheap probe, a
+ * missed wake is stable_poll_ms of latency. DR data never decides state;
+ * the wake only schedules the MMC probe.
  */
 
 static void dr_status_changed_callback(DRNotificationCenterRef center,
@@ -501,7 +459,7 @@ static void dr_status_changed_callback(DRNotificationCenterRef center,
             }
         }
         /* id resolved but unknown: a device we are not watching (cap
-           overflow) or one Appeared hasn't delivered yet — the
+           overflow) or one whose Appeared hasn't delivered yet — the
            Appeared handler owns joins; nothing to wake. Only break the
            pump's sleep when we actually pulled a poll forward; stopping
            with no wake spends a redundant pump cycle for no state change. */
@@ -571,7 +529,7 @@ static void setup_iokit_interest_wake(mos_watch_t *w)
     /* kIOBusyInterest deliberately NOT registered: BusyStateChange fires on
        every user-client open/close — including our own per-probe MMC
        user-clients — so dispatching it would self-trigger a tight probe
-       loop. Revisiting it is a v0.4 question for the empirical probe. */
+       loop. */
 }
 
 /* Tear down the IOKit interest notification in reverse order:
@@ -597,11 +555,11 @@ static void teardown_iokit_interest_wake(mos_watch_t *w)
     }
 }
 
-/* All-mode lifecycle (Phase 2b): Appeared joins a device to the
-   stream (its first event is relabeled device_appeared by the pure
-   multiplexer); Disappeared wakes the matching slot so its reopen can
-   confirm removal. All-mode only — single-target watches keep
-   kIOGeneralInterest as their terminal-removal source. */
+/* All-mode lifecycle: Appeared joins a device to the stream (its first
+   event is relabeled device_appeared by the pure multiplexer);
+   Disappeared wakes the matching slot so its reopen can confirm removal.
+   All-mode only — single-target watches keep kIOGeneralInterest as their
+   terminal-removal source. */
 static void dr_device_appeared_callback(DRNotificationCenterRef center,
                                         void *observer, CFStringRef name,
                                         DRTypeRef object,
@@ -639,7 +597,7 @@ static void dr_device_disappeared_callback(DRNotificationCenterRef center,
         /* Wake, not removal authority: the woken reopen confirms
            (NO_DEVICE → terminal) at the same latency, and a spurious
            Disappeared costs one probe instead of a permanent eviction
-           (C1 — DR data never decides state). */
+           (DR data never decides state). */
         mos_internal_watch_notify_wake(&w->all.cores[slot]);
     }
     /* Unresolved id: the probe floor catches it — the slot's next
@@ -822,10 +780,10 @@ static mos_watch_t *watch_open_from_validated_handle(
        pointer dangles and the unconditional derefs in the callbacks,
        teardown, and pump gate become use-after-free. Retain here / release
        in mos_watch_close so the run loop object lives for the handle's
-       whole life. This makes the off-thread misuse a safe no-op
-       (CFRunLoopStop on a non-running loop does nothing; removing a source
-       from an idle loop is fine) — it does NOT make cross-thread use
-       functional, the documented single-thread contract still stands. */
+       whole life. This makes off-thread misuse a safe no-op (CFRunLoopStop
+       on a non-running loop does nothing; removing a source from an idle
+       loop is fine) — it does NOT make cross-thread use functional; the
+       single-thread contract still stands. */
     w->run_loop = CFRunLoopGetCurrent();
     CFRetain(w->run_loop);
 
@@ -919,9 +877,9 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
 
     /* Observers BEFORE the snapshot: a device arriving in the gap is
        caught by the queued Appeared (its callback runs only inside the
-       pump), and one landing in both dedupes by registry_id. The
-       reverse order left an unwatchable window — all-mode discovery
-       has no poll floor (C2, doc/research/2026-06-11-review-triage.md). */
+       pump), and one landing in both dedupes by registry_id. The reverse
+       order would leave an unwatchable window — all-mode discovery has no
+       poll floor. */
     w->run_loop = CFRunLoopGetCurrent();
     CFRetain(w->run_loop);   /* borrowed Get-rule ref; released in close (see single-target path) */
     setup_dr_doorbell_wake(w);
@@ -936,10 +894,7 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
        all. A doorbell-less all-watch would "succeed" while unable to
        honor the hot-plug-joins / empty-stream-waits contract (the
        headline of this function's doc block), and the caller has no
-       way to detect the degradation. Fail honestly instead. A slow
-       directory-rescan fallback that would restore soft-fail is a
-       v0.next decision contingent on this failure being observed in
-       practice (ROADMAP). */
+       way to detect the degradation. Fail honestly instead. */
     if (!w->dr_center) {
         mos_watch_close(w);
         if (err_out) *err_out = MOS_ERR_IO;

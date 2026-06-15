@@ -5,11 +5,11 @@
  *
  * No IOKit. The IOKit shell issues READ DISC STRUCTURE (BD media type,
  * format 0x00) via the ReadDiscStructure convenience method into a
- * fixed, zero-initialized buffer and hands that buffer plus its size
- * here. Every length and string byte is device/disc-reported and
- * therefore hostile; this file keeps the declared length from steering
- * a read outside [buf, buf+len), and copies the ID bytes verbatim into
- * fixed buffers (the CLI layer escapes them at emit, same as INQUIRY).
+ * fixed, zero-initialized buffer and hands it plus its size here. Every
+ * length and string byte is device/disc-reported and therefore hostile;
+ * this file keeps the declared length from steering a read outside
+ * [buf, buf+len) and copies the ID bytes verbatim into fixed buffers
+ * (the CLI layer escapes them at emit, same as INQUIRY).
  *
  * Layout (response buffer):
  *   [0..1] Disc Structure Data Length (BE) — bytes available AFTER this
@@ -23,20 +23,11 @@
  *            [4+106..108] Media Type ID        (3 bytes)  e.g. "MR1"
  *            [4+111]      Product Revision Number (1 byte) e.g. '0'
  *
- * The DI offsets (8 / 100 / 106 / 111) are MMC-5 / BDA-registered and
- * were cross-verified against dvd+rw-mediainfo.cpp (di+4+100, di+4+106),
- * dvdisaster scsi-layer.c (buf[4+8] disc-type, 100/106), and libburn
- * mmc.c (mmc_set_product_id 100, 106, 111). The physical write-parameter
- * region (offsets 11..99) is deliberately NOT decoded — no consumer
- * value, and its sub-field packing is not multiply-confirmed. For
- * Millenniata
- * M-DISC BD-R the registered values are manufacturer "MILLEN", media
- * type "MR1" — but classification (MILLEN => M-DISC) is the CONSUMER's,
- * not mos's: this decode surfaces the registered ID bytes faithfully
- * and stops there (scope doctrine; same division as MusicBrainz ids).
- *
- * No-OOB property gated headless under ASan/UBSan by
- * tests/test_discstruct.c.
+ * The DI offsets (8 / 100 / 106 / 111) are MMC-5 / BDA-registered. The
+ * physical write-parameter region (offsets 11..99) is deliberately NOT
+ * decoded — no consumer value. Classification (e.g. manufacturer "MILLEN"
+ * => M-DISC) is the CONSUMER's, not mos's: this decode surfaces the
+ * registered ID bytes faithfully and stops there (scope doctrine).
  */
 
 #include "mos_pure.h"

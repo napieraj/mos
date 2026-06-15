@@ -21,9 +21,8 @@
 extern int         opt_index;     /* 0 = unset; 1-based when set */
 extern const char *opt_bsd;
 extern uint64_t    opt_registry;  /* 0 = unset; set only positionally */
-extern const char *opt_tray_action; /* tray sub-verb: eject|close|lock|unlock;
-                                       NULL = missing. A parsed argv value, so
-                                       opt_ (not flag_); positional only. */
+extern const char *opt_tray_action; /* tray sub-verb eject|close|lock|unlock;
+                                       NULL = missing. Parsed argv (opt_), positional. */
 extern bool        flag_list;
 extern bool        flag_json;
 extern bool        flag_watch;
@@ -47,32 +46,28 @@ int  mos_cli_emit_unknown_and_fail(const char *context, mos_error err,
                            const char *dev_node);
 const char *mos_cli_error_to_code(mos_error err);
 
-/* One mos.event.v1 NDJSON line (compact object + newline). The watch
-   loop's renderer, kept in cli/common.c (not the adapter-bound
-   cli/watch.c) so the headless emit harness can validate its real output
-   against the schema. Returns the stdout write outcome, shared with the
-   one-shot finalizers. */
+/* One mos.event.v1 NDJSON line (compact object + newline). Returns the
+   stdout write outcome (shared with the one-shot finalizers). Lives in
+   cli/common.c, not cli/watch.c, so the headless emit harness validates
+   real output against the schema. */
 mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e);
 
-/* mos.state.v1 / mos.event.v1 suppression rule, in one place: 0x0000 is
-   the SCSI sentinel "no current profile", and profile-derived fields
-   (current_profile_name, media_class, the human Profile row) are
-   omitted for it — surfacing "no_current_profile" as a name implies a
-   profile is set when none is. Every emitter must use this predicate
-   rather than comparing against the sentinel itself. */
+/* Profile-suppression rule for every emitter, in one place: 0x0000 is the
+   SCSI sentinel "no current profile". Profile-derived fields
+   (current_profile_name, media_class, the human Profile row) are omitted
+   for it, since surfacing a name would imply a profile is set when none
+   is. Use this predicate, never a bare compare against the sentinel. */
 static inline bool mos_cli_profile_present(uint16_t profile)
 {
     return profile != 0x0000;
 }
 
-/* The list "Volume" cell, RAW (the caller escapes at emit). Shows the
-   mount PATH only — its basename already carries macOS's disambiguation
-   (/Volumes/ARRIVAL vs /Volumes/ARRIVAL 1), so the DA label adds no
-   identifying information the path lacks in the one-row list view. The
-   label is not dropped: it stays in --json (volume_name) and on `mos
-   metadata`'s separate Volume row. Empty (rendered "-") when unmounted.
-   Bounded so a hostile or merely long path cannot wreck the table; the
-   JSON carries the faithful form. */
+/* The list "Volume" cell, RAW (caller escapes at emit). Shows the mount
+   PATH only: its basename already carries macOS disambiguation
+   (/Volumes/ARRIVAL vs /Volumes/ARRIVAL 1), so the DA label adds nothing
+   in the one-row view (it stays in --json volume_name and on `mos
+   metadata`). "" (renders "-") when unmounted. Bounded so a long/hostile
+   path cannot wreck the table; the JSON carries the faithful form. */
 static inline void mos_cli_list_volume_cell(const char *path,
                                             char *out, size_t cap)
 {
@@ -104,8 +99,8 @@ typedef struct {
        truncates at emit. */
     char     volume[256];
     /* Mount path, system-supplied ("" = unmounted). JSON emits it
-       byte-faithfully as volume_path; the table folds it into the one
-       Volume cell as "name (path)". */
+       byte-faithfully as volume_path; the list table's Volume cell shows
+       this path (mos_cli_list_volume_cell). */
     char     volume_path[1024];
     uint64_t registry_id;
 } mos_cli_list_row;
@@ -139,9 +134,8 @@ int mos_cli_run_tray(void);     /* tray control verbs (mos.tray.v1) */
 int mos_cli_run_capacity(void); /* disc capacity (mos.capacity.v1) */
 int mos_cli_run_list(void);
 int mos_cli_run_watch(void);
-int mos_cli_run_probe(void);   /* defined only in MOS_CLI_PROBE builds
-                          (cli/probe.c); the sole call site in main.c
-                          is #ifdef-guarded to match. */
+int mos_cli_run_probe(void);   /* MOS_CLI_PROBE builds only (cli/probe.c);
+                          the sole call site in main.c is #ifdef-guarded. */
 
 void mos_cli_print_usage(FILE *f);
 

@@ -27,15 +27,13 @@
  * the OS. It returns a decision: EMIT_EVENT (write and re-pump),
  * SLEEP_UNTIL (block, then re-pump), TERMINAL (close). mos_watch.c maps
  * SLEEP_UNTIL to CFRunLoopRunInMode so a notification can wake early; the
- * test driver maps it to advancing a fake clock. Mirrors the
- * mos_state_core.c pattern: every transition testable without IOKit. See
- * tests/test_watch_core.c — including the fixture that pins the two-clock
- * contract by running mono_ms in the thousands and wall_ms in the trillions.
+ * test driver maps it to advancing a fake clock. Every transition is
+ * testable without IOKit.
  */
 
-/* Precautionary, mirroring mos_watch.c: this file uses only POSIX time
-   interfaces today, but the define keeps BSD extensions visible if a
-   BSD-only helper is added later. */
+/* Mirrors mos_watch.c: no BSD-only helper here today, but the define
+   keeps BSD extensions visible if one is added (and keeps the amalgamated
+   feature-macro environment consistent). */
 #ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE 1
 #endif
@@ -74,14 +72,14 @@
 
    SATURATING: the schema pattern requires a 4-digit year, and the clock
    is an INPUT to this pure layer — the hostile-input discipline applies
-   to ops->wall_ms exactly as it does to drive-controlled bytes; an
-   insane host clock, NTP step, or fuzzed ops table must not produce a
-   schema-invalid line. Values past
-   9999-12-31T23:59:59Z clamp to that instant; a 5-digit year from
-   strftime (21 chars) and an empty string from a gmtime_r failure are
-   both schema violations, so neither can escape. Post-clamp, gmtime_r
-   and strftime cannot fail for any uint64 input; the fallback writes
-   the clamp constant anyway so the contract holds unconditionally. */
+   to ops->wall_ms exactly as it does to drive-controlled bytes; an insane
+   host clock, NTP step, or fuzzed ops table must not produce a schema-
+   invalid line. Values past 9999-12-31T23:59:59Z clamp to that instant; a
+   5-digit year from strftime (21 chars) and an empty string from a
+   gmtime_r failure are both schema violations, so neither can escape.
+   Post-clamp, gmtime_r and strftime cannot fail for any uint64 input; the
+   fallback writes the clamp constant anyway so the contract holds
+   unconditionally. */
 #define MOS_TS_MAX_SECS 253402300799ULL   /* 9999-12-31T23:59:59Z */
 static void format_rfc3339(uint64_t wall_ms, char *out, size_t cap)
 {
@@ -143,13 +141,11 @@ void mos_internal_watch_init(mos_watch_state *w,
 
     /* Session identity: two plain values, no composite token. The
        registry_id is the attachment identity (xnu mints real IDs from a
-       never-reused monotone counter >= 2^32+256; 0 is only reachable
-       from direct pure-layer callers). start_wall_ms is recorded as
+       never-reused monotone counter >= 2^32+256; 0 is only reachable from
+       direct pure-layer callers). start_wall_ms is recorded as
        stream_open_wall_ms on every event; the adapter monotonicizes it
-       per process so the (registry_id, stream_open_wall_ms) pair is
-       unique per session even for same-millisecond reopens of the same
-       drive. Consumers needing a single correlation key derive one —
-       the data layer stays normalized. */
+       per process so the (registry_id, stream_open_wall_ms) pair is unique
+       per session even for same-millisecond reopens of the same drive. */
     w->registry_id         = registry_id;
     w->stream_open_wall_ms = start_wall_ms;
 }
@@ -379,9 +375,8 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
        events with a fresh probe carry r.bsd_unit directly, but the
        error/device_removed fallback in fill_event_base reads w->bsd_unit
        — which must therefore track the last OBSERVED unit, not the
-       open-time one. The CORE owns this update: pushing it to adapters
-       would leave pure-only behavior wrong and make every adapter
-       rediscover the obligation. */
+       open-time one. The CORE owns this update so pure-only behavior is
+       correct without every adapter rediscovering the obligation. */
     w->bsd_unit = r.bsd_unit;
 
 
@@ -418,7 +413,7 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
         return d;
     }
 
-    /* Same-state media swap (F1) → media_changed, while the drive stays READY
+    /* Same-state media swap → media_changed, while the drive stays READY
        across two probes (a fast slot-load swap, or eject/reinsert that fell
        entirely between polls). Two independent signals:
 
@@ -477,12 +472,12 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
     return d;
 }
 
-/* ---- Watch-all multiplexer (DR pivot Phase 2b) --------------------- *
+/* ---- Watch-all multiplexer ----------------------------------------- *
  *
  * See mos_pure.h for the contract. Iteration order is ascending
  * registry_id over active slots on EVERY entry, so same-tick event
  * interleave is deterministic and independent of slot assignment
- * history — the property the fixture tests pin. */
+ * history. */
 
 void mos_internal_watch_all_init(mos_watch_all_state *a)
 {

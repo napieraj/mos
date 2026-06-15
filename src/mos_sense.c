@@ -15,8 +15,8 @@
  *   byte 2: ASC
  *   byte 3: ASCQ
  *
- * Optical drives in practice always return fixed format. The descriptor
- * path is here for correctness, not because we've seen it in the wild.
+ * Optical drives in practice return fixed format; the descriptor path is
+ * here for correctness.
  */
 
 #include "mos_pure.h"
@@ -48,23 +48,17 @@ void mos_internal_parse_sense(const uint8_t sense[18],
 /*
  * Map (sense_key, asc, ascq) → state, GIVEN THE TRAY IS CLOSED.
  *
- * This is the closed-branch enrichment, not a tray detector. By the time
- * it runs, the open/closed verdict already belongs to GESN's door bit (or,
- * when GESN was silent, to the sense fork in mos_state_core.c). So this
- * function never returns OPEN or EMPTY_OR_OPEN: it only refines a closed
- * tray into the *reason* the unit isn't ready. A 3A/02 ("medium not
- * present, tray open") reaching here means GESN already said closed and the
- * ASCQ's tray hint is deliberately discarded — enrich, don't invalidate.
+ * Closed-branch enrichment, not a tray detector: the open/closed verdict
+ * already belongs to GESN's door bit (or, when GESN was silent, to the
+ * sense fork in mos_state_core.c). So this never returns OPEN/EMPTY_OR_OPEN;
+ * it refines a closed tray into the *reason* the unit isn't ready, and a
+ * 3A/02 ("medium not present, tray open") reaching here has its ASCQ tray
+ * hint discarded — enrich, don't invalidate. asc == 0x3A means no medium →
+ * EMPTY; any other not-ready sense means a disc is engaged. Unrecognized
+ * sense → MOS_STATE_UNKNOWN (tray still known-closed; raw sense rides along).
  *
- * Presence is the hoist: asc == 0x3A means no medium → EMPTY; any other
- * not-ready sense means a disc is engaged and we classify why.
- *
- * Returns MOS_STATE_UNKNOWN for sense we won't assert a meaning for; the
- * tray is still known-closed, the raw sense still rides along on the result.
- *
- * References:
- *   T10 ASC/ASCQ public list: https://www.t10.org/lists/asc-num.htm
- *   MMC-6 / SBC-4 sense usage is consistent with the generic SCSI table.
+ * T10 ASC/ASCQ list: https://www.t10.org/lists/asc-num.htm (MMC-6 / SBC-4
+ * sense usage is consistent with the generic SCSI table).
  */
 mos_state mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uint8_t ascq)
 {

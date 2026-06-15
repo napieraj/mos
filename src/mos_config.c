@@ -35,11 +35,8 @@
  *     Additional Length cannot wrap the cursor.
  *   - The bool return is intentionally undifferentiated: false means
  *     "stop" — end of list OR a malformed/over-long descriptor, alike.
- *     Callers walk this as a plain `while (next(...))` and never need to
- *     tell the two apart (libcdio's long-standing model); the malformed
+ *     Callers walk this as a plain `while (next(...))`; the malformed
  *     branch is unreachable on conformant hardware.
- *
- * No-OOB property gated headless under ASan/UBSan by tests/test_config.c.
  */
 
 #include "mos_pure.h"

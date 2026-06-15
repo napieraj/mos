@@ -1,18 +1,7 @@
 /*
- * mos_scsi_status.h — SAM-5 §5.3 SCSI task status constants.
- *
- * Pure-data header with no IOKit / CoreFoundation dependencies. Safe
- * to include from:
- *   - Runtime source that needs to classify task status (mos_state_core.c)
- *   - Pure-data test code that must compile without the SDK
- *     (tests/test_scsi_status.c)
- *
- * This is the single source of truth for these values. Do NOT redeclare
- * them elsewhere — a second copy drifts the first time only one is updated.
- *
- * We define our own constants rather than using Apple's kSCSITaskStatus_*
- * enums from SCSITask.h so the contention classifier (and its test) stays
- * SDK-free and compiles headless. Values match SAM-2 and Apple's enums.
+ * mos_scsi_status.h — SAM-5 §5.3 SCSI task status constants. Sole source
+ * of truth; no IOKit/CF deps so the contention classifier and its test
+ * stay SDK-free. Values match Apple's kSCSITaskStatus_* enums.
  */
 
 #ifndef MOS_SCSI_STATUS_H

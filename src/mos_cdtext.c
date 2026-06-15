@@ -4,35 +4,31 @@
  * reply.
  *
  * No IOKit. The IOKit shell issues READ TOC/PMA/ATIP with format 0101b
- * via the non-exclusive ReadTableOfContents convenience method (the same
- * wrapper the format-0000b TOC uses) into a fixed, zero-initialized
- * buffer and hands that buffer plus its size here. Every length and text
- * byte is disc-reported and therefore hostile; this file keeps the
- * declared CD-TEXT Data Length from steering a read outside [buf,
- * buf+len), and copies text bytes verbatim into fixed buffers (the CLI
- * layer escapes them at emit, same as the volume name and INQUIRY
+ * via the non-exclusive ReadTableOfContents convenience method into a
+ * fixed, zero-initialized buffer and hands it plus its size here. Every
+ * length and text byte is disc-reported and therefore hostile; this file
+ * keeps the declared CD-TEXT Data Length from steering a read outside
+ * [buf, buf+len) and copies text bytes verbatim into fixed buffers (the
+ * CLI layer escapes them at emit, same as the volume name and INQUIRY
  * identity). No payload byte is ever used as an offset or length.
  *
  * SCOPE — the album Title/Performer (the "which album is in the drive"
  * disambiguator, parallel to the mounted volume name) plus the per-track
- * TITLES (song names) and PERFORMERS (for various-artists discs). All
- * from the FIRST language block (block 0) in single-byte charset.
- * Deliberately NOT decoded here, deferred with named falsifiers (design
- * doc 2026-06-14 addenda): the other field types (songwriter/composer/
- * arranger/message/genre/ISRC/UPC/disc-id); additional language blocks
- * (1..7); and double-byte (DBCC) text (MS-JIS / 16-bit) — a DBCC field
- * reads as absent rather than being mis-decoded as Latin-1. CD-TEXT is
- * BEST-EFFORT DISPLAY TEXT, not a fail-closed fingerprint: audio-CD
- * dedup keys ride on the TOC (mos_internal_toc_parse), the fail-closed
- * identity primitive.
+ * TITLES and PERFORMERS, all from the FIRST language block (block 0) in
+ * single-byte charset. Deliberately NOT decoded: the other field types
+ * (songwriter/composer/arranger/message/genre/ISRC/UPC/disc-id);
+ * additional language blocks (1..7); and double-byte (DBCC) text
+ * (MS-JIS / 16-bit) — a DBCC field reads as absent rather than being
+ * mis-decoded as Latin-1. CD-TEXT is BEST-EFFORT DISPLAY TEXT, not a
+ * fail-closed fingerprint: audio-CD dedup keys ride on the TOC
+ * (mos_internal_toc_parse), the fail-closed identity primitive.
  *
  * Stream model (MMC / Red Book): within one (pack-type, block) the
- * per-track strings are concatenated NUL-separated and chopped across
- * the 12-byte pack payloads; the first pack's Track Number field seeds
- * the running index, so the stream is [track S, track S+1, ...] where S
- * is that field (0 = album-level for the title/performer types). We walk
- * the block-0 packs in buffer order, reconstruct that stream, and
- * dispatch each string by its track number.
+ * per-track strings are NUL-separated and chopped across the 12-byte pack
+ * payloads; the first pack's Track Number field seeds the running index,
+ * so the stream is [track S, track S+1, ...] (S = 0 is album-level for
+ * the title/performer types). We walk the block-0 packs in buffer order,
+ * reconstruct that stream, and dispatch each string by its track number.
  *
  * Pack layout (READ TOC format 0101b, MMC-3 §6.27 / Red Book CD-TEXT;
  * cross-verified against libcdio lib/driver/cdtext.c):

@@ -362,8 +362,7 @@ bool mos_bsd_dev_node(int64_t unit, char *out, size_t out_cap)
     /* Same domain as mos_bsd_name_format, same rationale: a unit in
        (UINT32_MAX, ~1e14) would still fit a generous buffer and render
        a different, valid-LOOKING node — refuse rather than emit a node
-       no real disk can have. (Fifth review, F5: the guard had been
-       copy-adapted away.) */
+       no real disk can have. */
     if (unit < 0 || unit > (int64_t)UINT32_MAX) return false;
     int n = snprintf(out, out_cap, "/dev/disk%lld", (long long)unit);
     if (n < 0 || (size_t)n >= out_cap) { out[0] = 0; return false; }

@@ -9,10 +9,10 @@
  * returns the max performance found in one reply.
  *
  * No IOKit. The IOKit shell issues GET PERFORMANCE via GetPerformance
- * into a fixed, zero-initialized buffer and hands that buffer plus its
- * size here. Every length and value byte is device-reported and hostile;
- * this file keeps the declared length from steering a read outside
- * [buf, buf+len) and reads only fixed offsets within each descriptor.
+ * into a fixed, zero-initialized buffer and hands it plus its size here.
+ * Every length and value byte is device-reported and hostile; this file
+ * keeps the declared length from steering a read outside [buf, buf+len)
+ * and reads only fixed offsets within each descriptor.
  *
  * Wire layout (MMC GET PERFORMANCE, Performance Data, TYPE 00h):
  *   [0..3]  Performance Data Length (BE) — bytes AFTER byte 3
@@ -23,14 +23,11 @@
  *     desc[8..11]  End LBA
  *     desc[12..15] End Performance (kB/s, BE)
  *
- * SPEC-DERIVED, no in-repo capture yet: the Performance Data descriptor
- * layout is the MMC-6 Nominal Performance Descriptor. Per the AGENTS
- * hardware ADR this is built to spec; a real GET PERFORMANCE capture is
- * a falsifier, it does not steer the offsets. The list may be empty (a
- * drive that declines the direction) — that is data (count 0), not an
- * error. No payload byte is ever used as an offset. No-OOB property
- * gated headless under ASan/UBSan by tests/test_perf.c and
- * tests/fuzz_pure.c.
+ * The descriptor layout is the MMC-6 Nominal Performance Descriptor,
+ * built to spec (AGENTS hardware ADR: a real capture is a falsifier, it
+ * does not steer the offsets). The list may be empty (a drive that
+ * declines the direction) — that is data (count 0), not an error. No
+ * payload byte is ever used as an offset.
  */
 
 #include "mos_pure.h"

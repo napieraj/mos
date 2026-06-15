@@ -1,14 +1,7 @@
 /*
- * mos_pure.h — internal prototypes for pure-data functions.
- *
- * No IOKit / CoreFoundation includes. Safe to include from:
- *   - Runtime code (via mos_internal.h which re-includes this)
- *   - Pure-data tests (tests/test_sense.c, tests/test_bsd_name.c, etc.)
- *
- * The split exists because mos_internal.h has to drag in IOKit for the
- * mos_handle / mos_device_info struct definitions, but the sense parser
- * and state mapper are pure data transformations that should be testable
- * without linking IOKit into the test binary.
+ * mos_pure.h — prototypes and layouts for the pure-data functions. No
+ * IOKit / CoreFoundation includes, so the parsers and state mapper are
+ * testable without linking IOKit (mos_internal.h re-includes this).
  */
 
 #ifndef MOS_PURE_H
@@ -21,12 +14,11 @@
 
 /* ---- Returned-object layouts (opaque in the public header) --------- *
  *
- * The public mos.h exposes mos_state_result and mos_watch_event only as
- * opaque typedefs plus accessor prototypes; the full layout lives here so
- * the pure core, the Apple fill paths, and the pure tests can read and
- * write fields directly. "Grow in place" means appending a field below —
- * because external callers only ever see the accessors, that is ABI-safe
- * with no size/version negotiation. Keep additions at the end. */
+ * mos.h exposes mos_state_result / mos_watch_event as opaque typedefs +
+ * accessors; the full layout lives here for the pure core, the Apple fill
+ * paths, and the tests. Callers see only accessors, so appending a field
+ * at the end is ABI-safe (no size/version negotiation). Additions go at
+ * the end. */
 struct mos_state_result {
     mos_state state;
     int64_t        bsd_unit;      /* whole-disk unit; -1 = no whole-disk IOMedia node (media absent) */
@@ -51,13 +43,10 @@ struct mos_watch_event {
     mos_event_kind kind;
     uint64_t       seq;
     char           ts[24];        /* RFC 3339 UTC, NUL-terminated */
-    /* Session identity, as two plain values: registry_id is the watch
-       target's attachment identity (on the Apple adapter, the IORegistry
-       entry ID — xnu guarantees real IDs >= 2^32+256);
-       stream_open_wall_ms is the per-process-monotonicized wall epoch
-       captured at watch open. The pair is unique per session; both are
-       constant for the stream's life. JSON carries them as separate
-       fields; consumers needing a single correlation key derive one. */
+    /* Session identity, two plain values constant for the stream's life:
+       registry_id (attachment identity; the IORegistry entry ID on the
+       Apple adapter) and stream_open_wall_ms (wall epoch at watch open).
+       The pair is unique per session; JSON carries them separately. */
     uint64_t       registry_id;
     uint64_t       stream_open_wall_ms;
     int64_t        bsd_unit;
@@ -76,14 +65,10 @@ struct mos_watch_event {
 
 /* ---- Fixed-buffer capacities -------------------------------------- *
  *
- * Sizes for the transient BSD-name strings that appear only at I/O
- * boundaries — reading kIOBSDNameKey in the adapter, argv in the
- * probes. Drive identity itself is an int64 unit
- * (mos_*_bsd_unit), not a string; these caps bound only the short-lived
- * names that get parsed to a unit (or formatted from one) and discarded.
- *
- * MOS_BSD_NAME_CAP: a whole-disk name "diskN" — longest is "disk" + a
- *   32-bit unit ("disk4294967295", 14 chars) + NUL, so 32 is ample. */
+ * MOS_BSD_NAME_CAP bounds a transient whole-disk name "diskN" (longest
+ * "disk4294967295", 14 chars, + NUL — 32 is ample). Drive identity is
+ * the int64 unit, not a string; these names are parsed to a unit and
+ * discarded. */
 #define MOS_BSD_NAME_CAP  32
 
 /* ---- Sense parser (mos_sense.c) ------------------------------------ *
@@ -120,23 +105,19 @@ bool mos_internal_bsd_name_is_whole_shape(const char *bsd_name);
    identity. Pinned by tests/test_bsd_name.c. */
 int64_t mos_internal_parse_bsd_unit(const char *name);
 
-/* True if `reported` (a raw IOKit-reported BSD name, e.g. "disk4" or
-   "disk4s1") names whole-disk unit `whole_unit` itself or one of its
-   partition children. The unit is compared numerically (disk40 vs unit 4
-   is 40 != 4) and the suffix validated as `(s<digits>)*`; false for NULL,
-   whole_unit < 0, a non-"disk" prefix, or a malformed suffix. Pinned by
-   tests/test_bsd_name.c. No in-tree consumers since the DA retirement
-   (2026-06-11): its call sites were the DiskArbitration event filters
-   (the watch's, retired in DR pivot Phase 2a, then the probe's, retired
-   with the probe consolidation). Kept as the pinned partition-child
-   matching rule for any future BSD-name event filtering. */
+/* True if `reported` (a raw IOKit BSD name, e.g. "disk4" or "disk4s1")
+   names whole-disk unit `whole_unit` itself or one of its partition
+   children. The unit is compared numerically (disk40 vs unit 4 is
+   40 != 4) and the suffix validated as `(s<digits>)*`; false for NULL,
+   whole_unit < 0, a non-"disk" prefix, or a malformed suffix. No current
+   in-tree consumer; kept as the pinned partition-child matching rule
+   (tests/test_bsd_name.c) for future BSD-name event filtering. */
 bool mos_internal_bsd_unit_matches(const char *reported, int64_t whole_unit);
 
-/* xnu mints IORegistry entry IDs from a never-reused monotone counter
-   starting at 2^32+256; CLI indexes are 1..MOS_CLI_LIST_CAP. The two
-   all-digit selector spaces are disjoint by kernel construction, so a
-   parsed value classifies deterministically. Pinned by
-   tests/test_bsd_name.c. */
+/* xnu mints IORegistry entry IDs from a monotone counter starting at
+   2^32+256; CLI indexes are 1..MOS_CLI_LIST_CAP. The two all-digit
+   selector spaces are disjoint by kernel construction, so a parsed value
+   classifies deterministically. Pinned by tests/test_bsd_name.c. */
 #define MOS_REGISTRY_ID_FLOOR ((1ULL << 32) + 256)
 bool mos_internal_value_is_registry_id(uint64_t v);
 
@@ -154,26 +135,17 @@ typedef struct {
     uint8_t        data_len;    /* Additional Length, clamped to the buffer */
 } mos_config_feature;
 
-/* Bounds-safe pull-iterator over a GET CONFIGURATION response. `buf`/`len`
- * are the response and the byte count you trust (sizeof your zero-init
- * buffer; the MMC convenience GetConfiguration reports no realized count).
- * Initialize *cursor = 8 to skip the feature header. Returns true and fills
- * *out for each in-bounds descriptor (advancing *cursor by >= 4); false at
- * end-of-data or on the first descriptor that would read past the trusted
- * region. Device-reported lengths can only shorten the walk — no call ever
- * reads outside [buf, buf+len). Pure, so it is ASan/fuzz-checked headless. */
 /* READ TOC/PMA/ATIP format 0000b response — the normalized table of
  * contents, THE disc-identity primitive (MusicBrainz/CDDB ids are pure
  * functions of exactly these fields), read unprivileged via the
  * ReadTableOfContents convenience method. FAIL-CLOSED: an out-of-range,
- * duplicate, or non-ascending track rejects the whole TOC — identity
- * from a half-parsed hostile TOC would be a falsely-stable fingerprint.
- * The header's declared range is held to the same standard: first/last
- * must be coherent (1..99, not inverted) and the descriptor list must
- * cover exactly first..last — a claimed span that truncates the table
- * mid-range is the half-parsed case again, not padding.
- * A TOC without a lead-out parses (have_leadout=false); identity
- * consumers must require it. Byte layout at the decoder (mos_pure.c). */
+ * duplicate, or non-ascending track rejects the whole TOC — identity from
+ * a half-parsed hostile TOC would be a falsely-stable fingerprint. The
+ * header's declared range is held to the same standard: first/last
+ * coherent (1..99, not inverted) and the descriptor list covering exactly
+ * first..last (a truncating span is the half-parsed case, not padding). A
+ * TOC without a lead-out parses (have_leadout=false); identity consumers
+ * must require it. Byte layout at the decoder (mos_pure.c). */
 #define MOS_TOC_MAX_TRACKS 99
 typedef struct {
     uint8_t  track;        /* 1..99 */
@@ -204,18 +176,23 @@ bool mos_internal_toc_parse(const uint8_t *buf, size_t len, mos_toc *out);
  *
  * The trusted parse region is min(allocated, transferred), computed ONCE
  * at the seam; the device claim is DATA that may only shrink that bound,
- * never set or grow it. This is the generalization of the sense buffer's
- * fixed-18 rule to drive-sized replies, and it forecloses the classic
- * SCSI allocation-length overread (header claims 0xFFFF over an 8-byte
- * transfer) by construction. `claimed` is uint64_t so callers compute
- * header-derived totals (e.g. GET CONFIGURATION's `Data Length + 4`) in
- * a width that cannot wrap before the clamp. Pure, total, no failure
- * mode: pathological inputs simply yield a smaller (possibly zero)
- * trusted length. v0.4 RT=0 enrichment MUST derive its parse bound from
- * this function — see doc/seam-contract.md O-4. */
+ * never set or grow it. This generalizes the sense buffer's fixed-18 rule
+ * to drive-sized replies and forecloses the classic SCSI allocation-length
+ * overread (header claims 0xFFFF over an 8-byte transfer) by construction.
+ * `claimed` is uint64_t so header-derived totals (e.g. GET CONFIGURATION's
+ * `Data Length + 4`) cannot wrap before the clamp. Pure, total: pathological
+ * inputs simply yield a smaller (possibly zero) trusted length. Every
+ * variable-size parse bound MUST derive from this — see doc/seam-contract.md O-4. */
 size_t mos_internal_trusted_len(size_t allocated, size_t transferred,
                                 uint64_t claimed);
 
+/* Bounds-safe pull-iterator over a GET CONFIGURATION response. `buf`/`len`
+   are the response and the byte count you trust (sizeof your zero-init
+   buffer; the convenience GetConfiguration reports no realized count).
+   Init *cursor = 8 to skip the header. Returns true and fills *out per
+   in-bounds descriptor (advancing *cursor by >= 4); false at end-of-data
+   or on the first descriptor past the trusted region. Device lengths only
+   shorten the walk — no read outside [buf, buf+len). ASan/fuzz-checked. */
 bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
                                       size_t *cursor, mos_config_feature *out);
 
@@ -226,15 +203,12 @@ bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
                                       uint16_t feature_code,
                                       mos_config_feature *out);
 
-/* AACS capability facts from a full (RT=0) GET CONFIGURATION response —
-   the spec-grounded subset of what MakeMKV's drive dump shows, WITHOUT
-   the LibreDrive synthesis (design doc 2026-06-10 + 06-12 addendum).
+/* AACS capability facts from a full (RT=0) GET CONFIGURATION response.
    bus_encryption is the DRIVE-REPORTED support bit (feature 0x010D
-   payload byte 0 bit 1, per libaacs/UDFclient agreement; the
-   authoritative signed BEC bit lives in the AACS drive certificate
-   behind REPORT KEY, out of scope). Feature present but payload
-   truncated (< 4 bytes) is malformed and reads as absent — fail
-   closed, same rule as the walker. */
+   payload byte 0 bit 1, per libaacs/UDFclient; the authoritative signed
+   BEC bit lives in the AACS drive certificate behind REPORT KEY, out of
+   scope). A feature present but payload-truncated (< 4 bytes) reads as
+   absent — fail closed, same rule as the walker. */
 typedef struct mos_drive_caps {
     bool    aacs;            /* feature 0x010D present in the walk      */
     uint8_t aacs_version;    /* payload byte 3; 0 when aacs is false    */
@@ -245,12 +219,10 @@ void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
                                         mos_drive_caps *out);
 
 /* One feature for the public enumeration (mos_enumerate_features) —
-   the descriptor header facts only. The payload bytes stay internal:
-   exposing a borrowed slice across the public ABI buys lifetime rules
-   no current consumer needs; a typed decode (the AACS caps above) is
-   how payload facts go public. Tagged, no internal typedef alias: mos.h
-   owns the sole typedef (mos_feature_info_t), exactly as struct
-   mos_device_info is defined here but typedef'd only across the ABI. */
+   descriptor header facts only; payload bytes stay internal (a typed
+   decode like the AACS caps is how payload facts go public). Tagged with
+   NO internal typedef alias: mos.h owns the sole typedef
+   (mos_feature_info_t), like struct mos_device_info. */
 struct mos_feature_info {
     uint16_t code;
     bool     current;
@@ -267,15 +239,12 @@ bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
 
 /* ---- READ DISC INFORMATION decode (mos_discinfo.c) --------------- *
  *
- * Disc status from the MMC READ DISC INFORMATION (0x51) standard response —
- * the disc-completion signal: a Complete disc has finalized, readable content; a
- * Blank one has nothing to rip. byte 2 carries the status, last-session, and
- * erasable bits; the session/track counts are split LSB/MSB across the fixed
- * header (bytes 4..11). */
-/* mos_disc_status (the enum) is public — defined in mos.h with the
-   other ABI-pinned enums; the v0.4 typed accessor surfaces it. The
-   struct layout below stays internal (mos.h sees only the opaque
-   typedef; accessors in mos_result.c are the supported read path). */
+ * Disc status from MMC READ DISC INFORMATION (0x51) standard response —
+ * the completion signal: Complete = finalized readable content, Blank =
+ * nothing to rip. byte 2 carries status/last-session/erasable bits; the
+ * session/track counts split LSB/MSB across the fixed header (bytes 4..11).
+ * The mos_disc_status enum is public (mos.h); the struct stays internal,
+ * read through the mos_result.c accessors. */
 struct mos_disc_info {
     mos_disc_status status;              /* byte 2, bits 1:0 */
     uint8_t  last_session_state;         /* byte 2, bits 3:2: 0 empty,
@@ -294,26 +263,23 @@ struct mos_disc_info {
 /* Decode a READ DISC INFORMATION (0x51, data type 000b) response into
  * *out. True only when the fixed numeric region (through byte 11) is
  * present per BOTH `len` and the reply's own declared length. Address
- * fields and validity-gated identifiers are deliberately not decoded
- * (v0.4+). Layout and safety contract at the decoder (mos_discinfo.c). */
+ * fields and validity-gated identifiers are deliberately not decoded.
+ * Layout and safety contract at the decoder (mos_discinfo.c). */
 bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
                                   mos_disc_info *out);
 
 /* ---- READ DISC STRUCTURE / BD Disc Information decode (mos_discstruct.c) -- *
  *
  * The disc's REGISTERED identity from a Blu-ray Disc Information (DI)
- * reply (READ DISC STRUCTURE 0xAD, BD media type, format 0x00): the
- * Disc Manufacturer ID, Media Type ID, and Product Revision. Fixed-
- * width ASCII fields read at CONSTANT offsets inside the first DI unit;
- * no device-supplied value is ever used as an offset or length (the
- * only device length, the structure-data-length header, can only shrink
- * the trusted region), and no payload byte is dereferenced — bytes are
- * copied verbatim into these fixed buffers and the CLI layer escapes
- * them, same as INQUIRY identity. Classification (e.g. manufacturer
- * "MILLEN" => M-DISC) is the consumer's, not mos's. Strings are NUL-
- * terminated with fixed-width space padding stripped; "" when the DI is
- * absent. New fields append at the END (ABI-safe; accessors are the
- * contract). */
+ * reply (READ DISC STRUCTURE 0xAD, BD media type, format 0x00): Disc
+ * Manufacturer ID, Media Type ID, Product Revision. Fixed-width ASCII
+ * fields read at CONSTANT offsets in the first DI unit; no device value
+ * is ever used as offset or length (the only device length, the
+ * structure-data-length header, can only shrink the trusted region).
+ * Bytes copied verbatim into fixed buffers (CLI escapes at emit, like
+ * INQUIRY identity); classification (e.g. "MILLEN" => M-DISC) is the
+ * consumer's. Strings NUL-terminated, space-padding stripped; "" when
+ * the DI is absent. New fields append at the END. */
 struct mos_disc_id {
     char disc_type[4];      /* DI+8,   3 bytes + NUL: "BDR"/"BDW"/"BDO" */
     char manufacturer[7];   /* DI+100, 6 bytes + NUL */
@@ -339,9 +305,8 @@ bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
  * verbatim into fixed buffers (CLI escapes at emit); the only device
  * length (CD-TEXT Data Length) can only shrink the trusted span. This is
  * BEST-EFFORT DISPLAY TEXT, not a fingerprint — audio-CD dedup keys ride
- * on the fail-closed TOC. Per-track titles, the other field types, and
- * additional language blocks are deferred (design doc 2026-06-14). New
- * fields append at the END (ABI-safe; accessors are the contract). */
+ * on the fail-closed TOC. Other field types and additional language
+ * blocks are not decoded. New fields append at the END. */
 #define MOS_CDTEXT_STR_CAP        160u
 #define MOS_CDTEXT_MAX_TRACKS      99u
 #define MOS_CDTEXT_TRACK_TITLE_CAP 64u
@@ -373,17 +338,14 @@ bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
  *
  * Physical Format Information (READ DISC STRUCTURE 0xAD, DVD/HD-DVD media
  * type, format 0x00) and Copyright Management Information (format 0x01).
- * "Physical structure" rather than "DVD": the media-type-0 reply carries
- * HD-DVD book types (0x4..0x6) as well as DVD ones. The physical fields
- * are geometry the disc reports (book type, layer layout, data-area
- * sector boundaries — end_sector_l0 is the layer break); the copyright
- * fields are the protection-system type and the region mask. All read at
- * CONSTANT offsets inside a fixed buffer; the only device length (the
- * structure-data-length header) can only shrink the trusted region.
- * Classification (book_type => media name, cpst => "CSS-protected") is
- * the consumer's. The two halves share one struct: have_physical /
- * have_copyright say which the adapter merged in. New fields append at
- * the END (ABI-safe; accessors are the contract). */
+ * "Physical structure" not "DVD": media-type-0 carries HD-DVD book types
+ * (0x4..0x6) too. Physical fields are reported geometry (book type, layer
+ * layout, data-area boundaries — end_sector_l0 is the layer break);
+ * copyright fields are protection-system type and region mask. All read
+ * at CONSTANT offsets; the only device length (structure-data-length
+ * header) can only shrink the trusted region. Classification is the
+ * consumer's. have_physical / have_copyright say which half the adapter
+ * merged in. New fields append at the END. */
 struct mos_physical_structure {
     bool     have_physical;     /* format 0x00 was parsed */
     uint8_t  book_type;         /* base[0] 7:4  (0 DVD-ROM, 2 DVD-R, ...) */
@@ -451,22 +413,17 @@ bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
 
 /* ---- Disc capacity (assembled, no command) ------------------------- *
  *
- * Unlike every struct above, mos_capacity has NO pure decoder: there is
- * no capacity reply to parse. The IOKit shell assembles it from two
- * sources it already holds (doc/research/2026-06-13-read-capacity-
- * feasibility.md):
- *   - the whole-disk IOMedia node's kernel-cached byte size and natural
- *     block size (kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey) — the
- *     result of the kernel's own attach-time READ CAPACITY, a registry
- *     property read with no SCSI command and no exclusive access (so it
- *     works on MOUNTED media, where a raw READ CAPACITY would BUSY); and
- *   - the recordable / append-state view from READ TRACK INFORMATION
- *     (mos_track_info), the same non-exclusive convenience read.
- * media_bytes / block_bytes are 0 when the whole-disk node carries no
- * size (blank or absent media — there is no node until the disc is
- * formatted/recorded); have_recordable is false when READ TRACK
- * INFORMATION did not answer (e.g. an empty drive). New fields append at
- * the END. */
+ * mos_capacity has NO pure decoder — no capacity reply to parse. The
+ * IOKit shell assembles it from two sources it already holds:
+ *   - the whole-disk IOMedia node's kernel-cached size/block size
+ *     (kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey) — the kernel's
+ *     attach-time READ CAPACITY result, a registry read with no SCSI
+ *     command and no exclusive access (so it works on MOUNTED media,
+ *     where a raw READ CAPACITY would BUSY); and
+ *   - the recordable / append-state view from READ TRACK INFORMATION.
+ * media_bytes / block_bytes are 0 when the node carries no size (blank or
+ * absent media); have_recordable is false when TRACK INFORMATION did not
+ * answer. New fields append at the END. */
 struct mos_capacity {
     uint64_t media_bytes;     /* kIOMediaSizeKey; 0 == no whole-disk size  */
     uint32_t block_bytes;     /* kIOMediaPreferredBlockSizeKey; 0 == none  */
@@ -486,9 +443,9 @@ struct mos_capacity {
  * descriptor count. The read/write split is the CDB WRITE bit, so the
  * adapter issues the command twice and fills this struct from the two
  * replies. have is false when neither direction returned a descriptor
- * (media-dependent — data, not error). Spec-derived layout (no in-repo
- * capture yet); a real capture is a falsifier per the hardware ADR. New
- * fields append at the END. */
+ * (media-dependent — data, not error). Spec-derived layout; a real
+ * capture is a falsifier per the hardware ADR (AGENTS.md). New fields
+ * append at the END. */
 struct mos_drive_perf {
     bool     have;              /* >= 1 descriptor in either direction */
     uint16_t descriptor_count;  /* from the read-direction reply       */
@@ -506,9 +463,9 @@ bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
 
 /* ---- MODE SENSE(10) page decode (mos_modepage.c) ------------------- *
  *
- * Two read-only optical-specific pages (AGENTS 2026-06-13 addendum):
- * page 0x2A (mechanical: loading mechanism, eject/lock support, the live
- * locked bit, buffer size) and page 0x01 (read error-recovery config).
+ * Two read-only optical-specific pages: page 0x2A (mechanical: loading
+ * mechanism, eject/lock support, the live locked bit, buffer size) and
+ * page 0x01 (read error-recovery config).
  * Decoded by a bounded page walker; the only device lengths (mode data
  * length, block descriptor length, per-page length) can only shrink the
  * trusted region, and the walk strictly advances. New fields append at
@@ -635,17 +592,11 @@ typedef struct {
        indicating the underlying device has gone away. */
     mos_error (*probe)(void *ctx, mos_state_result *out);
 
-    /* Returns current MONOTONIC time in milliseconds. Used only for
-       deadline scheduling and latency measurement. MUST be from a
-       monotonic source (CLOCK_MONOTONIC / mach_absolute_time on
-       Apple, equivalent elsewhere). Tests inject a fake clock with
-       small integer values; production uses real uptime ms.
-
-       Splitting mono_ms and wall_ms into two callbacks at the type
-       level makes a clock-domain mixup impossible at adapter wiring
-       time: scheduling code calls mono_ms, ts-emission calls wall_ms.
-       The two values are not interchangeable — a mixup puts the
-       first-poll deadline decades in the future. */
+    /* Current MONOTONIC time in ms, for deadline scheduling and latency
+       only. MUST be monotonic (CLOCK_MONOTONIC / mach_absolute_time).
+       mono_ms and wall_ms are separate callbacks so a clock-domain mixup
+       is impossible at wiring time: the two values are not interchangeable
+       — a mixup puts the first-poll deadline decades in the future. */
     uint64_t  (*mono_ms)(void *ctx);
 
     /* Returns current WALL-CLOCK time in milliseconds since Unix
@@ -763,7 +714,7 @@ void mos_internal_watch_notify_removed(mos_watch_state *w);
    probe immediately rather than waiting for the scheduled poll. */
 void mos_internal_watch_notify_wake(mos_watch_state *w);
 
-/* ---- Watch-all multiplexer (DR pivot Phase 2b) --------------------- *
+/* ---- Watch-all multiplexer (mos_watch_core.c) --------------------- *
  *
  * Pure fan-in over up to MOS_WATCH_ALL_CAP per-device watch cores:
  * join/leave lifecycle, stream-global seq, deterministic same-tick

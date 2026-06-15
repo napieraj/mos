@@ -217,12 +217,10 @@ void mos_enumerate_devices(mos_enumerate_cb cb, void *ctx)
 
     /* DR-backed (the directory — mos_dr.c): the snapshot arrives in
        DR device-array order, which is the public ordering contract
-       (the same array drutil enumerates; drutil parity by provenance,
-       not by sort approximation). DR already dedups — one DRDevice
-       per drive — so the pre-pivot class-walk dedup died with the
-       walk. Identity strings ride the snapshot but mos_device_info_t
-       deliberately doesn't surface them yet: identity is handle data
-       (open the device), not enumeration data — unchanged contract. */
+       (the same array drutil enumerates). DR already dedups — one
+       DRDevice per drive. Identity strings ride the snapshot but
+       mos_device_info_t deliberately doesn't surface them: identity is
+       handle data (open the device), not enumeration data. */
     mos_internal_dr_snapshot snap[MOS_ENUM_CAP];
     size_t n = mos_internal_dr_copy_snapshot(snap, MOS_ENUM_CAP);
 
@@ -342,9 +340,7 @@ mos_handle_t *mos_open_by_bsd_name(const char *want, mos_error *err_out)
        resulting registry ID reopens atomically below, same TOCTOU
        posture as open-by-index: a name that DR resolved but whose
        entry terminated in between returns NO_DEVICE, never a
-       different drive. This replaced the pre-pivot class-walk-and-
-       match enumeration (and dissolved ARCHITECTURE's never-built
-       walk-up resolution). */
+       different drive. */
     char disk_name[MOS_BSD_NAME_CAP];
     if (!mos_bsd_name_format(want_unit, disk_name, sizeof disk_name)) {
         return NULL;
@@ -616,15 +612,13 @@ mos_error mos_internal_mmc_test_unit_ready(mos_handle_t *h,
 /* RETURN-CONVENTION NOTE: this function returns MOS_ERR_IO for
    command-reached-drive-but-unusable replies (non-GOOD status,
    truncated GOOD) rather than clearing the out-param in-band. That is
-   load-bearing, not pedantry: the profile's in-band "absent" value,
-   0x0000, is a REAL drive answer ("no current profile"), so a
-   malformed reply must be distinguishable out-of-band or it
-   masquerades as legitimate no-media — the exact silent-0x0000 bug
-   the third review fixed. (Identity strings, by contrast, have no
-   such collision — an empty vendor is never a meaningful drive answer
-   — which is why the retired INQUIRY path, and the DR identity seam
-   that replaced it, clear in-band and stay non-fatal.) The caller
-   treats both shapes as non-fatal enrichment skips. */
+   load-bearing: the profile's in-band "absent" value, 0x0000, is a REAL
+   drive answer ("no current profile"), so a malformed reply must be
+   distinguishable out-of-band or it masquerades as legitimate no-media.
+   (Identity strings have no such collision — an empty vendor is never a
+   meaningful drive answer — so the DR identity seam clears in-band and
+   stays non-fatal.) The caller treats both shapes as non-fatal
+   enrichment skips. */
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile)
 {
     if (!h || !h->mmc || !profile) return MOS_ERR_INVALID_ARG;
@@ -690,14 +684,10 @@ uint64_t mos_handle_registry_id(const mos_handle_t *h)
     return h ? h->drive_registry_id : 0;
 }
 
-/* The open-time INQUIRY (and its fixed-width SPC-4 string copier with
-   per-call-site _Static_assert width pins) retired with the DR pivot:
-   identity is directory data from DRDeviceCopyInfo — the same INQUIRY
-   bytes, pre-parsed by the framework — copied through the bounded
-   truncating seam in mos_dr.c. The output layer's escaping
-   (mos_cli_json_str / mos_cli_safe_ascii) is unchanged: it guards the
-   terminal and the JSON encoding against hostile bytes regardless of
-   which substrate produced the string. */
+/* Identity is directory data from DRDeviceCopyInfo (the INQUIRY bytes,
+   pre-parsed by the framework), copied through the bounded truncating
+   seam in mos_dr.c. Hostile bytes are escaped at the output layer
+   (mos_cli_json_str / mos_cli_safe_ascii), independent of substrate. */
 
 /* ---- Raw CDB (diagnostic only) ------------------------------------- */
 
@@ -803,8 +793,8 @@ mos_error mos_raw_cdb(mos_handle_t *h,
 
     /* On transport failure, outputs stay at the zeros set above (defined,
        not stack garbage); st/sense/xferred are not copied. Whether the API
-       populates anything useful before a non-success IOReturn is undocumented
-       — revisit under the v0.4 hardware-gate fixtures. */
+       populates anything useful before a non-success IOReturn is
+       undocumented. */
     if (er != kIOReturnSuccess) {
         return mos_internal_ioreturn_to_mos_error(er);
     }

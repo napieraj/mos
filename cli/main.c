@@ -11,14 +11,6 @@
 #include <string.h>
 #include <sysexits.h>
 
-/* The v0.4 typed-verb surface is complete: every reserved name has
-   shipped — "identity" became metadata + drive, "features" the
-   feature-list verb, "tray" the control verbs, "speed" folded into
-   drive's GET PERFORMANCE "speeds", and "capacity" landed 2026-06-13 as
-   mos.capacity.v1. The reserved-name machinery (a placeholder diagnostic
-   for not-yet-implemented names) retired with the last name; a future
-   reserved name reintroduces it. */
-
 void mos_cli_print_usage(FILE *f)
 {
     fprintf(f,
@@ -94,11 +86,6 @@ static void print_version(void)
     printf("%s %s\n", progname, mos_version_string());
 }
 
-/* ---- JSON output (hand-coded, no library) ----------------------------- */
-
-/* JSON-string and safe-ASCII writing is shared via cli/io
-   (mos_cli_json_str / mos_cli_safe_ascii) — see the #include above. */
-
 /* ---- Argument parsing -------------------------------------------------- */
 
 enum {
@@ -123,8 +110,8 @@ static const struct option long_options[] = {
        unknown option (usage + 64) instead of half-recognizing it. */
     { "dump",    no_argument,       0, OPT_DUMP },
 #endif
-    /* optional_argument, not no_argument: lets --json=v2 reach the
-       legacy-rejection diagnostic (no_argument would silently discard the
+    /* optional_argument, not no_argument: lets --json=value reach the
+       rejection diagnostic (no_argument would silently discard the
        =value). Bare --json works — optarg defaults to NULL. */
     { "json",    optional_argument, 0, 'j' },
     { "help",    no_argument,       0, 'h' },
@@ -177,13 +164,10 @@ int main(int argc, char **argv)
        here cannot fail (SIG_IGN is always installable). */
     signal(SIGPIPE, SIG_IGN);
 
-    /* Bare `mos` is an entry point, not an implicit status (the
-       single-drive default was a carryover from the one-word-stdout
-       era; retired 2026-06-12) — and not a probe either: the drive
-       table's state column rides the not-ready GESN branch, which
-       takes the exclusive lock, and an intent-free invocation must
-       not touch hardware (same-day revision of the table-at-entry
-       shape). Usage + hint, EX_USAGE; the table is one deliberate
+    /* Bare `mos` is an entry point, not an implicit status — and not a
+       probe either: an intent-free invocation must not touch hardware (a
+       state column would ride the not-ready GESN branch, which takes the
+       exclusive lock). Usage + hint, EX_USAGE; the table is one deliberate
        `mos list` away. */
     if (argc == 1) {
         /* %1$s: POSIX numbered conversions — one progname argument,
@@ -196,10 +180,8 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 
-    /* Subcommands are additive aliases for the flag forms, recognized only
-       when argv[1] is a bare word (flag-first invocations reach getopt
-       unchanged). The remaining v0.4 names are reserved so a premature use gets
-       a clearer diagnostic than "unknown subcommand". */
+    /* Subcommands are recognized only when argv[1] is a bare word
+       (flag-first invocations reach getopt unchanged). */
     if (argc >= 2 && argv[1][0] != '-' && argv[1][0] != '\0') {
         const char *cmd = argv[1];
 

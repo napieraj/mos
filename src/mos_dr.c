@@ -1,34 +1,22 @@
 /*
  * mos_dr.c — DiscRecording-side adapter: the directory.
  *
- * Doctrine (doc/research/2026-06-10-dr-pivot-implementation-plan.md):
  * DR is the doorbell and the directory; MMC is the inspector. This TU
  * supplies discovery, identity, and addressing from the DiscRecording
  * C API; it never decides drive STATE — the TUR⊕GESN core in
  * mos_state_core.c remains the sole authority (the §5.5 nub gate runs
- * on TUR sense bytes DR does not expose).
+ * on TUR sense bytes DR does not expose). DR is not a SCSI command
+ * author (AGENTS.md scope doctrine): it is a substrate above the same
+ * kext the MMC path uses, and mos still authors exactly one raw CDB
+ * (GESN, mos_scsi.c).
  *
- * Command-surface note (AGENTS.md scope doctrine): DR is not a SCSI
- * command author from mos's point of view — it is a substrate above
- * the same kext the MMC path uses. mos still authors exactly one raw
- * CDB (GESN, mos_scsi.c).
- *
- * The one surviving IOKit step (dr-field-mapping §identity): DR
- * exposes a device's IORegistry *path* (kDRDeviceIORegistryEntryPathKey),
- * not its entry ID. mos's identity currency — registry_id in events,
- * the reopen authority, the F1 fingerprint — is the uint64 entry ID,
- * so each path is resolved path → entry → ID here. A node that cannot
- * be resolved is skipped, preserving the enumeration/index ↔
- * open-by-index correspondence the public API documents (same gate
- * the pre-pivot visit_collect applied).
- *
- * KNOWN UNKNOWN (hardware falsification target, plan §coexistence):
- * whether DR's registry path lands on the same IO*BlockStorageDevice
- * node mos's IOKit matching used to produce, or on a neighbor in the
- * stack (e.g. the SCSI peripheral nub). If it's a neighbor, the MMC
- * plug-in attach in mos_internal_open_service fails DRIVER_REJECTED
- * and the Phase 0 probe's Info dumps will show the path shape — fix
- * lands as a path normalization HERE, never as a caller workaround.
+ * Identity resolution: DR exposes a device's IORegistry *path*
+ * (kDRDeviceIORegistryEntryPathKey), not its entry ID. mos's identity
+ * currency — registry_id in events, the reopen authority, the F1
+ * fingerprint — is the uint64 entry ID, so each path is resolved
+ * path → entry → ID here. A node that cannot be resolved is skipped,
+ * preserving the enumeration/index ↔ open-by-index correspondence the
+ * public API documents.
  */
 
 #ifndef _DARWIN_C_SOURCE
@@ -134,8 +122,7 @@ static void mos_internal_dr_fill_from_info(CFDictionaryRef info,
 
 /* The media BSD name lives in the Status dictionary's media-info
    sub-dictionary (kDRDeviceMediaInfoKey → kDRDeviceMediaBSDNameKey),
-   media-scoped exactly like the pre-pivot IOMedia walk: absent when
-   no media is loaded, hence unit -1. */
+   media-scoped: absent when no media is loaded, hence unit -1. */
 static int64_t mos_internal_dr_bsd_unit_from_status(CFDictionaryRef status)
 {
     CFTypeRef mi = CFDictionaryGetValue(status, kDRDeviceMediaInfoKey);
@@ -243,8 +230,7 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
 
     DRDeviceRef dev = DRDeviceCopyDeviceForIORegistryEntryPath(cfpath);
     CFRelease(cfpath);
-    if (!dev) return false; /* identity stays empty — same non-fatal
-                               contract the INQUIRY failure path had */
+    if (!dev) return false; /* identity stays empty — non-fatal */
 
     bool ok = false;
     CFDictionaryRef info = DRDeviceCopyInfo(dev);

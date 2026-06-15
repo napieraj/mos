@@ -1,15 +1,8 @@
 /*
- * mos_result.c — accessors for the opaque mos_state_result and
- * mos_watch_event objects.
- *
- * The public header exposes these objects only as opaque typedefs; their
- * layout (in mos_pure.h) is internal and may grow by appended fields
- * without breaking ABI. These accessors are the supported read path. Pure
- * (no IOKit), so they build and are unit-tested headless on any platform.
- *
- * Every accessor tolerates a NULL object, returning a benign zero/NULL —
- * a caller that ignored a failed query's NULL *out gets a defined answer
- * rather than a crash.
+ * mos_result.c — accessors for the opaque query-result objects (layout in
+ * mos_pure.h, may grow by appended fields without breaking ABI). Pure (no
+ * IOKit), so they build and unit-test headless. Every accessor tolerates a
+ * NULL object, returning a benign zero/NULL.
  */
 
 #include "mos_pure.h"

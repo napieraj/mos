@@ -12,11 +12,11 @@
  *
  * No IOKit. The IOKit shell issues READ DISC STRUCTURE (DVD/HD-DVD media
  * type) via the ReadDiscStructure convenience method into a fixed, zero-
- * initialized buffer and hands that buffer plus its size here. Every
- * length and value byte is device/disc-reported and therefore hostile;
- * this file keeps the declared length from steering a read outside
- * [buf, buf+len) and reads only fixed offsets — no payload byte is ever
- * used as an offset or length.
+ * initialized buffer and hands it plus its size here. Every length and
+ * value byte is device/disc-reported and therefore hostile; this file
+ * keeps the declared length from steering a read outside [buf, buf+len)
+ * and reads only fixed offsets — no payload byte is ever used as an
+ * offset or length.
  *
  * Wire layout (both formats share the READ DISC STRUCTURE 4-byte header):
  *   [0..1] Disc Structure Data Length (BE) — bytes AFTER this field;
@@ -39,20 +39,11 @@
  *     buf[4] Copyright Protection System Type (CPST)
  *     buf[5] Region Management Information (RMI)
  *
- * Offsets and the exact byte arithmetic are taken VERBATIM from the
- * Linux kernel's wire parse — drivers/cdrom/cdrom.c dvd_read_physical
- * (`base = &buf[4]`; book/version base[0], rate/size base[1],
- * layer_type/track_path/nlayers base[2], densities base[3],
- * start_sector base[5]<<16|base[6]<<8|base[7], end_sector base[9..11],
- * end_sector_l0 base[13..15], bca base[16]>>7) and dvd_read_copyright
- * (cpst buf[4], rmi buf[5]) — cross-checked against the field set
- * redumper print_physical_structure decodes. Classification (book_type
- * => media name, cpst => "CSS-protected") is the CONSUMER's; this decode
- * surfaces the registered values faithfully and stops there, same
- * division as the BD DI decode (mos_discstruct.c).
- *
- * No-OOB property gated headless under ASan/UBSan by
- * tests/test_physstruct.c and tests/fuzz_pure.c.
+ * Offsets and byte arithmetic match the Linux kernel's wire parse,
+ * drivers/cdrom/cdrom.c (dvd_read_physical with `base = &buf[4]`,
+ * dvd_read_copyright). Classification (book_type => media name, cpst =>
+ * "CSS-protected") is the CONSUMER's; this decode surfaces the registered
+ * values faithfully and stops there (scope doctrine, as the BD DI decode).
  */
 
 #include "mos_pure.h"

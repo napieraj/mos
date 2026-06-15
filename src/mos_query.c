@@ -433,7 +433,7 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
 }
 
 /* Shared MODE SENSE(10) issuance for the two read-only optical pages
-   (AGENTS scope addendum 2026-06-13). Signature confirmed against
+   (AGENTS.md scope doctrine, layer 2). Signature confirmed against
    SCSITaskLib.h (LLBAA, DBD, PC, PAGE_CODE, buffer, bufferSize,
    taskStatus, senseData). PC = 00b (current values); DBD=1 (no block
    descriptor) keeps the reply compact, though the pure walker tolerates

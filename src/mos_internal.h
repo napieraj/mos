@@ -102,9 +102,8 @@ struct mos_device_info {
 
 /* ---- DiscRecording-linked internal prototypes (mos_dr.c) ----------- *
  *
- * The directory half of the DR pivot: discovery, identity, addressing
- * (doc/research/2026-06-10-dr-pivot-implementation-plan.md). Never
- * state — that stays with the MMC seam below. */
+ * The directory half: discovery, identity, addressing. Never state —
+ * that stays with the MMC seam below. */
 
 /* One enumerated device, extracted from DR's dictionaries into plain C
    at the adapter seam (no CF types cross this line). Identity buffers
@@ -140,7 +139,7 @@ void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap);
 
 /* One-shot DiskArbitration mounted-volume lookup (mos_da.c). True only
    when mounted; gate calls on bsd_unit present. No callbacks, no run
-   loop — see the narrow re-admission terms at the top of mos_da.c. */
+   loop — see the re-admission terms at the top of mos_da.c. */
 bool mos_internal_da_volume(const char *bsd_name,
                             char *name_buf, size_t name_cap,
                             char *path_buf, size_t path_cap);
@@ -155,8 +154,7 @@ bool mos_internal_dr_device_snapshot(CFTypeRef device_ref,
 
 /* Device-static identity strings for an already-opened service, via
    DR's registry-path lookup. Best-effort: returns false (and empties
-   the buffers) when DR cannot see the service — the same non-fatal
-   contract the retired open-time INQUIRY had. */
+   the buffers) when DR cannot see the service (non-fatal). */
 bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                                                char *vendor, size_t vcap,
                                                char *product, size_t pcap,
@@ -164,9 +162,7 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
 
 /* ---- IOKit-linked internal prototypes ------------------------------ *
  *
- * MMC convenience wrappers for the query path (mos_state.c). The
- * open-time INQUIRY wrapper retired with the DR pivot — identity is
- * directory data now. */
+ * MMC convenience wrappers for the query path (mos_state.c). */
 mos_error mos_internal_mmc_get_tray_state     (mos_handle_t *h, bool *tray_open);
 mos_error mos_internal_mmc_test_unit_ready    (mos_handle_t *h,
                                                uint32_t *status,
@@ -219,28 +215,13 @@ io_service_t mos_internal_handle_get_service(mos_handle_t *h);
 
 /* ---- Auto-cleanup helpers for IOKit / CoreFoundation refcounts ----- *
  *
- * The cleanup attribute is a gcc/clang extension that runs the named
- * callback when the variable goes out of scope. We use it to make
- * refcount discipline automatic in functions with multiple early-exit
- * paths (iterator loops, two-pass property lookups) where an explicit
- * release is easy to miss on one branch.
- *
- * Usage:
- *   io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
- *   CFTypeRef prop  MOS_CF_AUTO = IORegistryEntryCreateCFProperty(...);
- *   // ... use, no explicit release ...
- *   // child and prop are released at scope exit
- *
- * Ownership transfer (when handing off to a longer-lived owner):
- *   io_service_t local MOS_IO_AUTO = IOIteratorNext(it);
- *   // ... validate ...
- *   io_service_t consumed = local;
- *   local = IO_OBJECT_NULL;   // disable cleanup; consumer now owns it
- *   return some_consumer(consumed);
- *
- * The cleanup callbacks check for the sentinel value before releasing
- * and clear the variable after, so manual release-and-clear and
- * auto-cleanup coexist safely. */
+ * The gcc/clang cleanup attribute runs the callback at scope exit, making
+ * refcount discipline automatic across multiple early-exit paths. To hand
+ * a reference off to a longer-lived owner, null the variable to disable
+ * cleanup (consumer now owns it):
+ *   io_service_t consumed = local; local = IO_OBJECT_NULL;
+ * The callbacks check the sentinel before releasing and clear after, so
+ * manual release-and-clear and auto-cleanup coexist safely. */
 
 static inline void mos_internal_cleanup_cftype(CFTypeRef *p)
 {
