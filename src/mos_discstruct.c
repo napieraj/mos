@@ -23,11 +23,11 @@
  *            [4+106..108] Media Type ID        (3 bytes)  e.g. "MR1"
  *            [4+111]      Product Revision Number (1 byte) e.g. '0'
  *
- * The DI offsets (8 / 100 / 106 / 111) are MMC-5 / BDA-registered. The
- * physical write-parameter region (offsets 11..99) is deliberately NOT
- * decoded — no consumer value. Classification (e.g. manufacturer "MILLEN"
- * => M-DISC) is the CONSUMER's, not mos's: this decode surfaces the
- * registered ID bytes faithfully and stops there (scope doctrine).
+ * The DI offsets (8 / 100 / 106 / 111) are MMC-5 / BDA-registered; the
+ * undecoded write-parameter region is noted in SPEC.md. Classification
+ * (e.g. manufacturer "MILLEN" => M-DISC) is the CONSUMER's, not mos's:
+ * this decode surfaces the registered ID bytes faithfully and stops
+ * there (scope doctrine).
  */
 
 #include "mos_pure.h"

@@ -22,8 +22,7 @@
  *   [9]    Number of Sessions (MSB)
  *   [10]   First Track Number in Last Session (MSB)
  *   [11]   Last Track Number in Last Session (MSB)
- *   (bytes 12+ : Disc Identification, lead-in / lead-out addresses, bar
- *    code, OPC table — not decoded; informational, not the status.)
+ *   (bytes 12+ : undecoded — see SPEC.md.)
  *
  * Safety contract (the device controls the length): `len` is the only
  * trusted ceiling; the Disc Information Length can only shrink the trusted

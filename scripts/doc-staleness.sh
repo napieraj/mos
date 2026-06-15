@@ -25,10 +25,27 @@
 set -u
 FAIL=0
 
-# Live documentation set (archives deliberately excluded).
-LIVE_DOCS="README.md ARCHITECTURE.md CONTRIBUTING.md INTEGRATION_HARNESS.md \
-ROADMAP.md schemas/README.md \
-tests/fixtures/README.md doc/dr-field-mapping.md"
+# Live documentation set, by EXCLUSION: every tracked *.md is checked by
+# default, so a new doc is covered the moment it lands — the fail-safe
+# direction for a staleness tripwire (an inclusion list silently misses a
+# doc nobody remembered to add). Exempt only the docs that preserve
+# superseded claims as records and would false-positive on their own
+# history:
+#   - AGENTS.md — the ADR chain, append-only (rebuts decisions in place).
+#   - CLAUDE.md — the failure-mode log; net flat/shrinking, not append-
+#     only, but it quotes past wrong states as evidence, so it is not
+#     held to current-state truth either.
+#   - doc/research/ and doc/history/ — dated archives.
+# To exempt a new doc, justify it here as one of these record types;
+# everything else is held to current-state truth.
+LIVE_DOCS=""
+for f in $(git ls-files '*.md'); do
+    case "$f" in
+        AGENTS.md|CLAUDE.md)          continue ;;
+        doc/research/*|doc/history/*) continue ;;
+        *) LIVE_DOCS="$LIVE_DOCS $f" ;;
+    esac
+done
 
 deny() {
     pattern="$1"; reason="$2"; files="${3:-$LIVE_DOCS}"

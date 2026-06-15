@@ -1,0 +1,77 @@
+# SPEC — external spec citation map
+
+Single source of truth for the spec citations behind mos's pure response
+parsers. Each parser keeps its **parsed byte-offset table and safety
+contract inline** — those guard the parse and are verified against the
+code beside them, so they stay local (AGENTS.md doctrine: spec byte
+layouts live in the parsing `.c`). This file holds the parts that repeat
+or are reference-only: the authoritative spec document per parser, the
+external cross-checks used to validate the offsets, and the fields each
+parser deliberately does **not** decode. A parser's header names its
+command and points here rather than restating citations.
+
+Opcodes, page codes, and field values quoted here are also operands in the
+code; this table is the citation, not the parse.
+
+## Parsers
+
+### `src/mos_sense.c` — SCSI sense data
+- **Spec:** SPC-4 §4.5.3 (fixed format, response code 0x70/0x71),
+  §4.5.2 (descriptor format, 0x72/0x73).
+- **Note:** optical drives return fixed format in practice; the
+  descriptor path exists for correctness.
+
+### `src/mos_discinfo.c` — READ DISC INFORMATION
+- **Spec:** MMC-6, opcode 0x51, standard data type 000b. First 12 bytes
+  decoded inline.
+- **Not decoded (bytes 12+):** Disc Identification, lead-in / lead-out
+  addresses, bar code, OPC table — informational, not the status.
+
+### `src/mos_discstruct.c` — READ DISC STRUCTURE (Blu-ray DI)
+- **Spec:** MMC-5, opcode 0xAD, BD media type, format 0x00. The DI unit
+  offsets (8 / 100 / 106 / 111) are MMC-5 / BDA-registered.
+- **Not decoded (DI offsets 11..99):** the physical write-parameter
+  region — no consumer value.
+
+### `src/mos_trackinfo.c` — READ TRACK INFORMATION
+- **Spec:** MMC, opcode 0x52, Track Information Block. The 32/33 Track/
+  Session MSB tail is the MMC-6 longer reply (optional).
+- **Cross-check:** offsets match the Linux kernel's packed
+  `struct track_information`, `include/uapi/linux/cdrom.h`.
+
+### `src/mos_physstruct.c` — READ DISC STRUCTURE (DVD/HD-DVD)
+- **Spec:** MMC-5, opcode 0xAD, media type 0; Physical Format Information
+  (format 0x00) and Copyright Management Information (format 0x01). The
+  same media-type-0 reply carries HD-DVD book types (0x4..0x6).
+- **Cross-check:** byte arithmetic matches Linux `drivers/cdrom/cdrom.c`
+  (`dvd_read_physical`, `dvd_read_copyright`, `base = &buf[4]`).
+
+### `src/mos_perf.c` — GET PERFORMANCE
+- **Spec:** MMC-6, opcode 0xAC, Performance Data TYPE 00h; the Nominal
+  Performance Descriptor layout is built to spec.
+- **Out of scope:** TYPE 03h write-speed descriptors. Apple's
+  GetPerformance convenience method exposes TOLERANCE/WRITE/EXCEPT but not
+  the TYPE field, so TYPE 03h is unreachable without a raw CDB.
+
+### `src/mos_cdtext.c` — READ TOC/PMA/ATIP format 0101b (CD-TEXT)
+- **Spec:** MMC-3 §6.27 / Red Book CD-TEXT; 18-byte packs.
+- **Cross-check:** libcdio `lib/driver/cdtext.c` (CRC present, not
+  verified, as in libcdio).
+- **Decoded:** album + per-track Title (0x80) and Performer (0x81), from
+  the first language block (block 0), single-byte charset.
+- **Not decoded:** other field types (songwriter / composer / arranger /
+  message / genre / ISRC / UPC / disc-id); language blocks 1..7;
+  double-byte (DBCC / MS-JIS) text — a DBCC field reads as absent rather
+  than mis-decoded as Latin-1.
+
+### `src/mos_modepage.c` — MODE SENSE(10) optical pages
+- **Spec:** page 0x2A is MMC-3 page-2A (CD/DVD Capabilities & Mechanical
+  Status); page 0x01 is the SPC Read/Write Error Recovery page. Sub-page
+  format (SPF=1) has a 4-byte header with a BE16 length; 0x2A/0x01 are
+  page_0 format. Read-only — no MODE SELECT.
+- **Cross-check:** page 0x2A offsets against Linux `sr.c`
+  `get_capabilities`.
+
+### `src/mos_config.c` — GET CONFIGURATION feature walk
+- **Spec:** MMC-6 §5.2 feature descriptors. The walker's bounds rules are
+  the inline safety contract.

@@ -15,11 +15,10 @@
  * SCOPE — the album Title/Performer (the "which album is in the drive"
  * disambiguator, parallel to the mounted volume name) plus the per-track
  * TITLES and PERFORMERS, all from the FIRST language block (block 0) in
- * single-byte charset. Deliberately NOT decoded: the other field types
- * (songwriter/composer/arranger/message/genre/ISRC/UPC/disc-id);
- * additional language blocks (1..7); and double-byte (DBCC) text
- * (MS-JIS / 16-bit) — a DBCC field reads as absent rather than being
- * mis-decoded as Latin-1. CD-TEXT is BEST-EFFORT DISPLAY TEXT, not a
+ * single-byte charset. The field types and language blocks deliberately
+ * NOT decoded are listed in SPEC.md; a double-byte (DBCC) field reads as
+ * absent rather than mis-decoded as Latin-1. CD-TEXT is BEST-EFFORT
+ * DISPLAY TEXT, not a
  * fail-closed fingerprint: audio-CD dedup keys ride on the TOC
  * (mos_internal_toc_parse), the fail-closed identity primitive.
  *
@@ -31,7 +30,7 @@
  * reconstruct that stream, and dispatch each string by its track number.
  *
  * Pack layout (READ TOC format 0101b, MMC-3 §6.27 / Red Book CD-TEXT;
- * cross-verified against libcdio lib/driver/cdtext.c):
+ * libcdio cross-check in SPEC.md):
  *   [0..1] CD-TEXT Data Length (BE) — bytes available AFTER this field;
  *          the reply occupies 2 + value bytes.
  *   [2..3] reserved

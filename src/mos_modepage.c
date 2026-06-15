@@ -22,7 +22,7 @@
  *     header with a BE16 length; pages 0x2A/0x01 are page_0 format.)
  *
  * Page 0x2A offsets (relative to page start): loading mechanism page[6]>>5
- * and eject page[6]&0x08 (Linux kernel sr.c get_capabilities), buffer size
+ * and eject page[6]&0x08 (sr.c cross-check in SPEC.md), buffer size
  * page[12..13] BE KB and lock bits page[6] bit1 supported / bit2 state
  * (MMC-3 page-2A). Page 0x01 is the canonical SPC Read/Write Error
  * Recovery page. A real MODE SENSE capture is a falsifier per the hardware

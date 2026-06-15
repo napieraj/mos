@@ -163,7 +163,9 @@ is `doc/research/2026-06-15-comment-purge-plan.md`):
    Implementation why → `.c`, at the relevant lines. Decisions, dates,
    review/audit provenance → `ARCHITECTURE.md` / `doc/history/` /
    `doc/research/`, with a `§` pointer from code. Spec byte layouts →
-   the `.c` that does the parsing. File headers: at most three lines
+   the `.c` that does the parsing; the spec *citation*, external offset
+   cross-checks, and undecoded-field reference → `SPEC.md` (the parser
+   points there rather than restating them). File headers: at most three lines
    (what the file is, plus the one constraint that governs it).
    Cross-reference, never restate.
 

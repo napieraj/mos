@@ -1,12 +1,10 @@
 /*
  * mos_perf.c — pure, bounds-safe decode of a GET PERFORMANCE (MMC 0xAC)
- * Performance Data response (the data type the Apple GetPerformance
- * convenience method retrieves — TYPE 00h; the convenience signature
- * exposes TOLERANCE/WRITE/EXCEPT but NOT the TYPE field, so write-speed
- * descriptors, TYPE 03h, are unreachable without a raw CDB and stay out
- * of scope). The read-vs-write direction is the WRITE bit in the CDB, so
- * the adapter issues this twice (WRITE=0, WRITE=1) and this decode
- * returns the max performance found in one reply.
+ * Performance Data response, TYPE 00h — the data type Apple's
+ * GetPerformance convenience method retrieves (the TYPE 03h write-speed
+ * carve-out is in SPEC.md). The read-vs-write direction is the WRITE bit
+ * in the CDB, so the adapter issues this twice (WRITE=0, WRITE=1) and
+ * this decode returns the max performance found in one reply.
  *
  * No IOKit. The IOKit shell issues GET PERFORMANCE via GetPerformance
  * into a fixed, zero-initialized buffer and hands it plus its size here.

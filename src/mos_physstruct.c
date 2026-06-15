@@ -39,11 +39,10 @@
  *     buf[4] Copyright Protection System Type (CPST)
  *     buf[5] Region Management Information (RMI)
  *
- * Offsets and byte arithmetic match the Linux kernel's wire parse,
- * drivers/cdrom/cdrom.c (dvd_read_physical with `base = &buf[4]`,
- * dvd_read_copyright). Classification (book_type => media name, cpst =>
- * "CSS-protected") is the CONSUMER's; this decode surfaces the registered
- * values faithfully and stops there (scope doctrine, as the BD DI decode).
+ * The Linux cdrom.c offset cross-check is in SPEC.md. Classification
+ * (book_type => media name, cpst => "CSS-protected") is the CONSUMER's;
+ * this decode surfaces the registered values faithfully and stops there
+ * (scope doctrine, as the BD DI decode).
  */
 
 #include "mos_pure.h"

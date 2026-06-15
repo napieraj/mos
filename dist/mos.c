@@ -1634,8 +1634,7 @@ void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
  *   [9]    Number of Sessions (MSB)
  *   [10]   First Track Number in Last Session (MSB)
  *   [11]   Last Track Number in Last Session (MSB)
- *   (bytes 12+ : Disc Identification, lead-in / lead-out addresses, bar
- *    code, OPC table — not decoded; informational, not the status.)
+ *   (bytes 12+ : undecoded — see SPEC.md.)
  *
  * Safety contract (the device controls the length): `len` is the only
  * trusted ceiling; the Disc Information Length can only shrink the trusted
@@ -1701,11 +1700,11 @@ bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
  *            [4+106..108] Media Type ID        (3 bytes)  e.g. "MR1"
  *            [4+111]      Product Revision Number (1 byte) e.g. '0'
  *
- * The DI offsets (8 / 100 / 106 / 111) are MMC-5 / BDA-registered. The
- * physical write-parameter region (offsets 11..99) is deliberately NOT
- * decoded — no consumer value. Classification (e.g. manufacturer "MILLEN"
- * => M-DISC) is the CONSUMER's, not mos's: this decode surfaces the
- * registered ID bytes faithfully and stops there (scope doctrine).
+ * The DI offsets (8 / 100 / 106 / 111) are MMC-5 / BDA-registered; the
+ * undecoded write-parameter region is noted in SPEC.md. Classification
+ * (e.g. manufacturer "MILLEN" => M-DISC) is the CONSUMER's, not mos's:
+ * this decode surfaces the registered ID bytes faithfully and stops
+ * there (scope doctrine).
  */
 
 
@@ -1774,11 +1773,10 @@ bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
  * SCOPE — the album Title/Performer (the "which album is in the drive"
  * disambiguator, parallel to the mounted volume name) plus the per-track
  * TITLES and PERFORMERS, all from the FIRST language block (block 0) in
- * single-byte charset. Deliberately NOT decoded: the other field types
- * (songwriter/composer/arranger/message/genre/ISRC/UPC/disc-id);
- * additional language blocks (1..7); and double-byte (DBCC) text
- * (MS-JIS / 16-bit) — a DBCC field reads as absent rather than being
- * mis-decoded as Latin-1. CD-TEXT is BEST-EFFORT DISPLAY TEXT, not a
+ * single-byte charset. The field types and language blocks deliberately
+ * NOT decoded are listed in SPEC.md; a double-byte (DBCC) field reads as
+ * absent rather than mis-decoded as Latin-1. CD-TEXT is BEST-EFFORT
+ * DISPLAY TEXT, not a
  * fail-closed fingerprint: audio-CD dedup keys ride on the TOC
  * (mos_internal_toc_parse), the fail-closed identity primitive.
  *
@@ -1790,7 +1788,7 @@ bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
  * reconstruct that stream, and dispatch each string by its track number.
  *
  * Pack layout (READ TOC format 0101b, MMC-3 §6.27 / Red Book CD-TEXT;
- * cross-verified against libcdio lib/driver/cdtext.c):
+ * libcdio cross-check in SPEC.md):
  *   [0..1] CD-TEXT Data Length (BE) — bytes available AFTER this field;
  *          the reply occupies 2 + value bytes.
  *   [2..3] reserved
@@ -1973,11 +1971,10 @@ bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
  *     buf[4] Copyright Protection System Type (CPST)
  *     buf[5] Region Management Information (RMI)
  *
- * Offsets and byte arithmetic match the Linux kernel's wire parse,
- * drivers/cdrom/cdrom.c (dvd_read_physical with `base = &buf[4]`,
- * dvd_read_copyright). Classification (book_type => media name, cpst =>
- * "CSS-protected") is the CONSUMER's; this decode surfaces the registered
- * values faithfully and stops there (scope doctrine, as the BD DI decode).
+ * The Linux cdrom.c offset cross-check is in SPEC.md. Classification
+ * (book_type => media name, cpst => "CSS-protected") is the CONSUMER's;
+ * this decode surfaces the registered values faithfully and stops there
+ * (scope doctrine, as the BD DI decode).
  */
 
 
@@ -2052,8 +2049,8 @@ bool mos_internal_copyright_mgmt_parse(const uint8_t *buf, size_t len,
  * length from steering a read outside [buf, buf+len) and reads only fixed
  * offsets.
  *
- * Wire layout (the MMC Track Information Block; offsets match the Linux
- * kernel's packed `struct track_information`, include/uapi/linux/cdrom.h):
+ * Wire layout (the MMC Track Information Block; cdrom.h offset cross-check
+ * in SPEC.md):
  *   [0..1]  Track Information Length (BE) — bytes AFTER this field
  *   [2]     Track Number (LSB)
  *   [3]     Session Number (LSB)
@@ -2121,13 +2118,11 @@ bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
 /* ==== src/mos_perf.c ==== */
 /*
  * mos_perf.c — pure, bounds-safe decode of a GET PERFORMANCE (MMC 0xAC)
- * Performance Data response (the data type the Apple GetPerformance
- * convenience method retrieves — TYPE 00h; the convenience signature
- * exposes TOLERANCE/WRITE/EXCEPT but NOT the TYPE field, so write-speed
- * descriptors, TYPE 03h, are unreachable without a raw CDB and stay out
- * of scope). The read-vs-write direction is the WRITE bit in the CDB, so
- * the adapter issues this twice (WRITE=0, WRITE=1) and this decode
- * returns the max performance found in one reply.
+ * Performance Data response, TYPE 00h — the data type Apple's
+ * GetPerformance convenience method retrieves (the TYPE 03h write-speed
+ * carve-out is in SPEC.md). The read-vs-write direction is the WRITE bit
+ * in the CDB, so the adapter issues this twice (WRITE=0, WRITE=1) and
+ * this decode returns the max performance found in one reply.
  *
  * No IOKit. The IOKit shell issues GET PERFORMANCE via GetPerformance
  * into a fixed, zero-initialized buffer and hands it plus its size here.
@@ -2222,7 +2217,7 @@ bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
  *     header with a BE16 length; pages 0x2A/0x01 are page_0 format.)
  *
  * Page 0x2A offsets (relative to page start): loading mechanism page[6]>>5
- * and eject page[6]&0x08 (Linux kernel sr.c get_capabilities), buffer size
+ * and eject page[6]&0x08 (sr.c cross-check in SPEC.md), buffer size
  * page[12..13] BE KB and lock bits page[6] bit1 supported / bit2 state
  * (MMC-3 page-2A). Page 0x01 is the canonical SPC Read/Write Error
  * Recovery page. A real MODE SENSE capture is a falsifier per the hardware

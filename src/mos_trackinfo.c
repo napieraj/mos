@@ -11,8 +11,8 @@
  * length from steering a read outside [buf, buf+len) and reads only fixed
  * offsets.
  *
- * Wire layout (the MMC Track Information Block; offsets match the Linux
- * kernel's packed `struct track_information`, include/uapi/linux/cdrom.h):
+ * Wire layout (the MMC Track Information Block; cdrom.h offset cross-check
+ * in SPEC.md):
  *   [0..1]  Track Information Length (BE) — bytes AFTER this field
  *   [2]     Track Number (LSB)
  *   [3]     Session Number (LSB)
