@@ -116,18 +116,10 @@ target_compile_options(mos_warnings INTERFACE
 
 # ---- Coverage instrumentation (opt-in) ---------------------------------
 #
-# MOS_COVERAGE=ON instruments every target that links mos_warnings —
-# mos_pure, mos_core, mos, mos_tests, fuzz_pure — with gcov/llvm-cov
-# counters. It rides mos_warnings so the single-source-of-truth flag
-# target stays the only place project-wide compile/link options live.
-# Carried as both a compile AND a link option because --coverage
-# (-fprofile-arcs -ftest-coverage) needs the profiling runtime linked
-# into the final executable, not just the objects instrumented; an
-# INTERFACE library propagates both to consumers. -O0 -g is forced
-# alongside so counter-to-source line mapping is accurate (optimization
-# fuses and reorders lines, making the report lie). OFF by default and
-# never on a release build — this is a measurement tool, run by the
-# coverage CI job and locally, not a shipped configuration.
+# Rides mos_warnings so project-wide flags stay in one target. --coverage
+# is both a compile and a link option (the profiling runtime must be
+# linked, not just the objects instrumented); -O0 -g keeps the
+# counter-to-source line mapping accurate.
 option(MOS_COVERAGE "Instrument with gcov/llvm-cov coverage counters (-O0 -g --coverage)" OFF)
 if(MOS_COVERAGE)
     target_compile_options(mos_warnings INTERFACE --coverage -O0 -g)

@@ -651,31 +651,11 @@ jobs:
             ./build-adapter/bin/mos_emit_fixtures schemas
 
   coverage:
-    # Pure-layer coverage, measured by the host-independent `unit` ctest
-    # suite under gcov. This is the STANDALONE FALLBACK leg: the
-    # authoritative repo-wide number comes from the `coverage-combined`
-    # macOS job (which runs this suite AND the macOS-only adapter tests in
-    # one llvm-cov pass). This job is kept separate and self-contained so
-    # that if macOS minutes ever become costly, deleting the combined job
-    # leaves a working pure-layer report here with zero rework.
-    #
-    # SCOPE — read before reacting to a low number. This measures ONLY
-    # what the Linux `unit` suite exercises (mos_pure + cli/human.c +
-    # cli/io.c), filtered to src/. The IOKit core layer (mos_scsi.c,
-    # mos_query.c, mos_state.c, mos_watch.c, mos_dr.c, mos_da.c, the tray
-    # verbs) and the CLI verb emitters can't run here, so their lines read
-    # as uncovered in THIS report. A file that looks bare (e.g.
-    # mos_result.c's JSON emitters) is covered in the combined macOS report;
-    # consult that one for the real per-file picture.
-    #
-    # REPORT, NOT GATE — deliberately no --fail-under-* floor yet. The
-    # sequence is measure-then-set-floor: a threshold picked before a
-    # baseline is observed is a guess, and the project's rule is to
-    # escalate rigor on evidence. Add the floor in a follow-up once the
-    # baseline number has settled. gcovr comes from apt (not hash-pinned
-    # like the schema validators) because this leg is observational — it
-    # asserts no correctness property, so a pinned-bytes supply chain buys
-    # nothing here.
+    # Pure-layer coverage (src/) from the host-independent unit suite.
+    # The repo-wide number is the coverage-combined macOS job below; this
+    # Linux leg reports only what runs without IOKit, and exists as the
+    # fallback that survives without a macOS runner. The core layer and
+    # CLI emitters show uncovered here — the combined report covers those.
     name: Coverage (pure layer, Linux)
     runs-on: ubuntu-latest
     steps:
@@ -690,8 +670,6 @@ jobs:
           sudo apt-get install -y gcovr
 
       - name: Configure + build with coverage instrumentation
-        # Debug + MOS_COVERAGE=ON; the option forces -O0 -g --coverage on
-        # every target that links mos_warnings (mos_pure, mos_tests).
         run: |
           set -e
           cmake -B build-cov -DCMAKE_BUILD_TYPE=Debug -DMOS_COVERAGE=ON
@@ -702,9 +680,6 @@ jobs:
         run: ctest --output-on-failure
 
       - name: Report coverage
-        # Filter to src/ — the library proper. The table goes to the job
-        # log and to the run's Summary tab so the number is visible without
-        # opening logs. No threshold: see the job-header note.
         run: |
           set -eo pipefail
           gcovr --root . --object-directory build-cov \
@@ -721,44 +696,14 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   coverage-combined:
-    # The AUTHORITATIVE, repo-wide coverage number. macOS is the only
-    # platform that can execute BOTH layers — the host-independent unit
-    # suite (pure layer) AND the link-seam adapter-fake tests + emit harness
-    # (IOKit core: mos_scsi/query/state/watch/dr/da, tray verbs, CLI verb
-    # emitters) — so it builds and runs all of them in ONE coverage build
-    # under a single llvm-cov toolchain and reports a single merged %.
-    #
-    # Why one combined job and not a cross-OS merge of two tracefiles:
-    # gcc's .gcda (Linux) and clang/llvm-cov's (macOS) are incompatible
-    # binary formats, so the only way to merge across OSes is to export
-    # each leg to gcovr's neutral JSON and `--add-tracefile` them in a third
-    # job — two extra artifact Actions and a merge step for a number macOS
-    # can produce directly. Doing it all on one runner is the simpler,
-    # less-machinery path.
-    #
-    # Why the Linux `coverage` job is KEPT alongside this (reversibility):
-    # the adapter layer is intrinsically macOS-only (it populates real
-    # SCSITaskLib SDK structs), so "needs macOS" is a permanent structural
-    # seam, not coupling to untangle later. The Linux job is the pure
-    # layer's standalone, already-written fallback — if macOS minutes ever
-    # become costly (repo goes private/paid), this combined job is deleted
-    # and Linux keeps reporting the pure layer with zero rework. The thing
-    # that WOULD be hard to undo is deleting Linux; keeping it is the cheap
-    # insurance, so it stays.
-    #
-    # Instrumentation note: the adapter-fake targets deliberately do NOT
-    # link mos_warnings (CMakeLists.txt: "No mos_warnings/-Werror here"),
-    # so the MOS_COVERAGE option — which rides mos_warnings — can't reach
-    # them. Coverage is injected through CMAKE_C_FLAGS instead, which
-    # applies project-wide regardless of the warnings target. Apple clang
-    # emits gcov-format counters that gcovr reads via `llvm-cov gcov`.
-    #
-    # REPORT, NOT GATE — same as the Linux leg: no --fail-under floor until
-    # a baseline settles. gcovr comes from Homebrew (bottle SHA-256 is
-    # checksum-verified by the formula — the macOS analog of the Linux
-    # leg's apt package); the only PyPI dependency is jsonschema, installed
-    # --require-hashes from the same pinned requirements file the schema
-    # jobs use. All Actions are commit-SHA pinned.
+    # Authoritative repo-wide coverage (src/ + cli/): macOS is the only
+    # runner that executes both the pure unit suite and the macOS-only
+    # adapter/emit tests, so one llvm-cov build merges them into one number
+    # (merging gcc and llvm-cov data cross-OS would need extra tooling for
+    # a number macOS produces directly). Instrumentation rides
+    # CMAKE_C_FLAGS, not MOS_COVERAGE: the adapter targets don't link
+    # mos_warnings, so the option can't reach them. gcovr from a Homebrew
+    # bottle; jsonschema --require-hashes; Actions SHA-pinned.
     name: Coverage (combined, macOS)
     runs-on: macos-latest
     steps:
@@ -776,14 +721,10 @@ jobs:
         run: brew install gcovr
 
       - name: Configure + build all instrumented targets
-        # One coverage build with BOTH the unit tests (MOS_BUILD_TESTS, the
-        # pure layer) and the adapter-fake targets (MOS_BUILD_ADAPTER_FAKE,
-        # the IOKit core + CLI emitters). Debug pins -O0 for accurate line
-        # mapping; --coverage rides CMAKE_C_FLAGS to reach the targets that
-        # don't link mos_warnings. Only the test/adapter/emit targets are
-        # built (not the real `mos` binary), so cli/main.c, cli/watch.c, and
-        # cli/probe.c — which only the macOS-gated shell contract test
-        # drives — don't appear as misleadingly-bare lines here.
+        # Build only the test/adapter/emit targets, not the real `mos`
+        # binary: cli/main.c, cli/watch.c, and cli/probe.c are driven only
+        # by the macOS-gated shell contract test and would otherwise show
+        # as misleadingly-bare lines.
         run: |
           set -e
           cmake -B build-cov -DMOS_BUILD_ADAPTER_FAKE=ON -DMOS_BUILD_TESTS=ON \
@@ -811,17 +752,11 @@ jobs:
             ./build-cov/bin/mos_emit_fixtures schemas
 
       - name: Report coverage
-        # `llvm-cov gcov` parses Apple clang's counters; gcovr merges the
-        # per-binary .gcda for the same source into a union — so a line
-        # covered by EITHER the pure unit suite or the adapter tests counts
-        # covered. Filter to src/ + cli/.
         run: |
           set -eo pipefail
-          # --gcov-ignore-errors=no_working_dir_found: CMAKE_C_FLAGS
-          # instruments project-wide, so CMake's own compiler-detection
-          # probe TU (CMakeCCompilerId.c) also emits counters gcovr can't
-          # resolve to a source. Skip those rather than fail the report;
-          # the src/ + cli/ filter already scopes what's counted.
+          # gcov-ignore-errors: CMAKE_C_FLAGS instruments project-wide, so
+          # CMake's compiler-detection probe TU emits counters gcovr can't
+          # resolve to a source; skip those (the filter scopes the report).
           # xcrun, not bare llvm-cov: Apple ships it inside the Xcode
           # toolchain, off the default PATH.
           gcovr --root . --object-directory build-cov \
