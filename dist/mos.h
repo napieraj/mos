@@ -166,13 +166,12 @@ mos_state mos_state_result_state(const mos_state_result *r);
    (empty/open tray) and hence no resolvable name. Render to "diskN" with
    mos_bsd_name_format().
 
-   QUERY-TIME SEMANTICS (v0.4): for a held handle this is re-resolved on
-   every mos_query_state from the drive's stable service, so a handle
-   opened on an empty drive reports the inserted disc's unit once a query
-   returns READY (and reverts to -1 after an eject). The re-resolve is a
-   local IORegistry walk off the drive node — no command, no exclusive
-   access. (mos_query_capacity and mos_query_volume refresh the same way;
-   the earlier v0.3 open-time-only behavior is retired.) */
+   QUERY-TIME SEMANTICS: for a held handle this is re-resolved on every
+   mos_query_state from the drive's stable service, so a handle opened on
+   an empty drive reports the inserted disc's unit once a query returns
+   READY (and reverts to -1 after an eject). The re-resolve is a local
+   IORegistry walk off the drive node — no command, no exclusive access.
+   mos_query_capacity and mos_query_volume refresh the same way. */
 int64_t        mos_state_result_bsd_unit(const mos_state_result *r);
 
 /* The drive service's IORegistry entry ID — the attachment identity,
@@ -322,7 +321,7 @@ int64_t mos_handle_bsd_unit(const mos_handle_t *h);
  */
 mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out);
 
-/* ---- Disc information (v0.4 typed API) ------------------------------- */
+/* ---- Disc information ------------------------------- */
 
 /* Result of a disc-information query. Opaque on the same terms as
    mos_state_result: handle-owned, read through the accessors, valid
@@ -372,7 +371,7 @@ const char     *mos_disc_status_description(mos_disc_status s);
    0..3; NULL for out-of-range. Tokens track Linux CDM_MRW_* (cdrom.h). */
 const char     *mos_bg_format_status_name(uint8_t status);
 
-/* ---- Table of contents (v0.4 typed API) ------------------------------ */
+/* ---- Table of contents ------------------------------ */
 
 /* Result of a TOC query. Opaque, handle-owned, read through the
    accessors; valid until the next mos_query_toc() call or mos_close(). */
@@ -405,7 +404,7 @@ uint8_t  mos_toc_track_adr(const mos_toc *t, size_t i);
 uint8_t  mos_toc_track_control(const mos_toc *t, size_t i);
 uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i);
 
-/* ---- Mounted volume (v0.4, DiskArbitration-sourced) ------------------ */
+/* ---- Mounted volume (DiskArbitration-sourced) ------------------------ */
 
 /*
  * Mounted-volume name and mount path for the drive's current media —
@@ -438,7 +437,7 @@ mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
                            char *name_buf, size_t name_cap,
                            char *path_buf, size_t path_cap);
 
-/* ---- Drive capabilities (v0.4 typed API) ----------------------------- */
+/* ---- Drive capabilities ----------------------------- */
 
 /* Result of a drive-capabilities query. Opaque, handle-owned; valid
    until the next mos_query_drive_caps() call or mos_close(). */
@@ -450,8 +449,8 @@ typedef struct mos_drive_caps mos_drive_caps;
  * bounds-checked feature walk. These are the spec-grounded fields a
  * MakeMKV drive dump shows ("Highest AACS version", bus-encryption
  * support) WITHOUT the LibreDrive status synthesis, which is a MakeMKV
- * database property, not a drive property (design doc 2026-06-10).
- * bus_encryption is the DRIVE-REPORTED support bit from the AACS
+ * database property, not a drive property. bus_encryption is the
+ * DRIVE-REPORTED support bit from the AACS
  * feature payload (0x010D byte 0 bit 1) — a firmware assertion; the
  * cryptographically signed BEC bit lives in the AACS drive
  * certificate behind a raw REPORT KEY, which mos does not issue
@@ -477,7 +476,7 @@ const char *mos_handle_product(const mos_handle_t *h);
 const char *mos_handle_revision(const mos_handle_t *h);
 uint64_t    mos_handle_registry_id(const mos_handle_t *h);
 
-/* ---- Disc identity from disc structure (v0.4 typed API) -------------- */
+/* ---- Disc identity from disc structure -------------- */
 
 /* Result of a disc-structure identity query. Opaque, handle-owned;
    valid until the next mos_query_disc_id() call or mos_close(). */
@@ -508,7 +507,7 @@ const char *mos_disc_id_manufacturer(const mos_disc_id *d);
 const char *mos_disc_id_media_type(const mos_disc_id *d);
 const char *mos_disc_id_revision(const mos_disc_id *d);
 
-/* ---- CD-TEXT album identity (v0.4 typed API) ------------------------- */
+/* ---- CD-TEXT album identity ------------------------- */
 
 /* Result of a CD-TEXT query. Opaque, handle-owned; valid until the next
    mos_query_cdtext() call or mos_close(). */
@@ -527,8 +526,8 @@ typedef struct mos_cdtext mos_cdtext;
  * Performer plus the per-track TITLES and PERFORMERS, all single-byte
  * charset; a double-byte (DBCC) field reads as NULL rather than
  * mis-decoded. The other CD-TEXT field types (songwriter/composer/…) and
- * additional language blocks are not decoded (deferred, design doc
- * 2026-06-14). CD-TEXT is BEST-EFFORT DISPLAY TEXT, not a
+ * additional language blocks are not decoded. CD-TEXT is BEST-EFFORT
+ * DISPLAY TEXT, not a
  * fingerprint: audio-CD dedup keys ride on mos_query_toc, the fail-closed
  * identity primitive. Title/Performer are disc-controlled bytes — escape
  * them before terminals or structured output. `out` REQUIRED (NULL =>
@@ -554,7 +553,7 @@ uint8_t     mos_cdtext_track_count(const mos_cdtext *c);
 const char *mos_cdtext_track_title(const mos_cdtext *c, uint8_t track);
 const char *mos_cdtext_track_performer(const mos_cdtext *c, uint8_t track);
 
-/* ---- Physical structure: DVD/HD-DVD (v0.4 typed API) ----------------- */
+/* ---- Physical structure: DVD/HD-DVD ----------------- */
 
 /* Result of a physical-structure query. Opaque, handle-owned; valid
    until the next mos_query_physical_structure() call or mos_close(). */
@@ -613,7 +612,7 @@ const char *mos_track_path_name(uint8_t track_path);
    "aacs", or NULL for reserved/unknown codes. */
 const char *mos_protection_name(uint8_t protection);
 
-/* ---- Track information / capacity (v0.4 typed API) -------------------- */
+/* ---- Track information / capacity -------------------- */
 
 /* Result of a track-information query. Opaque, handle-owned; valid until
    the next mos_query_track_info() call or mos_close(). */
@@ -651,7 +650,7 @@ uint32_t mos_track_info_free_blocks(const mos_track_info *t);
 uint32_t mos_track_info_track_size(const mos_track_info *t);
 uint32_t mos_track_info_last_recorded(const mos_track_info *t);
 
-/* ---- Disc capacity (v0.4 typed API) ---------------------------------- */
+/* ---- Disc capacity ---------------------------------- */
 
 /* Result of a capacity query. Opaque, handle-owned; valid until the next
    mos_query_capacity() call or mos_close(). */
@@ -702,7 +701,7 @@ uint32_t mos_capacity_free_blocks(const mos_capacity *c);
 uint32_t mos_capacity_next_writable(const mos_capacity *c);
 uint32_t mos_capacity_track_size(const mos_capacity *c);
 
-/* ---- Drive speeds (v0.4 typed API) ----------------------------------- */
+/* ---- Drive speeds ----------------------------------- */
 
 /* Result of a drive-speed query. Opaque, handle-owned; valid until the
    next mos_query_drive_perf() call or mos_close(). */
@@ -713,7 +712,7 @@ typedef struct mos_drive_perf mos_drive_perf;
  * non-exclusive GetPerformance convenience method: the drive's supported
  * read/write speeds, summarized as the max read and max write speed
  * (kB/s) and the descriptor count. The MMC-sanctioned modern speed
- * source (supersedes mode-page-0x2A speed fields). MEDIA-DEPENDENT: the
+ * source. MEDIA-DEPENDENT: the
  * write-speed list reflects the loaded medium, so an empty or read-only
  * drive may report zero descriptors — mos_drive_perf_have() is then
  * false, which is data, not an error. `out` REQUIRED (NULL =>
@@ -728,10 +727,10 @@ uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p);
 uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p);
 uint32_t mos_drive_perf_max_write_kbps(const mos_drive_perf *p);
 
-/* ---- Mechanical + error-recovery (MODE SENSE, v0.4 typed API) --------- */
+/* ---- Mechanical + error-recovery (MODE SENSE) ------------------------ */
 
-/* Results of the two read-only MODE SENSE(10) page reads (AGENTS scope
-   addendum 2026-06-13). Opaque, handle-owned; each valid until the next
+/* Results of the two read-only MODE SENSE(10) page reads. Opaque,
+   handle-owned; each valid until the next
    call of its query or mos_close(). */
 typedef struct mos_mode_caps      mos_mode_caps;
 typedef struct mos_error_recovery mos_error_recovery;
@@ -778,7 +777,7 @@ bool    mos_error_recovery_per(const mos_error_recovery *e);
 bool    mos_error_recovery_dcr(const mos_error_recovery *e);
 uint8_t mos_error_recovery_read_retry_count(const mos_error_recovery *e);
 
-/* ---- Feature enumeration (v0.4 typed API) ----------------------------- */
+/* ---- Feature enumeration ----------------------------- */
 
 /* One MMC feature descriptor's header facts. Opaque; valid only inside
    the callback (stack-backed per iteration, like mos_device_info_t). */
@@ -810,12 +809,12 @@ mos_error mos_enumerate_features(mos_handle_t *h,
                                             void *ctx),
                                  void *ctx);
 
-/* ---- Tray control (v0.4 control verbs) -------------------------------- *
+/* ---- Tray control ----------------------------------------------------- *
  *
- * The first commands mos issues that CHANGE drive state rather than report
- * it (ARCHITECTURE.md §1 reporter-only stance is narrowed, not reversed —
- * the query path never issues these; AGENTS.md controller-verbs ADR
- * 2026-06-13). Each is one raw 6-byte CDB on the mos_raw_cdb path, so each
+ * The commands mos issues that CHANGE drive state rather than report it
+ * (ARCHITECTURE.md §1's reporter-only stance is narrowed, not reversed —
+ * the query path never issues these). Each is one raw 6-byte CDB on the
+ * mos_raw_cdb path, so each
  * acquires and RELEASES exclusive access within the call:
  *
  *   - MOS_ERR_BUSY / MOS_ERR_EXCLUSIVE_ACCESS when the drive is mounted as a
@@ -869,9 +868,7 @@ mos_error mos_tray_lock  (mos_handle_t *h, bool persistent,
 /* Allow medium removal (PREVENT ALLOW MEDIUM REMOVAL 0x1E). persistent must
    MATCH the lock being released — the two prevent states are independent
    (04-349r1 §6.18.2): false issues 0x00 (clears basic Prevent), true issues
-   0x02 (clears Persistent Prevent). A 0x00 does NOT clear a persistent lock.
-   (This symmetric `persistent` parameter refines the v0.4 design sketch,
-   which predated confirming the two states are independent.) */
+   0x02 (clears Persistent Prevent). A 0x00 does NOT clear a persistent lock. */
 mos_error mos_tray_unlock(mos_handle_t *h, bool persistent,
                           mos_tray_outcome *out, uint8_t sense[3]);
 
@@ -883,8 +880,8 @@ const char *mos_tray_outcome_description(mos_tray_outcome o);
  * Diagnostic: issue a raw CDB against the drive. Requires exclusive
  * access; returns MOS_ERR_BUSY or MOS_ERR_EXCLUSIVE_ACCESS if the drive
  * is mounted or held by another process. For fixture capture and hardware
- * investigation — not production surface, and on the deprecation path for
- * v0.4 (prefer mos_query_state() and the typed APIs).
+ * investigation — not production surface; prefer mos_query_state() and the
+ * typed APIs.
  *
  * cdb_len must be 6, 10, 12, or 16 (the lengths SCSITaskLib accepts);
  * other values return MOS_ERR_INVALID_ARG. timeout_ms must be > 0 — 0 is
@@ -910,7 +907,7 @@ mos_error mos_raw_cdb(mos_handle_t *h,
 /* Safe to call on NULL. Do not call twice on the same handle. */
 void mos_close(mos_handle_t *h);
 
-/* ---- Watch API (v0.3+) ---------------------------------------------- */
+/* ---- Watch API ------------------------------------------------------- */
 
 /*
  * Watch the state of a single drive over time. Emits an immediate
@@ -1109,8 +1106,8 @@ const char *mos_profile_name(uint16_t profile_code);
    number ranges, so it costs nothing beyond the GET CONFIGURATION the
    state query already performs — this is what lets `mos list`-style
    output distinguish "the BD in drive A" from "the DVD in drive B" on
-   identical hardware. Finer disambiguation (volume name) is the v0.4
-   media-info work; see doc/research/2026-06-10-media-info-design.md. */
+   identical hardware. Finer disambiguation by volume name comes from
+   mos_query_volume. */
 const char *mos_profile_class(uint16_t profile_code);
 
 
