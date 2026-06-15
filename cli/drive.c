@@ -2,12 +2,10 @@
  *
  * One mos.drive.v1 document: what IS this drive (static facts), vs
  * metadata's "what disc is this". Identity is open-time directory data
- * (zero commands); capabilities are one GET CONFIGURATION RT=0 walk.
- * The INQUIRY unit serial — the durable drive-inventory key that
- * survives replug and machine moves — ships null in stage 1: whether
- * the convenience InquiryDevice surfaces VPD page 0x80 is a recorded
- * Mac falsifier (design doc, 06-12 addendum), and a raw INQUIRY would
- * need the AGENTS raw-verb showing first.
+ * (zero commands); capabilities are one GET CONFIGURATION RT=0 walk. The
+ * INQUIRY unit serial ships null: whether the convenience InquiryDevice
+ * surfaces VPD page 0x80 is unconfirmed on Mac, and a raw INQUIRY would
+ * need the raw-verb showing first (AGENTS.md scope doctrine §1).
  */
 #include "common.h"
 
@@ -50,8 +48,8 @@ static void emit_json(const drive_doc *d)
     if (d->revision) mos_cli_json_str(stdout, d->revision);
     else             fputs("null", stdout);
 
-    /* Stage 1: always null (see file header). The key is present so
-       the v1 field set never moves when the value arrives. */
+    /* Always null (see file header). The key is present so the v1 field
+       set never moves when the value arrives. */
     fputs(",\n  \"serial\": null", stdout);
 
     fprintf(stdout,
@@ -142,7 +140,7 @@ static void emit_human(const drive_doc *d)
     pairs[n++] = (mos_cli_human_pair){ "AACS", aacs_buf };
 
     /* 64: worst case "read 4294967295 kB/s, write 4294967295 kB/s (max)"
-       is 49 + NUL — the per-value "kB/s" pushes it past the old 48. */
+       is 49 + NUL. */
     char spd_buf[64];
     if (d->have_speeds)
         snprintf(spd_buf, sizeof spd_buf, "read %u kB/s, write %u kB/s (max)",

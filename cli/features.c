@@ -1,15 +1,12 @@
 /* cli/features.c — the features command: `mos features [selector] [--json]`.
  *
  * The raw MMC feature list (GET CONFIGURATION RT=0), one row per
- * descriptor in reply order: code, current, persistent, version. This
- * is the writability surface — a write feature's CURRENT bit answers
- * "can this drive write the medium mounted right now" (e.g. 0x0041
- * BD-R write with a blank BD-R inserted), which is the half of
- * "ready for archival" the disc-side blank status cannot carry.
- * Deliberately no name table and no current_profile: codes map
- * against MMC-6 §5.3 (consumer-side), and emitting the header's
- * profile here would bypass the profile-only-on-READY staleness rule
- * the state core enforces (ARCHITECTURE §9).
+ * descriptor in reply order: code, current, persistent, version — the
+ * writability surface (a write feature's CURRENT bit answers "can this
+ * drive write the mounted medium now"). No name table (codes map against
+ * MMC-6 §5.3 consumer-side) and no current_profile: emitting the header's
+ * profile here would bypass the profile-only-on-READY staleness rule the
+ * state core enforces (ARCHITECTURE.md §9).
  */
 #include "common.h"
 

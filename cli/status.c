@@ -53,10 +53,9 @@ static void emit_human(const mos_state_result *r, int index1,
     char sense_buf[16];
     if (sk || asc || ascq) {
         /* Raw triplet only: its decoded MEANING is the State line above
-           (the library's whole job); no public sense-text catalog
-           exists and the design review declined to invent one for an
-           edge-case row. The triplet is what you compare against the
-           MMC tables. */
+           (the library's whole job), and there is no public sense-text
+           catalog. The triplet is what you compare against the MMC
+           tables. */
         snprintf(sense_buf, sizeof sense_buf, "%02x/%02x/%02x",
                  sk, asc, ascq);
         pairs[n++] = (mos_cli_human_pair){ "Sense", sense_buf };
@@ -152,9 +151,8 @@ static void emit_json(const mos_state_result *r, int index1,
     }
     /* Coarse media class, same suppression rule as the name: derived
        entirely from the profile already in hand, so it ships with zero
-       extra wire traffic. This is the first disambiguator for the
-       identical-drives case; the volume name joins it in the v0.4
-       media-info work (doc/research/2026-06-10-media-info-design.md). */
+       extra wire traffic. The first disambiguator for the identical-drives
+       case; the volume name joins it. */
     {
         const char *media_class = mos_profile_class(profile);
         if (mos_cli_profile_present(profile) && media_class) {
@@ -196,9 +194,6 @@ static void emit_json(const mos_state_result *r, int index1,
     fputs("\n}\n", stdout);
 }
 
-/* Map mos_error to its JSON contract code string. The set of codes is
-   pinned in include/mos.h alongside the enum; downstream automation
-   relying on the JSON contract pattern-matches on these strings. */
 int mos_cli_run_query(void)
 {
     mos_error err = MOS_OK;
@@ -217,15 +212,13 @@ int mos_cli_run_query(void)
         /* index1 stays 0; resolved from the result's registry_id below. */
         h = mos_open_by_registry_id(opt_registry, &err);
     } else {
-        /* No selector: fine with exactly one drive; with several this
-           is EX_USAGE — no first-burner magic (CLI design 2026-06-10).
-           mos_cli_open_sole_drive opens the lone drive inside the same
-           enumeration that counts, so the happy path probes ONCE (the
-           pre-pivot collect-then-reopen double probe died with the DR
-           pivot). The multi-drive failure still carries the mini-list
-           (one table implementation) so the human gets the overview
-           they wanted, plus the retry path — the mini-list's probe
-           pass only runs on this error path. */
+        /* No selector: fine with exactly one drive; with several this is
+           EX_USAGE — no first-burner magic. mos_cli_open_sole_drive opens
+           the lone drive inside the same enumeration that counts, so the
+           happy path probes ONCE. The multi-drive failure still carries
+           the mini-list (one table implementation) so the human gets the
+           overview they wanted; the mini-list's probe pass only runs on
+           this error path. */
         int total = 0;
         h = mos_cli_open_sole_drive(&err, &total);
         if (total > 1) {
@@ -269,9 +262,9 @@ int mos_cli_run_query(void)
        point into h's internal buffers (see mos.h — "valid only until the
        next mos_query_state() call or mos_close()"). Freeing the handle
        first would leave r dangling. */
-    /* Volume label (stage 1): one DA description read, gated inside
-       the library on the media nub. Failure or unmounted just means
-       no field — never affects state reporting. */
+    /* Volume label: one DA description read, gated inside the library on
+       the media nub. Failure or unmounted just means no field — never
+       affects state reporting. */
     char volume[256] = "";
     bool mounted = false;
     (void)mos_query_volume(h, &mounted, volume, sizeof volume, NULL, 0);
