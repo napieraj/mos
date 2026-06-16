@@ -79,6 +79,9 @@ static inline void mos_cli_list_volume_cell(const char *path,
 #define MOS_CLI_VENDOR_CAP    9
 #define MOS_CLI_PRODUCT_CAP  17
 #define MOS_CLI_REVISION_CAP  5
+/* INQUIRY VPD-0x80 serial: variable-width (SPC PAGE LENGTH, max 255), capped
+   to the library's serial_str buffer; matches src/mos_internal.h. */
+#define MOS_CLI_SERIAL_CAP   64
 #define MOS_CLI_ESC_CAP(raw_cap) (4 * ((raw_cap) - 1) + 1)
 
 typedef struct {

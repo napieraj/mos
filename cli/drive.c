@@ -2,10 +2,13 @@
  *
  * One mos.drive.v1 document: what this drive IS (static facts), vs
  * metadata's "what disc is this". Identity is open-time directory data;
- * capabilities are one GET CONFIGURATION RT=0 walk. The INQUIRY serial
- * ships null — VPD page 0x80 via the convenience InquiryDevice is
- * unconfirmed on Mac, and a raw INQUIRY needs the raw-verb showing first
- * (AGENTS.md scope doctrine §1).
+ * capabilities are one GET CONFIGURATION RT=0 walk. The INQUIRY serial is
+ * a raw INQUIRY VPD page 0x80 (mos_query_serial) — the durable inventory
+ * key DiscRecording does not cache and no convenience method can carry
+ * (AGENTS.md scope doctrine §1; design:
+ * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md). Best-effort:
+ * null on BUSY (mounted media), an unsupported page, or no programmed
+ * serial — the natural inventory moment is an empty drive.
  */
 #include "common.h"
 
@@ -18,6 +21,7 @@ typedef struct {
     const char *vendor;       /* borrowed from the handle; NULL = absent */
     const char *product;
     const char *revision;
+    const char *serial;       /* borrowed; NULL = unavailable (see header) */
     bool        aacs;
     uint8_t     aacs_version;
     bool        bus_encryption;
@@ -48,9 +52,9 @@ static void emit_json(const drive_doc *d)
     if (d->revision) mos_cli_json_str(stdout, d->revision);
     else             fputs("null", stdout);
 
-    /* Always null (see file header); the key stays present so the v1 field
-       set won't move when the value arrives. */
-    fputs(",\n  \"serial\": null", stdout);
+    fputs(",\n  \"serial\": ", stdout);
+    if (d->serial)   mos_cli_json_str(stdout, d->serial);
+    else             fputs("null", stdout);
 
     fprintf(stdout,
             ",\n  \"capabilities\": {\"aacs\": %s, \"aacs_version\": ",
@@ -123,13 +127,15 @@ static void emit_human(const drive_doc *d)
     char v_esc[MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];
     char p_esc[MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
     char r_esc[MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];
+    char s_esc[MOS_CLI_ESC_CAP(MOS_CLI_SERIAL_CAP)];
     (void)mos_safe_ascii(d->vendor,   v_esc, sizeof v_esc);
     (void)mos_safe_ascii(d->product,  p_esc, sizeof p_esc);
     (void)mos_safe_ascii(d->revision, r_esc, sizeof r_esc);
+    (void)mos_safe_ascii(d->serial,   s_esc, sizeof s_esc);
     pairs[n++] = (mos_cli_human_pair){ "Vendor",  d->vendor   ? v_esc : NULL };
     pairs[n++] = (mos_cli_human_pair){ "Product", d->product  ? p_esc : NULL };
     pairs[n++] = (mos_cli_human_pair){ "Revision",     d->revision ? r_esc : NULL };
-    pairs[n++] = (mos_cli_human_pair){ "Serial",  NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Serial",  d->serial   ? s_esc : NULL };
 
     char aacs_buf[48];
     if (d->aacs)
@@ -213,6 +219,12 @@ int mos_cli_run_drive(void)
     d.aacs           = mos_drive_caps_aacs(c);
     d.aacs_version   = mos_drive_caps_aacs_version(c);
     d.bus_encryption = mos_drive_caps_bus_encryption(c);
+
+    /* Serial is best-effort: raw INQUIRY VPD 0x80 returns BUSY on mounted
+       media and IO on a drive without the page / no programmed serial — each
+       leaves serial null (see file header). */
+    const char *serial = NULL;
+    if (mos_query_serial(h, &serial) == MOS_OK) d.serial = serial;
 
     /* Speeds are best-effort and media-dependent: a failed command or
        empty descriptor list leaves them null (have_speeds false). */

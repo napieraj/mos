@@ -473,6 +473,16 @@ bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
 bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
                                        struct mos_error_recovery *out);
 
+/* ---- INQUIRY VPD page 0x80 decode (mos_vpd80.c) ------------------- *
+ *
+ * Decode the Unit Serial Number page into a NUL-terminated ASCII string in
+ * out[0..out_cap). True only when the reply echoes page code 0x80 and a
+ * non-empty serial survives the trailing space/NUL trim. Pure, bounded,
+ * no-OOB — fuzz/ASan-gated. The shell (mos_serial.c) bounds len to the
+ * realized transfer count before calling (O-4). */
+bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
+                                     char *out, size_t out_cap);
+
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
  * True for the four SAM-5 status values meaning "drive contended, retry

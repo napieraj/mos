@@ -85,6 +85,11 @@ struct mos_handle {
        mos_query_error_recovery). Same terms. */
     struct mos_mode_caps      mode_caps;
     struct mos_error_recovery error_recovery;
+
+    /* Handle-owned INQUIRY VPD-0x80 serial (mos_query_serial). Filled by the
+       raw-INQUIRY shell, returned by borrowed pointer; 64 holds any real
+       drive serial (SPC max 255 truncates, never overflows). */
+    char                      serial_str[64];
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on

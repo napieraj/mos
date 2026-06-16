@@ -47,7 +47,7 @@
     },
     "serial": {
       "type": ["string", "null"],
-      "description": "INQUIRY unit serial (VPD page 0x80) — the durable drive-inventory key. STAGE 1: always null; whether the convenience InquiryDevice surfaces VPD pages is a recorded Mac falsifier (design doc, 2026-06-12 addendum), and a raw INQUIRY would need the AGENTS raw-verb showing. The key is present so the v1 field set never moves when the value arrives."
+      "description": "INQUIRY unit serial (VPD page 0x80) — the durable drive-inventory key that survives replug and machine moves (registry_id is attachment identity, replug mints a new one). Read via a raw INQUIRY (EVPD=1, PAGE CODE=0x80): the convenience Inquiry issues only a standard INQUIRY, so the page is unreachable through it, satisfying the AGENTS layer-1 raw-verb showing (design: doc/research/2026-06-16-serial-vpd-0x80-feasibility.md). null when the drive is busy/mounted (the raw read backs off on exclusive access rather than contend), the drive does not implement the page, or no serial is programmed."
     },
     "capabilities": {
       "type": "object",
