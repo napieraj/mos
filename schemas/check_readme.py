@@ -34,9 +34,22 @@ mos-sim self-gen kit lifts from the source):
     is checked: the body is whitespace-aligned with space-bearing,
     dynamically-widthed cells, so it isn't round-trippable.
 
+Whole-document cross-checks (prose AND examples):
+
+  * every `mos <verb>` invocation names a real verb (parsed from main.c).
+    The per-block checks SKIP an unknown-verb block silently, so a rename
+    (status -> state) left stale `mos status` mentions with no tripwire;
+    this catches them in inline code spans and fenced command lines.
+    Digit-bearing first tokens (`mos 2`, `mos disk4`) are drive selectors
+    and `--flags` are options — both exempt, per the CLI's own digit-gate.
+
+  * every `mos.<name>.v<n>` token resolves to a real schema file. The
+    `schema` field inside an example doc is already validated; this covers
+    the names that appear only as prose (e.g. the JSON-output section).
+
 Exit: 0 if every checkable block validates, 1 on any failure, 2 on setup error.
-Runnable locally with `python3 schemas/check_readme.py`; meant for CI alongside
-validate.py.
+Runnable locally with `python3 schemas/check_readme.py` (or `--selftest` for
+the synthetic cross-check cases); meant for CI alongside validate.py.
 """
 import json
 import re
@@ -267,6 +280,79 @@ def key_problems(obj, schema, path=""):
     return problems
 
 
+def mos_verb_problems(md, verbs):
+    """Every `mos <verb>` invocation in the README must name a real verb —
+    in prose `mos …` inline code spans and in `$ mos …` / `mos …` command
+    lines inside fenced blocks alike. A digit-bearing first token is a drive
+    selector (the CLI's own digit-gate in main.c) and a `--flag` is an
+    option; both are exempt. This catches a verb renamed in main.c but left
+    stale in the README — the per-block checks above SKIP an unknown-verb
+    block silently, so a rename (status -> state) had no tripwire."""
+    bad = {}  # verb -> first location, deduped
+
+    def consider(word, loc):
+        if not word or word[0] == "-" or any(c.isdigit() for c in word):
+            return  # a --flag or a digit-bearing selector, not a verb
+        if word not in verbs and word not in bad:
+            bad[word] = loc
+
+    for m in re.finditer(r"`mos\s+([A-Za-z][\w-]*)", md):     # prose code spans
+        consider(m.group(1), "inline `mos …`")
+    for line0, raw in fenced_blocks(md):                      # fenced commands
+        for ln in raw.splitlines():
+            cm = re.match(r"\s*\$?\s*mos\s+([A-Za-z][\w-]*)", ln)
+            if cm:
+                consider(cm.group(1), f"README.md:{line0}")
+
+    return [f"{loc}: `mos {w}` is not a verb (have {sorted(verbs)})"
+            for w, loc in sorted(bad.items())]
+
+
+def schema_name_problems(md, schemas):
+    """Every `mos.<name>.v<n>` token in the README must resolve to a real
+    schema file. The `schema` field INSIDE an example document is already
+    validated; this covers the names that appear only as prose (the JSON-
+    output section lists all of them), where a renamed schema would slip
+    through."""
+    problems, seen = [], set()
+    for m in re.finditer(r"\bmos\.[a-z_]+\.v\d+\b", md):
+        name = m.group(0)
+        if name in seen:
+            continue
+        seen.add(name)
+        if name + ".json" not in schemas:
+            problems.append(f"`{name}` names no schema in schemas/")
+    return problems
+
+
+def selftest() -> int:
+    """Synthetic cases proving the cross-checks fire. `check_readme.py --selftest`."""
+    verbs = {"state", "list", "watch", "tray"}
+    schemas = {"mos.state.v1.json": {}, "mos.list.v1.json": {}}
+    cases = [
+        ("stale verb in prose",   mos_verb_problems,    ("Run `mos status 1`.", verbs),        True),
+        ("good verb in prose",    mos_verb_problems,    ("Run `mos state 1`.", verbs),         False),
+        ("stale verb in fence",   mos_verb_problems,    ("```\n$ mos status 1\n```", verbs),   True),
+        ("good verb in fence",    mos_verb_problems,    ("```\n$ mos state 1\n```", verbs),    False),
+        ("piped verb in fence",   mos_verb_problems,    ("```\nmos watch | jq .\n```", verbs), False),
+        ("digit selector exempt", mos_verb_problems,    ("Use `mos 2` or `mos disk4`.", verbs),False),
+        ("bare tool name exempt", mos_verb_problems,    ("`mos` reads the drive.", verbs),     False),
+        ("flag exempt",           mos_verb_problems,    ("Pass `mos --json`.", verbs),         False),
+        ("bad schema name",       schema_name_problems, ("Emits `mos.bogus.v9`.", schemas),    True),
+        ("good schema name",      schema_name_problems, ("Emits `mos.state.v1`.", schemas),    False),
+        ("schema in a path",      schema_name_problems, ("see schemas/mos.list.v1.json", schemas), False),
+    ]
+    failed = 0
+    for name, fn, args, expect in cases:
+        probs = fn(*args)
+        ok = bool(probs) == expect
+        print(f"  {'ok  ' if ok else 'FAIL'} {name}: "
+              f"{probs if probs else 'clean'}")
+        failed += not ok
+    print(f"\nselftest: {len(cases) - failed}/{len(cases)} passed")
+    return 1 if failed else 0
+
+
 def main() -> int:
     if not README.exists():
         print(f"error: {README} not found", file=sys.stderr)
@@ -364,9 +450,22 @@ def main() -> int:
                 print(f"  SKIP {loc}: not a JSON object")
                 skipped += 1
 
+    # Document-level cross-checks (prose + examples): every `mos <verb>`
+    # names a real verb, every `mos.*.v<n>` names a real schema.
+    for label, probs in (("mos verb names", mos_verb_problems(md, verbs)),
+                         ("schema names", schema_name_problems(md, schemas))):
+        if probs:
+            print(f"  FAIL README.md: {label}")
+            for pr in probs:
+                print(f"         {pr}")
+            failures += 1
+        else:
+            print(f"  ok   README.md: {label}")
+            checked += 1
+
     print(f"\n{checked} checked, {skipped} skipped, {failures} failed")
     return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(selftest() if "--selftest" in sys.argv else main())
