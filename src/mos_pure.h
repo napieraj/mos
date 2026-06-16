@@ -207,6 +207,10 @@ typedef struct mos_drive_caps {
        64 covers a conformant max (one-byte Additional Length ⇒ ≤63 codes). */
     uint8_t  profile_count;
     uint16_t profiles[64];
+    /* Firmware creation timestamp from the Firmware Information feature
+       (010Ch), "YYYY-MM-DDTHH:MM:SSZ" (GMT) or "" when absent. 24 holds the
+       20-char ISO form + NUL. */
+    char     firmware_date[24];
 } mos_drive_caps;
 
 #define MOS_DRIVE_PROFILE_CAP 64u
@@ -223,7 +227,16 @@ void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
                                            uint16_t *out_codes, uint8_t cap,
                                            uint8_t *out_count);
 
-/* ---- Standard INQUIRY decode (mos_stdinq.c) ----------------------- *
+/* Decode the Firmware Information feature (010Ch) into out as an ISO-8601 GMT
+   timestamp "YYYY-MM-DDTHH:MM:SSZ" (out_cap >= 21), or out[0]=0 when the
+   feature is absent / malformed. Payload (after the 4-byte feature header,
+   MMC-6 r02g §5.3.43 Table 197): Century[2] Year[2] Month[2] Day[2] Hour[2]
+   Minute[2] Second[2] Reserved[2], all decimal ASCII; non-digit bytes are
+   rejected (out empty). Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
+                                            char *out, size_t out_cap);
+
+/* ---- Standard INQUIRY decode (mos_versiondesc.c) ----------------------- *
  *
  * The version byte and the version-descriptor list from STANDARD INQUIRY
  * data (EVPD=0) — the standards the drive claims. The convenience Inquiry
@@ -241,7 +254,7 @@ typedef struct mos_drive_standards {
    the 5-byte header (through Additional Length); the descriptor region is
    bounded by both `len` and the reply's own Additional Length (byte 4,
    dual-length rule O-4). Pure, no-OOB — fuzz/ASan-gated. */
-bool mos_internal_stdinq_parse(const uint8_t *buf, size_t len,
+bool mos_internal_versiondesc_parse(const uint8_t *buf, size_t len,
                                mos_drive_standards *out);
 
 /* One feature for the public enumeration (mos_enumerate_features) —

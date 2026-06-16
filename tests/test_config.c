@@ -743,10 +743,71 @@ TEST(profile_list_absent_empty_bounds_and_null)
     return 0;
 }
 
+TEST(firmware_date_decodes_iso8601)
+{
+    /* GET CONFIG RT=0: header + Firmware Information feature (010Ch), MMC-6
+       Table 197. Payload = Century "20" Year "13" Month "08" Day "12"
+       Hour "13" Minute "20" Second "43" Reserved — decimal ASCII. */
+    uint8_t buf[] = {
+        0x00,0x00,0x00,0x18,  0x00,0x00, 0x00,0x10,   /* dlen 24 → total 28 */
+        0x01,0x0C, 0x03, 0x10,                         /* 010Ch, cur+pers, add=16 */
+        0x32,0x30, 0x31,0x33, 0x30,0x38, 0x31,0x32,    /* 20 13 08 12 */
+        0x31,0x33, 0x32,0x30, 0x34,0x33, 0x00,0x00,    /* 13 20 43 rsv */
+    };
+    char out[24];
+    mos_internal_firmware_date_from_config(buf, sizeof buf, out, sizeof out);
+    EXPECT_STREQ(out, "2013-08-12T13:20:43Z");
+    return 0;
+}
+
+TEST(firmware_date_absent_malformed_and_bounds)
+{
+    char out[24];
+
+    /* Feature absent → empty. */
+    uint8_t plain[] = { 0,0,0,8, 0,0, 0x00,0x10, 0x00,0x01, 0x03, 0x00 };
+    mos_internal_firmware_date_from_config(plain, sizeof plain, out, sizeof out);
+    EXPECT(out[0] == 0);
+
+    /* Present but a non-digit byte (Month high 'X') → fail closed, empty. */
+    uint8_t bad[] = {
+        0x00,0x00,0x00,0x18,  0x00,0x00, 0x00,0x10,
+        0x01,0x0C, 0x03, 0x10,
+        0x32,0x30, 0x31,0x33, 'X',0x38, 0x31,0x32,
+        0x31,0x33, 0x32,0x30, 0x34,0x33, 0x00,0x00,
+    };
+    mos_internal_firmware_date_from_config(bad, sizeof bad, out, sizeof out);
+    EXPECT(out[0] == 0);
+
+    /* Additional Length too short (12 < 14 needed) → empty. */
+    uint8_t shortp[] = {
+        0x00,0x00,0x00,0x14,  0x00,0x00, 0x00,0x10,
+        0x01,0x0C, 0x03, 0x0C,
+        0x32,0x30, 0x31,0x33, 0x30,0x38, 0x31,0x32, 0x31,0x33, 0x32,0x30,
+    };
+    mos_internal_firmware_date_from_config(shortp, sizeof shortp, out, sizeof out);
+    EXPECT(out[0] == 0);
+
+    /* Too-small out buffer and NULL are safe. */
+    uint8_t ok[] = {
+        0x00,0x00,0x00,0x18,  0x00,0x00, 0x00,0x10,
+        0x01,0x0C, 0x03, 0x10,
+        0x32,0x30, 0x31,0x33, 0x30,0x38, 0x31,0x32,
+        0x31,0x33, 0x32,0x30, 0x34,0x33, 0x00,0x00,
+    };
+    char tiny[8] = { 'x' };
+    mos_internal_firmware_date_from_config(ok, sizeof ok, tiny, sizeof tiny);
+    EXPECT(tiny[0] == 0);                       /* refused: cap < 21 */
+    mos_internal_firmware_date_from_config(ok, sizeof ok, NULL, 24);   /* no crash */
+    return 0;
+}
+
 void register_config_tests(void)
 {
     RUN(profile_list_extracts_drive_static_set);
     RUN(profile_list_absent_empty_bounds_and_null);
+    RUN(firmware_date_decodes_iso8601);
+    RUN(firmware_date_absent_malformed_and_bounds);
     RUN(toc_parses_real_pony_cd_single);
     RUN(aacs_caps_from_real_wh16ns40_capture);
     RUN(aacs_caps_decode_and_fail_closed);

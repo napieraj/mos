@@ -141,6 +141,10 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
     mos_internal_profile_list_from_config(buf, sizeof(buf), h->caps.profiles,
                                           MOS_DRIVE_PROFILE_CAP,
                                           &h->caps.profile_count);
+    /* Firmware creation timestamp (feature 010Ch) from the same RT=0 reply. */
+    mos_internal_firmware_date_from_config(buf, sizeof(buf),
+                                           h->caps.firmware_date,
+                                           sizeof h->caps.firmware_date);
     *out = &h->caps;
     return MOS_OK;
 }

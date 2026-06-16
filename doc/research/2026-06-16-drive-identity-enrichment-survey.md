@@ -40,16 +40,24 @@ Two true things that together answer it:
    special-casing the hardware-role ADR bars from `src/`. **Verdict: keep
    `revision`; do not chase a longer version string.**
 
-2. **A firmware *build date* IS reachable and MMC-standard** — GET
-   CONFIGURATION **feature 0x1FF** (Firmware Information / Firmware Date; MS
-   DDK `FEATURE_DATA_FIRMWARE_DATE`, libcdio `CDIO_MMC_FEATURE_FIRMWARE_DATE`)
-   carries ASCII Year/Month/Day + GMT time of the loaded firmware's build.
-   Drive-static, free on the GET CONFIGURATION walk mos already issues,
-   decoded against MMC like every other feature. It is *optional and often
-   absent* (high feature number), so it is a best-effort, null-by-default
-   field — never an error when missing. **This is the firmware enrichment the
-   ATA path couldn't give:** not a name, a build timestamp, which is arguably
-   the more useful "which firmware is this" signal.
+2. **A firmware *creation date* IS reachable and MMC-standard** — GET
+   CONFIGURATION **feature 010Ch** (Firmware Information). Drive-static, free
+   on the GET CONFIGURATION walk mos already issues, decoded against MMC like
+   every other feature. Optional, so best-effort/null-by-default — never an
+   error when missing. **This is the firmware enrichment the ATA path couldn't
+   give:** not a name, a build timestamp, the more useful "which firmware is
+   this" signal.
+
+   **Correction / resolution (2026-06-16).** Initial sources (libcdio
+   `CDIO_MMC_FEATURE_FIRMWARE_DATE`, MS DDK `FEATURE_DATA_FIRMWARE_DATE`) put
+   this at "0x1FF" with a Year[4] payload whose MS-DDK description
+   self-contradicted, so it was first DEFERRED pending a primary spec. The
+   maintainer then supplied MMC-6 r02g (§5.3.43, Table 197), which corrected
+   both: the feature is **010Ch** (0x1FF is *Reserved* in MMC-6) and the year
+   is **Century[2] + Year[2]** (bytes 4-7), not Year[4]. Built to that
+   verified layout — payload Century/Year/Month/Day/Hour/Minute/Second decimal
+   ASCII (GMT) → `firmware_date` as an RFC 3339 UTC string (same format as
+   `mos.event.v1`'s `ts`). **Shipped, not deferred.**
 
 ## Reachability tiers (cheapest first)
 
@@ -75,7 +83,7 @@ mos already pays for four data sources. The value of a candidate is mostly
 | Physical interconnect (bus type) | DR `kDRDevicePhysicalInterconnect{,Location}Key` | 0 | always | **skip — always USB-bridge today (no signal); bridge identity** |
 | Write-capability (boolean) | implied by openability | — | always | skip — tautology (mos only opens burners) |
 | **Supported-profile list** | GET CONFIG feature 0x0000 | 1 (existing walk) | always | **ship — richest cap fact; carries per-format write** |
-| **Firmware build date** | GET CONFIG feature 0x1FF | 1 (existing walk) | sometimes | **ship best-effort (firmware answer)** |
+| **Firmware creation date** | GET CONFIG feature 010Ch | 1 (existing walk) | sometimes | **shipped — RFC 3339, best-effort** |
 | **INQUIRY version + version descriptors** | raw INQUIRY EVPD=0 bytes 2, 58-73 | 1 (existing handle) | partial | **ship — standards the drive claims** |
 | Page-0x2A extra cap bits | MODE SENSE 0x2A | 1 (existing read) | always | maybe — mostly legacy CD bits |
 | GET CONFIG serial (0x0108) | feature 0x0108 | 1 | sometimes | skip — redundant with VPD 0x80 |
@@ -128,8 +136,9 @@ below as a near-constant "USB" with no signal. Every cheap win is Tier 1.)
    table is a small static lookup (like mos's other string tables); unknown
    codes emit as hex and never fail (the unknown-enum rule).
 
-3. **Firmware build date (feature 0x1FF).** As above — best-effort, the
-   reachable firmware enrichment, free on the existing walk.
+3. **Firmware creation date (feature 010Ch).** As above — best-effort,
+   the reachable firmware enrichment, free on the existing walk. Shipped to
+   the MMC-6 r02g Table 197 layout (RFC 3339 UTC, matching the event `ts`).
 
 ### The rejections (and why, briefly)
 
@@ -207,7 +216,7 @@ one-of-four raw-CDB count is unchanged):**
    the raw INQUIRY handle already opened for the serial. The "standards this
    drive claims" (SPC-4/MMC-6…) fingerprint. Lowest-risk of the raw paths
    (the handle and showing already exist).
-3. **Firmware build date** — GET CONFIG feature 0x1FF, same walk as #1.
+3. **Firmware creation date** — GET CONFIG feature 010Ch, same walk as #1.
    Best-effort, null when absent; the firmware answer beyond `revision`.
 4. *(lower value)* **Page-0x2A extra capability bits** — the MODE SENSE 0x2A
    read mos already does for `mechanical` carries more bits (test-write,
@@ -228,7 +237,7 @@ ATA path are closed as impossible, not deferred.
 ## What hardware can falsify, never establish
 
 Per the hardware-role ADR, a run can refute these but never steered them:
-a drive that omits feature 0x1FF (firmware date) or 0x0000 detail, a USB-SATA
+a drive that omits feature 010Ch (firmware date) or 0x0000 detail, a USB-SATA
 bridge that synthesizes bogus version descriptors, an optical drive that
 *does* populate VPD 0x83 (re-opening that field's value), or — the one that
 would revive the interconnect field — a genuine non-USB optical drive
@@ -243,7 +252,7 @@ case.
 - T10 SAT 05-137r1 — SCSI rev is 4-of-8 of the ATA firmware revision:
   https://www.t10.org/ftp/t10/document.05/05-137r1.pdf
 - MS DDK `ntddmmc.h` feature structs (0x0001 Core, 0x0003 Removable,
-  0x0106 CSS, 0x0107 RTS, 0x0108 Serial, 0x1FF Firmware Date):
+  0x0106 CSS, 0x0107 RTS, 0x0108 Serial; firmware date is 010Ch per MMC-6 r02g, not 0x1FF):
   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddmmc/ne-ntddmmc-_feature_number
 - libcdio feature constants + `cd-drive` capability model (page 0x2A):
   https://raw.githubusercontent.com/Distrotech/libcdio/master/include/cdio/mmc.h

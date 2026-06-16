@@ -196,6 +196,7 @@ Registry ID:  4295032831
        AACS:  version 68, bus encryption yes
    Profiles:  cd_rom, cd_r, cd_rw, dvd_rom, dvd_minus_r, ..., bd_rom, bd_r, bd_re
   Standards:  spc_4 — mmc_6, sbc_3, sam_5, spc_4
+   Firmware:  2019-01-07T13:20:43Z
      Speeds:  read 10560 kB/s, write 8310 kB/s (max)
        Mech:  tray, buffer 4096 KB
    ErrRecov:  retry 20, PER
@@ -220,9 +221,14 @@ is omitted, so it reflects the drive, not the loaded medium. `version` and
 `version_descriptors` come from a raw standard INQUIRY (EVPD=0): the SPC
 compliance level and the T10/ISO standards the drive claims (MMC-6, SPC-4,
 SBC-3…) — like `serial`, that raw read self-gates on exclusive access, so
-both are null/`-` when the drive is busy or has a disc mounted. Read-only
-throughout: `mos` reports these settings, it never changes them. Full
-fields: [`schemas/mos.drive.v1.json`](schemas/mos.drive.v1.json).
+both are null/`-` when the drive is busy or has a disc mounted. `firmware`
+(JSON `firmware_date`) is the firmware's CREATION timestamp from the GET
+CONFIGURATION Firmware Information feature (010Ch), as an RFC 3339 UTC
+string (the same format `mos watch` events use) — the firmware's *date*,
+not a version (the 4-char `Revision` stays the version); null when the
+drive doesn't implement the feature. Read-only throughout: `mos` reports
+these settings, it never changes them. Full fields:
+[`schemas/mos.drive.v1.json`](schemas/mos.drive.v1.json).
 
 ### features — medium writability
 

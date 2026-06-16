@@ -157,3 +157,36 @@ void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
     }
     *out_count = n;
 }
+
+/* Contract in mos_pure.h. Firmware Information feature (010Ch), MMC-6 r02g
+   §5.3.43 Table 197: the feature payload (f.data, after the 4-byte header)
+   is Century[2] Year[2] Month[2] Day[2] Hour[2] Minute[2] Second[2]
+   Reserved[2], all decimal ASCII (GMT). We emit RFC 3339 UTC
+   "YYYY-MM-DDTHH:MM:SSZ" — the SAME form mos.event.v1's `ts` uses
+   (mos_watch_core.c::format_rfc3339), integer seconds + trailing Z.
+   The 14 date/time bytes must all be decimal ASCII or the reply is refused
+   (empty out) — fail closed on a malformed descriptor. */
+void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
+                                            char *out, size_t out_cap)
+{
+    if (out && out_cap) out[0] = 0;
+    if (!out || out_cap < 21u) return;           /* "....-..-..T..:..:..Z"+NUL */
+
+    mos_config_feature f;
+    if (!mos_internal_config_find_feature(buf, len, 0x010C, &f)) return;
+    if (!f.data || f.data_len < 14u) return;     /* need Century..Second */
+
+    for (size_t i = 0; i < 14u; i++)
+        if (f.data[i] < '0' || f.data[i] > '9') return;   /* must be ASCII digits */
+
+    const uint8_t *d = f.data;
+    /* d[0..1] Century, [2..3] Year, [4..5] Month, [6..7] Day,
+       [8..9] Hour, [10..11] Minute, [12..13] Second. */
+    out[0]=(char)d[0];  out[1]=(char)d[1];  out[2]=(char)d[2];  out[3]=(char)d[3];
+    out[4]='-';  out[5]=(char)d[4];  out[6]=(char)d[5];
+    out[7]='-';  out[8]=(char)d[6];  out[9]=(char)d[7];
+    out[10]='T'; out[11]=(char)d[8]; out[12]=(char)d[9];
+    out[13]=':'; out[14]=(char)d[10]; out[15]=(char)d[11];
+    out[16]=':'; out[17]=(char)d[12]; out[18]=(char)d[13];
+    out[19]='Z'; out[20]='\0';
+}

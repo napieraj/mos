@@ -37,7 +37,7 @@ void register_trackinfo_tests   (void);
 void register_perf_tests        (void);
 void register_modepage_tests    (void);
 void register_vpd80_tests       (void);
-void register_stdinq_tests      (void);
+void register_versiondesc_tests      (void);
 void register_tray_tests        (void);
 void register_result_tests      (void);
 void register_io_tests          (void);
@@ -96,7 +96,7 @@ int main(void)
     register_vpd80_tests();
 
     printf("\nStandard INQUIRY version / descriptors decode (hostile input):\n");
-    register_stdinq_tests();
+    register_versiondesc_tests();
 
     printf("\nTray-command outcome classification:\n");
     register_tray_tests();

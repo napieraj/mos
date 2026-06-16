@@ -242,6 +242,11 @@ uint16_t mos_drive_caps_profile_code(const mos_drive_caps *c, uint8_t i)
     return (c && i < c->profile_count) ? c->profiles[i] : 0;
 }
 
+const char *mos_drive_caps_firmware_date(const mos_drive_caps *c)
+{
+    return (c && c->firmware_date[0]) ? c->firmware_date : NULL;
+}
+
 /* ---- mos_drive_standards accessors (mos_query_drive_standards) ------- */
 
 uint8_t mos_drive_standards_spc_version(const mos_drive_standards *s)
