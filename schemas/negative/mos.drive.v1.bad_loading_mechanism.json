@@ -10,6 +10,7 @@
     "aacs_version": null,
     "bus_encryption": null
   },
+  "profiles": [{"code": "0x0008", "name": "cd_rom"}],
   "speeds": {
     "descriptor_count": 4,
     "max_read_kbps": 10560,

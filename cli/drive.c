@@ -25,6 +25,7 @@ typedef struct {
     bool        aacs;
     uint8_t     aacs_version;
     bool        bus_encryption;
+    const mos_drive_caps *caps;  /* borrowed; for the supported-profile list */
     bool        have_speeds;   /* GET PERFORMANCE returned >= 1 descriptor */
     uint16_t    speed_count;
     uint32_t    max_read_kbps;
@@ -65,6 +66,20 @@ static void emit_json(const drive_doc *d)
     if (d->aacs) fputs(d->bus_encryption ? "true" : "false", stdout);
     else         fputs("null", stdout);
     fputs("}", stdout);
+
+    /* Supported-profile list: array of {code, name}. Empty array when the
+       Profile List feature was absent — a present-but-empty set, not null. */
+    fputs(",\n  \"profiles\": [", stdout);
+    uint8_t pcount = mos_drive_caps_profile_count(d->caps);
+    for (uint8_t i = 0; i < pcount; i++) {
+        uint16_t code = mos_drive_caps_profile_code(d->caps, i);
+        const char *name = mos_profile_name(code);
+        fprintf(stdout, "%s{\"code\": \"0x%04x\", \"name\": ",
+                i ? ", " : "", code);
+        if (name) mos_cli_json_str(stdout, name); else fputs("null", stdout);
+        fputs("}", stdout);
+    }
+    fputs("]", stdout);
 
     fputs(",\n  \"speeds\": ", stdout);
     if (d->have_speeds)
@@ -110,7 +125,7 @@ static void emit_json(const drive_doc *d)
 
 static void emit_human(const drive_doc *d)
 {
-    mos_cli_human_pair pairs[11];
+    mos_cli_human_pair pairs[12];
     size_t n = 0;
 
     char bsd_buf[24];
@@ -144,6 +159,24 @@ static void emit_human(const drive_doc *d)
     else
         snprintf(aacs_buf, sizeof aacs_buf, "no");
     pairs[n++] = (mos_cli_human_pair){ "AACS", aacs_buf };
+
+    /* Supported profiles, comma-joined names (unknown code → hex). 768 holds
+       the realistic set several times over; a pathological overflow stops at
+       what fit (the --json array is the complete record either way). */
+    char prof_buf[768];
+    uint8_t pcount = mos_drive_caps_profile_count(d->caps);
+    size_t poff = 0;
+    for (uint8_t i = 0; i < pcount; i++) {
+        uint16_t code = mos_drive_caps_profile_code(d->caps, i);
+        const char *name = mos_profile_name(code);
+        char hex[8];
+        if (!name) { snprintf(hex, sizeof hex, "0x%04x", code); name = hex; }
+        int w = snprintf(prof_buf + poff, sizeof prof_buf - poff, "%s%s",
+                         i ? ", " : "", name);
+        if (w < 0 || (size_t)w >= sizeof prof_buf - poff) break;
+        poff += (size_t)w;
+    }
+    pairs[n++] = (mos_cli_human_pair){ "Profiles", pcount ? prof_buf : NULL };
 
     /* 64: worst case "read 4294967295 kB/s, write 4294967295 kB/s (max)"
        is 49 + NUL. */
@@ -216,6 +249,7 @@ int mos_cli_run_drive(void)
     d.vendor         = mos_handle_vendor(h);
     d.product        = mos_handle_product(h);
     d.revision       = mos_handle_revision(h);
+    d.caps           = c;
     d.aacs           = mos_drive_caps_aacs(c);
     d.aacs_version   = mos_drive_caps_aacs_version(c);
     d.bus_encryption = mos_drive_caps_bus_encryption(c);

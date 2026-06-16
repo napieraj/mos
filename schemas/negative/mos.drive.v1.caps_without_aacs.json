@@ -11,6 +11,7 @@
     "aacs_version": 68,
     "bus_encryption": null
   },
+  "profiles": [{"code": "0x0008", "name": "cd_rom"}],
   "speeds": null,
   "mechanical": null,
   "error_recovery": null

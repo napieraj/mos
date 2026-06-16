@@ -232,6 +232,16 @@ bool mos_drive_caps_bus_encryption(const mos_drive_caps *c)
     return c ? c->bus_encryption : false;
 }
 
+uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)
+{
+    return c ? c->profile_count : 0;
+}
+
+uint16_t mos_drive_caps_profile_code(const mos_drive_caps *c, uint8_t i)
+{
+    return (c && i < c->profile_count) ? c->profiles[i] : 0;
+}
+
 /* ---- mos_feature_info accessors (mos_enumerate_features) ------------- */
 
 uint16_t mos_feature_info_code(const mos_feature_info_t *f)

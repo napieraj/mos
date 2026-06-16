@@ -194,6 +194,7 @@ Registry ID:  4295032831
    Revision:  1.00
      Serial:  KL2G7942618WL
        AACS:  version 68, bus encryption yes
+   Profiles:  cd_rom, cd_r, cd_rw, dvd_rom, dvd_minus_r, ..., bd_rom, bd_r, bd_re
      Speeds:  read 10560 kB/s, write 8310 kB/s (max)
        Mech:  tray, buffer 4096 KB
    ErrRecov:  retry 20, PER
@@ -209,9 +210,14 @@ page 0x80 — the one identity field DiscRecording does not cache); it is
 the durable inventory key that survives replug, where `registry_id` does
 not. The raw read backs off on exclusive access, so `serial` is `-`/null
 when the drive is busy or has a disc mounted, does not implement the
-page, or has no serial programmed. Read-only throughout: `mos` reports
-these settings, it never changes them. Full fields:
-[`schemas/mos.drive.v1.json`](schemas/mos.drive.v1.json).
+page, or has no serial programmed. The `profiles` array is the
+supported-profile set from the GET CONFIGURATION Profile List feature (the
+same walk that yields AACS) — the drive-static disc types this drive can
+handle (CD/DVD/BD…), the modern BD-aware "what can this drive read/write"
+that supersedes the legacy page-0x2A media bits; the per-disc Current bit
+is omitted, so it reflects the drive, not the loaded medium. Read-only
+throughout: `mos` reports these settings, it never changes them. Full
+fields: [`schemas/mos.drive.v1.json`](schemas/mos.drive.v1.json).
 
 ### features — medium writability
 
