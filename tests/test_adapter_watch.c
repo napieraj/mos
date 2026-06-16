@@ -35,7 +35,7 @@ int mos_tests_failed = 0;
 #define STABLE_MS     2000
 #define TRANSITION_MS 200
 
-/* IOReturn literals for the N2 transport-failure injections. This TU
+/* IOReturn literals for the transport-failure injections. This TU
    is SDK-header-free; the values are pinned against the SDK by the
    _Static_asserts in mos_scsi.c. */
 #define FAKE_KIORETURN_TIMEOUT   0xE00002D6u  /* kIOReturnTimeout  */
@@ -717,8 +717,8 @@ TEST(all_disappeared_unresolved_falls_to_poll_floor)
 
 TEST(by_name_resolves_only_actual_name)
 {
-    /* N1 closed: the fake matches the scenario's actual BSD name, so
-       the "well-formed but absent → NO_DEVICE" arm — previously pinned
+    /* The fake matches the scenario's actual BSD name, so the
+       "well-formed but absent → NO_DEVICE" arm — otherwise pinned
        only by test_cli.sh on real macOS — runs headless. */
     mos_fake_reset();
     mos_fake_watch_reset();
@@ -743,7 +743,7 @@ TEST(by_name_resolves_only_actual_name)
 
 TEST(tur_transport_timeout_emits_error_event)
 {
-    /* N2 closed, non-terminal arm: a TUR TRANSPORT failure (vs the
+    /* Non-terminal arm: a TUR TRANSPORT failure (vs the
        CHECK-CONDITION path task_status carries) maps kIOReturnTimeout
        → MOS_ERR_TIMEOUT and surfaces as an error event at the poll. */
     scenario_ready_at_t0();
@@ -769,7 +769,7 @@ TEST(tur_transport_timeout_emits_error_event)
 
 TEST(tur_transport_nodevice_is_terminal_removal)
 {
-    /* N2 closed, terminal arm: kIOReturnNoDevice from the transport
+    /* Terminal arm: kIOReturnNoDevice from the transport
        maps to MOS_ERR_NO_DEVICE, which the watch core converts to a
        terminal device_removed — the exact dependency the
        kIOReturnNoDevice _Static_assert in mos_scsi.c names. */
@@ -795,7 +795,7 @@ TEST(tur_transport_nodevice_is_terminal_removal)
 
 TEST(gesn_transport_failure_falls_back_to_sense)
 {
-    /* N2 on the raw path: ExecuteTaskSync fails at the transport, so
+    /* Raw path: ExecuteTaskSync fails at the transport, so
        GESN yields no authoritative tray bit and 3A/00 alone classifies
        EMPTY_OR_OPEN — and the exclusive lock taken for the raw task is
        still released on the error path (§5.5 both directions). */

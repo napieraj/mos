@@ -9,10 +9,10 @@
  * watch_probe() upholds that by re-homing the handle-borrowed strings
  * into watch-owned buffers before it closes the per-probe handle.
  *
- * The v0.3.2-dev `revision` use-after-free was a miss in exactly that
- * re-home: vendor and product were copied into watch storage, revision
- * rode the `*out = tmp` struct copy and dangled into the freed handle,
- * and the pure core forwarded the dangling pointer to the consumer.
+ * The hazard is a partial re-home: if vendor and product are copied into
+ * watch storage but `revision` rides the `*out = tmp` struct copy, it
+ * dangles into the freed handle and the pure core forwards the dangling
+ * pointer to the consumer.
  *
  * This test reads every drive-controlled string field AFTER the
  * probe's handle has been closed. Under ASan that read is the trap:
@@ -65,7 +65,7 @@ int main(void)
 static void touch_event_strings(const mos_watch_event *ev)
 {
     char sink[64];
-    /* bsd_unit is a value (Commit D), not a borrowed pointer, so it has
+    /* bsd_unit is a value, not a borrowed pointer, so it has
        no post-close lifetime concern; touch it as an int for completeness.
        The string fields below are the real subjects of this test. */
     const char *vendor    = mos_watch_event_vendor(ev);

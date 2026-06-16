@@ -315,11 +315,10 @@ TEST(toc_fail_closed_on_hostile_shapes)
     t[1] = 200;
     EXPECT_EQ(false, mos_internal_toc_parse(t, 4 + 20, &toc));
 
-    /* Honest short claim that truncates cleanly used to parse as a
-       partial table; under the header-consistency rule it is the
-       half-parsed-identity case and fails: the header still declares
-       tracks 1..2 but the claimed span (2 + 8 = 10) covers only one
-       descriptor. */
+    /* An honest short claim that truncates cleanly is the
+       half-parsed-identity case and must fail the header-consistency
+       rule: the header still declares tracks 1..2 but the claimed span
+       (2 + 8 = 10) covers only one descriptor. */
     t[4 + 2] = 1; t[12 + 2] = 2; t[20 + 2] = 0xAA;
     t[1] = 10;
     EXPECT_EQ(false, mos_internal_toc_parse(t, sizeof t, &toc));
@@ -434,8 +433,8 @@ TEST(trusted_len_each_authority_binds)
 
 TEST(trusted_len_hostile_and_degenerate_inputs)
 {
-    /* The attack shape from the audit conversation: header claims
-       0xFFFF (or worse) over a tiny transfer — the classic SCSI
+    /* The attack shape: header claims 0xFFFF (or worse) over a tiny
+       transfer — the classic SCSI
        allocation-length overread. And a claim computed as
        `data_length + header` at maximum field value, which must have
        been computed in 64-bit by the caller and must clamp here, not
@@ -454,14 +453,12 @@ TEST(trusted_len_hostile_and_degenerate_inputs)
 
 TEST(config_misaligned_additional_length_span_fits)
 {
-    /* Fourth review, finding 7 (donated regression test, adapted): the
-       companion test above uses a buffer short enough that the BOUNDS
-       check rejects the misaligned descriptor too — the mutation campaign
-       deleted the alignment guard (`add & 3`) and the suite stayed green.
-       Here the malformed descriptor's span FITS entirely inside the
-       trusted region, so only the alignment guard can stop the walk; a
-       desync would fabricate a feature 0xDEAD from misaligned bytes.
-       Verified to kill the guard-deletion mutant. */
+    /* The companion test above uses a buffer short enough that the BOUNDS
+       check rejects the misaligned descriptor too, so a deleted alignment
+       guard (`add & 3`) passes the suite there. Here the malformed
+       descriptor's span FITS entirely inside the trusted region, so only
+       the alignment guard can stop the walk; a desync would fabricate a
+       feature 0xDEAD from misaligned bytes. */
     uint8_t buf[32] = {0};
     buf[3] = 28;                          /* Data Length -> trusted end 32 */
     /* Descriptor at cursor 8: code 0x1234, Additional Length 5 (NOT a

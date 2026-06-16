@@ -50,7 +50,7 @@ assert_ec() {
 
 # NDJSON framing: the captured stdout (trailing newline already stripped
 # by $(...) ) must contain no embedded newline — exactly one object, one
-# line. Watch-mode JSON errors are held to this since the third review.
+# line. Watch-mode JSON errors are held to this.
 assert_single_line() {
     label="$1"; haystack="$2"
     nl_count=$(printf '%s' "$haystack" | wc -l | tr -d ' ')

@@ -1,16 +1,7 @@
 /* nub_invariant_check.c — exhaustive nub-invariant checker.
  *
- * PROVENANCE: authored by the fourth external reviewer as the flagship
- * deliverable of the 2026-06-10 seam-fidelity audit; vendored here (0BSD,
- * with permission implicit in the commission) with one change — the
- * independent mos-side predicate below now transcribes the FIXED gate
- * that this checker's own finding produced. It runs in CI with a
- * restricted status loop (MOS_NUB_STATUS_SET=1) and remains runnable
- * exhaustively by hand.
- *
- * Original header follows.
- *
- * (Item 2 flagship): mechanical closure of the
+ * It runs in CI with a restricted status loop (MOS_NUB_STATUS_SET=1) and
+ * remains runnable exhaustively by hand. Mechanical closure of the
  * ARCHITECTURE §5.5 nub invariant over the entire SCSI input domain.
  *
  * THE CLAIM (§5.5): whenever mos reaches the exclusive-access GESN ("the
@@ -167,8 +158,8 @@ static bool mos_reaches_lock_pred(uint32_t status,
                                   uint8_t key, uint8_t asc, uint8_t ascq)
 {
     if (status != MOS_SCSI_STATUS_CHECK_CONDITION) return false;
-    /* FIXED gate (seam audit, Item 2): mos skips the lock for every
-       kernel-nub-preserving 00/00 sense — i.e. it locks only when the
+    /* mos skips the lock for every kernel-nub-preserving 00/00 sense
+       — i.e. it locks only when the
        sense carries information (non-zero ASC/ASCQ) or the key is one
        the kernel ejects at 00/00 ({NOT_READY, MEDIUM_ERROR,
        HARDWARE_ERROR, BLANK_CHECK}), where no nub can exist. */

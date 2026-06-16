@@ -8,20 +8,15 @@
  * the symbolic constants to these literals, so any drift between Apple's
  * SDK and this fixture would fail the macOS build loudly.
  *
- * Why this fixture exists: prior to v0.3-dev, the IOReturn mapping was a
- * static function inside src/mos_scsi.c that collapsed kIOReturnNoDevice
- * and allocation failures into the catch-all MOS_ERR_IO. The watch core
- * was correctly designed to treat MOS_ERR_NO_DEVICE from a probe as
- * terminal removal — but in production, kIOReturnNoDevice (the actual
- * code returned when a drive is unplugged mid-probe) never produced
- * MOS_ERR_NO_DEVICE because the mapping was wrong. Pure watch tests
- * passed because they invoked the pump with MOS_ERR_NO_DEVICE directly,
- * bypassing the IOReturn layer.
- *
- * Moving the mapping to mos_pure.c under fixture coverage closes that
- * gap: pure tests now exercise the actual production translation, so a
- * future regression in the IOReturn switch fails the test suite rather
- * than escaping to hardware integration.
+ * Why this fixture exists: the watch core treats MOS_ERR_NO_DEVICE from a
+ * probe as terminal removal, so kIOReturnNoDevice (the code returned when
+ * a drive is unplugged mid-probe) MUST map to MOS_ERR_NO_DEVICE and not
+ * collapse into the catch-all MOS_ERR_IO. A pure watch test that invokes
+ * the pump with MOS_ERR_NO_DEVICE directly bypasses the IOReturn layer
+ * and cannot catch a mapping bug. The mapping lives in mos_pure.c under
+ * fixture coverage so these tests exercise the actual production
+ * translation, and a regression in the IOReturn switch fails the suite
+ * rather than escaping to hardware integration.
  */
 
 #include "test_harness.h"
@@ -59,11 +54,9 @@ TEST(test_ioreturn_success_maps_to_ok)
     return 0;
 }
 
-/* REGRESSION FIXTURE for the v0.3-dev watch-terminal-removal break.
-   This is the test that would have caught the prior pure-only fix
-   not reaching production. kIOReturnNoDevice MUST map to
-   MOS_ERR_NO_DEVICE so the watch core's terminal-removal path fires
-   on real-hardware drive unplug. */
+/* REGRESSION FIXTURE for watch terminal removal: kIOReturnNoDevice MUST
+   map to MOS_ERR_NO_DEVICE so the watch core's terminal-removal path
+   fires on real-hardware drive unplug. */
 TEST(test_ioreturn_no_device_maps_to_no_device)
 {
     EXPECT_EQ(MOS_ERR_NO_DEVICE,

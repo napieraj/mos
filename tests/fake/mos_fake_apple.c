@@ -89,7 +89,7 @@ static struct {
     char     da_path[1024];     /* VolumePath; "" = key absent (unmounted)*/
 
     /* Raw-CDB script (the GESN tray probe path). */
-    uint32_t method_rc[6];      /* per-method IOReturn injection (N2);
+    uint32_t method_rc[6];      /* per-method IOReturn injection;
                                    indexed by mos_fake_method, 0 = success */
     bool     plugin_fail;
     bool     exclusive_denied;
@@ -504,7 +504,7 @@ static IOReturn mmc_TestUnitReady(void *self, SCSITaskStatus *taskStatus,
                                   SCSI_Sense_Data *senseDataBuffer)
 {
     (void)self;
-    /* N2: a transport failure delivers nothing — outputs untouched. */
+    /* A transport failure delivers nothing — outputs untouched. */
     if (g.method_rc[MOS_FAKE_METHOD_TUR]) {
         return (IOReturn)g.method_rc[MOS_FAKE_METHOD_TUR];
     }
@@ -755,7 +755,7 @@ static void dict_set_str(CFMutableDictionaryRef d, CFStringRef key,
     if (s) { CFDictionarySetValue(d, key, s); CFRelease(s); }
 }
 
-/* PHASE-2 LIMIT (N4, 2026-06-11): the directory stays single-drive.
+/* LIMIT: the directory stays single-drive.
    Watch-all's adapter-layer additions — Appeared→snapshot→slot wiring,
    Disappeared→id-resolve→per-slot removal, the doorbell-or-fail open
    gate, stream_open_ms constancy across joins — are all exercised with
@@ -810,10 +810,10 @@ CFDictionaryRef DRDeviceCopyStatus(DRDeviceRef device)
     return d;
 }
 
-/* Matches the scenario's actual BSD name (N1 closed, phase 2): the
-   adapter documents passing the canonical "diskN" rendering, so a
-   media-less drive (unit < 0) has no name and ANY lookup misses —
-   "well-formed but absent → NO_DEVICE" is now expressible headless. */
+/* Matches the scenario's actual BSD name: the adapter documents passing
+   the canonical "diskN" rendering, so a media-less drive (unit < 0) has
+   no name and ANY lookup misses — "well-formed but absent → NO_DEVICE"
+   is expressible headless. */
 DRDeviceRef DRDeviceCopyDeviceForBSDName(CFStringRef name)
 {
     if (!g.present || g.bsd_unit < 0 || !name) return NULL;

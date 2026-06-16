@@ -53,17 +53,14 @@ typedef struct {
     int       profile_calls;
 } fake_mmc;
 
-/* SEAM CONTRACT E-1 ENFORCEMENT (seam audit): on a non-OK return,
-   out-params are UNDEFINED and the core must not read them. The fakes
-   used to leave error-path out-params untouched, which masked a
-   divergence from the adapter (whose TUR zeroes them — census B4) and
-   left E-1 unguarded: a core that leaked an error-path value into its
-   result would have passed the suite. The fakes now POISON every
-   out-param on error, so any read of one changes an assertion
-   somewhere. (The contract rule chosen is "undefined on error" — the
-   adapter's TUR zeroing remains a harmless implementation detail, and
-   a second adapter is bound only to never require its outputs to be
-   read on failure.) */
+/* SEAM CONTRACT E-1 ENFORCEMENT: on a non-OK return, out-params are
+   UNDEFINED and the core must not read them. Fakes that leave error-path
+   out-params untouched mask this — a core that leaked an error-path value
+   into its result would pass the suite. So the fakes POISON every
+   out-param on error, and any read of one changes an assertion somewhere.
+   (The contract rule is "undefined on error" — the adapter's TUR zeroing
+   remains a harmless implementation detail, and a second adapter is bound
+   only to never require its outputs to be read on failure.) */
 static mos_error fake_get_tray_state(void *ctx, bool *tray_open)
 {
     fake_mmc *f = (fake_mmc *)ctx;
@@ -315,8 +312,7 @@ TEST(state_loading_from_0401_gesn_closed)
 TEST(state_loading_from_0402_gesn_closed)
 {
     /* 04/02 with the tray known CLOSED = present-but-stopped → LOADING.
-       (The open-tray-as-04/02 case is the door-open branch, tested above.)
-       This is the disambiguation that used to need a watch-persistence hack. */
+       (The open-tray-as-04/02 case is the door-open branch, tested above.) */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;
@@ -365,15 +361,15 @@ TEST(state_media_unreadable_from_medium_error_gesn_closed)
 
 TEST(state_kernel_nub_preserving_sense_never_locks)
 {
-    /* Seam audit, Item 2 (the headline): PollForMedia sets mediaFound on
-       CC + ASC/ASCQ 00/00 INDEPENDENT of the sense key, and only keys
-       {NOT_READY, MEDIUM_ERROR, HARDWARE_ERROR, BLANK_CHECK} get the
-       eject reset. For every other key, 00/00 means the kernel KEEPS the
-       IOMedia nub — so mos taking the exclusive raw-GESN lock would be
-       exactly the collision §5.5 promises cannot happen. The old gate
-       (sk==0 && asc==0 && ascq==0) let these through; exhaustive
-       enumeration (tests/audit/nub_invariant_check.c) found exactly 11
-       such inputs. Representative keys: RECOVERED ERROR, ILLEGAL
+    /* PollForMedia sets mediaFound on CC + ASC/ASCQ 00/00 INDEPENDENT of
+       the sense key, and only keys {NOT_READY, MEDIUM_ERROR,
+       HARDWARE_ERROR, BLANK_CHECK} get the eject reset. For every other
+       key, 00/00 means the kernel KEEPS the IOMedia nub — so mos taking
+       the exclusive raw-GESN lock would be exactly the collision §5.5
+       promises cannot happen. A naive gate (sk==0 && asc==0 && ascq==0)
+       lets these through; exhaustive enumeration
+       (tests/audit/nub_invariant_check.c) finds exactly 11 such inputs.
+       Representative keys: RECOVERED ERROR, ILLEGAL
        REQUEST, UNIT ATTENTION. The tray_calls counter pins the
        no-lock obligation; the state is UNKNOWN (nothing mos may probe). */
     static const uint8_t keys[] = { 0x01, 0x05, 0x06 };
@@ -399,9 +395,9 @@ TEST(state_kernel_ejecting_sense_still_probes)
     /* The other half of the same predicate: at 00/00 the kernel EJECTS
        for NOT_READY — no nub survives, the lock is free, and mos's GESN
        probe is legitimate. A blunt key-independent gate would wrongly
-       skip the lock here (and the audit's branch census proved the
-       04/00/00 device_fault test below pins the HARDWARE ERROR arm).
-       This pins the NOT_READY arm: 02/00/00 must still reach the lock. */
+       skip the lock here (the 04/00/00 device_fault test below pins the
+       HARDWARE ERROR arm). This pins the NOT_READY arm: 02/00/00 must
+       still reach the lock. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;
@@ -417,17 +413,14 @@ TEST(state_kernel_ejecting_sense_still_probes)
 
 TEST(state_kernel_eject_set_all_four_keys_probe)
 {
-    /* Mutation finding (2026-06-10 pre-tag pass): the eject set was
-       pinned only at 0x02 and 0x04 — dropping 0x03 (MEDIUM ERROR) or
-       0x08 (BLANK CHECK at 00/00, the keep-list keeps only 64/00) from
-       the predicate survived the suite. The kernel ejects for ALL of
-       {0x02, 0x03, 0x04, 0x08} at 00/00 (mmc_device.cpp switch arms;
-       proven exhaustively by tests/audit/nub_invariant_check.c, which
-       DOES drive the live core through instrumented ops and would
-       catch the divergence — but the checker runs only in its own CI
-       job, in neither `make test` nor the mutation harness, so the
-       fast suite needs its own pin; fifth review F9 corrected the
-       earlier blindness claim here). Each key must reach the lock. */
+    /* The kernel ejects for ALL of {0x02, 0x03, 0x04, 0x08} at 00/00
+       (mmc_device.cpp switch arms): 0x02, 0x03 (MEDIUM ERROR), 0x04, and
+       0x08 (BLANK CHECK at 00/00, the keep-list keeps only 64/00). This
+       is also proven exhaustively by tests/audit/nub_invariant_check.c,
+       which drives the live core through instrumented ops — but that
+       checker runs only in its own CI job, in neither `make test` nor
+       the mutation harness, so the fast suite needs its own pin. Each
+       key must reach the lock. */
     static const uint8_t eject_keys[] = { 0x02, 0x03, 0x04, 0x08 };
     for (size_t i = 0; i < sizeof eject_keys; i++) {
         fake_mmc f = {0};
@@ -446,10 +439,9 @@ TEST(state_kernel_eject_set_all_four_keys_probe)
 
 TEST(state_registry_id_copies_through_verbatim)
 {
-    /* Mutation finding (same pass): zeroing the env->result
-       registry_id copy survived. The field is the state<->event join
-       key (mos.state.v1, CLI design 2026-06-10) — pin the passthrough
-       on both a success and a no-lock path, plus the accessor's NULL
+    /* The registry_id is the state<->event join key (mos.state.v1) and
+       must copy through env->result verbatim — pin the passthrough on
+       both a success and a no-lock path, plus the accessor's NULL
        contract. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;

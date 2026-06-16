@@ -272,10 +272,9 @@ TEST(gesn_decodes_door_closed)
 
 TEST(gesn_class_mask_is_three_bits)
 {
-    /* Seam audit rider (the one branch-census survivor): the notification
-       class field is 3 bits (MMC-6 GESN header), so the decoder masks
-       resp[2] & 0x07 — but every fixture used 0x04 exactly, leaving the
-       mask WIDTH unpinned: widening it to 0x0F survived the suite. Byte
+    /* The notification class field is 3 bits (MMC-6 GESN header), so the
+       decoder masks resp[2] & 0x07 — but a fixture using 0x04 exactly
+       leaves the mask WIDTH unpinned: widening it to 0x0F passes. Byte
        0x0C has bit 3 set with class still 4; a 3-bit mask accepts it, a
        4-bit mask would read class 12 and reject. MMC reserves the bit, so
        a drive setting it must not break decoding. */
@@ -288,9 +287,9 @@ TEST(gesn_class_mask_is_three_bits)
 
 TEST(sense_key_masks_to_low_nibble)
 {
-    /* Seam audit, contract V-5: the sense key is bits 3..0 of its byte;
-       bits 7..5 are FILEMARK/EOM/ILI in fixed format. Every fixture
-       passed clean low-nibble keys, so the & 0x0F mask was unpinned.
+    /* Seam contract V-5: the sense key is bits 3..0 of its byte;
+       bits 7..5 are FILEMARK/EOM/ILI in fixed format. A fixture with
+       clean low-nibble keys leaves the & 0x0F mask unpinned.
        Byte 0xA2 = FILEMARK + ILI flags over key 0x2 (NOT READY); the
        parser must yield key 2, not 0xA2. Both sense formats. */
     uint8_t fixed[18] = {0};

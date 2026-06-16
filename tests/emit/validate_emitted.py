@@ -5,7 +5,7 @@ scenario) and validate its real stdout JSON against the schema the
 document itself names (its `schema` field), exactly as a consumer
 dispatches.
 
-This is the missing guard the branch review surfaced: schemas/validate.py
+This closes a gap left by the other checks: schemas/validate.py
 checks hand-written fixtures, and the CLI contract test only covers the
 verbs' error envelopes. Here the ACTUAL emit_json output of every
 success path is validated, so emitter↔schema drift fails CI instead of

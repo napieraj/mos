@@ -5,12 +5,11 @@
  * --------------
  * mos_watch_open_all() registers the DR notification doorbell
  * (DRNotificationCenterCreate → CreateRunLoopSource → AddObserver)
- * and — since the 2026-06-11 fix — FAILS the open (NULL, MOS_ERR_IO)
- * if that setup fails, because all-mode arrival discovery has no poll
- * floor. Zero drives is a valid empty stream by contract, so on a
- * driveless CI runner a successful open IS the proof that the
- * registration calls are accepted by the macOS API; before that fix a
- * registration failure here was silent.
+ * and FAILS the open (NULL, MOS_ERR_IO) if that setup fails, because
+ * all-mode arrival discovery has no poll floor. Zero drives is a valid
+ * empty stream by contract, so on a driveless CI runner a successful
+ * open IS the proof that the registration calls are accepted by the
+ * macOS API.
  *
  * SCOPE / LIMITATION
  * ------------------
@@ -37,7 +36,7 @@ int main(void)
     mos_error err = MOS_OK;
 
     /* No drive required: zero drives is a valid empty stream. A NULL
-       here means doorbell registration was rejected — the finding. */
+       here means doorbell registration was rejected. */
     mos_watch_t *w = mos_watch_open_all(0, 0, &err);
     if (!w) {
         fprintf(stderr, "FAIL: mos_watch_open_all err=%d "

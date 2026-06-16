@@ -89,7 +89,7 @@ void mos_fake_set_da_volume(const char *name, const char *path);
    The fake records the CDB it received (mos_fake_last_cdb) so a test
    can pin the adapter's authored bytes.
 
-   DELIBERATE DECOUPLING (sixth review, N3): delivery copies
+   DELIBERATE DECOUPLING: delivery copies
    min(len, buffer) bytes, while `realized` is REPORTED independently
    and unchecked against either — so a scenario can model a transport
    that lies in both directions (under-reports a full transfer, or
@@ -101,7 +101,7 @@ void mos_fake_set_raw_reply(uint32_t task_status,
                             uint64_t realized,
                             const uint8_t sense[18]);
 
-/* Per-method IOReturn injection (N2 closed, phase 2): make one method
+/* Per-method IOReturn injection: make one method
    fail at the TRANSPORT layer — it returns the injected IOReturn and
    delivers nothing (outputs untouched), reaching the adapter's
    IOReturn-mapper arms that task_status alone cannot express. Raw
