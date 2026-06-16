@@ -183,9 +183,8 @@ TEST(human_bsd_dev_node_contract)
     EXPECT_STREQ("/dev/disk4", buf);
     EXPECT_EQ(false, mos_bsd_dev_node(-1, buf, sizeof buf));
     EXPECT_STREQ("", buf);
-    /* DOMAIN pin with an ample buffer (fifth review, F5: the old
-       fixture used a tiny buffer, so it passed via truncation and
-       masked the missing domain guard). */
+    /* DOMAIN pin with an ample buffer: a tiny buffer would pass via
+       truncation and mask a missing domain guard. */
     EXPECT_EQ(false, mos_bsd_dev_node(123456789012LL, buf, sizeof buf));
     EXPECT_STREQ("", buf);
     EXPECT_EQ(true,  mos_bsd_dev_node((int64_t)4294967295LL, buf, sizeof buf));

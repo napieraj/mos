@@ -136,7 +136,7 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
         if (is_whole && whole_name[0] == 0) {
             strlcpy(whole_name, this_name, sizeof(whole_name));
             /* Capture the whole-disk IOMedia registry entry ID while we
-               hold the node — this is the F1 media-swap fingerprint. On
+               hold the node — this is the media-swap fingerprint. On
                failure the id stays 0 (the "unavailable" sentinel), which
                the watch core treats as "don't infer a swap". */
             if (IORegistryEntryGetRegistryEntryID(child, &whole_id) != KERN_SUCCESS) {

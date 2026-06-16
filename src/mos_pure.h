@@ -651,7 +651,7 @@ typedef struct {
        the retry interval (escalation rule at the pump, mos_watch_core.c). */
     int32_t        last_probe_err;     /* mos_error of the previous probe, MOS_OK if it succeeded */
     uint32_t       consec_probe_errs;  /* consecutive probes returning last_probe_err */
-    /* Media identity for same-state swap detection (F1): last_media_id is
+    /* Media identity for same-state swap detection: last_media_id is
        the fingerprint, last_profile the no-id-bridge fallback. 0 means
        "unavailable", never an observation. Rules at the pump. */
     uint64_t       last_media_id;

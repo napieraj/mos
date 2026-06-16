@@ -12,7 +12,7 @@
  *
  * Identity resolution: DR exposes a device's IORegistry *path*
  * (kDRDeviceIORegistryEntryPathKey), not its entry ID. mos's identity
- * currency — registry_id in events, the reopen authority, the F1
+ * currency — registry_id in events, the reopen authority, the media-swap
  * fingerprint — is the uint64 entry ID, so each path is resolved
  * path → entry → ID here. A node that cannot be resolved is skipped,
  * preserving the enumeration/index ↔ open-by-index correspondence the

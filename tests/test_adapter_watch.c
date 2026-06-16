@@ -403,7 +403,7 @@ TEST(watch_poll_only_degraded)
 
 TEST(watch_media_swap_emits_media_changed)
 {
-    /* F1: same-state swap. The whole-disk IOMedia registry ID re-mints
+    /* Same-state swap. The whole-disk IOMedia registry ID re-mints
        (0x100000456 → 0x100000789) while the drive stays READY across
        two probes; the id flows through the real chain —
        IORegistryEntryGetRegistryEntryID → handle media_id → probe

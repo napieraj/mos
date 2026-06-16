@@ -573,8 +573,8 @@ Two name operations remain, with one registry walk between them:
 - **Naming a drive at open** still walks **down** from the
   BlockStorageDevice to its `IOMedia` child
   (`kIORegistryIterateRecursively` without parents) — the `BSD Name`
-  property and the whole-disk IOMedia entry ID (`media_id`, the F1
-  swap fingerprint, which DR has no equivalent for) live on the
+  property and the whole-disk IOMedia entry ID (`media_id`, the swap
+  fingerprint, which DR has no equivalent for) live on the
   descendant media node. An empty/open-tray drive has no media child
   and therefore no name (unit -1); it still enumerates and opens —
   which is why discovery/index can never be replaced by a name lookup.

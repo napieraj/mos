@@ -286,7 +286,7 @@ TEST(test_media_appears_after_empty_open_uses_probe_unit)
 
 TEST(test_media_changed_on_same_state_ready_swap)
 {
-    /* F1: the drive stays READY across probes but the disc is physically
+    /* Same-state swap: the drive stays READY across probes but the disc is physically
        replaced — the whole-disk IOMedia registry id changes. The core must
        emit media_changed (not state_changed, since state is unchanged), and
        a same-disc poll in between must emit nothing. */
@@ -923,7 +923,7 @@ TEST(test_error_event_unit_reflects_last_observed_not_open_time)
 
 TEST(test_error_backoff_escalates_and_caps)
 {
-    /* P2: consecutive identical probe errors double the retry interval
+    /* consecutive identical probe errors double the retry interval
        from transition_poll_ms (200) toward stable_poll_ms (2000):
        200, 400, 800, 1600, 2000 (capped), 2000, ... Every pump still
        emits an error event — only the spacing grows. */

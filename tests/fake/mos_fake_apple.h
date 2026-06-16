@@ -48,7 +48,7 @@ void mos_fake_set_identity(const char *vendor, const char *product,
 /* Override the drive's / whole-disk media's IORegistry entry ID
    (defaults 0x100000123 / 0x100000456). Re-minting mid-scenario models
    what xnu's never-reused ID counter does on replug (drive id) and on
-   media swap (media id — the F1 swap fingerprint). */
+   media swap (media id — the swap fingerprint). */
 void mos_fake_set_drive_id(uint64_t id);
 void mos_fake_set_media_id(uint64_t id);
 

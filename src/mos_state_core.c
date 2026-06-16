@@ -41,7 +41,7 @@ mos_error mos_internal_query_state_core(const mos_state_env_t *env,
     out->state    = MOS_STATE_UNKNOWN;
     /* Identity propagates verbatim: bsd_unit == -1 is the "no media" signal
        end to end (an empty/open-tray drive has no IOMedia child, hence no
-       unit), and media_id carries the F1 same-state swap fingerprint. */
+       unit), and media_id carries the same-state swap fingerprint. */
     out->bsd_unit    = env->bsd_unit;
     out->registry_id = env->registry_id;
     out->media_id    = env->media_id;

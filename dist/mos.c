@@ -716,7 +716,7 @@ typedef struct {
        the retry interval (escalation rule at the pump, mos_watch_core.c). */
     int32_t        last_probe_err;     /* mos_error of the previous probe, MOS_OK if it succeeded */
     uint32_t       consec_probe_errs;  /* consecutive probes returning last_probe_err */
-    /* Media identity for same-state swap detection (F1): last_media_id is
+    /* Media identity for same-state swap detection: last_media_id is
        the fingerprint, last_profile the no-id-bridge fallback. 0 means
        "unavailable", never an observation. Rules at the pump. */
     uint64_t       last_media_id;
@@ -877,8 +877,8 @@ struct mos_handle {
     uint64_t                  media_id;        /* whole-disk IOMedia registry
                                                   entry ID, 0 == no media;
                                                   re-resolved with bsd_unit per
-                                                  media-scoped query (F1 swap
-                                                  fingerprint) */
+                                                  media-scoped query (media_id
+                                                  swap fingerprint) */
     uint64_t                  media_bytes;     /* kIOMediaSizeKey off the same
                                                   whole-disk node; 0 == absent
                                                   (query-time, like bsd_unit) */
@@ -2969,7 +2969,7 @@ mos_error mos_internal_query_state_core(const mos_state_env_t *env,
     out->state    = MOS_STATE_UNKNOWN;
     /* Identity propagates verbatim: bsd_unit == -1 is the "no media" signal
        end to end (an empty/open-tray drive has no IOMedia child, hence no
-       unit), and media_id carries the F1 same-state swap fingerprint. */
+       unit), and media_id carries the same-state swap fingerprint. */
     out->bsd_unit    = env->bsd_unit;
     out->registry_id = env->registry_id;
     out->media_id    = env->media_id;
@@ -5189,7 +5189,7 @@ bool mos_bsd_dev_node(int64_t unit, char *out, size_t out_cap)
  *
  * Identity resolution: DR exposes a device's IORegistry *path*
  * (kDRDeviceIORegistryEntryPathKey), not its entry ID. mos's identity
- * currency — registry_id in events, the reopen authority, the F1
+ * currency — registry_id in events, the reopen authority, the media-swap
  * fingerprint — is the uint64 entry ID, so each path is resolved
  * path → entry → ID here. A node that cannot be resolved is skipped,
  * preserving the enumeration/index ↔ open-by-index correspondence the
@@ -5697,7 +5697,7 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
         if (is_whole && whole_name[0] == 0) {
             strlcpy(whole_name, this_name, sizeof(whole_name));
             /* Capture the whole-disk IOMedia registry entry ID while we
-               hold the node — this is the F1 media-swap fingerprint. On
+               hold the node — this is the media-swap fingerprint. On
                failure the id stays 0 (the "unavailable" sentinel), which
                the watch core treats as "don't infer a swap". */
             if (IORegistryEntryGetRegistryEntryID(child, &whole_id) != KERN_SUCCESS) {

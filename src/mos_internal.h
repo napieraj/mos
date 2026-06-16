@@ -39,8 +39,8 @@ struct mos_handle {
     uint64_t                  media_id;        /* whole-disk IOMedia registry
                                                   entry ID, 0 == no media;
                                                   re-resolved with bsd_unit per
-                                                  media-scoped query (F1 swap
-                                                  fingerprint) */
+                                                  media-scoped query (media_id
+                                                  swap fingerprint) */
     uint64_t                  media_bytes;     /* kIOMediaSizeKey off the same
                                                   whole-disk node; 0 == absent
                                                   (query-time, like bsd_unit) */
