@@ -230,5 +230,12 @@ case.
   `sg_get_config` (GET CONFIGURATION), `sg_vpd` (VPD pages).
 - VPD support on optical drives (often absent): ESX VPD note —
   https://elatov.github.io/2012/08/determine-disk-vpd-information-from-esx-classic/
+- MakeMKV `osxmmc` — the reverse-engineering writeup of macOS's optical-MMC
+  access and the upstream source of the read-only-drive-blocking policy
+  behind the write-cap tautology (its developer's original quip attributed
+  the policy to Apple's "weed"; the in-repo notes paraphrase it as
+  "Cupertino's herbal supply"): https://www.makemkv.com/osxmmc/
 - In-repo: `doc/dr-field-mapping.md` (DR zero-command keys, interconnect),
-  `AGENTS.md` scope doctrine, `2026-06-16-serial-vpd-0x80-feasibility.md`.
+  `AGENTS.md` scope doctrine, `ARCHITECTURE.md` §9.1 (read-only attach
+  block), `2026-06-10-media-info-design.md` §"non-burner case excluded",
+  `2026-06-16-serial-vpd-0x80-feasibility.md`.
