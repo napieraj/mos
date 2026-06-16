@@ -1,11 +1,9 @@
 /*
  * test_discinfo.c — READ DISC INFORMATION (0x51) decode. The matched
  * fixture pair (blank CD-R vs finalized CD-ROM) differs only in byte 2
- * and the lead-in/lead-out address fields, so it isolates the disc-status
- * decode — the disc-completion signal — from everything else. Plus the usual
- * hostile/short-buffer cases: under ASan any out-of-bounds read aborts.
- *
- * The inline buffers mirror tests/fixtures/readdiscinfo_*_*.bin.
+ * and the lead-in/lead-out address fields, isolating the disc-status
+ * decode. Plus the usual hostile/short-buffer cases (ASan aborts any OOB
+ * read). The inline buffers mirror tests/fixtures/readdiscinfo_*_*.bin.
  */
 #include "test_harness.h"
 #include "../src/mos_pure.h"
@@ -53,12 +51,9 @@ TEST(discinfo_blank_cdr_decodes_blank)
 
 TEST(discinfo_blank_bdr_decodes_blank)
 {
-    /* Blank BD-R (HL-DT-ST BH16NS40 1.00, JVC-AM/S6L media), reversed
-       from a published dvd+rw-mediainfo log through dvd+rw-mediainfo.cpp's
-       byte map: "Disc status: blank", "Number of Sessions: 1",
-       "Next Track: 1", "Number of Tracks: 1", last session empty.
-       BD-R is write-once (erasable clear); the CD ATIP address fields
-       are zero — not applicable to BD (fixtures README). Mirrors
+    /* Blank BD-R, reversed from a dvd+rw-mediainfo log: status blank,
+       1 session, last session empty, write-once (erasable clear). CD
+       ATIP address fields are zero — N/A on BD. Mirrors
        fixtures/readdiscinfo_blank_bdr.bin. */
     static const uint8_t rdi_blank_bdr[34] = {
         0x00,0x20, 0x00, 0x01, 0x01, 0x01, 0x01, 0x00,
@@ -235,18 +230,12 @@ TEST(discinfo_status_description_tokens)
 
 TEST(discinfo_complete_bdre_decodes_erasable)
 {
-    /* BD-RE, Pioneer BDR-209D 1.51, media CMCMAG/CN2 — reversed from a
-       verbatim (<pre>-preserved) dvd+rw-mediainfo dump in the
-       cdwrite@debian list, msg14498: "Disc status: complete / Number
-       of Sessions: 1 / State of Last Session: complete / Number of
-       Tracks: 1". The erasable bit is set per the 43h BD-RE rewritable
-       profile, NOT from the log — dvd+rw-mediainfo prints no Erasable
-       line (it consumes byte-2 bit 4 only as a READ FORMAT CAPACITIES
-       gate, source L901). first_track_last_session is likewise
-       inferred (the tool suppresses "Next Track" once complete). The
-       attested fields are status / sessions / last-session / tracks.
-       Mirrors fixtures/readdiscinfo_complete_bdre.bin; the first
-       erasable=true fixture. */
+    /* BD-RE, reversed from a dvd+rw-mediainfo dump. Attested fields:
+       status complete, 1 session, last session complete, 1 track. The
+       erasable bit is inferred from the BD-RE rewritable profile (the
+       tool prints no Erasable line), as is first_track_last_session
+       (Next Track is suppressed once complete). Mirrors
+       fixtures/readdiscinfo_complete_bdre.bin; first erasable=true. */
     static const uint8_t rdi[34] = {
         0x00,0x20, 0x1E, 0x01, 0x01, 0x01, 0x01, 0x00,
         /* bytes 8..33 zero */

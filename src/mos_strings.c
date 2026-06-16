@@ -1,6 +1,6 @@
 /*
- * mos_strings.c — pure string tables, escapers, and version. Separate TU
- * so mos_scsi.c stays exclusively IOKit-linked. No IOKit.
+ * mos_strings.c — pure string tables, escapers, and version. Separate TU so
+ * mos_scsi.c stays exclusively IOKit-linked. No IOKit.
  */
 
 #include "mos.h"
@@ -30,9 +30,7 @@ const char *mos_disc_status_description(mos_disc_status s)
         case MOS_DISC_BLANK:          return "blank";
         case MOS_DISC_APPENDABLE:     return "appendable";
         case MOS_DISC_COMPLETE:       return "complete";
-        /* OTHER doubles as the out-of-enum fallback, same pinned-
-           coverage style as mos_state_description: -Wswitch still
-           fires when a new enumerator appears. */
+        /* OTHER also the default; -Wswitch still fires on a new enumerator. */
         case MOS_DISC_OTHER: default: return "other";
     }
 }
@@ -42,9 +40,7 @@ const char *mos_tray_outcome_description(mos_tray_outcome o)
     switch (o) {
         case MOS_TRAY_DONE:           return "done";
         case MOS_TRAY_REFUSED_LOCKED: return "refused_locked";
-        /* REFUSED_OTHER doubles as the out-of-enum fallback, same pinned-
-           coverage style as mos_state_description: -Wswitch still fires
-           when a new enumerator appears. */
+        /* REFUSED_OTHER also the default; -Wswitch still fires on a new one. */
         case MOS_TRAY_REFUSED_OTHER: default: return "refused_other";
     }
 }
@@ -66,11 +62,10 @@ const char *mos_error_description(mos_error e)
     }
 }
 
-/* MMC-6 §5.4 Feature Header Profile Codes. Names follow cdrom_id /
-   udev conventions in lower_snake_case form (e.g. cdrom_id emits
-   ID_CDROM_MEDIA_BD_R, which becomes "bd_r" here). Codes not in this
-   table return NULL so the consumer can fall back to the hex form.
-   Order in the switch is by numeric value for grep-against-spec. */
+/* MMC-6 §5.4 Feature Header Profile Codes. Names follow cdrom_id/udev
+   lower_snake_case (cdrom_id's ID_CDROM_MEDIA_BD_R becomes "bd_r"). Unknown
+   codes return NULL so the consumer falls back to hex. Ordered by numeric
+   value for grep-against-spec. */
 const char *mos_profile_name(uint16_t profile_code)
 {
     switch (profile_code) {
@@ -109,10 +104,9 @@ const char *mos_profile_name(uint16_t profile_code)
 
 const char *mos_profile_class(uint16_t profile_code)
 {
-    /* MMC-6 Annex profile ranges. Deliberately mirrors the name table
-       above (the staleness pair: a profile added there without a class
-       here yields a named-but-classless profile, which the
-       profile_class_total_over_name_table test forbids). */
+    /* MMC-6 Annex profile ranges. Mirrors the name table above: a profile
+       named there without a class here is named-but-classless, which the
+       profile_class_total_over_name_table test forbids. */
     switch (profile_code) {
         case 0x0008: case 0x0009: case 0x000A:
             return "cd";
@@ -126,16 +120,14 @@ const char *mos_profile_class(uint16_t profile_code)
         case 0x0058: case 0x005A:
             return "hd_dvd";
         default:
-            return NULL;   /* no-profile, MO, legacy removable, unknown */
+            return NULL;   /* no-profile, MO, legacy removable, or unknown */
     }
 }
 
-/* Physical Format Information book-type codes (MMC-5 / the Linux uapi
-   dvd_layer book_type values) — DVD and HD-DVD share this field.
-   Lower_snake_case to match the profile-name convention; unrecognized
-   codes return NULL so consumers fall back to the numeric code. The
-   schema's book-type enum tracks this table (the validate.py drift
-   guard). */
+/* Physical Format Information book-type codes (MMC-5 / Linux uapi dvd_layer
+   values), shared by DVD and HD-DVD. Lower_snake_case; unknown codes return
+   NULL for numeric fallback. The schema's book-type enum tracks this table
+   (validate.py drift guard). */
 const char *mos_book_type_name(uint8_t book_type)
 {
     switch (book_type) {
@@ -154,9 +146,9 @@ const char *mos_book_type_name(uint8_t book_type)
     }
 }
 
-/* Track path: parallel (single-layer / sequential) vs opposite.
-   Explicit returns (not a ternary) so the validate.py drift guard can
-   harvest the token set. */
+/* Track path: parallel (single-layer/sequential) vs opposite. Explicit
+   returns, not a ternary, so the validate.py drift guard can harvest the
+   token set. */
 const char *mos_track_path_name(uint8_t track_path)
 {
     switch (track_path & 0x01) {
@@ -165,8 +157,8 @@ const char *mos_track_path_name(uint8_t track_path)
     }
 }
 
-/* Copyright Protection System Type (READ DISC STRUCTURE format 0x01,
-   CPST byte). Unrecognized/reserved codes return NULL. */
+/* Copyright Protection System Type (READ DISC STRUCTURE format 0x01, CPST
+   byte). Unknown/reserved codes return NULL. */
 const char *mos_protection_name(uint8_t protection)
 {
     switch (protection) {
@@ -178,12 +170,11 @@ const char *mos_protection_name(uint8_t protection)
     }
 }
 
-/* BG Format Status (READ DISC INFORMATION byte 7 bits 1:0). Stable
-   tokens for the four background-format states; the 2-bit field is total
-   so the default is unreachable from mos_disc_info_bg_format_status
-   (masked 0-3) but kept NULL for the out-of-range public-accessor call.
-   Names track the Linux CDM_MRW_* macros (cdrom.h). Explicit returns so
-   the validate.py drift guard harvests the tokens. */
+/* BG Format Status (READ DISC INFORMATION byte 7 bits 1:0). The 2-bit field
+   is total, so the default is unreachable from mos_disc_info_bg_format_status
+   (masked 0-3) but kept NULL for an out-of-range public-accessor call. Names
+   track the Linux CDM_MRW_* macros (cdrom.h); explicit returns feed the
+   validate.py drift guard. */
 const char *mos_bg_format_status_name(uint8_t status)
 {
     switch (status) {
@@ -195,9 +186,8 @@ const char *mos_bg_format_status_name(uint8_t status)
     }
 }
 
-/* Loading-mechanism type (MODE SENSE page 0x2A byte 6 bits 7:5).
-   Explicit returns so the validate.py drift guard harvests the tokens;
-   unrecognized/reserved codes return NULL. */
+/* Loading-mechanism type (MODE SENSE page 0x2A byte 6 bits 7:5). Explicit
+   returns feed the validate.py drift guard; unknown/reserved codes NULL. */
 const char *mos_loading_mechanism_name(uint8_t code)
 {
     switch (code) {
@@ -252,11 +242,9 @@ const char *mos_version_string(void) { return MOS_VERSION_STRING; }
 
 /* ---- Pure string escapers ---------------------------------------------
  *
- * Implementation: track `total` (the count we'd write with infinite
- * cap) and `pos` (the count we actually wrote, bounded by cap-1 to
- * leave room for NUL). Inner helpers write one byte or one string
- * conditionally based on `pos < cap - 1`. Return value is `total`,
- * letting callers detect truncation via `return >= out_cap`. */
+ * `total` is the count we'd write with infinite cap; `pos` the count
+ * actually written (bounded by cap-1 to leave room for NUL). Returning
+ * `total` lets callers detect truncation via `return >= out_cap`. */
 
 static inline void write_byte(char *out, size_t out_cap, size_t *pos,
                               size_t *total, char c)
@@ -289,12 +277,10 @@ size_t mos_json_escape(const char *in, char *out, size_t out_cap)
                 case '\r': write_str(out, out_cap, &pos, &total, "\\r");  break;
                 case '\t': write_str(out, out_cap, &pos, &total, "\\t");  break;
                 default:
-                    /* RFC 8259 requires escaping < 0x20. We additionally
-                       escape 0x7F (DEL — historically a control byte
-                       though RFC 8259 doesn't mandate it) and bytes
-                       >= 0x80 (INQUIRY fields aren't guaranteed UTF-8;
-                       escaping high bytes keeps the output valid JSON
-                       in every encoding the consumer might use). */
+                    /* RFC 8259 requires escaping < 0x20. We also escape
+                       0x7F (DEL) and bytes >= 0x80: INQUIRY fields aren't
+                       guaranteed UTF-8, and escaping high bytes keeps the
+                       output valid JSON in any encoding the consumer uses. */
                     if (*p < 0x20 || *p >= 0x7f) {
                         char buf[8];
                         int n = snprintf(buf, sizeof(buf), "\\u%04x", *p);
@@ -317,10 +303,9 @@ size_t mos_safe_ascii(const char *in, char *out, size_t out_cap)
 
     if (in) {
         for (const unsigned char *p = (const unsigned char *)in; *p; ++p) {
-            /* Printable ASCII range only. Everything else — including
-               0x7F (DEL), high bytes (0x80+), control bytes — renders
-               as \xNN. Prevents terminal-control-sequence injection
-               (ANSI escape, OSC 52 clipboard, cursor-position-report,
+            /* Printable ASCII only; everything else (control bytes, 0x7F,
+               0x80+) renders as \xNN. Blocks terminal-control-sequence
+               injection (ANSI escape, OSC 52 clipboard, cursor reports,
                title-bar manipulation) from drive-controlled bytes. */
             if (*p >= 0x20 && *p < 0x7f) {
                 write_byte(out, out_cap, &pos, &total, (char)*p);
@@ -336,19 +321,16 @@ size_t mos_safe_ascii(const char *in, char *out, size_t out_cap)
     return total;
 }
 
-/* See mos.h. Render a whole-disk unit to its canonical "diskN" name.
-   The single point where the integer identity becomes the "diskN"
-   string the JSON/plaintext renderers and humans expect; the JSON wire
-   contract is unchanged. 16 bytes always suffices ("disk" + a 32-bit
-   unit + NUL = 15 max). Returns false (and "" when cap > 0) for a
-   no-media unit (< 0) or a buffer too small to hold the result. */
+/* Render a whole-disk unit to its canonical "diskN" name (see mos.h).
+   16 bytes always suffices ("disk" + 32-bit unit + NUL = 15 max). Returns
+   false (and "" when cap > 0) for a no-media unit (< 0) or a buffer too
+   small. */
 bool mos_bsd_name_format(int64_t unit, char *buf, size_t cap)
 {
     if (!buf || cap == 0) return false;
-    /* Reject < 0 (no media) and anything above the 32-bit unit domain. The
-       upper bound matters for correctness, not just truncation: a value in
-       (UINT32_MAX, ~1e11) would still fit a 16-byte buffer and emit a
-       different, valid-looking "diskN". Refuse both with "" + false. */
+    /* The upper bound is correctness, not just truncation: a value in
+       (UINT32_MAX, ~1e11) still fits 16 bytes and would emit a different,
+       valid-looking "diskN". Refuse both < 0 and over-domain with "" + false. */
     if (unit < 0 || unit > (int64_t)UINT32_MAX) { buf[0] = 0; return false; }
     int n = snprintf(buf, cap, "disk%llu", (unsigned long long)unit);
     if (n <= 0 || (size_t)n >= cap) { buf[0] = 0; return false; }
@@ -359,10 +341,10 @@ bool mos_bsd_dev_node(int64_t unit, char *out, size_t out_cap)
 {
     if (!out || out_cap == 0) return false;
     out[0] = 0;
-    /* Same domain as mos_bsd_name_format, same rationale: a unit in
-       (UINT32_MAX, ~1e14) would still fit a generous buffer and render
-       a different, valid-LOOKING node — refuse rather than emit a node
-       no real disk can have. */
+    /* Same domain/rationale as mos_bsd_name_format: a unit in
+       (UINT32_MAX, ~1e14) still fits a generous buffer and would render a
+       different, valid-looking node — refuse rather than emit one no real
+       disk can have. */
     if (unit < 0 || unit > (int64_t)UINT32_MAX) return false;
     int n = snprintf(out, out_cap, "/dev/disk%lld", (long long)unit);
     if (n < 0 || (size_t)n >= out_cap) { out[0] = 0; return false; }

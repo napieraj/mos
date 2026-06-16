@@ -10,9 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Counters live in test_main.c — one definition per program. Must NOT
-   be `static` here: that would give each TU its own copy and silently
-   bury failures. */
+/* Counters defined once in test_main.c. Not `static`: a per-TU copy
+   would silently bury failures. */
 extern int mos_tests_run;
 extern int mos_tests_failed;
 

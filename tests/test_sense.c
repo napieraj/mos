@@ -75,12 +75,9 @@ TEST(descriptor_format_key_asc_ascq_extraction)
 
 TEST(unknown_response_code_yields_zeros)
 {
-    /* Defensive parsing: if a drive returns a response code we don't
-       recognize (rather than 0x70/0x71/0x72/0x73), zero the outputs
-       rather than guessing at a layout. The decision tree maps
-       (0,0,0) to UNKNOWN, which is the right answer when sense is
-       uninterpretable. Crashing or returning byte[2] regardless of
-       format would push garbage into the state-mapping table. */
+    /* Unrecognized response code (not 0x70/71/72/73): zero the outputs
+       rather than guess a layout. (0,0,0) maps to UNKNOWN, the right
+       answer for uninterpretable sense. */
     uint8_t s[18] = {0};
     s[0] = 0x55;            /* not a real response code */
     s[2] = 0xAA;
@@ -137,15 +134,14 @@ TEST(null_output_pointers_are_safe)
  *
  * mos_internal_state_from_sense_closed refines a known-closed, not-ready
  * drive into its reason. It NEVER returns OPEN/EMPTY_OR_OPEN — the tray
- * verdict belongs to GESN (or the sense fork) in mos_state_core.c, not here.
- * Authoritative codes from the T10 ASC/ASCQ list and MMC-6 sense usage.
+ * verdict belongs to GESN, not here. Codes per T10 ASC/ASCQ and MMC-6.
  */
 
 TEST(sense_closed_3A_02_maps_to_empty_not_open)
 {
-    /* 3A/02 is "medium not present, tray open" — but reaching this function
-       means GESN already said CLOSED. The ASCQ's tray hint is discarded:
-       enrich, don't invalidate. No medium + closed = EMPTY. */
+    /* 3A/02 is "medium not present, tray open", but GESN already said
+       CLOSED, so the ASCQ tray hint is discarded: no medium + closed
+       = EMPTY (enrich, don't invalidate). */
     EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x3A, 0x02), MOS_STATE_EMPTY);
     return 0;
 }
@@ -164,9 +160,8 @@ TEST(sense_closed_3A_00_maps_to_empty)
 
 TEST(sense_closed_3A_any_ascq_maps_to_empty)
 {
-    /* Closed + ASC 0x3A = no medium, full stop. The qualifier no longer
-       carries tray information we act on (GESN does), so every 0x3A flavor
-       collapses to EMPTY rather than the old UNKNOWN-on-unrecognized. */
+    /* Closed + ASC 0x3A = no medium; every ASCQ flavor collapses to
+       EMPTY (the qualifier's tray hint is GESN's job, not ours). */
     EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x3A, 0x55), MOS_STATE_EMPTY);
     return 0;
 }
@@ -180,9 +175,9 @@ TEST(sense_closed_04_01_maps_to_loading)
 
 TEST(sense_closed_04_02_maps_to_loading)
 {
-    /* "initialize command required" with the tray known CLOSED = a disc
-       present but stopped. The open-tray-as-04/02 pathology is caught
-       upstream by GESN's door bit, so here it is unambiguously LOADING. */
+    /* "initialize command required", tray known CLOSED: disc present
+       but stopped. The open-tray-as-04/02 case is caught upstream by
+       GESN, so here it is unambiguously LOADING. */
     EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x04, 0x02), MOS_STATE_LOADING);
     return 0;
 }
@@ -196,8 +191,8 @@ TEST(sense_closed_04_07_maps_to_loading)
 
 TEST(sense_closed_04_04_maps_to_formatting)
 {
-    /* "format in progress" is its own surfaced state now, not folded into
-       LOADING: a rip pipeline waits on it differently than a spin-up. */
+    /* "format in progress" is its own state, not folded into LOADING:
+       a rip pipeline waits on it differently than a spin-up. */
     EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x04, 0x04), MOS_STATE_FORMATTING);
     return 0;
 }
@@ -272,12 +267,11 @@ TEST(gesn_decodes_door_closed)
 
 TEST(gesn_class_mask_is_three_bits)
 {
-    /* The notification class field is 3 bits (MMC-6 GESN header), so the
-       decoder masks resp[2] & 0x07 — but a fixture using 0x04 exactly
-       leaves the mask WIDTH unpinned: widening it to 0x0F passes. Byte
-       0x0C has bit 3 set with class still 4; a 3-bit mask accepts it, a
-       4-bit mask would read class 12 and reject. MMC reserves the bit, so
-       a drive setting it must not break decoding. */
+    /* The class field is 3 bits (MMC-6), so the decoder masks resp[2] &
+       0x07. A clean 0x04 fixture leaves the mask WIDTH unpinned. Here
+       0x0C has reserved bit 3 set over class 4: a 3-bit mask reads
+       class 4 (accept), a 4-bit mask reads 12 (reject). The reserved
+       bit must not break decoding. */
     uint8_t resp[8] = { 0x00, 0x06, 0x0C, 0x10, 0x02, 0x01, 0x00, 0x00 };
     bool open = false;
     EXPECT_EQ(mos_internal_gesn_media_door_open(resp, sizeof resp, &open), true);
@@ -287,11 +281,10 @@ TEST(gesn_class_mask_is_three_bits)
 
 TEST(sense_key_masks_to_low_nibble)
 {
-    /* Seam contract V-5: the sense key is bits 3..0 of its byte;
-       bits 7..5 are FILEMARK/EOM/ILI in fixed format. A fixture with
-       clean low-nibble keys leaves the & 0x0F mask unpinned.
-       Byte 0xA2 = FILEMARK + ILI flags over key 0x2 (NOT READY); the
-       parser must yield key 2, not 0xA2. Both sense formats. */
+    /* Seam contract V-5: the sense key is bits 3..0; bits 7..5 are
+       FILEMARK/EOM/ILI in fixed format. Clean low-nibble fixtures leave
+       the & 0x0F mask unpinned. Byte 0xA2 = those flags over key 0x2
+       (NOT READY); the parser must yield 2, not 0xA2. Both formats. */
     uint8_t fixed[18] = {0};
     fixed[0] = 0x70; fixed[2] = 0xA2; fixed[12] = 0x3A; fixed[13] = 0x01;
     uint8_t sk = 0xFF, asc = 0, ascq = 0;
@@ -338,9 +331,9 @@ TEST(gesn_wrong_notification_class_is_rejected)
 
 TEST(gesn_short_event_data_length_is_rejected)
 {
-    /* Device-reported Event Data Length = 2 (a NEA stub span) — even with a
-       Media class and a door bit in the buffer, the reply doesn't claim a
-       full descriptor, so reject. This is the full-span gate. */
+    /* Event Data Length = 2 (a NEA stub span): even with a Media class
+       and door bit present, the reply doesn't claim a full descriptor,
+       so reject. The full-span gate. */
     uint8_t resp[8] = { 0x00, 0x02, 0x04, 0x10, 0x02, 0x01, 0x00, 0x00 };
     bool open = false;
     EXPECT_EQ(mos_internal_gesn_media_door_open(resp, sizeof resp, &open), false);

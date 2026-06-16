@@ -1,13 +1,13 @@
 /* cli/metadata.c — the metadata command: `mos metadata [selector] [--json]`.
  *
  * One mos.metadata.v1 document — the on-demand disc-identity record. The
- * `disc` object is the fingerprint subtree: its key set is fixed and every
- * identity field is required-and-nullable, never optional, so the canonical
+ * `disc` object is the fingerprint subtree: fixed key set, every identity
+ * field required-and-nullable (never optional), so the canonical
  * serialization consumers hash is trivial. Unreadable or inapplicable facts
- * emit null — partial readability is the normal regime (a DVD answers
- * disc_info but its TOC is identity-useless; a mounted UDF disc may answer
- * only the volume fields). The verb fails (mos.error.v1) only when no
- * observation was produced at all: open or state-query failure.
+ * emit null — partial readability is normal (a DVD answers disc_info but its
+ * TOC is identity-useless; a mounted UDF disc may answer only volume fields).
+ * The verb fails (mos.error.v1) only when no observation was produced at all:
+ * open or state-query failure.
  */
 #include "common.h"
 
@@ -30,7 +30,7 @@ static void format_rfc3339_utc(char *out, size_t cap)
              ts.tv_nsec / 1000000L);
 }
 
-/* Everything the emitters need, gathered before any output begins so a
+/* Everything the emitters need, gathered before output begins so a
    mid-document query can never truncate the JSON. */
 typedef struct {
     int64_t              bsd_unit;
@@ -119,9 +119,9 @@ static void emit_json(const metadata_doc *d)
         fputs("null", stdout);
     }
 
-    /* disc_structure carries BOTH the BD DI identity (did) and the
-       DVD/HD-DVD physical/copyright structure (ps). It is non-null when
-       either half answered; each half emits null when absent. */
+    /* disc_structure carries both the BD DI identity (did) and the DVD/HD-DVD
+       physical/copyright structure (ps): non-null when either half answered,
+       each half null when absent. */
     fputs(",\n    \"disc_structure\": ", stdout);
     if (d->did || d->ps) {
         const char *dt = d->did ? mos_disc_id_disc_type(d->did)   : NULL;
@@ -215,9 +215,9 @@ static void emit_json(const metadata_doc *d)
         fputs("null", stdout);
     }
 
-    /* cdtext carries the disc-level (album) Title/Performer for CDs that
-       publish CD-TEXT; null on non-CD media or a CD without it. Each
-       field is required-and-nullable (disc-controlled bytes, escaped). */
+    /* cdtext carries the album-level Title/Performer for CDs that publish
+       CD-TEXT; null on non-CD media or a CD without it. Each field is
+       required-and-nullable (disc-controlled bytes, escaped). */
     fputs(",\n    \"cdtext\": ", stdout);
     if (d->ct) {
         const char *ti = mos_cdtext_title(d->ct);
@@ -226,9 +226,8 @@ static void emit_json(const metadata_doc *d)
         if (ti) mos_cli_json_str(stdout, ti); else fputs("null", stdout);
         fputs(",\n      \"performer\": ", stdout);
         if (pf) mos_cli_json_str(stdout, pf); else fputs("null", stdout);
-        /* Per-track title + performer, sparse → only tracks carrying at
-           least one are emitted (each field null when absent). Empty
-           array when none. */
+        /* Per-track title + performer, sparse: only tracks with at least one
+           are emitted (each field null when absent), empty array when none. */
         fputs(",\n      \"tracks\": [", stdout);
         uint8_t tc = mos_cdtext_track_count(d->ct);
         bool first = true;
@@ -269,14 +268,12 @@ static void emit_human(const metadata_doc *d)
     bool have_bsd = mos_bsd_dev_node(d->bsd_unit, bsd_buf, sizeof bsd_buf);
     pairs[n++] = (mos_cli_human_pair){ "BSD", have_bsd ? bsd_buf : NULL };
 
-    /* Volume name/path are DISC-controlled bytes (a hostile volume
-       label); the human layer prints verbatim by contract, so escape
-       here, same rule as the status identity rows. */
+    /* Volume name/path are disc-controlled bytes (a hostile volume label);
+       the human layer prints verbatim by contract, so escape here. */
     char name_esc[MOS_CLI_ESC_CAP(256)];
-    char path_esc[MOS_CLI_ESC_CAP(64)];  /* paths beyond ~64 raw bytes are
-                                            truncated for the table; the
-                                            JSON document is the faithful
-                                            form */
+    char path_esc[MOS_CLI_ESC_CAP(64)];  /* paths past ~64 raw bytes are
+                                            truncated for the table; the JSON
+                                            document is the faithful form */
     name_esc[0] = 0;
     path_esc[0] = 0;
     if (d->mounted) {
@@ -306,9 +303,9 @@ static void emit_human(const metadata_doc *d)
 
     char di_buf[80];
     if (d->di) {
-        /* Surface only the in-flight BG-format states (inactive/active) —
-           the "is this disc still formatting" signal that bears on
-           readability; none/complete are the unremarkable common cases. */
+        /* Surface only the in-flight BG-format states (inactive/active) — the
+           "still formatting" signal that bears on readability; none/complete
+           are the unremarkable common cases. */
         uint8_t bg = mos_disc_info_bg_format_status(d->di);
         const char *bgs = (bg == 1) ? ", bg-format inactive"
                         : (bg == 2) ? ", bg-format active"
@@ -324,9 +321,9 @@ static void emit_human(const metadata_doc *d)
     }
     pairs[n++] = (mos_cli_human_pair){ "Disc", d->di ? di_buf : NULL };
 
-    /* Media identity from disc structure (BD DI): disc type + the
-       registered manufacturer/media code. Disc-controlled ASCII, so
-       escape before the layout engine prints it verbatim. */
+    /* Media identity from disc structure (BD DI): disc type + the registered
+       manufacturer/media code. Disc-controlled ASCII, so escape before the
+       layout engine prints it verbatim. */
     char media_buf[64];
     char media_esc[MOS_CLI_ESC_CAP(64)];
     media_esc[0] = 0;
@@ -369,14 +366,13 @@ static void emit_human(const metadata_doc *d)
     }
     pairs[n++] = (mos_cli_human_pair){ "TOC", d->toc ? toc_buf : NULL };
 
-    /* Track info — the first track's capacity / append-state, the human
-       half of disc.track_info. Fixed-vocabulary (numbers + flags), no
-       hostile bytes. blank/damage are the archival-readiness signals;
-       track_size is the recorded extent (≈ disc capacity on a single-
-       track pressed disc); NWA is the append point when its validity bit
-       is set (suppressed otherwise, same rule as the JSON null). Worst
-       case "track 4294967295, blank, damaged, 4294967295 blocks, NWA
-       4294967295" is 67 + NUL. */
+    /* First track's capacity / append-state — the human half of
+       disc.track_info. Fixed vocabulary (numbers + flags), no hostile bytes.
+       blank/damage are archival-readiness signals; track_size is the recorded
+       extent (≈ disc capacity on a single-track pressed disc); NWA is the
+       append point when its validity bit is set (else suppressed, as in the
+       JSON null). Worst case "track 4294967295, blank, damaged, 4294967295
+       blocks, NWA 4294967295" is 67 + NUL. */
     char ti_buf[80];
     if (d->ti) {
         int off = snprintf(ti_buf, sizeof ti_buf, "track %u",
@@ -394,15 +390,14 @@ static void emit_human(const metadata_doc *d)
     }
     pairs[n++] = (mos_cli_human_pair){ "Track", d->ti ? ti_buf : NULL };
 
-    /* CD-TEXT album identity, "title - performer". Disc-controlled bytes,
-       so escape before the layout engine prints verbatim, same rule as
-       the Media/Volume rows. */
+    /* CD-TEXT album identity, "title - performer". Disc-controlled bytes, so
+       escape before the layout engine prints verbatim. */
     char cdt_buf[160];
     char cdt_esc[MOS_CLI_ESC_CAP(160)];
     cdt_esc[0] = 0;
     const char *ct_title = d->ct ? mos_cdtext_title(d->ct) : NULL;
     const char *ct_perf  = d->ct ? mos_cdtext_performer(d->ct) : NULL;
-    uint8_t cdt_ntracks = 0;            /* per-track entries present (sparse) */
+    uint8_t cdt_ntracks = 0;            /* count of sparse per-track entries */
     if (d->ct) {
         uint8_t tc = mos_cdtext_track_count(d->ct);
         for (uint8_t tn = 1; tn <= tc; tn++)
@@ -453,10 +448,9 @@ int mos_cli_run_metadata(void)
     }
     if (!h) return mos_cli_emit_unknown_and_fail("could not open drive", err, NULL);
 
-    /* The state query is the gate: it proves the drive answers at all
-       (and is the profile source). Media-level reads after it are
-       each-may-fail-independently — failure is data (null), the
-       partial-readability ladder in the design doc. */
+    /* The state query is the gate: it proves the drive answers (and is the
+       profile source). Media-level reads after it each fail independently —
+       failure is data (null), the partial-readability ladder. */
     const mos_state_result *r = NULL;
     mos_error qerr = mos_query_state(h, &r);
     if (qerr != MOS_OK) {
@@ -479,9 +473,9 @@ int mos_cli_run_metadata(void)
     if (mos_query_disc_info(h, &di) == MOS_OK) d.di = di;
     const mos_toc *toc = NULL;
     if (mos_query_toc(h, &toc) == MOS_OK) d.toc = toc;
-    /* Disc structure is media-type-gated on the profile class so a disc
-       does not eat a guaranteed-failing command: BD DI is Blu-ray-only;
-       the physical/copyright structure is the DVD/HD-DVD family. */
+    /* Disc structure is gated on the profile class so a disc does not eat a
+       guaranteed-failing command: BD DI is Blu-ray-only; physical/copyright
+       structure is the DVD/HD-DVD family. */
     const char *pcls = mos_cli_profile_present(d.profile)
                            ? mos_profile_class(d.profile) : NULL;
     if (pcls && strcmp(pcls, "bd") == 0) {
@@ -492,15 +486,15 @@ int mos_cli_run_metadata(void)
         const mos_physical_structure *ps = NULL;
         if (mos_query_physical_structure(h, &ps) == MOS_OK) d.ps = ps;
     }
-    /* Track info / capacity — works on any media with a track; gate on a
-       profile being present (media inserted) so a no-media drive does
-       not eat a guaranteed-failing command. */
+    /* Track info works on any media with a track; gate on a profile being
+       present (media inserted) so a no-media drive does not eat a
+       guaranteed-failing command. */
     if (pcls) {
         const mos_track_info *ti = NULL;
         if (mos_query_track_info(h, &ti) == MOS_OK) d.ti = ti;
     }
-    /* CD-TEXT is CD-only (lead-in of CD media); gate on the cd class so
-       other media do not eat a guaranteed-failing format-0101b read. */
+    /* CD-TEXT is CD-only (CD lead-in); gate on the cd class so other media do
+       not eat a guaranteed-failing format-0101b read. */
     if (pcls && strcmp(pcls, "cd") == 0) {
         const mos_cdtext *ct = NULL;
         if (mos_query_cdtext(h, &ct) == MOS_OK) d.ct = ct;

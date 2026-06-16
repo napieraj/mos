@@ -1,26 +1,25 @@
 /* nub_invariant_check.c — exhaustive nub-invariant checker.
  *
- * It runs in CI with a restricted status loop (MOS_NUB_STATUS_SET=1) and
- * remains runnable exhaustively by hand. Mechanical closure of the
- * ARCHITECTURE §5.5 nub invariant over the entire SCSI input domain.
+ * Runs in CI with a restricted status loop (MOS_NUB_STATUS_SET=1) and
+ * remains exhaustive by hand. Mechanical closure of the ARCHITECTURE
+ * §5.5 nub invariant over the entire SCSI input domain.
  *
  * THE CLAIM (§5.5): whenever mos reaches the exclusive-access GESN ("the
  * lock"), the kernel has NOT created the IOMedia nub — so the lock cannot
- * collide with a mounted volume. Equivalently, over every input:
+ * collide with a mounted volume. Over every input:
  *
  *      kernel_media_found(in)  ==>  NOT mos_reaches_lock(in)
  *
- * This program PROVES it (or refutes it) by brute force, with two halves
- * that are deliberately NOT hand-copies of each other:
+ * Proved (or refuted) by brute force, with two halves that are
+ * deliberately NOT hand-copies of each other:
  *
- *   mos side    — the REAL src/mos_state_core.c is driven directly, through
- *                 an instrumented mos_mmc_ops_t that records whether the
- *                 get_tray_state callback (the lock) was invoked. So the
- *                 mos half is the shipping decision tree itself, not a
- *                 transcription. (A separate independent predicate,
- *                 mos_reaches_lock_pred(), is cross-checked against the real
- *                 behavior as a self-audit; a mismatch fails the run, which
- *                 catches a stale transcription rather than hiding it.)
+ *   mos side    — the REAL src/mos_state_core.c is driven directly through
+ *                 an instrumented mos_mmc_ops_t recording whether
+ *                 get_tray_state (the lock) fired — the shipping decision
+ *                 tree itself, not a transcription. An independent
+ *                 predicate mos_reaches_lock_pred() is self-audited against
+ *                 it; a mismatch fails the run, catching a stale
+ *                 transcription rather than hiding it.
  *
  *   kernel side — kernel_media_found() is implemented HERE, independently,
  *                 from IOSCSIMultimediaCommandsDevice::PollForMedia
@@ -89,12 +88,12 @@
 enum { SK_NOT_READY = 0x02, SK_MEDIUM_ERROR = 0x03,
        SK_HARDWARE_ERROR = 0x04, SK_BLANK_CHECK = 0x08 };
 
-/* The SENSE_KEY switch's eject decision (PollForMedia lines 3898-3979). Only
- * reached on CHECK CONDITION. Returns true iff shouldEjectMedia is set. The
- * Apple key-switch eject (line 4003-4006) is a physical-security feature
- * absent on consumer/external drives; omitting it is conservative — it can
- * only set shouldEjectMedia in MORE cases, which removes MORE nubs, which
- * shrinks the dangerous set. So this models the larger (less-safe) nub set. */
+/* The SENSE_KEY switch's eject decision (PollForMedia 3898-3979), reached
+ * only on CHECK CONDITION; true iff shouldEjectMedia is set. The Apple
+ * key-switch eject (4003-4006) is omitted: it's a physical-security
+ * feature absent on consumer drives, and omitting it is conservative —
+ * it would eject in MORE cases, removing MORE nubs. So this models the
+ * larger (less-safe) nub set. */
 static bool kernel_should_eject(uint32_t status, uint8_t key,
                                 uint8_t asc, uint8_t ascq)
 {
@@ -121,12 +120,12 @@ static bool kernel_should_eject(uint32_t status, uint8_t key,
 }
 
 /* ---------------- kernel side: REAL nub-creation predicate ----------- *
- * The nub is created iff mediaFound is still true at line 4052. The flag is
- * SET at 3890 (CC && ASC/ASCQ 00/00, key-independent) or 3986 (status != CC),
- * but RESET to false at 4029 whenever shouldEjectMedia is set (4012). So the
- * actual predicate is (flag-set) AND NOT (should-eject). §5.5's "mediaFound in
- * exactly two cases" describes the intermediate FLAG (3890/3986), not this
- * decision — the eject reset is the missing term. */
+ * Nub created iff mediaFound is still true at 4052. The flag is SET at 3890
+ * (CC && ASC/ASCQ 00/00, key-independent) or 3986 (status != CC), but RESET
+ * at 4029 when shouldEjectMedia is set (4012). So the predicate is
+ * (flag-set) AND NOT (should-eject). §5.5's "mediaFound in exactly two
+ * cases" describes the FLAG, not this decision — the eject reset is the
+ * missing term. */
 static bool kernel_nub_created(bool taskComplete, uint32_t status,
                                uint8_t key, uint8_t asc, uint8_t ascq)
 {
@@ -139,8 +138,8 @@ static bool kernel_nub_created(bool taskComplete, uint32_t status,
     return true;                                       /* 4052 survives */
 }
 
-/* The §5.5 "flag-only" predicate, kept so the checker can show how much the
- * eject reset narrows it. NOT the real nub decision. */
+/* The §5.5 "flag-only" predicate, kept so the checker can show how much
+ * the eject reset narrows it. NOT the real nub decision. */
 static bool kernel_media_found_flag(bool taskComplete, uint32_t status,
                                     uint8_t asc, uint8_t ascq)
 {
@@ -150,18 +149,17 @@ static bool kernel_media_found_flag(bool taskComplete, uint32_t status,
 }
 
 /* ---------------- mos side: independent predicate (self-audited) ----- *
- * From mos_state_core.c's documented contract: the lock (get_tray_state) is
- * reached iff TUR returned MOS_OK, status is CHECK_CONDITION, and the sense
- * triple is not all-zero. GOOD and the four contended statuses are not
- * CHECK_CONDITION, so they are excluded by the first conjunct. */
+ * Per mos_state_core.c's contract: the lock (get_tray_state) is reached iff
+ * TUR returned MOS_OK, status is CHECK_CONDITION, and the sense triple isn't
+ * all-zero. GOOD and the four contended statuses aren't CHECK_CONDITION, so
+ * the first conjunct excludes them. */
 static bool mos_reaches_lock_pred(uint32_t status,
                                   uint8_t key, uint8_t asc, uint8_t ascq)
 {
     if (status != MOS_SCSI_STATUS_CHECK_CONDITION) return false;
-    /* mos skips the lock for every kernel-nub-preserving 00/00 sense
-       — i.e. it locks only when the
-       sense carries information (non-zero ASC/ASCQ) or the key is one
-       the kernel ejects at 00/00 ({NOT_READY, MEDIUM_ERROR,
+    /* mos skips the lock for every kernel-nub-preserving 00/00 sense: it
+       locks only when the sense carries info (non-zero ASC/ASCQ) or the
+       key is one the kernel ejects at 00/00 ({NOT_READY, MEDIUM_ERROR,
        HARDWARE_ERROR, BLANK_CHECK}), where no nub can exist. */
     if (asc == 0 && ascq == 0 &&
         key != 0x02 && key != 0x03 && key != 0x04 && key != 0x08)
@@ -170,7 +168,7 @@ static bool mos_reaches_lock_pred(uint32_t status,
 }
 
 /* ---------------- mos side: the REAL decision tree ------------------- *
- * Instrumented ops table. We only care whether get_tray_state fired. */
+ * Instrumented ops table; only get_tray_state firing matters. */
 typedef struct {
     uint32_t status; uint8_t key, asc, ascq;
     int tray_calls;

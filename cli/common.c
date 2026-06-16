@@ -4,8 +4,6 @@
 #include <string.h>
 #include <sysexits.h>
 
-/* ---- Options ----------------------------------------------------------- */
-
 int         opt_index   = 0;     /* 0 = unset; 1-based when set */
 const char *opt_bsd     = NULL;
 uint64_t    opt_registry = 0;     /* 0 = unset; >= 2^32+256 when set */
@@ -25,16 +23,13 @@ bool        flag_dump   = false;  /* probe --dump one-shot DR capture */
 
 const char *progname = "mos";
 
-/* Finalize stdout for a one-shot command (status / list) and fold the
-   write outcome into the process exit code, uniform with the watch loop:
-
-     - clean write            -> the command's own success_code
-     - downstream pipe closed -> EX_OK (producer succeeded; the consumer,
-                                 e.g. `mos --json | head -c0`, chose to
-                                 stop reading — not our failure)
-     - real write error       -> EX_IOERR (ENOSPC on a redirect, EIO, ...)
-
-   Shares the single classifier in cli/io with the watch path. */
+/* Finalize a one-shot command's stdout, folding the write outcome into the
+   exit code (same classifier as the watch loop, in cli/io):
+     - clean write            -> success_code
+     - downstream pipe closed -> EX_OK (the consumer, e.g.
+                                 `mos --json | head -c0`, stopped reading —
+                                 the producer succeeded)
+     - real write error       -> EX_IOERR (ENOSPC on a redirect, EIO, ...) */
 int mos_cli_finalize_oneshot_stdout(int success_code)
 {
     switch (mos_cli_stdout_finalize()) {
@@ -45,10 +40,9 @@ int mos_cli_finalize_oneshot_stdout(int success_code)
     }
 }
 
-/* Failure twin: the envelope (or nothing, plain mode) is already out.
-   A closed pipe does not upgrade a failure to success — the command
-   still failed; EX_IOERR only when writing the FAILURE itself failed
-   for a non-pipe reason. */
+/* Failure twin: the envelope (or nothing, in plain mode) is already out.
+   A closed pipe does NOT upgrade a failure to success; EX_IOERR only when
+   writing the failure itself failed for a non-pipe reason. */
 int mos_cli_finalize_failure_stdout(int fail_code)
 {
     switch (mos_cli_stdout_finalize()) {
@@ -73,38 +67,34 @@ const char * mos_cli_error_to_code(mos_error err)
         case MOS_ERR_UNSUPPORTED:      return "unsupported";
         case MOS_ERR_OOM:              return "oom";
     }
-    return "io";  /* defensive default for forward-incompatible enum values */
+    return "io";  /* defensive default for unknown enum values */
 }
 
-/* Hard-failure exit path — only for "no observation produced" (open or
-   probe failed). Returns a sysexits.h code; plain mode writes nothing to
-   stdout (diagnostic to stderr), --json writes a mos.error.v1 envelope to
-   stdout (so `mos --json | jq '.error.code // .state'` works either way).
+/* Hard-failure exit path, only for "no observation produced" (open or probe
+   failed). Returns a sysexits.h code; plain mode writes nothing to stdout
+   (diagnostic to stderr), --json writes a mos.error.v1 envelope so
+   `mos --json | jq '.error.code // .state'` works either way.
 
-   The "drive reachable but classification unknown" case does NOT come here
-   — it routes through emit_plain/emit_json with state=unknown and exits 0;
-   an inconclusive answer is still an observation.
+   The "drive reachable but classification unknown" case does NOT come here —
+   it emits state=unknown and exits 0; an inconclusive answer is still an
+   observation.
 
-   Envelope shape is mos.error.v1 (schemas/). Two fields beyond the schema's
-   own docs: exit_code mirrors the process exit for consumers parsing JSON
-   without gating on $?, and error.context names what mos was attempting. */
+   Two envelope fields beyond the schema docs: exit_code mirrors the process
+   exit for consumers not gating on $?, and error.context names the attempt. */
 int mos_cli_emit_unknown_and_fail(const char *context, mos_error err,
                                  const char *dev_node)
 {
     int exit_code = mos_error_sysexit(err);
 
-    /* Human-readable diagnostic to stderr; sysexits exit code is the
-       machine signal. */
+    /* Human diagnostic to stderr; the exit code is the machine signal. */
     fprintf(stderr, "%s: %s: %s\n",
             progname, context, mos_error_description(err));
 
     if (flag_json) {
-        /* Framing follows the mode: watch's contract is NDJSON — one
-           object per line — and a multi-line error envelope would break a
-           line-framed consumer at exactly the moment it's reporting a
-           failure. One-shot mode keeps the pretty-printed envelope. Same
-           bytes-as-JSON either way: only whitespace differs, so the schema
-           fixtures cover both. */
+        /* Framing follows the mode: watch is NDJSON (one object per line),
+           so a multi-line envelope would break a line-framed consumer mid-
+           failure; one-shot keeps the pretty-printed form. Same JSON either
+           way — only whitespace differs, so one set of fixtures covers both. */
         const char *nl  = flag_watch ? ""  : "\n";
         const char *i2  = flag_watch ? ""  : "  ";
         const char *i4  = flag_watch ? ""  : "    ";
@@ -129,20 +119,18 @@ int mos_cli_emit_unknown_and_fail(const char *context, mos_error err,
         fprintf(stdout, "%s%s}%s}\n", nl, i2, nl);
         return mos_cli_finalize_failure_stdout(exit_code);
     }
-    /* Plain-text mode: nothing on stdout. The stderr diagnostic above
-       is the human-readable channel; sysexits exit code is the
-       machine signal. */
+    /* Plain mode: nothing on stdout — the stderr diagnostic above is the
+       human channel, the exit code the machine one. */
     return exit_code;
 }
 
 /* ---- Watch NDJSON line emitter ----------------------------------------- *
  *
- * Lives here, not in cli/watch.c, on purpose: rendering a mos.event.v1
- * line needs only the public mos_watch_event_* accessors plus the shared
- * CLI writers — no Apple-side symbol. Keeping it out of the adapter-bound
- * watch TU lets the headless emit harness (tests/emit) link and validate
- * its real output against the schema without dragging in IOKit /
- * DiscRecording and the time seam. */
+ * Here rather than cli/watch.c: rendering a mos.event.v1 line needs only
+ * the public mos_watch_event_* accessors and the shared writers — no
+ * Apple-side symbol. Keeping it out of the adapter-bound watch TU lets the
+ * headless emit harness (tests/emit) validate real output against the
+ * schema without IOKit / DiscRecording / the time seam. */
 
 static const char *event_kind_string(mos_event_kind k)
 {
@@ -176,25 +164,24 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
     fputs("{", stdout);
     fputs("\"schema\":\"mos.event.v1\"", stdout);
     fputs(",\"event\":\"", stdout); fputs(kind, stdout); fputc('"', stdout);
-    /* Session identity as two plain JSON numbers — no composite token;
-       consumers wanting one key concatenate. Both fit IEEE doubles for
-       any realistic uptime (registry IDs start at 2^32+256 and epoch ms
-       is ~2^41), so no string-quoting workaround is needed. */
+    /* Session identity as two plain numbers, not a composite token;
+       consumers wanting one key concatenate. Both fit IEEE doubles at any
+       realistic uptime (registry IDs start at 2^32+256, epoch ms ~2^41),
+       so no string-quoting is needed. */
     fprintf(stdout, ",\"registry_id\":%llu",
             (unsigned long long)mos_watch_event_registry_id(e));
     fprintf(stdout, ",\"stream_open_ms\":%llu",
             (unsigned long long)mos_watch_event_stream_open_ms(e));
     fprintf(stdout, ",\"seq\":%llu", (unsigned long long)mos_watch_event_seq(e));
     fputs(",\"ts\":", stdout); mos_cli_json_str(stdout, mos_watch_event_ts(e));
-    /* bsd is required by mos.event.v1 and nullable: emit it
-       unconditionally. mos_cli_bsd_dev_node renders unit < 0 as `null`, so an
-       empty-drive event keeps the required field present as null rather
-       than dropping it (which would fail schema validation), and a real
-       unit as "diskN" — the JSON wire shape is unchanged. */
+    /* bsd_node is required-and-nullable in mos.event.v1, so emit it always:
+       mos_cli_bsd_dev_node renders unit < 0 as `null`, keeping the required
+       key present (dropping it would fail validation) and a real unit as
+       "diskN". */
     fputs(",\"bsd_node\":", stdout); mos_cli_bsd_dev_node(stdout, mos_watch_event_bsd_unit(e));
 
-    /* device_removed carries only prev_state; every other kind also carries
-       the current state. prev_state is written unconditionally either way. */
+    /* device_removed carries prev_state only; every other kind also carries
+       the current state. prev_state is always written. */
     if (kind_e != MOS_EVENT_DEVICE_REMOVED) {
         fputs(",\"state\":\"", stdout); fputs(state, stdout); fputc('"', stdout);
     }
@@ -204,9 +191,7 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
         kind_e == MOS_EVENT_MEDIA_CHANGED ||
         kind_e == MOS_EVENT_DEVICE_APPEARED) {
         fprintf(stdout, ",\"current_profile\":\"0x%04x\"", profile);
-        /* Match emit_json's suppression: skip current_profile_name when
-           current_profile is the SCSI sentinel 0x0000. See emit_json
-           comment for rationale. */
+        /* Same suppression as emit_json: no name at the 0x0000 sentinel. */
         if (mos_cli_profile_present(profile) && pname) {
             fputs(",\"current_profile_name\":", stdout);
             mos_cli_json_str(stdout, pname);
@@ -254,18 +239,15 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
     return mos_cli_stdout_finalize();
 }
 
-/* ---- List-mode implementation ------------------------------------------ */
-
 /* ---- List: one snapshot, probe in-callback ---------------------------- *
  *
  * Enumeration yields bsd_unit + registry_id only; the State / Vendor /
- * Product / Rev columns need one open + query per drive — the same probe
- * `mos status` runs, opened in-callback via mos_open_device (atomic
- * registry-ID resolve, no selection-time TOCTOU). Per-entry containment:
- * a drive whose open/query fails shows state "error" with identity
- * dashes; one sick drive never kills the rig overview. */
+ * Product / Rev columns each need one open + query, the same probe
+ * `mos status` runs, done in-callback via mos_open_device (no selection-
+ * time TOCTOU). A drive whose open/query fails shows state "error" with
+ * dashes — one sick drive never kills the overview. */
 
-/* id/unit collector — used by mos_cli_resolve_index_of's index lookup. */
+/* id/unit collector — used by mos_cli_resolve_index_of and the index lookup. */
 typedef struct {
     int      count;                      /* total seen (may exceed cap) */
     int64_t  units[MOS_CLI_LIST_CAP];
@@ -284,9 +266,9 @@ static bool collect_cb(const mos_device_info_t *info, void *ctx)
 }
 
 
-/* Probe one enumerated drive into a row. Runs INSIDE the enumeration
-   callback (mos_open_device's lifetime contract) — the one-snapshot
-   pattern: no per-row re-enumeration, no enumerate→open index race. */
+/* Probe one enumerated drive into a row, INSIDE the enumeration callback
+   (mos_open_device's lifetime contract): no per-row re-enumeration, no
+   enumerate->open index race. */
 static void query_row(const mos_device_info_t *info, mos_cli_list_row *row)
 {
     memset(row, 0, sizeof *row);
@@ -306,9 +288,8 @@ static void query_row(const mos_device_info_t *info, mos_cli_list_row *row)
     }
     snprintf(row->state, sizeof row->state, "%s",
              mos_state_description(mos_state_result_state(r)));
-    /* Prefer the queried unit/registry over the enumeration snapshot —
-       the open re-validated identity, and media may have (un)loaded
-       between snapshot and probe. */
+    /* Prefer the queried unit/registry over the enumeration snapshot: the
+       open re-validated identity, and media may have changed in between. */
     (void)mos_bsd_dev_node(mos_state_result_bsd_unit(r),
                                  row->bsd_node, sizeof row->bsd_node);
     if (mos_state_result_registry_id(r))
@@ -326,9 +307,8 @@ static void query_row(const mos_device_info_t *info, mos_cli_list_row *row)
     mos_close(h);
 }
 
-/* Render rows as the human table. with_volume=false is the EX_USAGE
-   mini-list variant (one table implementation). Cell strings must outlive
-   the call — caller passes the row array. */
+/* Render rows as the human table. with_volume=false is the EX_USAGE mini-
+   list variant. Cell strings must outlive the call (caller owns rows). */
 void mos_cli_emit_list_table(FILE *f, const mos_cli_list_row *rows, int n,
                             bool with_volume)
 {
@@ -342,16 +322,14 @@ void mos_cli_emit_list_table(FILE *f, const mos_cli_list_row *rows, int n,
 
     size_t ncols = with_volume ? MAXC : MAXC - 1;
     if (n > MOS_CLI_LIST_CAP) n = MOS_CLI_LIST_CAP;
-    /* index strings need storage */
-    char idx[MOS_CLI_LIST_CAP][12];
-    /* Rows are raw; the terminal is where \xNN escaping is owed. */
+    char idx[MOS_CLI_LIST_CAP][12];   /* index strings need storage */
+    /* Rows hold raw bytes; \xNN escaping is owed here, at the terminal. */
     char v_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];
     char p_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
     char r_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];
-    /* Volume column shows the mount path only (mos_cli_list_volume_cell);
-       the label stays in --json and on metadata's Volume row. Bounded so a
-       hostile or merely long path can't wreck the table; JSON is the
-       faithful form. Worst case: 64 (path) + NUL. */
+    /* Volume cell shows the mount path only (mos_cli_list_volume_cell);
+       the label stays in --json and metadata. Bounded so a long or hostile
+       path can't wreck the table — JSON carries the faithful form. */
     char vol_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(96)];
     const char *cells[MOS_CLI_LIST_CAP * MAXC];
     for (int r = 0; r < n; r++) {
@@ -436,12 +414,11 @@ int mos_cli_collect_and_query(mos_cli_list_row *rows, int *out_n)
     return c.total;
 }
 
-/* status's no-selector path: exactly one drive present → an OPEN handle
-   from the same single enumeration that counted (no second probe, no
-   reopen). *total always carries the count; the handle is non-NULL only
-   when *total == 1 and the open succeeded (otherwise *err says why).
-   With several drives, any first-drive handle is closed again — the
-   caller renders the mini-list and exits EX_USAGE. */
+/* status's no-selector path: with exactly one drive, return an open handle
+   from the same enumeration that counted (no reopen). *total carries the
+   count; the handle is non-NULL only when *total == 1 and the open
+   succeeded (else *err says why). With several drives the first-drive
+   handle is closed again and the caller renders the mini-list. */
 typedef struct {
     mos_handle_t *h;
     mos_error     err;
@@ -484,10 +461,9 @@ int mos_cli_count_drives(void)
     return total;
 }
 
-/* Resolve a 1-based index to the bsd_unit of that enumeration slot —
-   the probe's index selector (see common.h). Indexes beyond
-   MOS_CLI_LIST_CAP are treated as out of range, consistent with the
-   list rendering they'd be read off of. */
+/* Resolve a 1-based index to that enumeration slot's bsd_unit (the probe's
+   index selector; see common.h). Indexes past MOS_CLI_LIST_CAP are out of
+   range, matching the list they'd be read off of. */
 bool mos_cli_unit_for_index(int index, int64_t *unit)
 {
     collect_ctx c = { 0, {0}, {0} };
@@ -498,9 +474,8 @@ bool mos_cli_unit_for_index(int index, int64_t *unit)
     return true;
 }
 
-/* Resolve the 1-based index of the drive the open handle refers to,
-   by matching its registry id against a fresh enumeration. Returns 0
-   when unresolvable (emitters render Index "-" / JSON index 0). */
+/* Resolve a registry id to its 1-based index by matching against a fresh
+   enumeration. Returns 0 when unresolvable (emitters render "-" / index 0). */
 int mos_cli_resolve_index_of(uint64_t reg)
 {
     if (!reg) return 0;

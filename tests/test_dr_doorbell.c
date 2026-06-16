@@ -1,23 +1,13 @@
 /* tests/test_dr_doorbell.c — macOS integration guard: DiscRecording
  * doorbell registration is accepted on a stock (driveless) Mac.
  *
- * WHAT IT GUARDS
- * --------------
- * mos_watch_open_all() registers the DR notification doorbell
- * (DRNotificationCenterCreate → CreateRunLoopSource → AddObserver)
- * and FAILS the open (NULL, MOS_ERR_IO) if that setup fails, because
- * all-mode arrival discovery has no poll floor. Zero drives is a valid
- * empty stream by contract, so on a driveless CI runner a successful
- * open IS the proof that the registration calls are accepted by the
- * macOS API.
- *
- * SCOPE / LIMITATION
- * ------------------
- * Proves registration is ACCEPTED, not that callbacks ever FIRE —
- * delivery needs a device appearing, which stays on the rig
- * (INTEGRATION_HARNESS falsification run 6). Like
- * test_watch_lifetime, this lives in no CMake target; CI compiles it
- * ad hoc against the built archives (same cc line, ASan+UBSan).
+ * mos_watch_open_all() registers the DR notification doorbell and fails
+ * the open (MOS_ERR_IO) if that setup fails, since all-mode arrival
+ * discovery has no poll floor. Zero drives is a valid empty stream, so a
+ * successful open on a driveless runner proves the registration calls are
+ * accepted — not that callbacks ever fire (delivery needs a device
+ * appearing, which stays on the rig). Like test_watch_lifetime, this is in
+ * no CMake target; CI compiles it ad hoc against the archives (ASan+UBSan).
  */
 
 #include <stdio.h>

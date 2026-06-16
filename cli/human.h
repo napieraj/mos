@@ -1,13 +1,12 @@
 /*
- * cli/human.h — layout engine for the human-readable CLI views. Pure:
- * writes to a FILE*, no result-struct knowledge; the caller owns
- * vocabulary and suppression (a suppressed pair is simply absent).
+ * cli/human.h — layout engine for the human-readable CLI views. Writes to
+ * a FILE*, knows no result struct; the caller owns vocabulary and
+ * suppression (a suppressed pair is simply absent).
  *
- * SANITIZATION CONTRACT: keys/values/cells print verbatim (fputs), so
- * any drive-controlled bytes (identity strings) must arrive pre-escaped.
- * Sanitization sites are cli/status.c emit_human and cli/common.c
- * query_row, both via mos_safe_ascii; library vocabulary is printable
- * ASCII by construction.
+ * SANITIZATION CONTRACT: keys/values/cells print verbatim (fputs), so any
+ * drive-controlled bytes (identity strings) must arrive pre-escaped via
+ * mos_safe_ascii — done in cli/status.c emit_human and cli/common.c
+ * query_row. Library vocabulary is printable ASCII by construction.
  */
 #ifndef MOS_CLI_HUMAN_H
 #define MOS_CLI_HUMAN_H

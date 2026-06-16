@@ -2,22 +2,20 @@
  * emit_fixtures.c — drive the REAL CLI emit_json paths against the
  * link-seam fake and print one document to stdout, selected by argv.
  *
- * Why this exists: schemas/validate.py validates hand-written fixture
- * files, and the CLI contract test only exercises the verbs' ERROR
- * envelopes (CI has no drive). The success-path JSON of metadata /
- * drive / features / status / list was therefore never validated
- * against its schema — emitter↔schema drift could ship silently. This
- * harness closes that: it configures the fake for a scenario, runs the
- * actual run_<verb>() (open → query → emit_json → stdout), and the
- * caller (tests/emit/validate_emitted.py) pipes stdout through the
- * schema validator. macOS-only, same seam as the adapter-fake tests.
+ * Why this exists: schemas/validate.py validates hand-written fixtures
+ * and the CLI contract test only covers the verbs' ERROR envelopes (CI
+ * has no drive), so the success-path JSON of metadata / drive / features
+ * / status / list was never validated against its schema — emitter↔schema
+ * drift could ship silently. This harness configures the fake for a
+ * scenario, runs the real run_<verb>() (open → query → emit_json →
+ * stdout), and validate_emitted.py pipes stdout through the validator.
+ * macOS-only, same seam as the adapter-fake tests.
  *
  * One document per process: `emit_fixtures <verb> <scenario>`.
  */
 #include "common.h"
 #include "mos_fake_apple.h"
-#include "mos_pure.h"   /* struct mos_watch_event layout — same as the pure
-                           core fills and the adapter hands to the emitter */
+#include "mos_pure.h"   /* struct mos_watch_event layout */
 
 #include <string.h>
 #include <stdio.h>
@@ -94,10 +92,9 @@ static void common_drive_setup(void)
     mos_fake_set_tur(0x00, NULL);   /* GOOD => READY */
 }
 
-/* A Track Information Block (READ TRACK INFORMATION 0x52) for the first
-   track — the recordable/append-state view mos_query_capacity folds in.
-   Offsets per src/mos_trackinfo.c; values written big-endian by shift so
-   no hand-packed hex. Length field set to a 36-byte block. */
+/* A Track Information Block (READ TRACK INFORMATION 0x52) for track 1 —
+   the recordable/append-state view mos_query_capacity folds in. 36-byte
+   block, values written big-endian by shift. */
 static void build_tib(uint8_t b[36], bool blank, bool nwa_valid,
                       uint32_t free_blocks, uint32_t next_writable,
                       uint32_t track_size)
@@ -269,13 +266,10 @@ int main(int argc, char **argv)
         return mos_cli_run_capacity();
     }
 
-    /* error: the mos.error.v1 failure envelope through the REAL path
-       (mos_cli_emit_unknown_and_fail). No drive present -> the open fails
-       and run_query emits the envelope on stdout, returning a non-zero
-       sysexit (66, EX_NOINPUT). We mask that to 0: this harness validates
-       the EMITTED DOCUMENT only — the process exit code is the ci.yml
-       smoke check's job — and an ASan abort still kills the process and
-       trips validate_emitted.py's return-code check. */
+    /* error: the mos.error.v1 envelope through the REAL path. No drive ->
+       open fails, run_query emits the envelope and returns EX_NOINPUT (66).
+       We mask to 0: this harness validates the DOCUMENT only, not the exit
+       code (an ASan abort still kills the process and trips the caller). */
     if (strcmp(verb, "error") == 0 && strcmp(scn, "no_drive") == 0) {
         mos_fake_reset();
         mos_fake_set_no_drive();
@@ -285,11 +279,9 @@ int main(int argc, char **argv)
     }
 
     /* watch: mos.event.v1 is NDJSON, one object per line. Drive the REAL
-       line emitter (mos_cli_emit_watch_ndjson — lifted out of the
-       adapter-bound watch loop so it links here without IOKit) once per
-       event shape, covering all four oneOf branches of the schema. Events
-       are built by value: the same internal layout the pure watch core
-       fills and the adapter hands to this emitter on a live drive. */
+       line emitter once per event shape, covering all four oneOf branches
+       of the schema. Events are built by value in the same internal layout
+       the pure watch core fills on a live drive. */
     if (strcmp(verb, "watch") == 0 && strcmp(scn, "stream") == 0) {
         mos_watch_event e;
         const uint64_t reg = 4294967552ULL;        /* >= 2^32+256: a real id */

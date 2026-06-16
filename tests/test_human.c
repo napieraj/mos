@@ -1,18 +1,16 @@
 /* open_memstream is POSIX.1-2008; glibc hides it under strict -std=c11
-   (CMAKE_C_EXTENSIONS OFF) unless asked. Same idiom as
-   src/mos_watch_core.c. Must precede every include. */
+   unless asked. Must precede every include. */
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
 
 /*
- * test_human.c — golden-string tests for the human-output layout
- * engine (cli/human.c). Each golden is a verbatim mock from
- * doc/research/2026-06-10-cli-design.md; if a mock and this file
- * disagree, one of them is wrong and the design doc decides which.
+ * test_human.c — golden-string tests for the human-output layout engine
+ * (cli/human.c). Each golden is a verbatim mock from the CLI design doc;
+ * a disagreement means one is wrong, and the design doc decides which.
  *
- * Uses open_memstream (POSIX, available on macOS and Linux CI) to
- * capture FILE* output without touching the filesystem.
+ * Uses open_memstream to capture FILE* output without touching the
+ * filesystem.
  */
 #include "test_harness.h"
 #include "../cli/human.h"

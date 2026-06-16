@@ -1,15 +1,14 @@
 #!/bin/sh
 # tests/cli/test_cli.sh — JSON and exit-code contract tests for the mos CLI.
 #
-# Pins the user-facing surface of `mos` against accidental drift. The
-# pure-data tests in tests/test_*.c cover the library's decision logic;
-# this script covers what consumers actually parse: stdout shape, exit
-# codes, and the JSON envelope (mos.state.v1, mos.error.v1, mos.event.v1,
-# mos.list.v1).
+# Pins the user-facing surface against drift: the pure-data tests cover
+# the library's decision logic; this covers what consumers parse — stdout
+# shape, exit codes, and the JSON envelopes (mos.state.v1, mos.error.v1,
+# mos.event.v1, mos.list.v1).
 #
-# Tests are limited to scenarios reachable without a real optical drive
-# attached (CI has none). The success-path JSON contract for state=ready
-# etc. is exercised by the integration harness on real hardware, not here.
+# Limited to scenarios reachable without a real optical drive (CI has
+# none). The success-path JSON for state=ready etc. is exercised by the
+# integration harness on real hardware, not here.
 #
 # Usage: test_cli.sh <path-to-mos-binary>
 #   or:  MOS_BIN=<path> test_cli.sh
@@ -48,9 +47,8 @@ assert_ec() {
     fi
 }
 
-# NDJSON framing: the captured stdout (trailing newline already stripped
-# by $(...) ) must contain no embedded newline — exactly one object, one
-# line. Watch-mode JSON errors are held to this.
+# NDJSON framing: captured stdout (trailing newline stripped by $(...))
+# must have no embedded newline — exactly one object, one line.
 assert_single_line() {
     label="$1"; haystack="$2"
     nl_count=$(printf '%s' "$haystack" | wc -l | tr -d ' ')
@@ -115,23 +113,20 @@ run_mos --version
 assert_ec       "version exit code"      "0" "$EC"
 assert_contains "version output shape"   "$OUT" "0."
 
-# Test 2: --help exits 0 and prints the Options block and the watch
-# subcommand.
+# Test 2: --help exits 0 and prints the Options block and watch subcommand.
 run_mos --help
 assert_ec       "help exit code"          "0" "$EC"
 assert_contains "help mentions Options"   "$OUT" "Options:"
 assert_contains "help advertises the watch subcommand" "$OUT" "watch"
 
-# Test 3: unknown flag exits 64 (EX_USAGE per sysexits.h). Pins that
-# getopt-level errors are distinguishable from query failures (which
-# now use other sysexits classes like 66 EX_NOINPUT).
+# Test 3: unknown flag exits 64 (EX_USAGE), distinguishing getopt-level
+# errors from query failures (which use other classes like 66 EX_NOINPUT).
 run_mos --bogus-flag-that-does-not-exist
 assert_ec "invalid flag exits 64 (EX_USAGE)" "64" "$EC"
 
-# Test 4: --index pointing at a non-existent drive in plain mode emits
-# NOTHING on stdout, a diagnostic on stderr, and exits 66 (EX_NOINPUT).
-# Index 99 is well past any plausible drive count so the no-drive
-# failure is guaranteed regardless of host drive layout.
+# Test 4: --index at a non-existent drive (plain mode) emits NOTHING on
+# stdout, a diagnostic on stderr, and exits 66 (EX_NOINPUT). Index 99 is
+# past any plausible drive count, so the failure holds on any host.
 run_mos --index 99
 assert_ec     "no-drive plain exit 66 (EX_NOINPUT)" "66"  "$EC"
 assert_equals "no-drive plain stdout empty"         ""    "$OUT"
@@ -148,20 +143,10 @@ case "$ERR" in
         ;;
 esac
 
-# Test 5: --json --index 99 emits a mos.error.v1 envelope. The v0.3
-# failure shape is:
-#   {
-#     "schema": "mos.error.v1",
-#     "exit_code": 66,
-#     "error": {
-#       "code":        "no_device",
-#       "message":     "...",
-#       "context":     "...",
-#       "recoverable": false
-#     }
-#   }
-# The schema field discriminates against the success envelope
-# (mos.state.v1); no shared required fields beyond schema.
+# Test 5: --json --index 99 emits a mos.error.v1 envelope — schema,
+# exit_code, and a nested error object (code/message/context/recoverable).
+# The schema field discriminates it from the mos.state.v1 success shape;
+# no shared required fields beyond schema.
 run_mos --json --index 99
 assert_ec       "no-drive JSON exit 66"              "66"   "$EC"
 assert_contains "JSON has mos.error.v1 schema"       "$OUT" '"schema": "mos.error.v1"'
@@ -176,24 +161,24 @@ assert_not_contains "no legacy schema_version field" "$OUT" '"schema_version"'
 assert_not_contains "no flat error_message field"    "$OUT" '"error_message"'
 # Failure envelope must NOT include "state" — disjointness rule.
 assert_not_contains "failure envelope has no state"  "$OUT" '"state"'
-# Pure-open-failure path: no handle was open, so the conditional
-# "bsd_node" field must be absent from this envelope.
+# Open-failure path: no handle was open, so the conditional "bsd_node"
+# field must be absent.
 assert_not_contains "open-failure envelope omits bsd_node" "$OUT" '"bsd_node":'
 
 # Test 6: --index and --bsd are mutually exclusive (EX_USAGE 64).
 run_mos --index 1 --bsd disk0
 assert_ec "index+bsd mutual exclusion exits 64" "64" "$EC"
 
-# Test 7: the retired verb flags (flags-as-commands, retired
-# 2026-06-12) are plain unknown options now — verbs are subcommands.
+# Test 7: the retired flags-as-commands are plain unknown options now —
+# verbs are subcommands.
 run_mos --list
 assert_ec "retired --list is an unknown option (64)" "64" "$EC"
 run_mos --watch
 assert_ec "retired --watch is an unknown option (64)" "64" "$EC"
 
-# Test 8: --json=value is rejected with EX_USAGE 64. In v0.3 the --json
-# flag takes no argument — schemas carry their own version. Legacy
-# callers passing --json=v2 or --json=v3 must get a clear diagnostic.
+# Test 8: --json=value is rejected with EX_USAGE 64 — the --json flag
+# takes no argument (schemas carry their own version). Callers passing
+# --json=v2 etc. must get a clear diagnostic.
 run_mos --json=v2 --index 99
 assert_ec "--json=v2 rejected with EX_USAGE" "64" "$EC"
 run_mos --json=anything --index 99
@@ -208,25 +193,21 @@ assert_ec       "list --json exit 0"           "0"    "$EC"
 assert_contains "list JSON has mos.list.v1"    "$OUT" '"schema": "mos.list.v1"'
 assert_contains "list JSON has drives array"   "$OUT" '"drives":'
 
-# Test 10: --bsd with a non-resolving name exits 66 with mos.error.v1
-# envelope. Distinct from --index path because the open logic differs.
-# The name must be WELL-FORMED (disk<N>): mos_open_by_bsd_name rejects
-# malformed names with invalid_arg/64 before the no_device/66 lookup
-# (mos_internal_parse_bsd_unit returns -1, see src/mos_scsi.c).
+# Test 10: --bsd with a well-formed but non-resolving name exits 66 with
+# mos.error.v1 (distinct open logic from --index). Malformed names are
+# rejected earlier with invalid_arg/64, before the no_device/66 lookup.
 run_mos --bsd disk99 --json
 assert_ec       "bad --bsd JSON exit 66"          "66"   "$EC"
 assert_contains "bad --bsd JSON has mos.error.v1" "$OUT" '"schema": "mos.error.v1"'
 
-# Test 11: watch against a non-resolving --bsd exits 66 with a
-# mos.error.v1 envelope. Exercises the watch-open-failure path
-# (mos_watch_open_by_bsd_name returns NULL, mos_cli_run_watch routes through
-# mos_cli_emit_unknown_and_fail). This is the only watch path testable
-# without IOKit; the full event-stream behavior is exercised by the
-# pure watch_core unit tests and the hardware integration matrix.
+# Test 11: watch against a non-resolving --bsd exits 66 with mos.error.v1,
+# exercising the watch-open-failure path. This is the only watch path
+# testable without IOKit; the full event stream is covered by the pure
+# watch_core unit tests and the hardware integration matrix.
 run_mos watch --bsd disk99 --json
 assert_ec          "bad --bsd watch exit 66"           "66"   "$EC"
-# Watch-mode JSON is NDJSON: the error envelope is COMPACT (no spaces
-# after colons) and single-line, unlike the pretty one-shot envelope.
+# Watch NDJSON: the error envelope is COMPACT (no spaces after colons)
+# and single-line, unlike the pretty one-shot envelope.
 assert_contains    "bad --bsd watch has mos.error.v1"  "$OUT" '"schema":"mos.error.v1"'
 assert_contains    "bad --bsd watch has no_device"     "$OUT" '"code":"no_device"'
 assert_single_line "bad --bsd watch envelope is one NDJSON line" "$OUT"
@@ -238,9 +219,8 @@ assert_ec          "bad --index watch exit 66"          "66"   "$EC"
 assert_contains    "bad --index watch has mos.error.v1" "$OUT" '"schema":"mos.error.v1"'
 assert_single_line "bad --index watch envelope is one NDJSON line" "$OUT"
 
-# Test 13: subcommand 'status' is an alias for the implicit-status form.
-# On a CI runner with no drive, both forms produce the same v0.3
-# no-device error envelope.
+# Test 13: 'status' subcommand is an alias for the implicit-status form;
+# with no drive, both produce the same no-device error envelope.
 run_mos status --json --index 99
 assert_ec       "status subcommand exit 66"          "66"   "$EC"
 assert_contains "status subcommand has mos.error.v1" "$OUT" '"schema": "mos.error.v1"'
@@ -258,8 +238,8 @@ assert_ec          "watch subcommand bad --bsd exit 66"           "66" "$EC"
 assert_contains    "watch subcommand bad --bsd has mos.error.v1"  "$OUT" '"schema":"mos.error.v1"'
 assert_single_line "watch subcommand envelope is one NDJSON line" "$OUT"
 
-# Test 16: the retired verb flags stay unknown options after an
-# explicit subcommand too — verb-vs-verb states are unrepresentable.
+# Test 16: retired verb flags stay unknown options after an explicit
+# subcommand too — verb-vs-verb states are unrepresentable.
 run_mos status --list
 assert_ec "status + retired --list is unknown option (64)" "64" "$EC"
 run_mos status --watch
@@ -272,11 +252,9 @@ assert_ec "unknown subcommand exits 64" "64" "$EC"
 ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
 assert_contains "unknown subcommand diagnostic names recognized set" "$ERR" "status, list, watch"
 
-# Test 18 (capacity verb): 'capacity' was the lone remaining reserved
-# name; it shipped 2026-06-13 as mos.capacity.v1 (the reserved-name
-# machinery retired with it). It must now be a RECOGNIZED verb — a
-# selector miss carries the same mos.error.v1 envelope as the others, and
-# it must NOT hit the unknown-subcommand or reserved-name diagnostics.
+# Test 18 (capacity verb): 'capacity' is a recognized verb (mos.capacity.v1).
+# A selector miss carries the same mos.error.v1 envelope as the others and
+# must NOT hit the unknown-subcommand or reserved-name diagnostics.
 run_mos capacity --json --index 99
 assert_ec       "capacity no-drive JSON exit 66"     "66"   "$EC"
 assert_contains "capacity error envelope schema"     "$OUT" '"schema": "mos.error.v1"'
@@ -288,17 +266,16 @@ case "$ERR" in
     *)  pass=$((pass + 1)) ;;
 esac
 
-# Test 19: list is mutually exclusive with --index/--bsd. List is
-# "enumerate ALL drives"; selectors target a single drive. Combining
-# them is contradictory and must be rejected at the argument-parsing
-# layer with EX_USAGE rather than silently picking one to honor.
+# Test 19: list is mutually exclusive with --index/--bsd. List enumerates
+# ALL drives; selectors target one. Combining them is contradictory and
+# rejected with EX_USAGE rather than silently honoring one.
 run_mos list --index 1
 assert_ec "list + --index rejected with EX_USAGE" "64" "$EC"
 run_mos list --bsd disk4
 assert_ec "list + --bsd rejected with EX_USAGE"   "64" "$EC"
 
-# Test 20: positional drive subject (CLI design 2026-06-10). All-digits
-# parses as an index: `mos status 99` matches the --index 99 contract.
+# Test 20: positional drive subject. All-digits parses as an index:
+# `mos status 99` matches the --index 99 contract.
 run_mos status 99
 assert_ec     "positional index: exit 66"     "66" "$EC"
 assert_equals "positional index: stdout empty" ""  "$OUT"
@@ -335,13 +312,11 @@ assert_ec          "watch sans --json: exit 66"          "66"   "$EC"
 assert_contains    "watch sans --json: envelope present" "$OUT" '"schema":"mos.error.v1"'
 assert_single_line "watch sans --json: one NDJSON line"  "$OUT"
 
-# Test 25a: bare `mos` is an entry point, not a status query (retired
-# implicit-status default, 2026-06-12) — and does NO device work (the
-# table-at-entry shape was revised out the same day: its state column
-# rode the GESN exclusive lock, wrong for an intent-free invocation).
-# Exit 64, NOTHING on stdout, hint + usage on stderr — identical on a
-# driveless CI runner and a developer's Mac, so pin the usage shape
-# and the absence of the table's header row.
+# Test 25a: bare `mos` is an entry point, not a status query, and does NO
+# device work (an entry-point table would ride the GESN exclusive lock,
+# wrong for an intent-free invocation). Exit 64, nothing on stdout, hint +
+# usage on stderr — identical driveless or not, so pin the usage shape and
+# the absence of the table header.
 run_mos
 assert_ec     "bare mos exits 64 (entry point)"  "64" "$EC"
 assert_equals "bare mos stdout is empty"         ""   "$OUT"
@@ -350,13 +325,11 @@ assert_contains     "bare mos stderr carries usage"        "$ERR" "Subcommands:"
 assert_contains     "bare mos hint points at status/list"  "$ERR" "no subcommand"
 assert_not_contains "bare mos prints no drive table"       "$ERR" "Vendor"
 
-# Test 25b: positional registry-id selector and its dispatch boundary
-# (the xnu floor 2^32+256 = 4294967552; pure-pinned in
-# tests/test_bsd_name.c, contract-pinned here). At the floor the digits
-# resolve as a registry id: well-formed, absent attachment -> 66 with
-# the structured envelope. One below the floor they resolve as an
-# index, which parse_index rejects (> INT32_MAX) -> usage 64. A value
-# too big for uint64 is rejected as out of range -> 64.
+# Test 25b: positional registry-id selector and its dispatch boundary (the
+# xnu floor 2^32+256 = 4294967552, pure-pinned in test_bsd_name.c). At the
+# floor the digits resolve as a registry id: absent -> 66 with envelope.
+# One below, they resolve as an index that parse_index rejects (> INT32_MAX)
+# -> 64. Beyond uint64 -> out of range -> 64.
 run_mos status 4294967552 --json
 assert_ec       "registry-id selector absent: exit 66"   "66"   "$EC"
 assert_contains "registry-id selector: error envelope"   "$OUT" '"schema": "mos.error.v1"'
@@ -366,12 +339,10 @@ assert_ec "floor-1 resolves as index, invalid: exit 64"  "64"   "$EC"
 run_mos status 99999999999999999999
 assert_ec "selector beyond uint64: out of range, 64"     "64"   "$EC"
 
-# Test 26: probe subcommand (MOS_CLI_PROBE consolidation, 2026-06-11).
-# Bare `mos probe` exits 64 in BOTH build states: usage error ("probe
-# requires a drive ... or --dump") when compiled in, the not-built
+# Test 26: probe subcommand. Bare `mos probe` exits 64 in BOTH build
+# states: a usage error when compiled in (MOS_CLI_PROBE=ON), the not-built
 # diagnostic when compiled out. The rest of the block exercises the
-# compiled-in surface only, so an OFF binary (its own contract is
-# pinned by CI's build-noprobe leg) skips it by feature detection.
+# compiled-in surface only, so an OFF binary skips it by feature detection.
 run_mos probe
 assert_ec "probe with no selector exits 64" "64" "$EC"
 case "$ERR" in
@@ -390,7 +361,7 @@ case "$ERR" in
     assert_ec "--dump without probe exits 64" "64" "$EC"
 
     # Test 28: retired verb flags are unknown options after probe (64
-    # each); verb-vs-verb states are unrepresentable post-retirement.
+    # each); verb-vs-verb states are unrepresentable.
     run_mos probe --list
     assert_ec "probe + retired --list exits 64" "64" "$EC"
     run_mos probe --watch
@@ -407,21 +378,18 @@ case "$ERR" in
     assert_ec "probe absent bsd exits 66" "66" "$EC"
     run_mos probe 99
     assert_ec "probe absent index exits 66" "66" "$EC"
-    # A registry-id selector (at/above the xnu floor 2^32+256) is accepted
-    # by the global positional grammar and honored by the other selector-
-    # taking subcommands, but probe resolves its service by BSD name only,
-    # so it is rejected at usage time (64) with an accurate message — not
-    # the generic "requires a drive" guard, which would misreport a drive
-    # that was in fact given.
+    # A registry-id selector (>= the xnu floor 2^32+256) is accepted by the
+    # global positional grammar but probe resolves its service by BSD name
+    # only, so it is rejected at usage time (64) with an accurate message —
+    # not the generic "requires a drive" guard, which would misreport.
     run_mos probe 4294967552
     assert_ec       "probe registry-id selector exits 64" "64" "$EC"
     assert_contains "probe registry-id: named in error" "$ERR" "registry-id"
 
-    # Test 30: probe --dump is runnable without hardware: the runner
-    # has no burner, so the DR device array is empty — banner, count
-    # line, exit 0. (If a runner's DRCopyDeviceArray ever returns NULL
-    # instead of an empty array, the observed contract is 69 with a
-    # "(NULL array)" marker — re-pin on that evidence, not in advance.)
+    # Test 30: probe --dump runs without hardware: no burner, so the DR
+    # device array is empty — banner, count line, exit 0. (If a runner's
+    # DRCopyDeviceArray ever returns NULL instead of an empty array, the
+    # contract is 69 with a "(NULL array)" marker — re-pin on that evidence.)
     run_mos probe --dump
     assert_ec       "probe --dump exits 0"        "0"    "$EC"
     assert_contains "probe --dump banner"         "$OUT" "mos probe --dump"
@@ -430,8 +398,7 @@ case "$ERR" in
 esac
 
 # Test 19a (drive verb): same envelope contract as metadata below;
-# 'identity' left the reserved list when metadata + drive shipped its
-# surface, so it must now hit the UNKNOWN-subcommand diagnostic.
+# 'identity' is retired, so it must hit the unknown-subcommand diagnostic.
 run_mos drive --json --index 99
 assert_ec       "drive no-drive JSON exit 66"        "66"   "$EC"
 assert_contains "drive error envelope schema"        "$OUT" '"schema": "mos.error.v1"'
@@ -444,10 +411,9 @@ run_mos features --json --index 99
 assert_ec       "features no-drive JSON exit 66"     "66"   "$EC"
 assert_contains "features error envelope schema"     "$OUT" '"schema": "mos.error.v1"'
 
-# Test 19c (tray verb): control verbs (eject/close/lock/unlock), shipped
-# 2026-06-13 — 'tray' must NOT be on the reserved list anymore. The success
-# path needs a drive; everything below is the argument/selector surface,
-# pinned driveless.
+# Test 19c (tray verb): control verbs (eject/close/lock/unlock) — 'tray'
+# is a recognized verb, not reserved. The success path needs a drive;
+# everything below is the argument/selector surface, pinned driveless.
 run_mos tray
 assert_ec       "tray without action exits 64"      "64"   "$EC"
 assert_contains "tray no-action names the verbs"    "$ERR" "eject"
@@ -474,8 +440,8 @@ assert_ec       "tray no-drive JSON exit 66"          "66"  "$EC"
 assert_contains "tray error envelope schema"          "$OUT" '"schema": "mos.error.v1"'
 
 # Test 19 (metadata verb): selector errors carry the same mos.error.v1
-# contract as status — the verb's success path needs a drive, but the
-# error envelope and exit-code surface are pinned here.
+# contract as status; the success path needs a drive, but the error
+# envelope and exit-code surface are pinned here.
 run_mos metadata --json --index 99
 assert_ec       "metadata no-drive JSON exit 66"     "66"   "$EC"
 assert_contains "metadata error envelope schema"     "$OUT" '"schema": "mos.error.v1"'

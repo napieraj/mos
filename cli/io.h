@@ -1,7 +1,7 @@
 /*
- * cli/io.h — shared stdout writers for the mos CLI. JSON escaping and
- * ASCII sanitizing live once in the library (src/mos_strings.c); these
- * wrap them for FILE output so every command emits identically.
+ * cli/io.h — shared stdout writers for the mos CLI. JSON escaping and ASCII
+ * sanitizing live in the library (src/mos_strings.c); these wrap them for
+ * FILE output so every command emits identically.
  */
 #ifndef MOS_CLI_IO_H
 #define MOS_CLI_IO_H

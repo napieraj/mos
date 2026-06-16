@@ -8,9 +8,8 @@
 
 /* ---- Signal handling (watch) ------------------------------------------- *
  *
- * SIGINT during a watch loop should terminate cleanly: stop pumping,
- * close the watch handle, exit 0. A volatile sig_atomic_t flag is the
- * portable way to communicate from a signal handler. */
+ * SIGINT terminates the loop cleanly: stop pumping, close the handle, exit
+ * 0. A volatile sig_atomic_t flag is the portable handler-to-loop channel. */
 #include <unistd.h>  /* isatty(), STDOUT_FILENO */
 static volatile sig_atomic_t watch_interrupted = 0;
 static void watch_sigint_handler(int signum)
@@ -19,18 +18,13 @@ static void watch_sigint_handler(int signum)
     watch_interrupted = 1;
 }
 
-/* Watch-emit status — bridges "the downstream pipe just closed" from
-   mos_cli_emit_watch_ndjson up to the watch loop. The classification rule
-   (fflush + sticky ferror + best-effort EPIPE) lives once in cli/io
-   (mos_cli_stdout_finalize), shared with the one-shot status/list paths;
-   these aliases let the watch code read in its own vocabulary while
-   routing through that single definition.
+/* Watch-emit status — local vocabulary over the shared classifier
+   (mos_cli_stdout_finalize in cli/io; fflush + sticky ferror + EPIPE),
+   the same one the one-shot paths use:
 
-     WATCH_EMIT_OK            successful write, keep watching
-     WATCH_EMIT_PIPE_CLOSED   write failed with EPIPE → tail-f
-                              semantics: clean exit, EX_OK
-     WATCH_EMIT_WRITE_ERROR   write failed with something else
-                              (ENOSPC, EIO, etc.) → exit EX_IOERR */
+     WATCH_EMIT_OK            wrote, keep watching
+     WATCH_EMIT_PIPE_CLOSED   EPIPE → tail-f clean exit, EX_OK
+     WATCH_EMIT_WRITE_ERROR   other (ENOSPC, EIO, ...) → EX_IOERR */
 typedef mos_cli_stdout_status watch_emit_status;
 #define WATCH_EMIT_OK          MOS_CLI_STDOUT_OK
 #define WATCH_EMIT_PIPE_CLOSED MOS_CLI_STDOUT_PIPE_CLOSED
@@ -43,12 +37,9 @@ static uint32_t getenv_uint(const char *name, uint32_t default_value)
     char *end = NULL;
     unsigned long n = strtoul(v, &end, 10);
     if (!end || *end != 0 || n > 3600000U) {
-        /* A set-but-invalid value is a user typo, not an unset default:
-           say so on stderr (the diagnostics channel in both output
-           modes; stdout stays envelope/NDJSON-clean) and fall back
-           rather than failing — cadence tuning should never be able to
-           break a watch. */
-        /* Env values are the same trust class as argv: render through
+        /* A set-but-invalid value is a typo: warn on stderr (stdout stays
+           NDJSON-clean) and fall back — cadence tuning must never break a
+           watch. Env is the same trust class as argv, so render through
            the safe-ASCII choke point, never verbatim to a tty. */
         fprintf(stderr, "%s: ignoring %s=\"", progname, name);
         mos_cli_safe_ascii(stderr, v);
@@ -60,20 +51,19 @@ static uint32_t getenv_uint(const char *name, uint32_t default_value)
 
 int mos_cli_run_watch(void)
 {
-    /* Watch is NDJSON end to end — the event stream AND any error
-       envelope: a stream consumed by orchestrators has one format.
-       Forcing the flag here keeps mos_cli_emit_unknown_and_fail on its
-       compact single-line framing without a second mode check. */
+    /* Watch is NDJSON end to end — event stream and error envelope alike,
+       one format for orchestrators. Forcing the flag here puts
+       mos_cli_emit_unknown_and_fail on its compact single-line framing. */
     flag_json = true;
 
-    /* Register SIGINT handler before opening the watch — if the user
-       hits Ctrl-C during the open call, we want to clean up. */
+    /* Install the SIGINT handler before opening, so a Ctrl-C during the
+       open call still cleans up. */
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = watch_sigint_handler;
     sigemptyset(&sa.sa_mask);
-    /* No SA_RESTART: we want the next_event call to return promptly
-       on SIGINT so the loop can check watch_interrupted. */
+    /* No SA_RESTART: next_event should return promptly on SIGINT so the
+       loop can re-check watch_interrupted. */
     sigaction(SIGINT,  &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
@@ -92,11 +82,10 @@ int mos_cli_run_watch(void)
         w = mos_watch_open_by_registry_id(opt_registry, stable_ms,
                                           transition_ms, &err);
     } else {
-        /* No selector: the bus. Watch is a stream tool, so the default is
-           total coverage (journalctl -f shape) — a selector NARROWS.
-           Zero drives is a valid empty stream that waits for hot-plug; the
-           doorbell-unavailable case fails honestly (open_all contract,
-           mos.h). */
+        /* No selector: the whole bus. Watch is a stream tool, so the
+           default is total coverage (journalctl -f) and a selector
+           NARROWS. Zero drives is a valid empty stream awaiting hot-plug;
+           doorbell-unavailable fails honestly (open_all contract, mos.h). */
         w = mos_watch_open_all(stable_ms, transition_ms, &err);
     }
 
@@ -107,29 +96,24 @@ int mos_cli_run_watch(void)
     int rc = EX_OK;
     while (!watch_interrupted) {
         const mos_watch_event *ev = NULL;
-        /* The next_event timeout is the SIGNAL-LATENCY bound, not the
-           poll cadence: SIGINT only sets a flag, and CFRunLoopRunInMode is
-           not reliably broken by signal delivery, so Ctrl-C is noticed
-           when this slice expires and the loop re-checks the flag. Cap it
-           independently of the poll rates — coupling it to transition_ms
-           would invert its purpose at large env values
-           (MOS_WATCH_TRANSITION_MS=3600000 → an up-to-one-hour Ctrl-C
-           stall). Shorter slices do NOT probe more often (the pump's
-           deadlines are internal; a TIMEOUT return just re-enters), they
-           only bound shutdown latency. 500 ms idle wakeups are
-           negligible. */
+        /* This timeout bounds SIGNAL latency, not poll cadence: SIGINT only
+           sets a flag, and CFRunLoopRunInMode is not reliably broken by
+           signal delivery, so Ctrl-C is noticed when the slice expires and
+           the loop re-checks. Capped independently of the poll rates —
+           coupling it to transition_ms would mean an up-to-one-hour Ctrl-C
+           stall at MOS_WATCH_TRANSITION_MS=3600000. Shorter slices don't
+           probe more often (the pump's deadlines are internal; a TIMEOUT
+           just re-enters); they only bound shutdown latency. */
         int timeout_ms = (int)(transition_ms && transition_ms < 500
                                    ? transition_ms : 500);
         mos_error ne = mos_watch_next_event(w, &ev, timeout_ms);
         if (ne == MOS_ERR_TIMEOUT) {
-            /* No event in this slice; loop and re-check signal. */
-            continue;
+            continue;  /* no event this slice; re-check the signal */
         }
         if (ne != MOS_OK) {
-            /* Pump-level failure (distinct from an event of kind ERROR).
-               Format the watch's BSD unit to "diskN" before
-               mos_watch_close so the failure envelope can carry it;
-               mos_bsd_dev_node yields "" / false for a no-media unit. */
+            /* Pump-level failure (distinct from a kind-ERROR event). Format
+               the BSD unit before mos_watch_close so the envelope can carry
+               it; a no-media unit gives "" / false. */
             char bsd_buf[24];
             if (!mos_bsd_dev_node(mos_watch_bsd_unit(w), bsd_buf, sizeof bsd_buf)) {
                 bsd_buf[0] = 0;
@@ -139,39 +123,31 @@ int mos_cli_run_watch(void)
                                          bsd_buf[0] ? bsd_buf : NULL);
         }
 
-        /* NDJSON unconditionally (forced in mos_cli_run_watch); --json is a
-           no-op here. */
         watch_emit_status est = mos_cli_emit_watch_ndjson(ev);
 
-        /* Downstream pipe handling. SIGPIPE is ignored at main() entry
-           so writes return EPIPE instead of killing the process; the
-           emit functions surface that via their return value. The
-           clean-exit semantics here match `tail -f` and other long-
-           running producers: when stdout closes, stop probing the
-           drive, release the watch, return EX_OK so shell pipelines
-           see a successful producer (the consumer is the one that
-           ended the conversation). */
+        /* Downstream pipe handling, `tail -f` semantics. SIGPIPE is
+           ignored at main() entry so writes return EPIPE; on a closed
+           stdout, stop probing, release the watch, and return EX_OK — the
+           producer succeeded, the consumer ended the conversation. */
         if (est == WATCH_EMIT_PIPE_CLOSED) {
             mos_watch_close(w);
             return EX_OK;
         }
         if (est == WATCH_EMIT_WRITE_ERROR) {
-            /* Non-EPIPE write failure (ENOSPC on a redirected log,
-               EIO on a flaky filesystem, etc.). Distinct exit code
-               so scripts can tell apart "consumer closed cleanly"
-               from "writing the output stream failed for real." */
+            /* Non-EPIPE write failure (ENOSPC, EIO, ...). Distinct exit
+               code so scripts can tell "consumer closed cleanly" from
+               "writing the stream failed for real". */
             mos_watch_close(w);
             return EX_IOERR;
         }
 
         if (single_target &&
             mos_watch_event_kind(ev) == MOS_EVENT_DEVICE_REMOVED) {
-            rc = EX_OK;  /* Clean exit on device removal — watch ended. */
+            rc = EX_OK;  /* single-target removal ends the watch */
             break;
         }
-        /* On the bus (no selector) device_removed is per-drive and the
-           stream continues (mos.h open_all contract); only SIGINT/pipe
-           ends it. */
+        /* On the bus, device_removed is per-drive and the stream continues
+           (open_all contract); only SIGINT/pipe ends it. */
     }
 
     mos_watch_close(w);

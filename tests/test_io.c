@@ -9,14 +9,12 @@
  * genuinely broken stdout.
  *
  * Each case runs in a FORKED CHILD whose stdout fd is redirected to a
- * broken target, so the parent's stdout — which carries the test
- * harness's own "ok/FAIL" output — is never disturbed. The child writes
- * far more than any stdio buffer (forcing at least one failed auto-flush
- * plus the trailing no-op writes the errno-freshness argument is about),
- * calls mos_cli_stdout_finalize, and _exit()s with the classification as
- * its status; the parent reads it back. Framework-free (POSIX only), so
- * this runs on Linux CI as well as macOS — the same reach as the rest of
- * the unit suite.
+ * broken target, so the parent's stdout (the harness's own ok/FAIL
+ * output) is never disturbed. The child overflows any stdio buffer
+ * (forcing a failed auto-flush plus the trailing no-op writes the
+ * argument is about), calls mos_cli_stdout_finalize, and _exit()s with
+ * the classification as its status for the parent to read back. POSIX
+ * only, so it runs on Linux CI as well as macOS.
  */
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L

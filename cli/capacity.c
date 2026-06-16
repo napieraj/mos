@@ -1,13 +1,13 @@
 /* cli/capacity.c — the capacity command: `mos capacity [selector] [--json]`.
  *
- * One mos.capacity.v1 document: how big is the loaded disc. No capacity
- * command is issued — the whole-disk byte size is the kernel's cached
- * attach-time READ CAPACITY (a registry property read, works on mounted
- * media where a raw READ CAPACITY would return BUSY), and the recordable
- * view is the same non-exclusive READ TRACK INFORMATION the other typed
- * verbs use. Both halves are independently nullable: a pressed disc has a
- * media size but no recordable view; a blank recordable has no whole-disk
- * size (no node yet) but a recordable view; an empty drive, neither.
+ * One mos.capacity.v1 document: how big the loaded disc is. The whole-disk
+ * byte size is the kernel's cached attach-time READ CAPACITY (a registry
+ * read, so it works on mounted media where a raw READ CAPACITY would BUSY);
+ * the recordable view is the same non-exclusive READ TRACK INFORMATION the
+ * other typed verbs use. Both halves are independently nullable: a pressed
+ * disc has a size but no recordable view; a blank recordable has a
+ * recordable view but no whole-disk size (no node yet); an empty drive,
+ * neither.
  */
 #include "common.h"
 
@@ -33,8 +33,8 @@ static void emit_json(const capacity_doc *d)
     fputs("  \"bsd_node\": ", stdout);
     mos_cli_bsd_dev_node(stdout, d->bsd_unit);
 
-    /* The whole-disk size half. block_bytes / media_blocks are null
-       whenever the size is absent — they have no meaning without it. */
+    /* Whole-disk size half. block_bytes / media_blocks are null without a
+       size — they have no meaning then. */
     if (d->have_media) {
         fprintf(stdout, ",\n  \"media_bytes\": %llu",
                 (unsigned long long)d->media_bytes);

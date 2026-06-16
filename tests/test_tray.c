@@ -33,10 +33,10 @@ TEST(tray_locked_eject_is_refused_locked)
 
 TEST(tray_other_check_condition_is_refused_other)
 {
-    /* Any other answered CHECK CONDITION. The load-bearing case is a drive
-       without the Persistent Prevent (PDTE) state rejecting a 0x02/0x03 with
-       ILLEGAL REQUEST / INVALID FIELD IN CDB (5/24/00) — 04-349r1 Table 2
-       note a. Also a near-miss on the locked triple must NOT read as locked. */
+    /* Any other answered CHECK CONDITION. Load-bearing case: a drive
+       lacking the Persistent Prevent (PDTE) state rejects 0x02/0x03 with
+       5/24/00 (04-349r1 Table 2 note a); and a near-miss on the locked
+       triple must NOT read as locked. */
     EXPECT_EQ(mos_internal_tray_classify(MOS_SCSI_STATUS_CHECK_CONDITION,
                                          0x05, 0x24, 0x00),
               MOS_TRAY_REFUSED_OTHER);

@@ -258,19 +258,15 @@ bool mos_bsd_name_format(int64_t unit, char *buf, size_t cap);
  * Return value is a borrowed error code via *err_out when non-NULL.
  * On success returns a handle; on failure returns NULL and sets *err_out.
  *
- * SELECTOR STABILITY — mos_open_by_index is POSITIONAL, not durable.
- * The index is a slot in a freshly enumerated snapshot (drutil-style
- * convenience), so it is a TOCTOU against device hotplug: between the
- * enumeration a caller read the index from and this open, a drive
- * appearing or disappearing can shift every higher slot — the index may
- * then open a DIFFERENT drive than intended, or return MOS_ERR_NO_DEVICE
- * if the set shrank. Use it only for one-shot, single-drive,
- * human-driven invocations. For programmatic selection that must survive
- * hotplug, prefer mos_open_by_registry_id (the attachment identity every
- * mos.state.v1 / mos.event.v1 document carries; atomic, never reused) or
- * mos_open_by_bsd_name (more stable than position, though a "diskN" name
- * can be recycled after an eject). The same positional caveat applies to
- * mos_device_info_bsd_unit's index provenance.
+ * SELECTOR STABILITY — mos_open_by_index is POSITIONAL, not durable. The
+ * index is a slot in a freshly enumerated snapshot, so it races device
+ * hotplug: a drive appearing or disappearing between the enumeration the
+ * caller read and this open shifts every higher slot, which can then open
+ * a DIFFERENT drive or return MOS_ERR_NO_DEVICE. Use it only for one-shot,
+ * human-driven, single-drive invocations. For programmatic selection that
+ * must survive hotplug, prefer mos_open_by_registry_id (atomic, never
+ * reused) or mos_open_by_bsd_name (more stable, though "diskN" can be
+ * recycled after an eject). Same caveat applies to mos_device_info_bsd_unit.
  */
 mos_handle_t *mos_open_by_index(int one_based, mos_error *err_out);
 mos_handle_t *mos_open_by_bsd_name(const char *bsd_name, mos_error *err_out);
@@ -407,31 +403,25 @@ uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i);
 /* ---- Mounted volume (DiskArbitration-sourced) ------------------------ */
 
 /*
- * Mounted-volume name and mount path for the drive's current media —
- * what the FILESYSTEM layer says, complementing the SCSI-derived facts
- * above. One synchronous DiskArbitration description read; no
- * callbacks, no commands to the drive, no elevation. Gated on the
- * whole-disk IOMedia node existing: media absent or no nub means DA is
- * never consulted and *mounted is false. That nub is the handle's
- * bsd_unit, RE-RESOLVED per call (query-time semantics, same as
- * mos_state_result_bsd_unit above) — so a handle opened on an empty
- * drive correctly reports the inserted disc's volume once media is
- * present, and reverts to unmounted after an eject. UNMOUNTED IS NOT AN
- * ERROR — it is also the common case for
- * UDF video discs — so the result is MOS_OK with *mounted=false and
- * empty buffers; only a NULL handle returns
- * MOS_ERR_INVALID_ARG. Buffers are optional (NULL/0 skips that field)
- * and always NUL-terminated; name may be "" even when mounted (a
- * volume can lack a label). Recommended caps: name 256, path 1024 —
- * a mount path that exceeds the cap reports unmounted rather than a
- * truncated path. Volume names are disc-controlled bytes: escape them
- * before terminals or structured output.
+ * Volume name and mount path for the drive's current media — the
+ * filesystem view, complementing the SCSI facts above. One synchronous
+ * DiskArbitration read: no callbacks, no drive commands, no elevation.
+ * Gated on the whole-disk IOMedia node (the handle's bsd_unit, re-resolved
+ * per call — same query-time semantics as mos_state_result_bsd_unit), so a
+ * handle opened empty reports the inserted disc's volume and reverts to
+ * unmounted after eject.
  *
- * OPTIONAL DEPENDENCY: DiskArbitration is the only thing this call
- * needs. A build with MOS_USE_DISKARBITRATION=0 (no -framework
- * DiskArbitration) keeps this function and its contract — it simply
- * always reports unmounted (MOS_OK, *mounted=false, empty buffers), so
- * the CLI and JSON shapes are identical with the volume fields null.
+ * UNMOUNTED IS NOT AN ERROR (also the common case for UDF video discs):
+ * the result is MOS_OK with *mounted=false and empty buffers; only a NULL
+ * handle returns MOS_ERR_INVALID_ARG. Buffers are optional (NULL/0 skips
+ * the field), always NUL-terminated, and name may be "" even when mounted.
+ * Recommended caps: name 256, path 1024; a path over its cap reports
+ * unmounted rather than truncated. Volume names are disc-controlled —
+ * escape before terminals or structured output.
+ *
+ * OPTIONAL DEPENDENCY: a build with MOS_USE_DISKARBITRATION=0 keeps this
+ * function and its contract, always reporting unmounted — CLI and JSON
+ * shapes are identical with the volume fields null.
  */
 mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
                            char *name_buf, size_t name_cap,
@@ -657,30 +647,22 @@ uint32_t mos_track_info_last_recorded(const mos_track_info *t);
 typedef struct mos_capacity mos_capacity;
 
 /*
- * Assemble the disc's capacity WITHOUT issuing a capacity command. Two
- * sources, both already available to an open handle:
- *   - the whole-disk IOMedia node's kernel-cached byte size and natural
- *     block size (kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey) — the
- *     result of the kernel's own attach-time READ CAPACITY, a registry
- *     property read with NO SCSI command and NO exclusive access, so it
- *     works on MOUNTED media (where a raw READ CAPACITY would return
- *     BUSY); re-resolved per call alongside the rest of the whole-disk
- *     identity (query-time semantics — a held handle reports the current
- *     disc's size, see mos_state_result_bsd_unit); and
- *   - the recordable / append-state view (free blocks, next writable
- *     address, first-track size) from READ TRACK INFORMATION, the same
- *     non-exclusive convenience read mos_query_track_info uses, issued
- *     fresh here (best-effort: a drive that rejects it simply leaves the
- *     recordable view absent).
- * The IOMedia size is absent on blank or absent media (no whole-disk
- * node); the recordable view is absent on a pressed disc with no
- * readable track. So a result can carry the media size, the recordable
- * view, both, or neither — each independently nullable. No raw CDB is
- * authored (the one-raw-CDB doctrine is untouched); design + the
- * READ FORMAT CAPACITIES deferral:
- * doc/research/2026-06-13-read-capacity-feasibility.md. `out` REQUIRED
- * (NULL => MOS_ERR_INVALID_ARG); on success *out is valid until the next
- * query or mos_close().
+ * Assemble the disc's capacity WITHOUT issuing a capacity command, from
+ * two sources already available to an open handle:
+ *   - the whole-disk IOMedia node's kernel-cached byte and block size
+ *     (kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey) — the kernel's own
+ *     attach-time READ CAPACITY, read as a registry property with no SCSI
+ *     command and no exclusive access, so it works on MOUNTED media (a raw
+ *     READ CAPACITY would return BUSY). Re-resolved per call (query-time
+ *     semantics; see mos_state_result_bsd_unit).
+ *   - the recordable / append view (free blocks, next writable address,
+ *     first-track size) from READ TRACK INFORMATION, the same non-exclusive
+ *     read mos_query_track_info uses — best-effort.
+ * Each view is independently nullable: the media size is absent on
+ * blank/absent media, the recordable view on a pressed disc with no
+ * readable track. No raw CDB is authored. `out` REQUIRED (NULL =>
+ * MOS_ERR_INVALID_ARG); on success *out is valid until the next query or
+ * mos_close().
  */
 mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out);
 

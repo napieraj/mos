@@ -1,10 +1,8 @@
 /*
- * test_adapter_seam_probe.c — phase-2 mechanism probe (design record §12,
- * doc/research/2026-06-11-headless-adapter-emulation.md).
+ * test_adapter_seam_probe.c — adapter-fake mechanism probe.
  *
- * Settles, on real CI hardware and under the adapter-fake job's
- * ASan/UBSan flags, the two unvalidated mechanisms phase 2 stands on
- * BEFORE any scenario is built on them:
+ * Validates the mechanisms the adapter fake stands on, before any
+ * scenario builds on them:
  *
  *   A. time seam — a clock_gettime / nanosleep definition in the
  *      executable's own objects wins cross-TU resolution over
@@ -15,12 +13,10 @@
  *   B. run-loop delivery — through the REAL CFRunLoopRunInMode, a
  *      signalled version-0 CFRunLoopSource performs in a private mode
  *      (B1) and a perform-callback's CFRunLoopStop returns the loop
- *      promptly (B2) — the adapter's exact wake shape
- *      (src/mos_watch.c watch_interest_callback / dr_*_callback).
+ *      promptly (B2) — the adapter's exact wake shape.
  *
  * Each probe prints "PROBE <id>: PASS|FAIL" so a red CI run names the
- * failed mechanism from the log alone; the pre-decided fallback per
- * verdict is recorded in the design record. The binary stays in the
+ * failed mechanism from the log alone. The binary stays in the
  * adapter-fake job as a canary for toolchain/runtime drift.
  */
 
@@ -35,7 +31,7 @@
 
 #include "seam_probe_caller.h"
 
-/* ---- interposing definitions (referenced from seam_probe_caller.c) ---- */
+/* ---- interposing definitions (called from seam_probe_caller.c) ---- */
 
 #define SEAM_PROBE_RUN_LOOP_SENTINEL 0x7E57
 
@@ -113,8 +109,8 @@ static void run_b_probes(run_in_mode_fn real_run_in_mode)
     report("B1", g_perform_ran && r == kCFRunLoopRunHandledSource);
 
     /* B2: perform calls CFRunLoopStop; returnAfterSourceHandled=false
-       (the adapter's shape) — the loop must return Stopped, promptly
-       rather than after the full 5 s interval. */
+       (the adapter's shape) — the loop must return Stopped promptly,
+       not after the full 5 s interval. */
     g_perform_ran = false;
     g_perform_stops_loop = true;
     CFRunLoopSourceSignal(src);

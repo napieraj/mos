@@ -1,11 +1,11 @@
 /* cli/drive.c — the drive command: `mos drive [selector] [--json]`.
  *
- * One mos.drive.v1 document: what IS this drive (static facts), vs
- * metadata's "what disc is this". Identity is open-time directory data
- * (zero commands); capabilities are one GET CONFIGURATION RT=0 walk. The
- * INQUIRY unit serial ships null: whether the convenience InquiryDevice
- * surfaces VPD page 0x80 is unconfirmed on Mac, and a raw INQUIRY would
- * need the raw-verb showing first (AGENTS.md scope doctrine §1).
+ * One mos.drive.v1 document: what this drive IS (static facts), vs
+ * metadata's "what disc is this". Identity is open-time directory data;
+ * capabilities are one GET CONFIGURATION RT=0 walk. The INQUIRY serial
+ * ships null — VPD page 0x80 via the convenience InquiryDevice is
+ * unconfirmed on Mac, and a raw INQUIRY needs the raw-verb showing first
+ * (AGENTS.md scope doctrine §1).
  */
 #include "common.h"
 
@@ -48,8 +48,8 @@ static void emit_json(const drive_doc *d)
     if (d->revision) mos_cli_json_str(stdout, d->revision);
     else             fputs("null", stdout);
 
-    /* Always null (see file header). The key is present so the v1 field
-       set never moves when the value arrives. */
+    /* Always null (see file header); the key stays present so the v1 field
+       set won't move when the value arrives. */
     fputs(",\n  \"serial\": null", stdout);
 
     fprintf(stdout,
@@ -214,8 +214,8 @@ int mos_cli_run_drive(void)
     d.aacs_version   = mos_drive_caps_aacs_version(c);
     d.bus_encryption = mos_drive_caps_bus_encryption(c);
 
-    /* Speeds are best-effort and media-dependent: a failed command or an
-       empty descriptor list leaves speeds null (have_speeds false). */
+    /* Speeds are best-effort and media-dependent: a failed command or
+       empty descriptor list leaves them null (have_speeds false). */
     const mos_drive_perf *perf = NULL;
     if (mos_query_drive_perf(h, &perf) == MOS_OK &&
         mos_drive_perf_have(perf)) {

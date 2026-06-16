@@ -12,8 +12,7 @@
 
 TEST(sam5_status_values_match_spec)
 {
-    /* SAM-5 §5.3.2 Status Codes. These values are ABI-stable since
-       SCSI-3 (1998) and are what every SCSI target uses. */
+    /* SAM-5 §5.3.2 status codes — ABI-stable since SCSI-3. */
     EXPECT_EQ(MOS_SCSI_STATUS_GOOD,                 0x00);
     EXPECT_EQ(MOS_SCSI_STATUS_CHECK_CONDITION,      0x02);
     EXPECT_EQ(MOS_SCSI_STATUS_BUSY,                 0x08);

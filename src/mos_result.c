@@ -1,8 +1,7 @@
 /*
  * mos_result.c — accessors for the opaque query-result objects (layout in
- * mos_pure.h, may grow by appended fields without breaking ABI). Pure (no
- * IOKit), so they build and unit-test headless. Every accessor tolerates a
- * NULL object, returning a benign zero/NULL.
+ * mos_pure.h, may grow appended fields without breaking ABI). Pure, no IOKit.
+ * Every accessor tolerates a NULL object, returning a benign zero/NULL.
  */
 
 #include "mos_pure.h"
@@ -175,9 +174,8 @@ uint8_t mos_disc_info_bg_format_status(const mos_disc_info *d)
 }
 
 /* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
- * NULL- and range-tolerant like every accessor above; the entry index
- * is bounded by track_count, which the fail-closed parser proved
- * covers exactly first..last. */
+ * NULL- and range-tolerant; the entry index is bounded by track_count,
+ * which the fail-closed parser proved covers exactly first..last. */
 
 uint8_t mos_toc_first_track(const mos_toc *t) { return t ? t->first_track : 0; }
 uint8_t mos_toc_last_track(const mos_toc *t)  { return t ? t->last_track  : 0; }
@@ -258,8 +256,7 @@ uint8_t mos_feature_info_version(const mos_feature_info_t *f)
 
 /* ---- mos_disc_id accessors (mos_query_disc_id) ---------------------- *
  * Borrowed strings into the handle-owned result; "" reads as NULL so the
- * emitters suppress empty fields uniformly. Disc-controlled bytes — the
- * CLI layer escapes them. */
+ * emitters suppress empty fields. Disc-controlled bytes — the CLI escapes. */
 
 const char *mos_disc_id_disc_type(const mos_disc_id *d)
 {
@@ -283,8 +280,7 @@ const char *mos_disc_id_revision(const mos_disc_id *d)
 
 /* ---- mos_cdtext accessors (mos_query_cdtext) ----------------------- *
  * Borrowed strings into the handle-owned result; "" reads as NULL so the
- * emitters suppress empty fields uniformly. Disc-controlled bytes — the
- * CLI layer escapes them. */
+ * emitters suppress empty fields. Disc-controlled bytes — the CLI escapes. */
 
 const char *mos_cdtext_title(const mos_cdtext *c)
 {
@@ -316,9 +312,8 @@ const char *mos_cdtext_track_performer(const mos_cdtext *c, uint8_t track)
 }
 
 /* ---- mos_physical_structure accessors (mos_query_physical_structure) - *
- * Plain values, NULL-tolerant. Physical fields read 0/false unless
- * have_physical; copyright fields unless have_copyright — the emitters
- * gate on the have_* accessors. */
+ * Plain values, NULL-tolerant. Physical/copyright fields are meaningful
+ * only when have_physical/have_copyright — the emitters gate on those. */
 
 bool mos_physical_structure_have_physical(const mos_physical_structure *d)
 {
@@ -406,8 +401,8 @@ uint8_t mos_physical_structure_region(const mos_physical_structure *d)
 }
 
 /* ---- mos_track_info accessors (mos_query_track_info) ---------------- *
- * Plain values, NULL-tolerant. next_writable/last_recorded are valid
- * only when nwa_valid/lra_valid — the emitter gates on those. */
+ * Plain values, NULL-tolerant. next_writable/last_recorded are valid only
+ * when nwa_valid/lra_valid — the emitter gates on those. */
 
 uint16_t mos_track_info_track_number(const mos_track_info *t)
 {
@@ -475,16 +470,14 @@ uint32_t mos_track_info_last_recorded(const mos_track_info *t)
 }
 
 /* ---- mos_capacity accessors (mos_query_capacity) ------------------- *
- * Plain values, NULL-tolerant. The two halves are independently
- * present: have_media_size gates media_bytes/block_bytes/media_blocks
- * (the kernel IOMedia size), have_recordable gates the READ TRACK
- * INFORMATION view, and within it next_writable is meaningful only when
- * nwa_valid. media_blocks is derived, never stored. */
+ * Plain values, NULL-tolerant. Two independent halves: have_media_size
+ * gates the kernel IOMedia size; have_recordable gates the READ TRACK
+ * INFORMATION view, within which next_writable needs nwa_valid.
+ * media_blocks is derived, never stored. */
 
 bool mos_capacity_have_media_size(const mos_capacity *c)
 {
-    /* A whole-disk node with a real size has media_bytes > 0; a 0 size
-       is the "no whole-disk node" sentinel (blank/absent media). */
+    /* media_bytes 0 is the "no whole-disk node" sentinel (blank/absent). */
     return c ? (c->media_bytes != 0) : false;
 }
 
@@ -500,8 +493,7 @@ uint32_t mos_capacity_block_bytes(const mos_capacity *c)
 
 uint64_t mos_capacity_media_blocks(const mos_capacity *c)
 {
-    /* Derived: bytes / natural block size. 0 when either is absent
-       (no division by a zero block size). */
+    /* bytes / block size; 0 when either is absent (no divide-by-zero). */
     if (!c || c->media_bytes == 0 || c->block_bytes == 0) return 0;
     return c->media_bytes / c->block_bytes;
 }

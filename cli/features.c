@@ -1,21 +1,20 @@
 /* cli/features.c — the features command: `mos features [selector] [--json]`.
  *
- * The raw MMC feature list (GET CONFIGURATION RT=0), one row per
- * descriptor in reply order: code, current, persistent, version — the
- * writability surface (a write feature's CURRENT bit answers "can this
- * drive write the mounted medium now"). No name table (codes map against
- * MMC-6 §5.3 consumer-side) and no current_profile: emitting the header's
- * profile here would bypass the profile-only-on-READY staleness rule the
- * state core enforces (ARCHITECTURE.md §9).
+ * The raw MMC feature list (GET CONFIGURATION RT=0), one row per descriptor
+ * in reply order: code, current, persistent, version — the writability
+ * surface (a write feature's CURRENT bit answers "can this drive write the
+ * mounted medium now"). No name table (codes map MMC-6 §5.3 consumer-side),
+ * and no current_profile: emitting the header's profile would bypass the
+ * profile-only-on-READY staleness rule the state core enforces
+ * (ARCHITECTURE.md §9).
  */
 #include "common.h"
 
 #include <string.h>
 #include <sysexits.h>
 
-#define FEAT_CAP 256   /* covers the walk's own ceiling (1024 bytes / 4 =
-                          256 descriptors); a real drive reports ~30, so
-                          both human and JSON carry every descriptor walked */
+#define FEAT_CAP 256   /* the walk's own ceiling (1024 bytes / 4); a real
+                          drive reports ~30, so both renderings carry all */
 
 typedef struct {
     struct {
@@ -64,8 +63,8 @@ static void emit_json(const feat_collect *c, int64_t bsd_unit,
 
 static void emit_human(const feat_collect *c)
 {
-    /* Fixed-vocabulary table (hex codes, yes/no) — no hostile bytes
-       can appear, so plain fprintf is fine. */
+    /* Fixed vocabulary (hex codes, yes/no) — no hostile bytes, plain
+       fprintf is fine. */
     fputs("  Code    Cur  Persist  Ver\n", stdout);
     for (int i = 0; i < c->n; i++) {
         fprintf(stdout, "  0x%04x  %-3s  %-7s  %u\n",
@@ -75,9 +74,8 @@ static void emit_human(const feat_collect *c)
                 c->rows[i].version);
     }
     if (c->total > c->n) {
-        /* Unreachable while FEAT_CAP matches the walk ceiling; kept as a
-           guard. Both renderings cap at FEAT_CAP, so overflow rows are
-           not shown anywhere — do not claim --json carries them. */
+        /* Unreachable while FEAT_CAP matches the walk ceiling; a guard.
+           Both renderings cap at FEAT_CAP, so overflow rows show nowhere. */
         fprintf(stdout, "  (+%d more past the %d-row cap; not shown)\n",
                 c->total - c->n, FEAT_CAP);
     }

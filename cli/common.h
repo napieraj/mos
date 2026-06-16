@@ -1,10 +1,9 @@
 /*
  * cli/common.h — shared state and helpers for the mos CLI commands.
  *
- * The CLI is one file per command (cli/status.c, cli/list.c,
- * cli/watch.c) over this shared layer, dispatched from cli/main.c.
- * Presentation code (cli/human.{h,c}) lives HERE, not in the library:
- * libmos is embeddable and ships no terminal formatting.
+ * One file per command over this shared layer, dispatched from cli/main.c.
+ * Presentation (cli/human.{h,c}) lives here, not in the library: libmos is
+ * embeddable and ships no terminal formatting.
  */
 #ifndef MOS_CLI_COMMON_H
 #define MOS_CLI_COMMON_H
@@ -47,27 +46,24 @@ int  mos_cli_emit_unknown_and_fail(const char *context, mos_error err,
 const char *mos_cli_error_to_code(mos_error err);
 
 /* One mos.event.v1 NDJSON line (compact object + newline). Returns the
-   stdout write outcome (shared with the one-shot finalizers). Lives in
-   cli/common.c, not cli/watch.c, so the headless emit harness validates
-   real output against the schema. */
+   stdout write outcome. In cli/common.c, not cli/watch.c, so the headless
+   emit harness can validate real output against the schema. */
 mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e);
 
-/* Profile-suppression rule for every emitter, in one place: 0x0000 is the
-   SCSI sentinel "no current profile". Profile-derived fields
-   (current_profile_name, media_class, the human Profile row) are omitted
-   for it, since surfacing a name would imply a profile is set when none
-   is. Use this predicate, never a bare compare against the sentinel. */
+/* The profile-suppression rule, in one place: 0x0000 is the SCSI sentinel
+   "no current profile", so profile-derived fields (current_profile_name,
+   media_class, the human Profile row) are omitted for it — a name would
+   imply a profile is set. Use this, never a bare compare. */
 static inline bool mos_cli_profile_present(uint16_t profile)
 {
     return profile != 0x0000;
 }
 
 /* The list "Volume" cell, RAW (caller escapes at emit). Shows the mount
-   PATH only: its basename already carries macOS disambiguation
-   (/Volumes/ARRIVAL vs /Volumes/ARRIVAL 1), so the DA label adds nothing
-   in the one-row view (it stays in --json volume_name and on `mos
-   metadata`). "" (renders "-") when unmounted. Bounded so a long/hostile
-   path cannot wreck the table; the JSON carries the faithful form. */
+   path only: its basename already carries macOS disambiguation (ARRIVAL vs
+   ARRIVAL 1), so the DA label adds nothing here (it stays in --json and
+   `mos metadata`). "" when unmounted. Bounded so a long/hostile path can't
+   wreck the table; JSON carries the faithful form. */
 static inline void mos_cli_list_volume_cell(const char *path,
                                             char *out, size_t cap)
 {
@@ -75,12 +71,11 @@ static inline void mos_cli_list_volume_cell(const char *path,
     snprintf(out, cap, "%.64s", path ? path : "");
 }
 
-/* Enumeration collection + per-drive query rows (the list command and
-   the multi-drive EX_USAGE mini-list share these). */
+/* Shared by the list command and the multi-drive EX_USAGE mini-list. */
 #define MOS_CLI_LIST_CAP 64
 
-/* SPC-4 identity field widths + NUL, and the mos_safe_ascii worst
-   case (every byte → \xNN, 4x) — shared by status and list emitters. */
+/* SPC-4 identity field widths (+ NUL) and the mos_safe_ascii worst case
+   (every byte -> \xNN, 4x) — shared by status and list emitters. */
 #define MOS_CLI_VENDOR_CAP    9
 #define MOS_CLI_PRODUCT_CAP  17
 #define MOS_CLI_REVISION_CAP  5
@@ -89,18 +84,16 @@ static inline void mos_cli_list_volume_cell(const char *path,
 typedef struct {
     char     state[24];
     char     bsd_node[24];        /* "" == none */
-    /* RAW identity bytes (trailing-stripped at extraction). JSON is
-       byte-faithful; the table escapes at emit. */
+    /* RAW identity bytes (trailing-stripped). JSON byte-faithful; table
+       escapes at emit. */
     char     vendor[MOS_CLI_VENDOR_CAP];
     char     product[MOS_CLI_PRODUCT_CAP];
     char     revision[MOS_CLI_REVISION_CAP];
     /* Mounted volume name, RAW disc-controlled bytes ("" = unmounted/
-       unlabeled); JSON emits byte-faithfully, the table escapes and
-       truncates at emit. */
+       unlabeled). JSON byte-faithful; table escapes and truncates at emit. */
     char     volume[256];
-    /* Mount path, system-supplied ("" = unmounted). JSON emits it
-       byte-faithfully as volume_path; the list table's Volume cell shows
-       this path (mos_cli_list_volume_cell). */
+    /* Mount path, system-supplied ("" = unmounted). JSON byte-faithful as
+       volume_path; the table's Volume cell shows it (mos_cli_list_volume_cell). */
     char     volume_path[1024];
     uint64_t registry_id;
 } mos_cli_list_row;
@@ -111,18 +104,17 @@ void mos_cli_emit_list_json(const mos_cli_list_row *rows, int n);
 int  mos_cli_resolve_index_of(uint64_t reg);
 
 /* status no-selector path: open the sole present drive in the same
-   enumeration that counts (single probe; *total reports the count,
-   handle is non-NULL only when *total == 1 and the open succeeded). */
+   enumeration that counts. *total reports the count; the handle is
+   non-NULL only when *total == 1 and the open succeeded. */
 mos_handle_t *mos_cli_open_sole_drive(mos_error *err, int *total);
 
-/* Count attached drives: one bare enumeration pass, no probe, no
-   open. The watch no-selector path's sole-drive check. */
+/* Count attached drives: one bare enumeration pass, no open. The watch
+   no-selector path's sole-drive check. */
 int mos_cli_count_drives(void);
 
-/* Resolve a 1-based index to its enumeration snapshot's bsd_unit, one
-   enumeration pass, no drive opens. Returns false when no drive holds
-   that index; on true, *unit may still be -1 = no whole-disk IOMedia
-   node (media absent). */
+/* Resolve a 1-based index to its snapshot's bsd_unit (one enumeration, no
+   opens). False when no drive holds that index; on true, *unit may still
+   be -1 = no whole-disk IOMedia node (media absent). */
 bool mos_cli_unit_for_index(int index, int64_t *unit);
 
 /* Command entry points. */

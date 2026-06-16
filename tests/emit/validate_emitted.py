@@ -24,9 +24,9 @@ except ImportError:
     print("jsonschema not installed. `pip install jsonschema`", file=sys.stderr)
     sys.exit(2)
 
-# (verb, scenario, expected schema). The expected schema is asserted
-# against the document's own `schema` field too, so a verb emitting the
-# wrong schema id is caught.
+# (verb, scenario, expected schema). The expected schema is checked
+# against the document's own `schema` field, catching a verb that emits
+# the wrong schema id.
 SCENARIOS = [
     ("metadata", "bd_mdisc",      "mos.metadata.v1"),
     ("metadata", "cd_mounted",    "mos.metadata.v1"),
@@ -86,9 +86,8 @@ def main() -> int:
     failures = 0
     for verb, scn, expect in SCENARIOS:
         proc = subprocess.run([binary, verb, scn], capture_output=True, text=True)
-        # A non-zero exit means a crash/abort (e.g. ASan): the emit
-        # harness masks expected sysexit codes to 0, so any non-zero here
-        # is a real failure regardless of stdout.
+        # The harness masks expected sysexit codes to 0, so any non-zero
+        # exit here is a real crash/abort (e.g. ASan) regardless of stdout.
         if proc.returncode != 0:
             print(f"  FAIL {verb}/{scn}: binary exited {proc.returncode}\n"
                   f"    stderr: {proc.stderr.strip()}")
