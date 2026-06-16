@@ -252,3 +252,93 @@ without a convenience method? what surface?) is now answered, so the build
 is a bounded, spec-grounded task whenever it is wanted. Pickup checklist:
 CDB above → pure parser + SPEC.md entry → negative fixtures → `mos_query_*`
 accessor → drive.c null→value → synthetic-serial capture fixture.
+
+## Update (2026-06-16): build authorized for `mos drive`; `mos state` out; `mos watch` deferred
+
+The recommendation above ("build when an inventory consumer materializes")
+was overridden by the maintainer the same day: build it now, in `mos drive`.
+The consumer-materialization test is satisfied in the obvious way — the
+operator running `mos drive` *is* the inventory consumer; the verb is a
+deliberate "tell me about this drive" ask, not a polled hot path. This
+section records what shipped, what was deliberately excluded, and the one
+extension that is **deferred, not declined**, with its design captured so a
+later session can execute it without re-deriving the conversation.
+
+### Shipped: serial as a `mos drive` fact
+
+`mos.drive.v1.serial` now carries the VPD-0x80 read. Files:
+`src/mos_vpd80.c` (pure decoder), `src/mos_serial.c` (the `mos_query_serial`
+verb — named for the datum, not the generic INQUIRY command set),
+`cli/drive.c` wiring, plus the schema/example/README/SPEC.md/`dist/`
+updates. The raw read self-gates: `mos_raw_cdb` calls `ObtainExclusiveAccess`
+first and, if anything holds the drive (a mounted IOMedia nub, another
+client), returns BUSY *without issuing the CDB* — so even a `mos drive`
+run mid-rip degrades to `serial: null`, never a disturbed mount. The lock
+is held only for the one INQUIRY and released on every exit path.
+
+### Excluded by decision: `mos state`
+
+Serial is NOT folded into `mos_query_state` / `mos_state_result`. That path
+is frequent and polled (it backs `mos state` and the watch loop), and it
+keeps a deliberate **no-lock-on-READY** shape: a GOOD TUR short-circuits to
+READY with no exclusive access; the raw GESN is taken only on the not-ready
+branch, where "not ready ⇒ not mounted ⇒ lock is free"
+(`mos_state_core.c:123`). Folding serial into the shared result would add a
+raw INQUIRY + a lock-*attempt* to the currently lock-free READY path on
+every state query — the wrong cost profile for a hot path, and it would
+leak serial into `mos.state.v1`. (Note for the record: an earlier draft of
+this analysis mis-stated the state path as "never takes a lock"; it does, on
+the not-ready branch. The correct invariant is no-lock-*on-READY*, and the
+serial grab must ride that same "raw only when nothing can be harmed"
+discipline — which `mos_query_serial`'s BUSY back-off already enforces.)
+
+### Deferred (not declined): serial in `mos watch`
+
+Watch is the one place a *cache* earns its keep: a single-shot `mos drive`
+opens, reads, closes, so caching buys nothing there, but a watch session is
+resident and bound to a `registry_id`, and the serial is immutable for that
+id. The design below is sound and feasibility-clear; it is deferred only
+because no watch consumer needs the serial in the event stream *yet*, and
+because it is a `mos.event.v1` schema evolution plus a raw command in the
+poll loop — worth landing deliberately, not reflexively. When a consumer
+materializes, this is the build:
+
+- **Grab once per `registry_id`, piggybacked on the probe handle.**
+  `watch_probe` / `watch_slot_probe` (`src/mos_watch.c`) already reopen a
+  handle by `registry_id` every poll and cache device-static identity
+  (vendor/product/revision) once per target/slot. Serial slots in the same
+  way: on each probe, if serial is not yet grabbed, call `mos_query_serial`
+  on the handle the probe **already opened**; on success cache it in a new
+  `serial[64]` field (single-target block + `mos_watch_slot`) and stop
+  trying; on BUSY/IO leave it ungrabbed and retry next poll. Zero extra
+  opens; at most one successful raw INQUIRY per session per id.
+
+- **Self-gated, never disturbs a mount.** The grab inherits
+  `mos_query_serial`'s BUSY back-off, so attempting it on every probe until
+  the first success is safe: on mounted/ready media `ObtainExclusiveAccess`
+  fails and the CDB never issues; on the first empty/not-ready poll — where
+  the walk's lock is already free and the serial needs no disc — it lands
+  and sticks. Consequence to document: `serial` is `null` in early event
+  lines until a free window occurs, then populated for the rest of the
+  session.
+
+- **Watch-adapter-scoped, NOT in `mos_state_result`.** Carry serial on
+  `mos_watch_event` and re-home it to the watch-static buffer before
+  `mos_close` (the pointer-lifetime invariant at `src/mos_watch.c:165`),
+  exactly as vendor/product/revision are. Keeping it off the shared state
+  result is what preserves the `mos state` exclusion above.
+
+- **Schema:** add a nullable `serial` to `mos.event.v1` on the
+  snapshot / state_changed / media_changed field sets; **absent** from
+  `error` and `device_removed` (mirrors how those events already forbid
+  vendor/product/revision). Pre-first-tag, so mutable-in-place: emitter +
+  examples + negatives + docs in one commit.
+
+- **`--all` hot-plug:** per-slot by construction — a replug re-mints
+  `registry_id`, so the new slot grabs a fresh serial; no stale carry-over.
+
+- **Pickup checklist (watch):** `serial[64]` on the single-target block and
+  `mos_watch_slot` → grab-once logic in `watch_probe` / `watch_slot_probe`
+  → `serial` on `mos_watch_event` + re-home before close → `mos.event.v1`
+  schema + examples + negatives → `cli/watch.c` emit → README/event-doc
+  note on the null-until-free-window behavior.
