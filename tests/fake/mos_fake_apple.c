@@ -1,24 +1,21 @@
 /*
  * mos_fake_apple.c — link-seam fake of the Apple framework layer.
  *
- * Provides the IOKit + DiscRecording C symbols the one-shot adapter
- * path imports (mos_scsi.c / mos_state.c / mos_dr.c), so the real
- * adapter TUs run headless on a macOS build host with the real SDK
- * headers but WITHOUT linking IOKit / DiscRecording. Real
- * CoreFoundation stays linked — CF objects here are genuine.
+ * Supplies the IOKit + DiscRecording C symbols the one-shot adapter imports
+ * (mos_scsi.c / mos_state.c / mos_dr.c), so the real adapter TUs run headless
+ * on a macOS build host with the real SDK headers but WITHOUT linking IOKit /
+ * DiscRecording. Real CoreFoundation stays linked — CF objects here are
+ * genuine. Mechanism: doc/research/2026-06-11-headless-adapter-emulation.md.
  *
- * Mechanism and rationale:
- * doc/research/2026-06-11-headless-adapter-emulation.md. This TU is
- * phase 1 (open / query / enumerate); the watch lifecycle's
- * notification and time symbols are phase 2, in mos_fake_watch.c
- * (linked only into the watch test binary, mos_adapter_watch_tests).
+ * Phase 1 (open / query / enumerate); the watch lifecycle's notification and
+ * time symbols are phase 2 in mos_fake_watch.c (linked only into
+ * mos_adapter_watch_tests).
  *
- * Model: ONE optical drive. IOKit object handles are small integers
- * (io_object_t is a mach_port_t), resolved through a fixed table; the
- * DR "device" is an immortal CFSTR sentinel (so the adapter's
- * CFRelease on it is safe — it is a real CF object). MMC replies are
- * scripted from committed fixture bytes via the control surface in
- * mos_fake_apple.h.
+ * Model: ONE optical drive. IOKit handles are small integers (io_object_t is
+ * a mach_port_t) resolved through a fixed table; the DR "device" is an
+ * immortal CFSTR sentinel (a real CF object, so the adapter's CFRelease is
+ * safe). MMC replies are scripted from committed fixtures via the control
+ * surface in mos_fake_apple.h.
  */
 
 #include "mos_fake_apple.h"
@@ -36,17 +33,17 @@
 #include <string.h>
 #include <stdio.h>
 
-/* kIOMainPortDefault is an extern const on macOS 12+; older SDKs spell
-   it kIOMasterPortDefault. We don't link IOKit, so we must define the
-   symbol the adapter references. Guard against the macro form. */
+/* kIOMainPortDefault is an extern const on macOS 12+ (older SDKs spell it
+   kIOMasterPortDefault). IOKit isn't linked, so we define the symbol the
+   adapter references; guard against the macro form. */
 #ifndef kIOMainPortDefault
 const mach_port_t kIOMainPortDefault = 0;
 #endif
 
-/* ---- DiscRecording key constants (the adapter reads these symbols;
-   we define them since DiscRecording is not linked). Values are
-   arbitrary but must be the SAME objects the dict-builders below use —
-   they are, because both sides reference these symbols. ---- */
+/* ---- DiscRecording key constants. The adapter reads these symbols; we
+   define them since DiscRecording is not linked. Values are arbitrary but
+   must be the SAME objects the dict-builders below use — they are, since
+   both sides reference these symbols. ---- */
 const CFStringRef kDRDeviceVendorNameKey        = CFSTR("mos.fake.VendorName");
 const CFStringRef kDRDeviceProductNameKey       = CFSTR("mos.fake.ProductName");
 const CFStringRef kDRDeviceFirmwareRevisionKey  = CFSTR("mos.fake.FirmwareRevision");
@@ -250,7 +247,7 @@ kern_return_t IORegistryEntryCreateIterator(io_registry_entry_t entry,
 {
     (void)plane; (void)options;
     if (entry != FAKE_SVC || !iterator) return KERN_FAILURE;
-    /* One whole-disk IOMedia child iff media is present. */
+    /* One whole-disk IOMedia child iff media present. */
     g_iter_remaining = (g.bsd_unit >= 0) ? 1u : 0u;
     *iterator = FAKE_ITER;
     return KERN_SUCCESS;
@@ -279,8 +276,8 @@ CFTypeRef IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
     if (CFEqual(key, CFSTR("Whole"))) {
         return CFRetain(kCFBooleanTrue);
     }
-    /* The kernel-cached capacity off the whole-disk node (mos_query_capacity).
-       0 models the property being absent (blank/unrecorded media). */
+    /* Kernel-cached capacity off the whole-disk node (mos_query_capacity);
+       0 models the property absent (blank/unrecorded media). */
     if (CFEqual(key, CFSTR(kIOMediaSizeKey)) && g.media_bytes) {
         long long v = (long long)g.media_bytes;
         return CFNumberCreate(kCFAllocatorDefault, kCFNumberLongLongType, &v);
@@ -595,12 +592,11 @@ static IOReturn mmc_ReadDiscStructure(void *self, SCSICmdField4Bit MEDIA_TYPE,
     return kIOReturnSuccess;
 }
 
-/* The v0.4 enrichment convenience methods. The default scenario returns
-   GOOD with a zeroed reply, so the pure decoders yield empty/null
-   results (speeds/mechanical/error_recovery/track_info null) — enough to
-   exercise the adapter call paths and emit valid documents. A scenario
-   wanting populated values would script a canned reply (not needed by
-   the current contract tests). */
+/* The v0.4 enrichment convenience methods. By default they return GOOD with
+   a zeroed reply, so the pure decoders yield empty/null results
+   (speeds/mechanical/error_recovery/track_info null) — enough to exercise
+   the adapter call paths and emit valid documents. A scenario wanting
+   populated values would script a canned reply (no current test needs it). */
 static IOReturn mmc_ReadTrackInformation(void *self,
                                          SCSICmdField2Bit ADDRESS_NUMBER_TYPE,
                                          SCSICmdField4Byte LBA_TRACK_SESSION,
@@ -664,9 +660,8 @@ static IOReturn std_ObtainExclusiveAccess(void *self)
 {
     (void)self;
     if (g.exclusive_denied) return kIOReturnExclusiveAccess;
-    /* The kernel refuses a second exclusive open; model it so a
-       double-acquire in the adapter is a test failure, not a silent
-       balance bump. */
+    /* The kernel refuses a second exclusive open; modeled so a double-acquire
+       in the adapter is a test failure, not a silent balance bump. */
     if (g_lock_balance > 0) return kIOReturnExclusiveAccess;
     g_lock_balance++;
     g_lock_acquires++;
@@ -676,8 +671,8 @@ static IOReturn std_ObtainExclusiveAccess(void *self)
 static IOReturn std_ReleaseExclusiveAccess(void *self)
 {
     (void)self;
-    /* Over-release drives the balance negative; the test's balance==0
-       assertion catches it. */
+    /* Over-release drives the balance negative; the test's balance==0 check
+       catches it. */
     g_lock_balance--;
     return kIOReturnSuccess;
 }
@@ -755,17 +750,16 @@ static void dict_set_str(CFMutableDictionaryRef d, CFStringRef key,
     if (s) { CFDictionarySetValue(d, key, s); CFRelease(s); }
 }
 
-/* LIMIT: the directory stays single-drive.
-   Watch-all's adapter-layer additions — Appeared→snapshot→slot wiring,
-   Disappeared→id-resolve→per-slot removal, the doorbell-or-fail open
-   gate, stream_open_ms constancy across joins — are all exercised with
-   one drive appearing, leaving, and rejoining under a re-minted ID
-   (test_adapter_watch.c). The ascending-registry-id same-tick
-   interleave across MULTIPLE drives lives in the pure multiplexer and
-   is pinned by test_watch_core.c; modelling a second drive here would
-   restructure every singleton table in this fake to re-test it. If a
-   multi-drive adapter scenario ever earns its keep, this array is the
-   starting point. */
+/* LIMIT: the directory stays single-drive — a deliberate decoupling.
+   Watch-all's adapter-layer additions (Appeared→snapshot→slot wiring,
+   Disappeared→id-resolve→per-slot removal, the doorbell-or-fail open gate,
+   stream_open_ms constancy across joins) are all exercised with one drive
+   appearing, leaving, and rejoining under a re-minted ID
+   (test_adapter_watch.c). The ascending-registry-id same-tick interleave
+   across MULTIPLE drives lives in the pure multiplexer and is pinned by
+   test_watch_core.c; modelling a second drive here would restructure every
+   singleton table in this fake to re-test it. If a multi-drive adapter
+   scenario ever earns its keep, this array is the starting point. */
 CFArrayRef DRCopyDeviceArray(void)
 {
     const void *vals[1];
@@ -810,10 +804,10 @@ CFDictionaryRef DRDeviceCopyStatus(DRDeviceRef device)
     return d;
 }
 
-/* Matches the scenario's actual BSD name: the adapter documents passing
-   the canonical "diskN" rendering, so a media-less drive (unit < 0) has
-   no name and ANY lookup misses — "well-formed but absent → NO_DEVICE"
-   is expressible headless. */
+/* Matches the scenario's actual BSD name. The adapter passes the canonical
+   "diskN" rendering, so a media-less drive (unit < 0) has no name and ANY
+   lookup misses — making "well-formed but absent → NO_DEVICE" expressible
+   headless. */
 DRDeviceRef DRDeviceCopyDeviceForBSDName(CFStringRef name)
 {
     if (!g.present || g.bsd_unit < 0 || !name) return NULL;
@@ -836,11 +830,11 @@ DRDeviceRef DRDeviceCopyDeviceForIORegistryEntryPath(CFStringRef path)
 /* ---- DiskArbitration: the one-shot volume lookup (mos_da.c) --------- *
  *
  * Same seam rule as IOKit/DR: the fake supplies the DA symbols, real
- * CoreFoundation does the object lifetimes — session and disk are real
- * CF objects (so the adapter's CFRelease discipline is exercised for
- * real), and the description is a real dictionary carrying a real
- * CFURL, the type mos_da.c must check for. Reset state (da_present
- * false) models "DA knows no such disk": DADiskCopyDescription NULL. */
+ * CoreFoundation does the lifetimes — session and disk are real CF objects
+ * (so the adapter's CFRelease discipline is exercised), and the description
+ * is a real dictionary carrying a real CFURL, the type mos_da.c must check
+ * for. Reset state (da_present false) models "DA knows no such disk":
+ * DADiskCopyDescription returns NULL. */
 
 const CFStringRef kDADiskDescriptionVolumeNameKey = CFSTR("DAVolumeName");
 const CFStringRef kDADiskDescriptionVolumePathKey = CFSTR("DAVolumePath");

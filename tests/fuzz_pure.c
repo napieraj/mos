@@ -1,57 +1,43 @@
-/* tests/fuzz_pure.c — adversarial fuzz harness for the framework-free
- * pure layer (mos_pure.c, mos_sense.c, mos_strings.c).
+/* tests/fuzz_pure.c — adversarial fuzz harness for the framework-free pure
+ * layer (mos_pure.c, mos_sense.c, mos_strings.c).
  *
- * Build under ASan+UBSan with -fno-sanitize-recover=all; any finding
- * aborts the process. This is the harness referenced in the security
- * audit — millions of iterations across the eight pure attack surfaces a
- * hostile drive or caller can reach WITHOUT IOKit:
+ * Build under ASan+UBSan with -fno-sanitize-recover=all; any finding aborts.
+ * The referenced security-audit harness: millions of iterations across the
+ * pure attack surfaces a hostile drive or caller can reach WITHOUT IOKit.
+ * The common technique is the EXACT-size allocation — buffers are malloc'd
+ * at precisely their length, so any read/write one past the end is a
+ * heap-buffer-overflow ASan catches:
  *
- *   1. parse_sense        18-byte SCSI sense buffers. The parser reads
- *                         only fixed offsets; this rules out the classic
- *                         length-driven SCSI over-read empirically by
- *                         allocating the buffer at exactly 18 bytes, so
- *                         any read at [18] is a heap-buffer-overflow.
- *   2. mos_json_escape /  Every byte class incl. ESC/OSC injection
- *      mos_safe_ascii     payloads, into out buffers of every small
- *                         capacity (incl. 0/1/2). The out buffer is
- *                         allocated at exactly `cap`, so any write at
- *                         [cap] trips ASan and a missing NUL within cap
- *                         is reported and aborts.
- *   3. bsd-name helpers   normalize / is_whole_shape /
- *                         bsd_unit_matches over malformed,
- *                         oversized, and high-byte inputs; plus
- *                         status_is_contended and ioreturn_to_error over
- *                         their full numeric domains.
- *   4. config walk        GET CONFIGURATION feature descriptors over
- *                         random/structured buffers allocated at EXACTLY
- *                         `len`, so any walk read at [len] is a
- *                         heap-buffer-overflow; every yielded payload byte
- *                         is touched (an out-of-range data slice trips
- *                         ASan) and a per-walk budget catches any failure
- *                         to terminate.
- *   5. discinfo decode    READ DISC INFORMATION replies over the same
- *                         exact-allocation discipline as the config walk;
- *                         device-reported lengths may only shrink the
- *                         trusted region.
- *   7. toc parse          READ TOC format-0 walks (the disc-identity
- *                         primitive for rip dedup); fail-closed, success
- *                         invariants: <=99 strictly-ascending tracks.
- *   6. dual-length rule   mos_internal_trusted_len property check (seam
- *                         contract O-4): the trusted parse bound for any
- *                         variable-size transfer is min(allocated,
- *                         transferred), with the device's self-described
- *                         length able only to shrink it. The v0.4 RT=0
- *                         enrichment bound derives from this function.
+ *   1. parse_sense     18-byte sense buffers, allocated at 18 — pins the
+ *                      fixed-offset reads, ruling out the length-driven
+ *                      SCSI over-read.
+ *   2. escapers        json_escape / safe_ascii over every byte class
+ *                      (incl. ESC/OSC injection) into out buffers of every
+ *                      cap (0/1/2 included); the NUL must land within cap.
+ *   3. bsd helpers     normalize / is_whole_shape / bsd_unit_matches over
+ *                      malformed/oversized/high-byte inputs; plus
+ *                      status_is_contended / ioreturn_to_error over their
+ *                      full numeric domains.
+ *   4. config walk     GET CONFIGURATION descriptors; every yielded payload
+ *                      byte is touched and a per-walk budget catches any
+ *                      failure to terminate.
+ *   5. discinfo decode READ DISC INFORMATION; device lengths may only shrink
+ *                      the trusted region.
+ *   6. dual-length     mos_internal_trusted_len property check (seam
+ *                      contract O-4): the bound is min(allocated,
+ *                      transferred), device claim able only to shrink it.
+ *   7. toc parse       READ TOC format-0; fail-closed, success invariant
+ *                      <=99 strictly-ascending tracks.
  *
- * The pure layer is the only part that compiles and runs off-Mac, so
- * this is the one surface that can be fuzzed in Linux CI. The IOKit
- * adapter is exercised by the macOS sanitizer job and by the
- * watch-lifetime integration test (tests/test_watch_lifetime.c).
+ * (Later phases below add discstruct, cdtext, physstruct, trackinfo, perf,
+ * modepage on the same exact-allocation discipline.)
  *
- * Reproducible. Seed: argv[1] or $MOS_FUZZ_SEED. Iteration counts:
- * $MOS_FUZZ_SENSE / _ESC / _BSD / _CFG / _DISCINFO / _TRUST / _TOC.
- * Defaults match the audited run;
- * CI may lower them via env for speed.
+ * The pure layer is the only part that runs off-Mac, so this is the one
+ * surface fuzzable in Linux CI. The IOKit adapter is exercised by the macOS
+ * sanitizer job and the watch-lifetime test (tests/test_watch_lifetime.c).
+ *
+ * Reproducible. Seed: argv[1] or $MOS_FUZZ_SEED. Iteration counts via
+ * $MOS_FUZZ_* env (defaults match the audited run; CI may lower them).
  *
  * Build (Linux):
  *   cc -std=c11 -Wall -Wextra -Wpedantic -Werror \
@@ -99,7 +85,7 @@ static void fuzz_sense(uint64_t iters)
         uint8_t *sb = (uint8_t *)malloc(18); /* exact: read at [18] => ASan */
         for (int b = 0; b < 18; b++) sb[b] = (uint8_t)rng();
         uint8_t sk = 0, asc = 0, ascq = 0;
-        /* Exercise the all-present and optional-NULL output paths. */
+        /* Exercise the all-present and optional-NULL out-param paths. */
         switch (i & 3u) {
             case 0:  mos_internal_parse_sense(sb, &sk, &asc, &ascq); break;
             case 1:  mos_internal_parse_sense(sb, NULL, &asc, &ascq); break;
@@ -108,9 +94,8 @@ static void fuzz_sense(uint64_t iters)
         }
         (void)mos_internal_state_from_sense_closed(sk, asc, ascq);
 
-        /* GESN media door-open decoder: exact-sized buffer so any over-read
-           past the trusted span trips ASan. Vary the length (including
-           sub-header) to exercise the bounds and validity gates. */
+        /* GESN media door-open decoder, exact-sized buffer. Vary the length
+           (including sub-header) to exercise the bounds and validity gates. */
         size_t glen = (size_t)(rng() % 9u);           /* 0..8 */
         uint8_t *gb = (uint8_t *)malloc(glen ? glen : 1);
         for (size_t b = 0; b < glen; b++) gb[b] = (uint8_t)rng();
@@ -209,12 +194,11 @@ static void fuzz_bsd(uint64_t iters)
         (void)mos_internal_bsd_unit_matches(a, (int64_t)(rng() & 0xff));
         (void)mos_internal_status_is_contended((uint32_t)rng());
         (void)mos_internal_ioreturn_to_error((int32_t)rng());
-        /* mos_bsd_name_format with a random int64 across the full range
-           (negatives, in-domain, and > UINT32_MAX) into a normal and a
-           deliberately-tiny buffer — exercises the domain reject, the
-           truncation guard, and NUL-termination under ASan. When it
-           reports success the result must round-trip back to the same
-           unit; a mismatch is a real defect, not just a memory error. */
+        /* mos_bsd_name_format over a full-range random int64 (negatives,
+           in-domain, > UINT32_MAX) into a normal and a tiny buffer —
+           exercises the domain reject, truncation guard, and NUL-termination.
+           On success the result must round-trip to the same unit; a mismatch
+           is a real defect, not just a memory error. */
         int64_t fu = (int64_t)rng();
         char fb[16];
         if (mos_bsd_name_format(fu, fb, sizeof fb) &&
@@ -246,9 +230,8 @@ static void fuzz_config(uint64_t iters)
         uint8_t *buf = (uint8_t *)malloc(len ? len : 1); /* EXACT size: read at [len] => ASan */
         for (size_t b = 0; b < len; b++) buf[b] = (uint8_t)rng();
 
-        /* Half the time, plant a sane Data Length and 4-aligned Additional
-           Lengths so the walk runs deep (multi-descriptor) instead of only
-           hitting the malformed/clamp rejects on the first byte. */
+        /* Half the time plant a sane Data Length and 4-aligned Additional
+           Lengths so the walk runs deep, not just first-byte rejects. */
         if (len >= 8 && rng_below(2)) {
             buf[0] = buf[1] = buf[2] = 0;
             buf[3] = (uint8_t)(len - 4);            /* len < 64, fits a byte */
@@ -258,11 +241,10 @@ static void fuzz_config(uint64_t iters)
             }
         }
 
-        /* Walk to exhaustion. Touch every payload byte so an out-of-range
-           data slice trips ASan; bound the loop by the buffer so a
-           hypothetical non-terminating walk is a detected failure, not a
-           hang (the walker guarantees span >= 4, so this never fires for
-           correct code). */
+        /* Walk to exhaustion, touching every payload byte (an out-of-range
+           slice trips ASan). The budget makes a non-terminating walk a
+           detected failure, not a hang — the walker guarantees span >= 4, so
+           it never fires for correct code. */
         size_t             cursor = 8;
         mos_config_feature f;
         uint64_t           guard = 0, budget = (uint64_t)len + 8u;
@@ -276,9 +258,8 @@ static void fuzz_config(uint64_t iters)
         }
         (void)sink;
 
-        /* Current-profile extraction over the same arbitrary buffer: exact
-           span so any over-read trips ASan; result ignored, we only care
-           that it stays in bounds across all length/Data-Length combinations. */
+        /* Current-profile extraction over the same buffer; result ignored,
+           we only check it stays in bounds across all length combinations. */
         uint16_t prof = 0;
         (void)mos_internal_config_current_profile(buf, len, &prof);
         free(buf);
@@ -293,11 +274,10 @@ static void fuzz_discinfo(uint64_t iters)
         uint8_t *buf = (uint8_t *)malloc(len ? len : 1); /* EXACT size: read at [len] => ASan */
         for (size_t b = 0; b < len; b++) buf[b] = (uint8_t)rng();
 
-        /* Half the time, plant a plausible Disc Information Length so the
-           accept path (declared length covering the fixed region) runs as
-           often as the reject paths. The other half leaves the BE16 fully
-           random — including values that vastly overrun `len`, which must
-           only ever shrink-clamp, never extend the read. */
+        /* Half the time plant a plausible Disc Information Length so the
+           accept path runs as often as the rejects. The other half leaves the
+           BE16 fully random — including values that overrun `len`, which must
+           only shrink-clamp, never extend the read. */
         if (len >= 2 && rng_below(2)) {
             uint16_t dil = (uint16_t)(len >= 2 ? rng_below((uint64_t)len + 8) : 0);
             buf[0] = (uint8_t)(dil >> 8);
@@ -307,10 +287,9 @@ static void fuzz_discinfo(uint64_t iters)
         mos_disc_info info;
         memset(&info, 0xA5, sizeof info);
         if (mos_internal_disc_info_parse(buf, len, &info)) {
-            /* Accepted ⇒ every promised field must be in-domain: the
-               two-bit fields can only hold 0..3, and parse promised the
-               fixed region (through byte 11) was readable. A poisoned
-               0xA5A5 surviving into a 2-bit field is a real defect. */
+            /* Accepted ⇒ every promised field in-domain: the 2-bit fields
+               hold only 0..3. A poisoned 0xA5A5 surviving into one is a real
+               defect, not just an OOB. */
             if ((unsigned)info.status > 3u || info.last_session_state > 3u) {
                 fprintf(stderr, "FUZZ FAIL: discinfo out-of-domain field "
                         "(len=%zu status=%d lss=%u)\n",
@@ -328,15 +307,14 @@ static void fuzz_discinfo(uint64_t iters)
 }
 
 /* Phase 6: the dual-length rule (seam contract O-4). Property check over
-   random (allocated, transferred, claimed) triples drawn to cluster
-   around the interesting boundaries (zeros, equal pairs, off-by-ones,
-   maxima). mos_internal_trusted_len is the SOLE authority v0.4 RT=0
-   enrichment may derive a parse bound from, so its invariants get the
-   same standing audit as the parsers it will feed:
+   random (allocated, transferred, claimed) triples clustered around the
+   boundaries (zeros, equal pairs, off-by-ones, maxima).
+   mos_internal_trusted_len is the SOLE authority v0.4 RT=0 enrichment may
+   derive a parse bound from, so its invariants get a standing audit:
      I1  result <= allocated          (never exceeds our buffer)
      I2  result <= transferred        (never exceeds delivered bytes)
      I3  result <= claimed            (a small honest claim is believed)
-     I4  monotone in the clamp: raising `claimed` never shrinks result
+     I4  raising `claimed` never shrinks result (monotone clamp)
    Violations abort. */
 static void fuzz_trusted_len(uint64_t iters)
 {
@@ -378,11 +356,10 @@ static void fuzz_trusted_len(uint64_t iters)
     }
 }
 
-/* Phase 7: TOC parse over exact-size structured-random buffers. The
-   parser is fail-closed; invariants on SUCCESS: track_count <= 99,
-   tracks strictly ascending in 1..99, cursor accounting exact (implied
-   by parse success), every touched byte inside the allocation (ASan).
-   Half the inputs get a plausible header so the walk runs deep. */
+/* Phase 7: TOC parse over exact-size structured-random buffers. Fail-closed;
+   SUCCESS invariants: track_count <= 99, tracks strictly ascending in 1..99,
+   every touched byte inside the allocation. Half the inputs get a plausible
+   header so the walk runs deep. */
 static void fuzz_toc(uint64_t iters)
 {
     for (uint64_t i = 0; i < iters; i++) {
@@ -394,10 +371,9 @@ static void fuzz_toc(uint64_t iters)
             size_t body = len - 4;
             buf[0] = (uint8_t)((body + 2) >> 8);
             buf[1] = (uint8_t)((body + 2) & 0xFF);
-            /* sometimes ascend the track bytes so the walk survives,
-               and sometimes also write the matching header range so
-               the accept path stays exercised under the
-               header-consistency gate */
+            /* sometimes ascend the track bytes so the walk survives, and
+               sometimes also write the matching header range so the accept
+               path stays exercised under the header-consistency gate */
             if (rng() & 1) {
                 uint8_t trk = 1;
                 for (size_t off = 4; off + 8 <= len; off += 8)
@@ -425,8 +401,8 @@ static void fuzz_toc(uint64_t iters)
                 }
                 prev = trk;
             }
-            /* Header consistency: an accepted TOC's descriptors are
-               exactly first..last (ascending+unique+count+endpoints). */
+            /* Header consistency: an accepted TOC's descriptors are exactly
+               first..last (ascending + unique + count + endpoints). */
             if (toc.track_count == 0 ||
                 toc.track_count != toc.last_track - toc.first_track + 1 ||
                 toc.tracks[0].track != toc.first_track ||
@@ -447,9 +423,9 @@ static void fuzz_discstruct(uint64_t iters)
         uint8_t *buf = (uint8_t *)malloc(len ? len : 1); /* EXACT size: read at [len] => ASan */
         for (size_t b = 0; b < len; b++) buf[b] = (uint8_t)rng();
 
-        /* Half the time, plant the 'DI' signature so the accept path runs
-           as often as the reject paths; and plant a Disc Structure Data
-           Length, sometimes huge (must only shrink-clamp, never extend). */
+        /* Half the time plant the 'DI' signature so the accept path runs as
+           often as the rejects, plus a Disc Structure Data Length sometimes
+           huge (must only shrink-clamp, never extend). */
         if (len >= 6 && rng_below(2)) {
             buf[4] = 'D'; buf[5] = 'I';
             uint16_t dsl = (uint16_t)rng_below((uint64_t)len + 64);
@@ -460,8 +436,8 @@ static void fuzz_discstruct(uint64_t iters)
         struct mos_disc_id id;
         memset(&id, 0xA5, sizeof id);
         if (mos_internal_bd_disc_id_parse(buf, len, &id)) {
-            /* Accepted => every string is NUL-terminated within its fixed
-               buffer (no 0xA5 poison survived as an unterminated copy). */
+            /* Accepted => every string NUL-terminated within its fixed buffer
+               (no 0xA5 poison survived as an unterminated copy). */
             if (id.disc_type[sizeof id.disc_type - 1] != 0 ||
                 id.manufacturer[sizeof id.manufacturer - 1] != 0 ||
                 id.media_type[sizeof id.media_type - 1] != 0 ||
@@ -488,7 +464,7 @@ static void fuzz_cdtext(uint64_t iters)
         for (size_t b = 0; b < len; b++) buf[b] = (uint8_t)rng();
 
         /* Half the time plant a CD-TEXT Data Length, sometimes huge (must
-           only shrink-clamp, never extend the pack walk past `len`). */
+           shrink-clamp, never extend the pack walk past `len`). */
         if (len >= 2 && rng_below(2)) {
             uint16_t dl = (uint16_t)rng_below((uint64_t)len + 64);
             buf[0] = (uint8_t)(dl >> 8);
@@ -505,10 +481,9 @@ static void fuzz_cdtext(uint64_t iters)
         struct mos_cdtext c;
         memset(&c, 0xA5, sizeof c);
         if (mos_internal_cdtext_parse(buf, len, &c)) {
-            /* Accepted => the album fields NUL-terminated within their
-               fixed buffers, track_count within range, and every
-               per-track row terminated (parse zero-inits the struct, so
-               no 0xA5 poison survives). */
+            /* Accepted => album fields NUL-terminated within their fixed
+               buffers, track_count in range, every per-track row terminated
+               (parse zero-inits, so no 0xA5 poison survives). */
             if (c.title[sizeof c.title - 1] != 0 ||
                 c.performer[sizeof c.performer - 1] != 0) {
                 fprintf(stderr, "FUZZ FAIL: cdtext field not terminated "
@@ -538,11 +513,9 @@ static void fuzz_cdtext(uint64_t iters)
 }
 
 /* READ DISC STRUCTURE physical (format 0x00) + copyright (format 0x01)
-   decode. No strings to terminate; the property is purely no-OOB — the
-   fixed-offset reads (through base[16] for physical, buf[5] for
-   copyright) must never read past [buf, buf+len), whatever the planted
-   Disc Structure Data Length claims. EXACT-size alloc => an OOB read
-   trips ASan. */
+   decode. No strings; the property is purely no-OOB — the fixed-offset reads
+   (base[16] for physical, buf[5] for copyright) must never read past
+   [buf, buf+len), whatever the planted Data Length claims. */
 static void fuzz_physstruct(uint64_t iters)
 {
     for (uint64_t i = 0; i < iters; i++) {
@@ -561,9 +534,9 @@ static void fuzz_physstruct(uint64_t iters)
         struct mos_physical_structure d;
         memset(&d, 0xA5, sizeof d);
         if (mos_internal_physical_format_parse(buf, len, &d)) {
-            /* num_layers is ((b>>5)&3)+1 — always in [1,4] by
-               construction; assert it to pin the field never leaks the
-               0xA5 poison through an unwritten accept path. */
+            /* num_layers is ((b>>5)&3)+1 — always [1,4] by construction;
+               assert it to pin that the field never leaks 0xA5 poison
+               through an unwritten accept path. */
             if (d.num_layers < 1 || d.num_layers > 4) {
                 fprintf(stderr, "FUZZ FAIL: physical num_layers=%u "
                         "(len=%zu)\n", d.num_layers, len);
@@ -581,10 +554,10 @@ static void fuzz_physstruct(uint64_t iters)
     }
 }
 
-/* READ TRACK INFORMATION (0x52) decode. No strings; the property is
-   no-OOB — the fixed-offset reads (through Last Recorded Address, byte
-   31, and the optional MSB at 32/33) must never read past
-   [buf, buf+len), whatever the planted Track Information Length claims. */
+/* READ TRACK INFORMATION (0x52) decode. No strings; the property is no-OOB —
+   the fixed-offset reads (Last Recorded Address at byte 31, optional MSB at
+   32/33) must never read past [buf, buf+len), whatever the planted Track
+   Information Length claims. */
 static void fuzz_trackinfo(uint64_t iters)
 {
     for (uint64_t i = 0; i < iters; i++) {
@@ -609,10 +582,9 @@ static void fuzz_trackinfo(uint64_t iters)
     }
 }
 
-/* GET PERFORMANCE (0xAC Type 03h) decode. No strings; the property is
-   no-OOB — the descriptor walk (8-byte header + N*16) must never read
-   past [buf, buf+len) whatever the planted data length / descriptor
-   count claims. */
+/* GET PERFORMANCE (0xAC Type 03h) decode. No strings; the property is no-OOB
+   — the descriptor walk (8-byte header + N*16) must never read past
+   [buf, buf+len) whatever the planted data length / count claims. */
 static void fuzz_perf(uint64_t iters)
 {
     for (uint64_t i = 0; i < iters; i++) {
@@ -649,8 +621,7 @@ static void fuzz_modepage(uint64_t iters)
         for (size_t b = 0; b < len; b++) buf[b] = (uint8_t)rng();
 
         /* Half the time plant a page header (0x2A or 0x01) at a random
-           in-bounds offset past the 8-byte header so the accept path
-           runs. */
+           in-bounds offset past the 8-byte header so the accept path runs. */
         if (len >= 12 && rng_below(2)) {
             size_t at = 8 + rng_below(len - 10);
             buf[at] = (rng_below(2) ? 0x2A : 0x01);

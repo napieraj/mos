@@ -1,15 +1,14 @@
 /*
- * test_adapter_watch.c — runs the REAL watch adapter (mos_watch.c,
- * with mos_scsi.c / mos_state.c / mos_dr.c beneath it) headless against
- * the link-seam fake, under deterministic fake time. Phase 2 of
- * doc/research/2026-06-11-headless-adapter-emulation.md: the watch
- * lifecycle — notification delivery into the parked run loop, doorbell
- * vs poll-floor timing, removal paths, degraded modes.
+ * test_adapter_watch.c — runs the REAL watch adapter (mos_watch.c over
+ * mos_scsi.c / mos_state.c / mos_dr.c) headless against the link-seam fake,
+ * under deterministic fake time. Phase 2 of
+ * doc/research/2026-06-11-headless-adapter-emulation.md: the watch lifecycle
+ * — notification delivery into the parked run loop, doorbell vs poll-floor
+ * timing, removal paths, degraded modes.
  *
  * Every scenario runs on the fake clock (tests/fake/mos_fake_watch.h):
- * timestamps and inter-event gaps are asserted EXACTLY, in fake
- * milliseconds — the pure-core oracle for the expected sequences is
- * tests/test_watch_core.c.
+ * timestamps and gaps are asserted EXACTLY in fake ms; the pure-core oracle
+ * for the expected sequences is tests/test_watch_core.c.
  */
 
 #include "mos.h"
@@ -35,8 +34,8 @@ int mos_tests_failed = 0;
 #define STABLE_MS     2000
 #define TRANSITION_MS 200
 
-/* IOReturn literals for the transport-failure injections. This TU
-   is SDK-header-free; the values are pinned against the SDK by the
+/* IOReturn literals for transport-failure injections. This TU is
+   SDK-header-free; the values are pinned against the SDK by the
    _Static_asserts in mos_scsi.c. */
 #define FAKE_KIORETURN_TIMEOUT   0xE00002D6u  /* kIOReturnTimeout  */
 #define FAKE_KIORETURN_NO_DEVICE 0xE00002C0u  /* kIOReturnNoDevice */
@@ -64,8 +63,8 @@ static void make_sense(uint8_t out[18], uint8_t sk, uint8_t asc, uint8_t ascq)
     out[13] = ascq;
 }
 
-/* 8-byte GESN media-event reply, door closed/open (test_adapter_oneshot
-   has the field map). */
+/* 8-byte GESN media-event reply, door closed/open (field map in
+   test_adapter_oneshot). */
 static void make_gesn(uint8_t out[8], bool door_open)
 {
     memset(out, 0, 8);
@@ -76,7 +75,7 @@ static void make_gesn(uint8_t out[8], bool door_open)
 }
 
 /* Scenario base: both fakes reset, drive present and READY (committed
-   DVD-ROM GET CONFIGURATION fixture, TUR GOOD), fake clock at mono 0. */
+   DVD-ROM GET CONFIGURATION fixture, TUR GOOD), clock at mono 0. */
 static void scenario_ready_at_t0(void)
 {
     mos_fake_reset();
@@ -88,8 +87,8 @@ static void scenario_ready_at_t0(void)
     mos_fake_clock_enable(0, WALL_BASE_MS);
 }
 
-/* Re-script the drive to not-ready EMPTY: media gone (no IOMedia
-   child), TUR CHECK 02/3A/00, GESN door closed. */
+/* Re-script to not-ready EMPTY: media gone (no IOMedia child), TUR CHECK
+   02/3A/00, GESN door closed. */
 static void script_empty(void)
 {
     uint8_t sense[18], gesn[8];
@@ -100,9 +99,8 @@ static void script_empty(void)
     mos_fake_set_raw_reply(0x00, gesn, 8, 8, NULL);
 }
 
-/* 8-byte GET CONFIGURATION feature header, header-only reply: Data
-   Length 4 (the reserved + current-profile bytes that follow it),
-   current profile in [6..7]. */
+/* 8-byte GET CONFIGURATION header-only reply: Data Length 4 (reserved +
+   current-profile bytes), current profile in [6..7]. */
 static void make_config_header(uint8_t out[8], uint16_t profile)
 {
     memset(out, 0, 8);
@@ -203,9 +201,9 @@ static void act_fire_dr_appeared(void *ctx)
 static void act_remint_fire_appeared(void *ctx)
 {
     (void)ctx;
-    /* A re-mint is a replug: present by construction. (set_drive_id
-       alone leaves a prior set_no_drive in force, and an absent device
-       rightly fails the Appeared snapshot — no join, no event.) */
+    /* A re-mint is a replug, so set present too: set_drive_id alone would
+       leave a prior set_no_drive in force, and an absent device rightly
+       fails the Appeared snapshot (no join, no event). */
     mos_fake_set_drive_present(true);
     mos_fake_set_drive_id(0x100000BBBull);
     mos_fake_fire_dr_appeared();
@@ -225,8 +223,8 @@ static void act_tur_ioreturn_no_device(void *ctx)
 }
 
 /* Open a watch on the default drive and consume the snapshot event,
-   asserting its full shape; returns via *so the stream_open_ms the rest
-   of the stream must keep. */
+   asserting its full shape; returns via *so the stream_open_ms the rest of
+   the stream must keep. */
 static int open_and_take_snapshot(mos_watch_t **w_out, uint64_t *so)
 {
     mos_error err = MOS_ERR_IO;
@@ -262,12 +260,12 @@ TEST(watch_snapshot_then_doorbell_state_change)
     int rc = open_and_take_snapshot(&w, &so);
     if (rc) return rc;
 
-    /* The adapter registered exactly: one IOKit port, one DR center,
-       one StatusChanged observer. */
+    /* Registered exactly: one IOKit port, one DR center, one StatusChanged
+       observer. */
     EXPECT_EQ(3, mos_fake_outstanding_notify_objects());
 
-    /* t=500: media ejected; the DR doorbell rings. The state change is
-       observed AT t=500 — the doorbell beat the 2000 ms poll floor. */
+    /* t=500: media ejected, DR doorbell rings. Observed AT t=500 — the
+       doorbell beat the 2000 ms poll floor. */
     mos_fake_step(500, act_empty_fire_dr, NULL);
 
     const mos_watch_event *e = NULL;
@@ -289,7 +287,7 @@ TEST(watch_snapshot_then_doorbell_state_change)
 TEST(watch_property_change_wake)
 {
     /* Same shape through the OTHER wake path: a kIOGeneralInterest
-       property-change message on the drive service. */
+       property-change message on the service. */
     scenario_ready_at_t0();
 
     mos_watch_t *w = NULL;
@@ -320,8 +318,8 @@ TEST(watch_removed_via_interest_termination)
     int rc = open_and_take_snapshot(&w, &so);
     if (rc) return rc;
 
-    /* t=700: the kernel terminates the service. The removal event is
-       notification-driven: no probe, latency 0, arrives at t=700. */
+    /* t=700: kernel terminates the service. Removal is notification-driven:
+       no probe, latency 0, arrives at t=700. */
     mos_fake_step(700, act_fire_io_termination, NULL);
 
     const mos_watch_event *e = NULL;
@@ -342,10 +340,10 @@ TEST(watch_removed_via_interest_termination)
 
 TEST(watch_removed_via_reopen_failure)
 {
-    /* The poll-floor removal path: the drive vanishes WITHOUT any
-       notification (t=300); the scheduled poll at t=2000 reopens by
-       registry ID, gets NO_DEVICE, and the core converts it to a
-       terminal device_removed. Pins the by-ID-reopen authority. */
+    /* Poll-floor removal: the drive vanishes WITHOUT a notification (t=300);
+       the t=2000 poll reopens by registry ID, gets NO_DEVICE, and the core
+       converts it to a terminal device_removed. Pins the by-ID-reopen
+       authority. */
     scenario_ready_at_t0();
 
     mos_watch_t *w = NULL;
@@ -370,10 +368,10 @@ TEST(watch_removed_via_reopen_failure)
 
 TEST(watch_poll_only_degraded)
 {
-    /* Both notification setups fail at open. The single-target contract
-       is soft-fail: the watch opens, polling is the correctness floor.
-       A state change at t=900 is observed at the t=2000 poll, via the
-       nanosleep path (no sources exist, the run-loop gate is closed). */
+    /* Both notification setups fail at open. Single-target contract is
+       soft-fail: the watch opens, polling is the correctness floor. A
+       state change at t=900 is seen at the t=2000 poll via the nanosleep
+       path (no sources exist, the run-loop gate is closed). */
     scenario_ready_at_t0();
     mos_fake_set_io_notify_fail(true);
     mos_fake_set_dr_center_fail(true);
@@ -403,11 +401,11 @@ TEST(watch_poll_only_degraded)
 
 TEST(watch_media_swap_emits_media_changed)
 {
-    /* Same-state swap. The whole-disk IOMedia registry ID re-mints
-       (0x100000456 → 0x100000789) while the drive stays READY across
-       two probes; the id flows through the real chain —
-       IORegistryEntryGetRegistryEntryID → handle media_id → probe
-       result → core fingerprint — and emits media_changed. */
+    /* Same-state swap: the whole-disk IOMedia registry ID re-mints
+       (0x100000456 → 0x100000789) while the drive stays READY across two
+       probes. The id flows through the real chain
+       (IORegistryEntryGetRegistryEntryID → handle media_id → probe result →
+       core fingerprint) and emits media_changed. */
     scenario_ready_at_t0();
 
     mos_watch_t *w = NULL;
@@ -424,8 +422,8 @@ TEST(watch_media_swap_emits_media_changed)
     EXPECT_EQ(MOS_STATE_READY, mos_watch_event_prev_state(e));
     EXPECT_EQ(500, mos_fake_clock_now());
     EXPECT_EQ(so, mos_watch_event_stream_open_ms(e));
-    /* Identity strings on a live event: the watch-static buffers, read
-       under ASan (the watch-lifetime analogue of seam-contract O-3). */
+    /* Identity strings on a live event: the watch-static buffers read under
+       ASan (the watch-lifetime analogue of seam contract O-3). */
     EXPECT_STREQ("HL-DT-ST", mos_watch_event_vendor(e));
     EXPECT_STREQ("DVDROM",   mos_watch_event_product(e));
 
@@ -436,10 +434,9 @@ TEST(watch_media_swap_emits_media_changed)
 
 TEST(watch_media_swap_profile_fallback)
 {
-    /* The bridge-without-identity arm: media_id is 0 on both sides, so
-       the only swap evidence is the current profile's class changing
-       (CD-ROM 0x08 → DVD-ROM 0x10) — the core's documented fallback
-       fingerprint. */
+    /* Bridge-without-identity arm: media_id is 0 on both sides, so the only
+       swap evidence is the profile class changing (CD-ROM 0x08 → DVD-ROM
+       0x10) — the core's documented fallback fingerprint. */
     mos_fake_reset();
     mos_fake_watch_reset();
     uint8_t hdr[8];
@@ -477,10 +474,10 @@ TEST(watch_media_swap_profile_fallback)
 
 TEST(watch_replug_reminted_drive_id)
 {
-    /* Replug: terminal removal of stream 1, then the "same" drive back
-       under a re-minted registry ID (xnu's never-reused counter). The
-       new stream carries the NEW id and a DIFFERENT stream_open_ms —
-       (registry_id, stream_open_ms) stays a unique session key. */
+    /* Replug: terminal removal of stream 1, then the "same" drive back under
+       a re-minted registry ID (xnu's never-reused counter). The new stream
+       carries the NEW id and a DIFFERENT stream_open_ms — (registry_id,
+       stream_open_ms) stays a unique session key. */
     scenario_ready_at_t0();
 
     mos_watch_t *w1 = NULL;
@@ -517,11 +514,10 @@ TEST(watch_replug_reminted_drive_id)
 TEST(watch_error_backoff_escalates_deterministically)
 {
     /* Consecutive identical probe errors escalate the retry interval
-       200 → 400 → 800 → 1600 → 2000 (capped) — pinned at the pure
-       layer by test_watch_core.c, asserted HERE as exact fake-clock
-       positions through the real adapter: the per-probe reopen fails
-       with MOS_ERR_DRIVER_REJECTED (plugin factory declines) from the
-       t=2000 poll onward. */
+       200 → 400 → 800 → 1600 → 2000 (capped) — pinned at the pure layer by
+       test_watch_core.c, asserted HERE as exact fake-clock positions through
+       the real adapter: the per-probe reopen fails with
+       MOS_ERR_DRIVER_REJECTED (plugin factory declines) from t=2000 on. */
     scenario_ready_at_t0();
 
     mos_watch_t *w = NULL;
@@ -549,9 +545,9 @@ TEST(watch_error_backoff_escalates_deterministically)
 
 TEST(all_open_fails_without_doorbell)
 {
-    /* All-mode's doorbell is NOT latency-only: arrivals are discovered
-       ONLY by the DR Appeared observer, so a center-creation failure
-       fails the open honestly instead of degrading silently. */
+    /* All-mode's doorbell is NOT latency-only: arrivals are discovered ONLY
+       by the DR Appeared observer, so a center-creation failure fails the
+       open honestly rather than degrading silently. */
     scenario_ready_at_t0();
     mos_fake_set_dr_center_fail(true);
 
@@ -565,11 +561,10 @@ TEST(all_open_fails_without_doorbell)
 
 TEST(all_empty_stream_hotplug_join_leave_rejoin)
 {
-    /* The all-watch lifecycle with one drive: a valid EMPTY stream,
-       hot-plug join (first event relabeled device_appeared), a
-       doorbell-routed state change, per-slot non-terminal removal,
-       and rejoin under a re-minted registry ID — every event carrying
-       the ONE stream_open_ms minted at open. */
+    /* All-watch lifecycle with one drive: valid EMPTY stream, hot-plug join
+       (first event relabeled device_appeared), doorbell-routed state change,
+       per-slot non-terminal removal, and rejoin under a re-minted registry
+       ID — every event carrying the ONE stream_open_ms minted at open. */
     scenario_ready_at_t0();
     mos_fake_set_no_drive();
 
@@ -584,8 +579,8 @@ TEST(all_empty_stream_hotplug_join_leave_rejoin)
     mos_fake_step(2800, act_absent_fire_dr_disappeared, NULL);
     mos_fake_step(4500, act_remint_fire_appeared, NULL);
 
-    /* Empty stream: no event before the join, and the timeout slice is
-       exact in fake time. */
+    /* Empty stream: no event before the join, timeout slice exact in fake
+       time. */
     const mos_watch_event *e = NULL;
     EXPECT_EQ(MOS_ERR_TIMEOUT, mos_watch_next_event(w, &e, 500));
     EXPECT_EQ(500, mos_fake_clock_now());
@@ -606,15 +601,15 @@ TEST(all_empty_stream_hotplug_join_leave_rejoin)
     EXPECT_EQ(1500, mos_fake_clock_now());
     EXPECT_EQ(so, mos_watch_event_stream_open_ms(e));
 
-    /* Spurious Disappeared (drive still present and resolvable):
-       wake-not-remove — the woken probe at t=2200 finds the drive,
-       state unchanged, nothing evicted, no event. */
+    /* Spurious Disappeared (drive still present, resolvable): wake-not-remove
+       — the woken probe at t=2200 finds the drive, state unchanged, nothing
+       evicted, no event. */
     EXPECT_EQ(MOS_ERR_TIMEOUT, mos_watch_next_event(w, &e, 1000));
     EXPECT_EQ(2500, mos_fake_clock_now());
 
-    /* Real removal: registry entry gone at 2800 (Disappeared resolves
-       0, wakes nothing) — the poll floor's reopen at 4200 (2200 probe
-       + STABLE_MS) returns NO_DEVICE. Per-slot, NOT stream-terminal. */
+    /* Real removal: registry entry gone at 2800 (Disappeared resolves 0,
+       wakes nothing) — the poll-floor reopen at 4200 (2200 probe + STABLE_MS)
+       returns NO_DEVICE. Per-slot, NOT stream-terminal. */
     EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 2000));
     EXPECT_EQ(MOS_EVENT_DEVICE_REMOVED, mos_watch_event_kind(e));
     EXPECT_EQ(3, mos_watch_event_seq(e));
@@ -636,16 +631,15 @@ TEST(all_empty_stream_hotplug_join_leave_rejoin)
 
 TEST(all_status_for_unjoined_device_joins_nothing)
 {
-    /* The quiet arm of the watch-all doorbell filter (mos_watch.c,
-       dr_status_changed_callback): a StatusChanged whose device
-       RESOLVES to a registry ID that matches no slot — a drive whose
-       Appeared hasn't been delivered yet (this staging), or one beyond
-       the slot cap. The Appeared handler owns joins, so the status
-       handler must neither join nor emit; a regression that "fixes" it
-       to join on unrecognized IDs surfaces here as an event where a
-       timeout is asserted. Delivery itself is proven by the fake's
-       undelivered-signal tripwire (a lost signal aborts the run), so a
-       passing test means the callback ran and chose to do nothing. */
+    /* Quiet arm of the watch-all doorbell filter (mos_watch.c,
+       dr_status_changed_callback): a StatusChanged resolving to a registry
+       ID that matches no slot — a drive whose Appeared hasn't arrived yet,
+       or one beyond the slot cap. The Appeared handler owns joins, so the
+       status handler must neither join nor emit; a regression that joins on
+       unrecognized IDs surfaces here as an event where a timeout is
+       asserted. Delivery is proven by the fake's undelivered-signal tripwire
+       (a lost signal aborts), so passing means the callback ran and did
+       nothing. */
     scenario_ready_at_t0();
     mos_fake_set_no_drive();
 
@@ -654,16 +648,16 @@ TEST(all_status_for_unjoined_device_joins_nothing)
     EXPECT(w != NULL);
     EXPECT_EQ(MOS_OK, err);
 
-    /* t=400: the drive exists in the registry (its ID resolves) but
-       only its StatusChanged arrives — no Appeared. */
+    /* t=400: drive exists in the registry (ID resolves) but only its
+       StatusChanged arrives — no Appeared. */
     mos_fake_step(400, act_present_fire_dr_status, NULL);
 
     const mos_watch_event *e = NULL;
     EXPECT_EQ(MOS_ERR_TIMEOUT, mos_watch_next_event(w, &e, 1000));
     EXPECT_EQ(1000, mos_fake_clock_now());
 
-    /* The stream is not poisoned: the join still happens when the
-       Appeared finally lands, carrying the same resolved identity. */
+    /* Stream not poisoned: the join still happens when Appeared finally
+       lands, carrying the same resolved identity. */
     mos_fake_step(1500, act_fire_dr_appeared, NULL);
 
     EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 2000));
@@ -680,11 +674,10 @@ TEST(all_status_for_unjoined_device_joins_nothing)
 
 TEST(all_disappeared_unresolved_falls_to_poll_floor)
 {
-    /* Disappeared arriving AFTER the registry entry is gone: the
-       callback can't resolve the device to an ID (resolves 0), marks
-       nothing — and removal still arrives via the slot's next reopen
-       returning NO_DEVICE at the poll floor (mos_watch.c's documented
-       fallback). */
+    /* Disappeared arriving AFTER the registry entry is gone: the callback
+       can't resolve the device (resolves 0), marks nothing — and removal
+       still arrives via the slot's next reopen returning NO_DEVICE at the
+       poll floor (mos_watch.c's documented fallback). */
     scenario_ready_at_t0();
 
     mos_error err = MOS_ERR_IO;
@@ -717,9 +710,9 @@ TEST(all_disappeared_unresolved_falls_to_poll_floor)
 
 TEST(by_name_resolves_only_actual_name)
 {
-    /* The fake matches the scenario's actual BSD name, so the
-       "well-formed but absent → NO_DEVICE" arm — otherwise pinned
-       only by test_cli.sh on real macOS — runs headless. */
+    /* The fake matches the scenario's actual BSD name, so the "well-formed
+       but absent → NO_DEVICE" arm — otherwise pinned only by test_cli.sh on
+       real macOS — runs headless. */
     mos_fake_reset();
     mos_fake_watch_reset();
 
@@ -743,9 +736,9 @@ TEST(by_name_resolves_only_actual_name)
 
 TEST(tur_transport_timeout_emits_error_event)
 {
-    /* Non-terminal arm: a TUR TRANSPORT failure (vs the
-       CHECK-CONDITION path task_status carries) maps kIOReturnTimeout
-       → MOS_ERR_TIMEOUT and surfaces as an error event at the poll. */
+    /* Non-terminal arm: a TUR TRANSPORT failure (vs the CHECK-CONDITION
+       path task_status carries) maps kIOReturnTimeout → MOS_ERR_TIMEOUT and
+       surfaces as an error event at the poll. */
     scenario_ready_at_t0();
 
     mos_watch_t *w = NULL;
@@ -769,10 +762,10 @@ TEST(tur_transport_timeout_emits_error_event)
 
 TEST(tur_transport_nodevice_is_terminal_removal)
 {
-    /* Terminal arm: kIOReturnNoDevice from the transport
-       maps to MOS_ERR_NO_DEVICE, which the watch core converts to a
-       terminal device_removed — the exact dependency the
-       kIOReturnNoDevice _Static_assert in mos_scsi.c names. */
+    /* Terminal arm: kIOReturnNoDevice from the transport maps to
+       MOS_ERR_NO_DEVICE, which the core converts to a terminal
+       device_removed — the dependency the kIOReturnNoDevice _Static_assert
+       in mos_scsi.c names. */
     scenario_ready_at_t0();
 
     mos_watch_t *w = NULL;
@@ -795,10 +788,10 @@ TEST(tur_transport_nodevice_is_terminal_removal)
 
 TEST(gesn_transport_failure_falls_back_to_sense)
 {
-    /* Raw path: ExecuteTaskSync fails at the transport, so
-       GESN yields no authoritative tray bit and 3A/00 alone classifies
-       EMPTY_OR_OPEN — and the exclusive lock taken for the raw task is
-       still released on the error path (§5.5 both directions). */
+    /* Raw path: ExecuteTaskSync fails at the transport, so GESN yields no
+       tray bit and 3A/00 alone classifies EMPTY_OR_OPEN — and the exclusive
+       lock taken for the raw task is still released on the error path (§5.5
+       both directions). */
     mos_fake_reset();
     mos_fake_watch_reset();
     uint8_t sense[18];
