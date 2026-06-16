@@ -151,7 +151,20 @@ endif()
 # mos_core happens to pull IOKit anyway. See ARCHITECTURE.md §3 and
 # AGENTS.md rule 3.
 
-add_library(mos_pure STATIC
+# Source-of-truth lists, named once and reused by every target (the library
+# archives AND the macOS adapter/emit test executables, which compile these
+# TUs directly against the fake rather than linking the archive). A new TU is
+# added here once, not copied into each target — the duplication that used to
+# let an added parser link-fail in the adapter/emit jobs is gone.
+#
+# MOS_PURE_SOURCES — the IOKit-free layer (mos_pure archive; also linked by
+#   the unit tests on every platform).
+# MOS_CORE_BASE_SOURCES — the IOKit adapter TUs EXCEPT the watch run-loop TU.
+#   The adapter/emit test targets compile these against the fake; mos_watch.c
+#   is held out because it needs the separate watch fake, so only the watch
+#   test target (and the real mos_core) add it.
+# MOS_CORE_SOURCES — the full adapter layer (BASE + mos_watch.c).
+set(MOS_PURE_SOURCES
     src/mos_pure.c
     src/mos_sense.c
     src/mos_strings.c
@@ -168,6 +181,18 @@ add_library(mos_pure STATIC
     src/mos_vpd80.c
     src/mos_result.c
 )
+set(MOS_CORE_BASE_SOURCES
+    src/mos_scsi.c
+    src/mos_query.c
+    src/mos_serial.c
+    src/mos_tray.c
+    src/mos_state.c
+    src/mos_da.c
+    src/mos_dr.c
+)
+set(MOS_CORE_SOURCES ${MOS_CORE_BASE_SOURCES} src/mos_watch.c)
+
+add_library(mos_pure STATIC ${MOS_PURE_SOURCES})
 
 target_include_directories(mos_pure
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -192,16 +217,7 @@ set_target_properties(mos_pure PROPERTIES
 # even when the user just wants to run the pure unit tests.
 if(APPLE)
 
-add_library(mos_core STATIC
-    src/mos_scsi.c
-    src/mos_query.c
-    src/mos_serial.c
-    src/mos_tray.c
-    src/mos_da.c
-    src/mos_state.c
-    src/mos_watch.c
-    src/mos_dr.c
-)
+add_library(mos_core STATIC ${MOS_CORE_SOURCES})
 
 target_include_directories(mos_core
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -420,12 +436,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
     add_executable(mos_adapter_oneshot_tests
         tests/test_adapter_oneshot.c
         tests/fake/mos_fake_apple.c
-        src/mos_scsi.c
-        src/mos_query.c
-        src/mos_tray.c
-        src/mos_state.c
-        src/mos_dr.c
-        src/mos_da.c
+        ${MOS_CORE_BASE_SOURCES}
     )
     target_include_directories(mos_adapter_oneshot_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -455,12 +466,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
     add_executable(mos_emit_fixtures
         tests/emit/emit_fixtures.c
         tests/fake/mos_fake_apple.c
-        src/mos_scsi.c
-        src/mos_query.c
-        src/mos_tray.c
-        src/mos_state.c
-        src/mos_dr.c
-        src/mos_da.c
+        ${MOS_CORE_BASE_SOURCES}
         cli/common.c
         cli/io.c
         cli/human.c
@@ -492,12 +498,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         tests/test_adapter_watch.c
         tests/fake/mos_fake_apple.c
         tests/fake/mos_fake_watch.c
-        src/mos_scsi.c
-        src/mos_query.c
-        src/mos_state.c
-        src/mos_dr.c
-        src/mos_da.c
-        src/mos_watch.c
+        ${MOS_CORE_SOURCES}
     )
     target_include_directories(mos_adapter_watch_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
