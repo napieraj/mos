@@ -649,3 +649,130 @@ jobs:
           pip install --require-hashes -r schemas/requirements-ci.txt
           python3 tests/emit/validate_emitted.py \
             ./build-adapter/bin/mos_emit_fixtures schemas
+
+  coverage:
+    # Pure-layer coverage (src/) from the host-independent unit suite.
+    # The repo-wide number is the coverage-combined macOS job below; this
+    # Linux leg reports only what runs without IOKit, and exists as the
+    # fallback that survives without a macOS runner. The core layer and
+    # CLI emitters show uncovered here — the combined report covers those.
+    name: Coverage (pure layer, Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
+
+      - name: Install gcovr
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y gcovr
+
+      - name: Configure + build with coverage instrumentation
+        run: |
+          set -e
+          cmake -B build-cov -DCMAKE_BUILD_TYPE=Debug -DMOS_COVERAGE=ON
+          cmake --build build-cov --parallel
+
+      - name: Run unit tests (generates .gcda counters)
+        working-directory: build-cov
+        run: ctest --output-on-failure
+
+      - name: Report coverage
+        run: |
+          set -eo pipefail
+          gcovr --root . --object-directory build-cov \
+            --filter 'src/' --print-summary 2>&1 | tee coverage.txt
+          {
+            echo '### Pure-layer coverage (Linux `unit` suite)';
+            echo '';
+            echo 'Scope: src/ via the host-independent unit tests only — the';
+            echo 'IOKit core + CLI verbs are measured by the macOS adapter job.';
+            echo '';
+            echo '```';
+            cat coverage.txt;
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  coverage-combined:
+    # Authoritative repo-wide coverage (src/ + cli/): macOS is the only
+    # runner that executes both the pure unit suite and the macOS-only
+    # adapter/emit tests, so one llvm-cov build merges them into one number
+    # (merging gcc and llvm-cov data cross-OS would need extra tooling for
+    # a number macOS produces directly). Instrumentation rides
+    # CMAKE_C_FLAGS, not MOS_COVERAGE: the adapter targets don't link
+    # mos_warnings, so the option can't reach them. gcovr from a Homebrew
+    # bottle; jsonschema --require-hashes; Actions SHA-pinned.
+    name: Coverage (combined, macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (Node 24)
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0 (Node 24)
+        with:
+          # 3.12 to match the schemas/adapter jobs (requirements-ci.txt
+          # hash-pins rpds-py 0.20.0, whose newest wheels stop at cp313).
+          python-version: '3.12'
+
+      - name: Install gcovr (Homebrew bottle)
+        run: brew install gcovr
+
+      - name: Configure + build all instrumented targets
+        # Build only the test/adapter/emit targets, not the real `mos`
+        # binary: cli/main.c, cli/watch.c, and cli/probe.c are driven only
+        # by the macOS-gated shell contract test and would otherwise show
+        # as misleadingly-bare lines.
+        run: |
+          set -e
+          cmake -B build-cov -DMOS_BUILD_ADAPTER_FAKE=ON -DMOS_BUILD_TESTS=ON \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS="-O0 -g --coverage" \
+            -DCMAKE_EXE_LINKER_FLAGS="--coverage"
+          cmake --build build-cov --target mos_tests
+          cmake --build build-cov --target mos_adapter_oneshot_tests
+          cmake --build build-cov --target mos_adapter_watch_tests
+          cmake --build build-cov --target mos_emit_fixtures
+
+      - name: Run all suites (generates .gcda counters)
+        env:
+          ASAN_OPTIONS: "abort_on_error=1"
+          UBSAN_OPTIONS: "halt_on_error=1"
+        run: |
+          set -e
+          ./build-cov/bin/mos_tests
+          ./build-cov/bin/mos_adapter_oneshot_tests
+          ./build-cov/bin/mos_adapter_watch_tests
+          # Drive every emit verb/scenario through the validator so the CLI
+          # emitter + mos_result.c paths are exercised (and stay correct).
+          pip install --require-hashes -r schemas/requirements-ci.txt
+          python3 tests/emit/validate_emitted.py \
+            ./build-cov/bin/mos_emit_fixtures schemas
+
+      - name: Report coverage
+        run: |
+          set -eo pipefail
+          # gcov-ignore-errors: CMAKE_C_FLAGS instruments project-wide, so
+          # CMake's compiler-detection probe TU emits counters gcovr can't
+          # resolve to a source; skip those (the filter scopes the report).
+          # xcrun, not bare llvm-cov: Apple ships it inside the Xcode
+          # toolchain, off the default PATH.
+          gcovr --root . --object-directory build-cov \
+            --gcov-executable 'xcrun llvm-cov gcov' \
+            --gcov-ignore-errors=no_working_dir_found \
+            --filter 'src/' --filter 'cli/' \
+            --print-summary 2>&1 | tee coverage.txt
+          {
+            echo '### Combined coverage (macOS — pure + IOKit core + CLI)';
+            echo '';
+            echo 'Authoritative repo-wide number: src/ + cli/ via the unit';
+            echo 'suite AND the adapter-fake + emit-validate harness, merged';
+            echo 'under one llvm-cov toolchain. The Linux `coverage` job';
+            echo 'reports the pure layer alone as a standalone fallback.';
+            echo '';
+            echo '```';
+            cat coverage.txt;
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"

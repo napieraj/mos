@@ -114,6 +114,18 @@ target_compile_options(mos_warnings INTERFACE
     -Werror=implicit-function-declaration
 )
 
+# ---- Coverage instrumentation (opt-in) ---------------------------------
+#
+# Rides mos_warnings so project-wide flags stay in one target. --coverage
+# is both a compile and a link option (the profiling runtime must be
+# linked, not just the objects instrumented); -O0 -g keeps the
+# counter-to-source line mapping accurate.
+option(MOS_COVERAGE "Instrument with gcov/llvm-cov coverage counters (-O0 -g --coverage)" OFF)
+if(MOS_COVERAGE)
+    target_compile_options(mos_warnings INTERFACE --coverage -O0 -g)
+    target_link_options(mos_warnings INTERFACE --coverage)
+endif()
+
 # ---- Static libraries ---------------------------------------------------
 #
 # Two-tier split:
