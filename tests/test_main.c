@@ -36,6 +36,7 @@ void register_physstruct_tests  (void);
 void register_trackinfo_tests   (void);
 void register_perf_tests        (void);
 void register_modepage_tests    (void);
+void register_vpd80_tests       (void);
 void register_tray_tests        (void);
 void register_result_tests      (void);
 void register_io_tests          (void);
@@ -89,6 +90,9 @@ int main(void)
 
     printf("\nMODE SENSE page 0x2A / 0x01 decode (hostile input):\n");
     register_modepage_tests();
+
+    printf("\nINQUIRY VPD page 0x80 serial decode (hostile input):\n");
+    register_vpd80_tests();
 
     printf("\nTray-command outcome classification:\n");
     register_tray_tests();

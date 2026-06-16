@@ -75,3 +75,16 @@ code; this table is the citation, not the parse.
 ### `src/mos_config.c` — GET CONFIGURATION feature walk
 - **Spec:** MMC-6 §5.2 feature descriptors. The walker's bounds rules are
   the inline safety contract.
+
+### `src/mos_vpd80.c` — INQUIRY VPD page 0x80 (Unit Serial Number)
+- **Spec:** SPC-4 §7.7.13, opcode 0x12 with EVPD=1, PAGE CODE 0x80. Byte 3
+  is the (single-byte) PAGE LENGTH; the serial is the ASCII bytes 4..n.
+  Byte 2 stays reserved for this page — it is NOT the high byte of a 2-byte
+  length (that generalization is page 0x83's, not 0x80's).
+- **Cross-check:** sg3_utils `sg_inq.c` (`decode_unit_serial_num`) reads
+  `ucp[3]` as the length and the serial at `ucp + 4`; Linux
+  `drivers/scsi/scsi.c` VPD handling uses the same byte-3 length.
+- **Not decoded:** every other VPD page (0x00 supported-pages list, 0x83
+  Device Identification, …) and the standard-INQUIRY data itself
+  (vendor/product/revision come from DiscRecording's directory, zero
+  commands) — this parser decodes only the serial page.

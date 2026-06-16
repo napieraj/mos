@@ -466,6 +466,29 @@ const char *mos_handle_product(const mos_handle_t *h);
 const char *mos_handle_revision(const mos_handle_t *h);
 uint64_t    mos_handle_registry_id(const mos_handle_t *h);
 
+/*
+ * Query the drive's Unit Serial Number: one raw INQUIRY (EVPD=1, PAGE
+ * CODE=0x80) on the mos_raw_cdb exclusive-access path, decoded by the
+ * bounds-checked pure parser. This is the durable inventory key that
+ * survives replug and machine moves — registry_id is attachment identity
+ * (replug mints a new one) and must not be used as a durable key.
+ *
+ * It is the one identity field DiscRecording's directory does not cache and
+ * no convenience method can carry: MMCDeviceInterface's Inquiry issues only
+ * a standard INQUIRY (no EVPD / PAGE CODE), so VPD page 0x80 is structurally
+ * unreachable through it (AGENTS.md scope-doctrine layer-1 raw-verb showing;
+ * design: doc/research/2026-06-16-serial-vpd-0x80-feasibility.md).
+ *
+ * Because it is raw it takes ObtainExclusiveAccess, which returns
+ * MOS_ERR_BUSY on MOUNTED media — benign: the serial is a static drive fact,
+ * equally readable with the tray empty (the natural time to inventory a
+ * drive). A drive that does not implement page 0x80 (it is optional) or has
+ * no serial programmed (all-spaces) returns MOS_ERR_IO. `out` REQUIRED
+ * (NULL => MOS_ERR_INVALID_ARG); on success *out is a borrowed string valid
+ * until the next mos_query_serial() call or mos_close().
+ */
+mos_error mos_query_serial(mos_handle_t *h, const char **out);
+
 /* ---- Disc identity from disc structure -------------- */
 
 /* Result of a disc-structure identity query. Opaque, handle-owned;

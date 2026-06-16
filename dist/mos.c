@@ -538,6 +538,16 @@ bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
 bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
                                        struct mos_error_recovery *out);
 
+/* ---- INQUIRY VPD page 0x80 decode (mos_vpd80.c) ------------------- *
+ *
+ * Decode the Unit Serial Number page into a NUL-terminated ASCII string in
+ * out[0..out_cap). True only when the reply echoes page code 0x80 and a
+ * non-empty serial survives the trailing space/NUL trim. Pure, bounded,
+ * no-OOB — fuzz/ASan-gated. The shell (mos_serial.c) bounds len to the
+ * realized transfer count before calling (O-4). */
+bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
+                                     char *out, size_t out_cap);
+
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
  * True for the four SAM-5 status values meaning "drive contended, retry
@@ -875,6 +885,11 @@ struct mos_handle {
        mos_query_error_recovery). Same terms. */
     struct mos_mode_caps      mode_caps;
     struct mos_error_recovery error_recovery;
+
+    /* Handle-owned INQUIRY VPD-0x80 serial (mos_query_serial). Filled by the
+       raw-INQUIRY shell, returned by borrowed pointer; 64 holds any real
+       drive serial (SPC max 255 truncates, never overflows). */
+    char                      serial_str[64];
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
@@ -2175,6 +2190,73 @@ bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
     out->dcr              = (p[2] & 0x01) != 0;
     out->read_retry_count = p[3];
     out->have             = true;
+    return true;
+}
+
+/* ==== src/mos_vpd80.c ==== */
+/*
+ * mos_vpd80.c — pure, bounds-safe decode of INQUIRY VPD page 0x80 (Unit
+ * Serial Number). The one identity field DiscRecording's directory does not
+ * cache and no convenience method can carry: MMCDeviceInterface's Inquiry
+ * issues only a standard INQUIRY (no EVPD / PAGE CODE), so page 0x80 needs a
+ * raw INQUIRY (mos_serial.c). Design + layer-1 raw-verb showing:
+ * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md.
+ *
+ * No IOKit: the shell hands us a fixed zero-init buffer (filled via
+ * mos_raw_cdb) bounded to the bytes the transport actually returned
+ * (dual-length rule O-4 — the realized count, not the device-claimed
+ * length, is the trusted span). The page's own PAGE LENGTH can only shrink
+ * the serial region within that span, never extend it.
+ *
+ * Page 0x80 layout (SPC-4 §7.7.13, Unit Serial Number VPD page):
+ *   [0]      PERIPHERAL QUALIFIER (7:5) | PERIPHERAL DEVICE TYPE (4:0)
+ *   [1]      PAGE CODE = 80h        — the drive echoes the page we asked for
+ *   [2]      reserved
+ *   [3]      PAGE LENGTH (n-3)      — serial byte count
+ *   [4..n]   PRODUCT SERIAL NUMBER  — ASCII, left-justified, space-padded
+ * Byte 2 stays reserved for this page (it is NOT the high byte of a 2-byte
+ * length — that generalization is page 0x83's, not 0x80's). A real page-0x80
+ * capture is a falsifier per the hardware ADR, not a design input.
+ */
+
+
+#define VPD_HDR 4u   /* bytes 0..3 before the serial */
+
+/* Decode page 0x80 into out[0..out_cap). True only when the reply echoes
+   page code 0x80 and carries a non-empty serial (trailing spaces / NULs
+   trimmed). out is always NUL-terminated. A drive that does not implement
+   the page (it is optional) or has none programmed (all-spaces) returns
+   false → the caller leaves serial null, never an empty string. Non-ASCII
+   bytes are copied verbatim and escaped at the output sink
+   (mos_cli_json_str / mos_safe_ascii), as with vendor/product/revision. */
+bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
+                                     char *out, size_t out_cap)
+{
+    if (out && out_cap) out[0] = 0;
+    if (!buf || !out || out_cap == 0) return false;
+    if (len < VPD_HDR) return false;          /* no room for the VPD header */
+    if (buf[1] != 0x80) return false;         /* wrong page echoed — refuse */
+
+    /* PAGE LENGTH (byte 3) bounded by the bytes actually present (O-4): a
+       hostile/over-long length cannot read past the trusted span. */
+    size_t page_len = buf[3];
+    size_t avail    = len - VPD_HDR;
+    size_t serial_len = (page_len < avail) ? page_len : avail;
+
+    /* Trim trailing wire padding — spaces (SPC pad) and NULs. Leading and
+       interior bytes are data and stay (mirrors mos_dr.c identity trim). */
+    while (serial_len > 0) {
+        uint8_t c = buf[VPD_HDR + serial_len - 1];
+        if (c != ' ' && c != 0x00) break;
+        serial_len--;
+    }
+    if (serial_len == 0) return false;        /* page present, no serial */
+
+    /* Copy bounded by out_cap (reserve the NUL). A serial longer than the
+       buffer is truncated, never overflowed — real serials are << the cap. */
+    size_t copy = (serial_len < out_cap - 1) ? serial_len : out_cap - 1;
+    for (size_t i = 0; i < copy; i++) out[i] = (char)buf[VPD_HDR + i];
+    out[copy] = 0;
     return true;
 }
 
@@ -6417,6 +6499,93 @@ mos_error mos_query_error_recovery(mos_handle_t *h,
         return MOS_ERR_IO;   /* page 0x01 absent or short — refused whole */
     }
     *out = &h->error_recovery;
+    return MOS_OK;
+}
+
+/* ==== src/mos_serial.c ==== */
+/*
+ * mos_serial.c — the drive-serial query (mos_query_serial): one raw INQUIRY
+ * (EVPD=1, PAGE CODE=0x80, Unit Serial Number) on the mos_raw_cdb path,
+ * decoded by the pure parser in mos_vpd80.c. The serial is the durable
+ * drive-inventory key that survives replug and machine moves (registry_id is
+ * attachment-scoped). Named for the datum it produces, not the generic
+ * INQUIRY command set: this file owns the serial verb only — any future VPD
+ * page is its own argument, not a fold into "the inquiry file".
+ *
+ * Authored raw, not via the convenience Inquiry, because MMCDeviceInterface's
+ * Inquiry takes only SCSICmd_INQUIRY_StandardData* — no EVPD / PAGE CODE
+ * parameter — so VPD page 0x80 is structurally unreachable through it
+ * (contrast ModeSense10's PC/PAGE_CODE, GetConfiguration's RT). That is the
+ * layer-1 "no convenience method carries the information" showing (AGENTS.md
+ * scope doctrine; design + full derivation:
+ * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md).
+ *
+ * Never disturbs another consumer. mos_raw_cdb is the SINGLE
+ * ObtainExclusiveAccess call site (ARCHITECTURE.md §3); this file adds none.
+ * Exclusive access is the gate: if anyone else holds the drive — a mounted
+ * IOMedia nub, Finder, MakeMKV, another initiator — ObtainExclusiveAccess
+ * fails (kIOReturnBusy / kIOReturnExclusiveAccess) and mos_raw_cdb returns
+ * the mapped error WITHOUT issuing the CDB, so the serial read backs off
+ * cleanly rather than contending. On success the lock is held only for the
+ * single INQUIRY and released immediately (mos_raw_cdb releases per call —
+ * never held across the handle's life). This is the same BUSY-on-mounted
+ * guard the §5.5 nub invariant relies on. The degradation is benign: the
+ * serial is a static drive fact, equally readable with the tray empty (the
+ * natural time to inventory a drive), and any non-OK leaves serial null —
+ * the field's existing default. INQUIRY changes no drive state, so there is
+ * no lock-lifetime question (unlike the tray PREVENT verbs).
+ */
+
+
+/* 252-byte reply buffer: the serial fits in serial_str (64) many times over;
+   the SPC PAGE LENGTH is a single byte (max 255), so this receives any
+   conforming page and the parser truncates into serial_str. */
+#define MOS_SERIAL_REPLY_BUF 252u
+
+mos_error mos_query_serial(mos_handle_t *h, const char **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* INQUIRY (SPC-4 0x12), 6-byte CDB:
+         byte0   opcode 0x12
+         byte1   bit0 EVPD = 1            — request a vital-product-data page
+         byte2   PAGE CODE = 0x80         — Unit Serial Number
+         byte3-4 ALLOCATION LENGTH (BE)   — MOS_SERIAL_REPLY_BUF
+         byte5   CONTROL = 0
+       IMMED has no meaning for INQUIRY; the call waits for final status. */
+    const uint8_t cdb[6] = {
+        0x12, 0x01, 0x80,
+        (uint8_t)(MOS_SERIAL_REPLY_BUF >> 8),
+        (uint8_t)(MOS_SERIAL_REPLY_BUF & 0xFF),
+        0x00,
+    };
+
+    uint8_t  buf[MOS_SERIAL_REPLY_BUF] = {0};
+    uint32_t task_status               = 0;
+    uint8_t  sense[18]                 = {0};
+    uint64_t xferred                   = 0;
+
+    /* Exclusive access unavailable (mounted media, another holder) →
+       kIOReturnBusy/ExclusiveAccess → MOS_ERR_BUSY, the CDB never issues;
+       any transport error surfaces honestly. The caller treats every non-OK
+       as "serial stays null". */
+    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
+                              MOS_XFER_FROM_TARGET, 2000,
+                              &task_status, sense, &xferred);
+    if (e != MOS_OK) return e;
+    if (task_status != MOS_SCSI_STATUS_GOOD)   /* CHECK CONDITION etc. */
+        return MOS_ERR_IO;
+
+    /* Dual-length rule (O-4): bound the parse to the bytes the transport
+       actually delivered, not the full buffer — some USB bridges under-fill.
+       The page's own PAGE LENGTH only shrinks the serial within that span. */
+    size_t trusted = (xferred < sizeof buf) ? (size_t)xferred : sizeof buf;
+    if (!mos_internal_vpd80_serial_parse(buf, trusted,
+                                         h->serial_str, sizeof h->serial_str))
+        return MOS_ERR_IO;   /* page absent / wrong page / no serial → null */
+
+    *out = h->serial_str;
     return MOS_OK;
 }
 

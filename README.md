@@ -192,7 +192,7 @@ Registry ID:  4295032831
      Vendor:  HL-DT-ST
     Product:  BD-RE WH16NS60
    Revision:  1.00
-     Serial:  -
+     Serial:  KL2G7942618WL
        AACS:  version 68, bus encryption yes
      Speeds:  read 10560 kB/s, write 8310 kB/s (max)
        Mech:  tray, buffer 4096 KB
@@ -204,8 +204,13 @@ capability (from one GET CONFIGURATION feature walk), max read/write
 speeds, and the two read-only MODE SENSE pages — `mechanical` (loading
 mechanism, eject/lock support, the live media-locked bit, buffer size)
 and `error_recovery` (the drive's read error-recovery configuration).
-Read-only throughout: `mos` reports these settings, it never changes
-them. Full fields:
+The `serial` is the drive's Unit Serial Number (a raw INQUIRY of VPD
+page 0x80 — the one identity field DiscRecording does not cache); it is
+the durable inventory key that survives replug, where `registry_id` does
+not. The raw read backs off on exclusive access, so `serial` is `-`/null
+when the drive is busy or has a disc mounted, does not implement the
+page, or has no serial programmed. Read-only throughout: `mos` reports
+these settings, it never changes them. Full fields:
 [`schemas/mos.drive.v1.json`](schemas/mos.drive.v1.json).
 
 ### features — medium writability

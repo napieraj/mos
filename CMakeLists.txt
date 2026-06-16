@@ -165,6 +165,7 @@ add_library(mos_pure STATIC
     src/mos_trackinfo.c
     src/mos_perf.c
     src/mos_modepage.c
+    src/mos_vpd80.c
     src/mos_result.c
 )
 
@@ -194,6 +195,7 @@ if(APPLE)
 add_library(mos_core STATIC
     src/mos_scsi.c
     src/mos_query.c
+    src/mos_serial.c
     src/mos_tray.c
     src/mos_da.c
     src/mos_state.c
@@ -329,6 +331,7 @@ if(MOS_BUILD_TESTS)
         tests/test_trackinfo.c
         tests/test_perf.c
         tests/test_modepage.c
+        tests/test_vpd80.c
         tests/test_tray.c
         tests/test_result.c
         tests/test_io.c
