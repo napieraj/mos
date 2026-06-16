@@ -60,14 +60,28 @@ Before reaching for a raw CDB, the two no-command sources are ruled out:
 1. **DiscRecording `DRDeviceCopyInfo`** — the zero-command identity dict
    that already feeds vendor/product/revision. Its documented key set
    (`doc/dr-field-mapping.md`, "Identity / device-static") is
-   Vendor / Product / FirmwareRevision / CanWrite\* / PhysicalInterconnect.
-   **No serial key.** The 06-10 design's "DR has no serial key and predates
-   AACS" holds against the vendored-header mapping. (The 06-13 survey notes
-   `drutil` reports a serial; `drutil` is a DiscRecording client, but the
-   Info dict carries no such key, so it obtains the serial by some other
-   path — most likely a raw INQUIRY of its own. Not verified here, and not
-   load-bearing: what matters is that `mos`'s zero-command surface cannot
-   carry it.)
+   SupportLevel / IORegistryEntryPath / VendorName / ProductName /
+   FirmwareRevision / PhysicalInterconnect{,Location} / WriteCapabilities /
+   LoadingMechanism{CanEject,CanInject,CanOpen} / WriteBufferSize.
+   **No serial key.** Re-verified 2026-06-16 against the live modern header
+   (`DRCoreDevice.h`, MacOSX15.5.sdk public mirror, §11): the string
+   "serial" does not appear anywhere in the file, and no `DRDevice*`
+   function or key exposes a unit serial. The 06-10 design's "DR has no
+   serial key and predates AACS" holds.
+
+   **The 06-13 survey's "drutil … serial" claim is wrong — checked
+   2026-06-16.** It was the basis for asking this whole question ("drutil is
+   a DR wrapper, so if it shows a serial, DR must carry one"). It does not.
+   drutil's DiscRecording-sourced identity output is vendor / product / rev
+   / bus / support-level — the exact `DRDeviceCopyInfo` key set above, no
+   serial column (`drutil list` / `status` / `info`); the documented
+   behavior even notes status "does not directly display the serial number."
+   And the premise is false anyway: drutil is **not** a pure DR wrapper — its
+   `getconfig` / `trackinfo` / `subchannel` / `cdtext` subcommands dump raw
+   MMC command output, so it issues SCSI directly. If any drutil surface ever
+   printed a serial it would be drutil's own raw INQUIRY, not a DR key. Either
+   way `mos`'s zero-command DR surface cannot carry the serial — confirmed,
+   not assumed.
 
 2. **Convenience `Inquiry` standard-INQUIRY tail (bytes 36+).** Standard
    INQUIRY data has a vendor-specific region from byte 36, and
