@@ -672,12 +672,22 @@ never a per-device special-case.
 ### (2026-06-16, narrows the "INQUIRY = EVPD=1 page 0x80" scope above)
 
 The ADR above admitted INQUIRY (0x12) for exactly one mode: EVPD=1, PAGE
-CODE 0x80 (the serial). The drive-standards work (`mos_query_drive_standards`,
-`src/mos_standards.c` / parser `src/mos_versiondesc.c`, feeding
-`mos.drive.v1.version` + `version_descriptors`) adds a **second mode of the
-same opcode**: EVPD=0 standard INQUIRY with allocation length ≥74, to read
-the VERSION byte and the version descriptors (bytes 58-73 — the standards the
-drive claims). Design: `doc/research/2026-06-16-drive-identity-enrichment-survey.md`.
+CODE 0x80 (the serial). The drive-identity work (`mos_query_drive_inquiry`,
+`src/mos_drive_inquiry.c` / parser `src/mos_inqdata.c`, feeding
+`mos.drive.v1` vendor/product/revision + version + `version_descriptors`)
+adds a **second mode of the same opcode**: EVPD=0 standard INQUIRY with
+allocation length ≥74, to read the drive's self-reported identity
+(vendor/product/revision, bytes 8-35), the VERSION byte, and the version
+descriptors (bytes 58-73 — the standards the drive claims). Design:
+`doc/research/2026-06-16-drive-identity-enrichment-survey.md`.
+
+**Why `mos drive` prefers it over the DR cache.** Identity elsewhere
+(`mos list`, `mos state`) comes zero-command from the DiscRecording
+directory cache. `mos drive` is the one path where the user explicitly asks
+for the canonical drive truth, and it is *already* issuing this raw INQUIRY,
+so it surfaces vendor/product/revision fresh from the drive and uses the DR
+cache only as the fallback when the raw read can't run (BUSY/mounted). No
+other verb changes — the polled paths keep the zero-command DR source.
 
 **This is not a new raw verb.** It is the same opcode 0x12 on the same
 `mos_raw_cdb` path, so the one-raw-CDB count stays **one-of-four** (GESN +

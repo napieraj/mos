@@ -510,8 +510,8 @@ mos_error mos_query_serial(mos_handle_t *h, const char **out);
 /* ---- Drive standards (standard INQUIRY) ------------- */
 
 /* Result of a drive-standards query. Opaque, handle-owned; valid until the
-   next mos_query_drive_standards() call or mos_close(). */
-typedef struct mos_drive_standards mos_drive_standards;
+   next mos_query_drive_inquiry() call or mos_close(). */
+typedef struct mos_drive_inquiry mos_drive_inquiry;
 
 /*
  * Query the standards the drive claims: the VERSION byte (SPC compliance
@@ -528,17 +528,25 @@ typedef struct mos_drive_standards mos_drive_standards;
  * REQUIRED (NULL => MOS_ERR_INVALID_ARG); on success *out is valid until the
  * next query or mos_close().
  */
-mos_error mos_query_drive_standards(mos_handle_t *h,
-                                    const mos_drive_standards **out);
+mos_error mos_query_drive_inquiry(mos_handle_t *h,
+                                    const mos_drive_inquiry **out);
 
-/* Accessors. NULL-tolerant. spc_version is the raw INQUIRY byte 2 (map with
-   mos_spc_version_name; 0 = none/unknown). _descriptor_count is the number of
-   non-empty version-descriptor codes; _descriptor_code(s, i) returns the i-th
-   (0 for out-of-range). Map a descriptor code with mos_version_descriptor_name;
-   an unknown code has a NULL name and is surfaced as hex. */
-uint8_t  mos_drive_standards_spc_version(const mos_drive_standards *s);
-uint8_t  mos_drive_standards_descriptor_count(const mos_drive_standards *s);
-uint16_t mos_drive_standards_descriptor_code(const mos_drive_standards *s,
+/* Accessors. NULL-tolerant. vendor/product/revision are the drive's
+   self-reported identity FRESH from this INQUIRY (trailing-trimmed; NULL when
+   the reply was too short) — `mos drive` prefers these over the DiscRecording
+   cache (mos_handle_vendor/...), which it falls back to. Same display rules as
+   the other identity strings (escape drive-controlled bytes before output).
+   spc_version is the raw INQUIRY byte 2 (map with mos_spc_version_name; 0 =
+   none/unknown). _descriptor_count is the number of non-empty version-
+   descriptor codes; _descriptor_code(s, i) returns the i-th (0 for
+   out-of-range). Map a descriptor code with mos_version_descriptor_name; an
+   unknown code has a NULL name and is surfaced as hex. */
+const char *mos_drive_inquiry_vendor(const mos_drive_inquiry *s);
+const char *mos_drive_inquiry_product(const mos_drive_inquiry *s);
+const char *mos_drive_inquiry_revision(const mos_drive_inquiry *s);
+uint8_t  mos_drive_inquiry_spc_version(const mos_drive_inquiry *s);
+uint8_t  mos_drive_inquiry_descriptor_count(const mos_drive_inquiry *s);
+uint16_t mos_drive_inquiry_descriptor_code(const mos_drive_inquiry *s,
                                              uint8_t i);
 
 /* ---- Disc identity from disc structure -------------- */

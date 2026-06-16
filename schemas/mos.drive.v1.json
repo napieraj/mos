@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/napieraj/mos/schemas/mos.drive.v1.json",
   "title": "mos.drive.v1",
-  "description": "Static drive facts emitted by `mos drive --json`: what IS this drive, vs mos.metadata.v1's what disc is this (design: doc/research/2026-06-10-media-info-design.md, schema taxonomy). Identity is open-time directory data (zero commands); capabilities are one GET CONFIGURATION RT=0 feature walk. The drive-disc JOIN is consumer-side: the pipeline that loaded a disc knows which drive it used. serial — when it arrives — is the durable inventory key that survives replug and machine moves; registry_id is ATTACHMENT identity (replug mints a new one) and must not be used as a durable key.",
+  "description": "Static drive facts emitted by `mos drive --json`: what IS this drive, vs mos.metadata.v1's what disc is this (design: doc/research/2026-06-10-media-info-design.md and 2026-06-16-drive-identity-enrichment-survey.md). This is the verb where the user asks for the canonical truth, so identity (vendor/product/revision), version and version_descriptors are read FRESH from a raw standard INQUIRY, with the DiscRecording directory cache as fallback; capabilities/profiles/firmware_date are one GET CONFIGURATION RT=0 walk. The drive-disc JOIN is consumer-side: the pipeline that loaded a disc knows which drive it used. serial is the durable inventory key that survives replug and machine moves; registry_id is ATTACHMENT identity (replug mints a new one) and must not be used as a durable key.",
   "type": "object",
   "required": [
     "schema",
@@ -39,15 +39,15 @@
     },
     "vendor": {
       "type": ["string", "null"],
-      "description": "INQUIRY-derived vendor string (DiscRecording pre-parsed directory data), null when the directory has no identity. Same sanitization rules as mos.state.v1."
+      "description": "Vendor identification. FRESH from this verb's raw standard INQUIRY (the canonical drive truth), falling back to the DiscRecording pre-parsed directory cache when the raw read can't run (BUSY/mounted); null when neither has it. Same sanitization rules as mos.state.v1. (Other verbs that don't issue the raw INQUIRY — list/state — use the DR cache.)"
     },
     "product": {
       "type": ["string", "null"],
-      "description": "Product identity, same terms as vendor."
+      "description": "Product identification, same terms/source as vendor."
     },
     "revision": {
       "type": ["string", "null"],
-      "description": "Firmware revision (SPC-4 PRODUCT_REVISION_LEVEL), same terms as vendor."
+      "description": "Firmware revision (SPC-4 PRODUCT_REVISION_LEVEL) — the firmware VERSION (4 chars); the creation date is firmware_date. Same terms/source as vendor (fresh INQUIRY, DR fallback)."
     },
     "serial": {
       "type": ["string", "null"],
