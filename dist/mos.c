@@ -288,6 +288,27 @@ void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
                                            uint16_t *out_codes, uint8_t cap,
                                            uint8_t *out_count);
 
+/* ---- Standard INQUIRY decode (mos_stdinq.c) ----------------------- *
+ *
+ * The version byte and the version-descriptor list from STANDARD INQUIRY
+ * data (EVPD=0) — the standards the drive claims. The convenience Inquiry
+ * returns only the 36-byte header, so the descriptors (bytes 58-73) need a
+ * raw read with allocation length >= 74 (mos_standards.c). spc_version is
+ * INQUIRY byte 2; descriptors are up to eight 2-byte BE codes at 58-73, a
+ * 0x0000 slot meaning "none" (skipped). New fields append at the END. */
+typedef struct mos_drive_standards {
+    uint8_t  spc_version;        /* INQUIRY byte 2 (SPC compliance level) */
+    uint8_t  descriptor_count;   /* non-zero version-descriptor codes     */
+    uint16_t descriptors[8];     /* bytes 58-73, BE; 0x0000 slots skipped */
+} mos_drive_standards;
+
+/* Decode standard INQUIRY data into *out. True when the reply has at least
+   the 5-byte header (through Additional Length); the descriptor region is
+   bounded by both `len` and the reply's own Additional Length (byte 4,
+   dual-length rule O-4). Pure, no-OOB — fuzz/ASan-gated. */
+bool mos_internal_stdinq_parse(const uint8_t *buf, size_t len,
+                               mos_drive_standards *out);
+
 /* One feature for the public enumeration (mos_enumerate_features) —
    descriptor header facts only; payload bytes stay internal (a typed decode
    like the AACS caps is how payload facts go public). No internal typedef
@@ -906,6 +927,9 @@ struct mos_handle {
        raw-INQUIRY shell, returned by borrowed pointer; 64 holds any real
        drive serial (SPC max 255 truncates, never overflows). */
     char                      serial_str[64];
+
+    /* Handle-owned standard-INQUIRY result (mos_query_drive_standards). */
+    struct mos_drive_standards drive_standards;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
@@ -2299,6 +2323,62 @@ bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
     return true;
 }
 
+/* ==== src/mos_stdinq.c ==== */
+/*
+ * mos_stdinq.c — pure decode of STANDARD INQUIRY data (EVPD=0): the version
+ * byte (SPC compliance level) and the version-descriptor list (the T10/ISO
+ * standards the drive claims). Read raw because macOS's convenience Inquiry
+ * returns only the 36-byte header, so the descriptors at bytes 58-73 are
+ * structurally unreachable through it (mos_standards.c does the raw read;
+ * AGENTS.md scope-doctrine ADR for the EVPD=0 INQUIRY mode). Naming is
+ * applied at the output sink (mos_spc_version_name / mos_version_descriptor_name).
+ *
+ * No IOKit: the shell hands us a fixed zero-init buffer bounded to the bytes
+ * the transport actually returned. Every length here is device-reported,
+ * hence hostile; the descriptor region is bounded by BOTH the passed len and
+ * the reply's own Additional Length (byte 4) — the dual-length rule (O-4).
+ *
+ * Standard INQUIRY layout (SPC-4 §6.4.2):
+ *   [0]    PERIPHERAL QUALIFIER (7:5) | PERIPHERAL DEVICE TYPE (4:0)
+ *   [1]    RMB (bit7) | …
+ *   [2]    VERSION              — SPC compliance level (the byte we keep)
+ *   [3]    response data format …
+ *   [4]    ADDITIONAL LENGTH (n-4) — bytes that follow; total = 5 + this
+ *   …
+ *   [58..73] VERSION DESCRIPTORS — up to eight 2-byte BE codes (0 = none)
+ */
+
+
+#define STDINQ_HDR        5u    /* through ADDITIONAL LENGTH (byte 4) */
+#define STDINQ_VD_OFFSET 58u    /* first version descriptor           */
+#define STDINQ_VD_MAX     8u    /* eight descriptor slots, bytes 58-73 */
+
+bool mos_internal_stdinq_parse(const uint8_t *buf, size_t len,
+                               mos_drive_standards *out)
+{
+    if (!out) return false;
+    *out = (mos_drive_standards){0};
+    if (!buf || len < STDINQ_HDR) return false;   /* need the fixed header */
+
+    out->spc_version = buf[2];
+
+    /* Trusted end: the smaller of the buffer span and the reply's own
+       declared total (5 + Additional Length). A lying-long Additional Length
+       cannot extend past `len`; an honest-short one shrinks the region. */
+    size_t declared = STDINQ_HDR + (size_t)buf[4];
+    size_t end = (declared < len) ? declared : len;
+
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < STDINQ_VD_MAX; i++) {
+        size_t off = STDINQ_VD_OFFSET + (size_t)i * 2u;
+        if (off + 2u > end) break;                /* descriptor not present */
+        uint16_t code = (uint16_t)(((uint16_t)buf[off] << 8) | buf[off + 1]);
+        if (code != 0) out->descriptors[n++] = code;   /* 0x0000 = empty slot */
+    }
+    out->descriptor_count = n;
+    return true;
+}
+
 /* ==== src/mos_result.c ==== */
 /*
  * mos_result.c — accessors for the opaque query-result objects (layout in
@@ -2541,6 +2621,24 @@ uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)
 uint16_t mos_drive_caps_profile_code(const mos_drive_caps *c, uint8_t i)
 {
     return (c && i < c->profile_count) ? c->profiles[i] : 0;
+}
+
+/* ---- mos_drive_standards accessors (mos_query_drive_standards) ------- */
+
+uint8_t mos_drive_standards_spc_version(const mos_drive_standards *s)
+{
+    return s ? s->spc_version : 0;
+}
+
+uint8_t mos_drive_standards_descriptor_count(const mos_drive_standards *s)
+{
+    return s ? s->descriptor_count : 0;
+}
+
+uint16_t mos_drive_standards_descriptor_code(const mos_drive_standards *s,
+                                             uint8_t i)
+{
+    return (s && i < s->descriptor_count) ? s->descriptors[i] : 0;
 }
 
 /* ---- mos_feature_info accessors (mos_enumerate_features) ------------- */
@@ -4752,6 +4850,57 @@ const char *mos_profile_class(uint16_t profile_code)
     }
 }
 
+/* Standard INQUIRY VERSION byte (byte 2) → SPC compliance token. Values from
+   the Linux kernel scsi.h table (SCSI_SPC_* are resp[2]+1; the wire byte is
+   one less). Unknown / legacy SCSI-1/2 values return NULL (numeric fallback). */
+const char *mos_spc_version_name(uint8_t version)
+{
+    switch (version) {
+        case 0x03: return "spc";
+        case 0x04: return "spc_2";
+        case 0x05: return "spc_3";
+        case 0x06: return "spc_4";
+        case 0x07: return "spc_5";
+        default:   return NULL;   /* 0x00 none, legacy SCSI-1/2, or unknown */
+    }
+}
+
+/* Version-descriptor code (INQUIRY bytes 58-73) → standard token. The
+   "no version claimed" family codes from sg3_utils sg_version_descriptor_arr
+   (the ones drives actually emit). A specific-revision or non-listed code
+   returns NULL and is surfaced as hex (the unknown-code rule). Lower_snake. */
+const char *mos_version_descriptor_name(uint16_t code)
+{
+    switch (code) {
+        case 0x0020: return "sam";
+        case 0x0040: return "sam_2";
+        case 0x0060: return "sam_3";
+        case 0x0080: return "sam_4";
+        case 0x00A0: return "sam_5";
+        case 0x00C0: return "sam_6";
+        case 0x0120: return "spc";
+        case 0x0140: return "mmc";
+        case 0x0180: return "sbc";
+        case 0x0240: return "mmc_2";
+        case 0x0260: return "spc_2";
+        case 0x02A0: return "mmc_3";
+        case 0x0300: return "spc_3";
+        case 0x0320: return "sbc_2";
+        case 0x03A0: return "mmc_4";
+        case 0x0420: return "mmc_5";
+        case 0x0460: return "spc_4";
+        case 0x04C0: return "sbc_3";
+        case 0x04E0: return "mmc_6";
+        case 0x05C0: return "spc_5";
+        case 0x0600: return "sbc_4";
+        case 0x1EA0: return "sat";
+        case 0x1EC0: return "sat_2";
+        case 0x1EE0: return "sat_3";
+        case 0x1F00: return "sat_4";
+        default:     return NULL;   /* per-revision / non-listed → hex fallback */
+    }
+}
+
 /* Physical Format Information book-type codes (MMC-5 / Linux uapi dvd_layer
    values), shared by DVD and HD-DVD. Lower_snake_case; unknown codes return
    NULL for numeric fallback. The schema's book-type enum tracks this table
@@ -6641,6 +6790,76 @@ mos_error mos_query_serial(mos_handle_t *h, const char **out)
         return MOS_ERR_IO;   /* page absent / wrong page / no serial → null */
 
     *out = h->serial_str;
+    return MOS_OK;
+}
+
+/* ==== src/mos_standards.c ==== */
+/*
+ * mos_standards.c — the drive-standards query (mos_query_drive_standards):
+ * one raw STANDARD INQUIRY (EVPD=0, allocation length >= 74) on the
+ * mos_raw_cdb path, decoded by the pure parser in mos_stdinq.c. Surfaces the
+ * VERSION byte (SPC compliance level) and the version-descriptor list — the
+ * standards the drive claims. Named for the datum, not the INQUIRY command.
+ *
+ * Authored raw, not via the convenience Inquiry, because that method returns
+ * only the 36-byte standard header (SCSICmd_INQUIRY_StandardData), so the
+ * version descriptors at bytes 58-73 are structurally unreachable through it
+ * — the same layer-1 raw-verb showing as the serial, the same INQUIRY opcode
+ * (0x12) in a different mode: EVPD=0 here vs EVPD=1/page-0x80 in mos_serial.c
+ * (AGENTS.md scope-doctrine ADR; design:
+ * doc/research/2026-06-16-drive-identity-enrichment-survey.md).
+ *
+ * mos_raw_cdb is the SINGLE ObtainExclusiveAccess call site; this file adds
+ * none. Exclusive access is the gate: a mounted volume / other holder makes
+ * the open fail BUSY and the CDB never issues, so the read backs off rather
+ * than disturb a live nub — the same benign degradation as the serial (a
+ * static drive fact, read with the tray empty). INQUIRY changes no state.
+ */
+
+
+/* 96-byte reply: covers the version descriptors (bytes 58-73) with margin;
+   the parser bounds the decode by both this and the reply's Additional Length. */
+#define MOS_STDINQ_REPLY_BUF 96u
+
+mos_error mos_query_drive_standards(mos_handle_t *h,
+                                    const mos_drive_standards **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* STANDARD INQUIRY (SPC-4 0x12), 6-byte CDB:
+         byte0   opcode 0x12
+         byte1   EVPD = 0                  — standard data (not a VPD page)
+         byte2   PAGE CODE = 0x00          — must be 0 when EVPD=0
+         byte3-4 ALLOCATION LENGTH (BE)    — MOS_STDINQ_REPLY_BUF (>= 74)
+         byte5   CONTROL = 0 */
+    const uint8_t cdb[6] = {
+        0x12, 0x00, 0x00,
+        (uint8_t)(MOS_STDINQ_REPLY_BUF >> 8),
+        (uint8_t)(MOS_STDINQ_REPLY_BUF & 0xFF),
+        0x00,
+    };
+
+    uint8_t  buf[MOS_STDINQ_REPLY_BUF] = {0};
+    uint32_t task_status               = 0;
+    uint8_t  sense[18]                 = {0};
+    uint64_t xferred                   = 0;
+
+    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
+                              MOS_XFER_FROM_TARGET, 2000,
+                              &task_status, sense, &xferred);
+    if (e != MOS_OK) return e;
+    if (task_status != MOS_SCSI_STATUS_GOOD)
+        return MOS_ERR_IO;
+
+    /* Dual-length rule (O-4): bound the parse to the realized transfer count,
+       not the full buffer — the parser further bounds by the reply's own
+       Additional Length. */
+    size_t trusted = (xferred < sizeof buf) ? (size_t)xferred : sizeof buf;
+    if (!mos_internal_stdinq_parse(buf, trusted, &h->drive_standards))
+        return MOS_ERR_IO;   /* truncated below the 5-byte fixed header */
+
+    *out = &h->drive_standards;
     return MOS_OK;
 }
 

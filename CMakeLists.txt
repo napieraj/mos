@@ -179,12 +179,14 @@ set(MOS_PURE_SOURCES
     src/mos_perf.c
     src/mos_modepage.c
     src/mos_vpd80.c
+    src/mos_stdinq.c
     src/mos_result.c
 )
 set(MOS_CORE_BASE_SOURCES
     src/mos_scsi.c
     src/mos_query.c
     src/mos_serial.c
+    src/mos_standards.c
     src/mos_tray.c
     src/mos_state.c
     src/mos_da.c
@@ -348,6 +350,7 @@ if(MOS_BUILD_TESTS)
         tests/test_perf.c
         tests/test_modepage.c
         tests/test_vpd80.c
+        tests/test_stdinq.c
         tests/test_tray.c
         tests/test_result.c
         tests/test_io.c

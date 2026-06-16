@@ -195,6 +195,7 @@ Registry ID:  4295032831
      Serial:  KL2G7942618WL
        AACS:  version 68, bus encryption yes
    Profiles:  cd_rom, cd_r, cd_rw, dvd_rom, dvd_minus_r, ..., bd_rom, bd_r, bd_re
+  Standards:  spc_4 — mmc_6, sbc_3, sam_5, spc_4
      Speeds:  read 10560 kB/s, write 8310 kB/s (max)
        Mech:  tray, buffer 4096 KB
    ErrRecov:  retry 20, PER
@@ -215,7 +216,11 @@ supported-profile set from the GET CONFIGURATION Profile List feature (the
 same walk that yields AACS) — the drive-static disc types this drive can
 handle (CD/DVD/BD…), the modern BD-aware "what can this drive read/write"
 that supersedes the legacy page-0x2A media bits; the per-disc Current bit
-is omitted, so it reflects the drive, not the loaded medium. Read-only
+is omitted, so it reflects the drive, not the loaded medium. `version` and
+`version_descriptors` come from a raw standard INQUIRY (EVPD=0): the SPC
+compliance level and the T10/ISO standards the drive claims (MMC-6, SPC-4,
+SBC-3…) — like `serial`, that raw read self-gates on exclusive access, so
+both are null/`-` when the drive is busy or has a disc mounted. Read-only
 throughout: `mos` reports these settings, it never changes them. Full
 fields: [`schemas/mos.drive.v1.json`](schemas/mos.drive.v1.json).
 

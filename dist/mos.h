@@ -500,6 +500,40 @@ uint64_t    mos_handle_registry_id(const mos_handle_t *h);
  */
 mos_error mos_query_serial(mos_handle_t *h, const char **out);
 
+/* ---- Drive standards (standard INQUIRY) ------------- */
+
+/* Result of a drive-standards query. Opaque, handle-owned; valid until the
+   next mos_query_drive_standards() call or mos_close(). */
+typedef struct mos_drive_standards mos_drive_standards;
+
+/*
+ * Query the standards the drive claims: the VERSION byte (SPC compliance
+ * level) and the version-descriptor list, from a raw STANDARD INQUIRY
+ * (EVPD=0, allocation length >= 74) on the mos_raw_cdb exclusive-access path.
+ * The version descriptors live at INQUIRY bytes 58-73, which macOS's
+ * convenience Inquiry (a 36-byte standard-header read) cannot reach — the
+ * same layer-1 raw-verb showing as the serial, the same INQUIRY opcode in a
+ * different mode (AGENTS.md scope-doctrine ADR; design:
+ * doc/research/2026-06-16-drive-identity-enrichment-survey.md).
+ *
+ * Like the serial it takes ObtainExclusiveAccess (MOS_ERR_BUSY on MOUNTED
+ * media — benign: a static drive fact, read with the tray empty). `out`
+ * REQUIRED (NULL => MOS_ERR_INVALID_ARG); on success *out is valid until the
+ * next query or mos_close().
+ */
+mos_error mos_query_drive_standards(mos_handle_t *h,
+                                    const mos_drive_standards **out);
+
+/* Accessors. NULL-tolerant. spc_version is the raw INQUIRY byte 2 (map with
+   mos_spc_version_name; 0 = none/unknown). _descriptor_count is the number of
+   non-empty version-descriptor codes; _descriptor_code(s, i) returns the i-th
+   (0 for out-of-range). Map a descriptor code with mos_version_descriptor_name;
+   an unknown code has a NULL name and is surfaced as hex. */
+uint8_t  mos_drive_standards_spc_version(const mos_drive_standards *s);
+uint8_t  mos_drive_standards_descriptor_count(const mos_drive_standards *s);
+uint16_t mos_drive_standards_descriptor_code(const mos_drive_standards *s,
+                                             uint8_t i);
+
 /* ---- Disc identity from disc structure -------------- */
 
 /* Result of a disc-structure identity query. Opaque, handle-owned;
@@ -1125,6 +1159,17 @@ const char *mos_profile_name(uint16_t profile_code);
    identical hardware. Finer disambiguation by volume name comes from
    mos_query_volume. */
 const char *mos_profile_class(uint16_t profile_code);
+
+/* Stable snake_case token for the standard INQUIRY VERSION byte (byte 2):
+   0x03 "spc" … 0x07 "spc_5". NULL for 0x00/none, legacy SCSI-1/2, or unknown
+   (consumer falls back to the numeric value). */
+const char *mos_spc_version_name(uint8_t version);
+
+/* Stable snake_case token for an INQUIRY version-descriptor code (bytes
+   58-73), e.g. 0x04E0 → "mmc_6", 0x0460 → "spc_4". Maps the "no version
+   claimed" family codes drives emit; a specific-revision or non-listed code
+   returns NULL so consumers fall back to the hex code. */
+const char *mos_version_descriptor_name(uint16_t code);
 
 
 /* sysexits.h class for an error, suitable for use as a process exit

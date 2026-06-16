@@ -242,6 +242,24 @@ uint16_t mos_drive_caps_profile_code(const mos_drive_caps *c, uint8_t i)
     return (c && i < c->profile_count) ? c->profiles[i] : 0;
 }
 
+/* ---- mos_drive_standards accessors (mos_query_drive_standards) ------- */
+
+uint8_t mos_drive_standards_spc_version(const mos_drive_standards *s)
+{
+    return s ? s->spc_version : 0;
+}
+
+uint8_t mos_drive_standards_descriptor_count(const mos_drive_standards *s)
+{
+    return s ? s->descriptor_count : 0;
+}
+
+uint16_t mos_drive_standards_descriptor_code(const mos_drive_standards *s,
+                                             uint8_t i)
+{
+    return (s && i < s->descriptor_count) ? s->descriptors[i] : 0;
+}
+
 /* ---- mos_feature_info accessors (mos_enumerate_features) ------------- */
 
 uint16_t mos_feature_info_code(const mos_feature_info_t *f)

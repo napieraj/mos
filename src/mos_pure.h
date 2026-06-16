@@ -223,6 +223,27 @@ void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
                                            uint16_t *out_codes, uint8_t cap,
                                            uint8_t *out_count);
 
+/* ---- Standard INQUIRY decode (mos_stdinq.c) ----------------------- *
+ *
+ * The version byte and the version-descriptor list from STANDARD INQUIRY
+ * data (EVPD=0) — the standards the drive claims. The convenience Inquiry
+ * returns only the 36-byte header, so the descriptors (bytes 58-73) need a
+ * raw read with allocation length >= 74 (mos_standards.c). spc_version is
+ * INQUIRY byte 2; descriptors are up to eight 2-byte BE codes at 58-73, a
+ * 0x0000 slot meaning "none" (skipped). New fields append at the END. */
+typedef struct mos_drive_standards {
+    uint8_t  spc_version;        /* INQUIRY byte 2 (SPC compliance level) */
+    uint8_t  descriptor_count;   /* non-zero version-descriptor codes     */
+    uint16_t descriptors[8];     /* bytes 58-73, BE; 0x0000 slots skipped */
+} mos_drive_standards;
+
+/* Decode standard INQUIRY data into *out. True when the reply has at least
+   the 5-byte header (through Additional Length); the descriptor region is
+   bounded by both `len` and the reply's own Additional Length (byte 4,
+   dual-length rule O-4). Pure, no-OOB — fuzz/ASan-gated. */
+bool mos_internal_stdinq_parse(const uint8_t *buf, size_t len,
+                               mos_drive_standards *out);
+
 /* One feature for the public enumeration (mos_enumerate_features) —
    descriptor header facts only; payload bytes stay internal (a typed decode
    like the AACS caps is how payload facts go public). No internal typedef

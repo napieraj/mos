@@ -28,6 +28,14 @@
     {"code": "0x0041", "name": "bd_r"},
     {"code": "0x0043", "name": "bd_re"}
   ],
+  "version": {"code": 6, "name": "spc_4"},
+  "version_descriptors": [
+    {"code": "0x00a0", "name": "sam_5"},
+    {"code": "0x0460", "name": "spc_4"},
+    {"code": "0x04c0", "name": "sbc_3"},
+    {"code": "0x04e0", "name": "mmc_6"},
+    {"code": "0x1ea0", "name": "sat"}
+  ],
   "speeds": null,
   "mechanical": null,
   "error_recovery": null

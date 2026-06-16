@@ -90,6 +90,9 @@ struct mos_handle {
        raw-INQUIRY shell, returned by borrowed pointer; 64 holds any real
        drive serial (SPC max 255 truncates, never overflows). */
     char                      serial_str[64];
+
+    /* Handle-owned standard-INQUIRY result (mos_query_drive_standards). */
+    struct mos_drive_standards drive_standards;
 };
 
 /* Device-info records returned by the enumeration callback. Allocated on
