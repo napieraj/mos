@@ -254,26 +254,24 @@ jobs:
           # library contract for external embedders is: `dist/mos.c`
           # and `dist/mos.h`, plus IOKit/CoreFoundation at link time.
           # This job exercises that contract.
+          #
+          # The pure-suite test files are GLOBBED — tests/test_*.c minus the
+          # macOS adapter/integration suites (their own harnesses, not part of
+          # the unit suite) — so a new test TU is picked up with no edit here.
+          # The list lives once in CMakeLists.txt's mos_tests target; this no
+          # longer keeps a second copy (a missing entry used to fail the link
+          # with an undefined register_* symbol). Same philosophy as the
+          # strict-adapter job's cli/*.c glob.
+          pure_tests=$(ls tests/test_*.c | grep -vE 'tests/test_(adapter_|watch_lifetime|dr_doorbell)')
           cc -std=c11 -Wall -Wextra -Werror \
              -Idist -Isrc -Itests \
              -mmacosx-version-min=12.0 \
              cli/human.c cli/io.c \
-             tests/test_main.c tests/test_sense.c \
-             tests/test_bsd_name.c tests/test_scsi_status.c \
-             tests/test_ioreturn.c \
-             tests/test_state_core.c tests/test_watch_core.c \
-             tests/test_render.c tests/test_human.c \
-             tests/test_config.c tests/test_discinfo.c tests/test_discstruct.c tests/test_cdtext.c \
-             tests/test_physstruct.c tests/test_trackinfo.c tests/test_perf.c tests/test_modepage.c tests/test_tray.c tests/test_result.c tests/test_io.c \
+             $pure_tests \
              /tmp/amalgamated.o \
              -framework IOKit -framework CoreFoundation \
              -framework DiscRecording -framework DiskArbitration \
              -o /tmp/amalgamated_tests
-          # test_render.c registers the hostile-input render fixtures
-          # via register_render_tests(); test_main.c calls that
-          # registration function unconditionally. Omitting the .c
-          # file fails the link (undefined symbol). Keep this list
-          # in sync with the unit-test target in CMakeLists.txt.
           /tmp/amalgamated_tests
           echo "OK: amalgamated test suite passes"
 
@@ -386,11 +384,14 @@ jobs:
       - name: build and run nub invariant checker
         run: |
           set -e
+          # Link the checker against CMake's mos_pure archive rather than a
+          # hand-copied pure-source list — MOS_PURE_SOURCES is the single
+          # source of truth, so a new pure TU is included with no edit here.
+          cmake -B build-nub >/dev/null
+          cmake --build build-nub --target mos_pure
           cc -std=c11 -O2 -I include -I src \
              tests/audit/nub_invariant_check.c \
-             src/mos_pure.c src/mos_sense.c src/mos_strings.c \
-             src/mos_state_core.c src/mos_watch_core.c \
-             src/mos_config.c src/mos_discinfo.c src/mos_discstruct.c src/mos_cdtext.c src/mos_physstruct.c src/mos_trackinfo.c src/mos_perf.c src/mos_modepage.c src/mos_result.c \
+             build-nub/libmos_pure.a \
              -o /tmp/nub
           MOS_NUB_STATUS_SET=1 /tmp/nub
 
@@ -418,27 +419,17 @@ jobs:
       - name: Build pure tests under -O2 -Werror
         run: |
           set -e
-          mkdir -p /tmp/strict
-          # -Wshadow -Wconversion -Wsign-conversion: the third review
-          # verified the pure layer clean under these (rare for C);
-          # the gate owns the property so it stays true. -fanalyzer is
-          # deliberately NOT here — version-dependent false positives
-          # make it a human tool, not a gate.
-          cc -std=c11 -O2 -Wall -Wextra -Wpedantic \
-             -Wshadow -Wconversion -Wsign-conversion -Werror \
-             -I include -I src -I tests \
-             src/mos_pure.c src/mos_sense.c src/mos_strings.c \
-             src/mos_state_core.c src/mos_watch_core.c \
-             src/mos_config.c src/mos_discinfo.c src/mos_discstruct.c src/mos_cdtext.c src/mos_physstruct.c src/mos_trackinfo.c src/mos_perf.c src/mos_modepage.c src/mos_result.c \
-             cli/human.c cli/io.c \
-             tests/test_main.c tests/test_sense.c tests/test_bsd_name.c \
-             tests/test_scsi_status.c tests/test_ioreturn.c \
-             tests/test_state_core.c tests/test_watch_core.c \
-             tests/test_render.c tests/test_human.c \
-             tests/test_config.c tests/test_discinfo.c tests/test_discstruct.c tests/test_cdtext.c \
-             tests/test_physstruct.c tests/test_trackinfo.c tests/test_perf.c tests/test_modepage.c tests/test_tray.c tests/test_result.c tests/test_io.c \
-             -o /tmp/strict/mos_tests_strict
-          /tmp/strict/mos_tests_strict
+          # Drive CMake's mos_tests target (MOS_PURE_SOURCES + the test list,
+          # both defined once in CMakeLists.txt) with the strict flags riding
+          # CMAKE_C_FLAGS — so there is no second source list here to drift
+          # out of sync with the build. -Wshadow/-Wconversion/-Wsign-conversion
+          # catch class-of-bug issues the default level lets through;
+          # -fanalyzer is deliberately NOT here (version-dependent false
+          # positives make it a human tool, not a gate).
+          cmake -B build-strict \
+            -DCMAKE_C_FLAGS="-O2 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror"
+          cmake --build build-strict --target mos_tests
+          ./build-strict/bin/mos_tests
 
   strict-adapter-build:
     # macOS adapter TUs compiled with stricter -Werror flags than the
