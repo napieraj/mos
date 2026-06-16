@@ -86,7 +86,11 @@ ways:
    encodes *"MEDIUM NOT PRESENT - TRAY CLOSED"* vs *"MEDIUM NOT PRESENT -
    TRAY OPEN"*. T10 ASC/ASCQ list, entry `3A/01` and `3A/02`.
 
-`drutil` throws both of those bits away. This tool surfaces them.
+`drutil` throws both of those bits away. DiscRecording exposes a
+tray-open key (`kDRDeviceIsTrayOpenKey`), but it inherits the
+`GetTrayState` convenience's failure-masking (§9.7) — a failed query
+reads back as a confident "closed" — so no Apple surface separates an
+open tray from a query error. This tool surfaces them.
 
 ## 3. API choice: convenience for presence, raw GESN for the tray bit
 
