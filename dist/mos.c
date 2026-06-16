@@ -267,10 +267,26 @@ typedef struct mos_drive_caps {
     bool    aacs;            /* feature 0x010D present in the walk      */
     uint8_t aacs_version;    /* payload byte 3; 0 when aacs is false    */
     bool    bus_encryption;  /* payload byte 0 bit 1; false when absent */
+    /* Supported-profile set from the Profile List feature (0x0000), drive-
+       static (the per-descriptor CurrentP bit is media-dependent, ignored).
+       64 covers a conformant max (one-byte Additional Length ⇒ ≤63 codes). */
+    uint8_t  profile_count;
+    uint16_t profiles[64];
 } mos_drive_caps;
+
+#define MOS_DRIVE_PROFILE_CAP 64u
 
 void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
                                         mos_drive_caps *out);
+
+/* Decode the Profile List feature (0x0000) into out_codes[0..cap), setting
+   *out_count. Each descriptor is 4 bytes: [0..1] Profile Number (BE),
+   [2] bit0 CurrentP (media-dependent — NOT recorded), [3] reserved. Bounded
+   by the feature's Additional Length and cap; a trailing partial descriptor
+   is ignored. Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
+                                           uint16_t *out_codes, uint8_t cap,
+                                           uint8_t *out_count);
 
 /* One feature for the public enumeration (mos_enumerate_features) —
    descriptor header facts only; payload bytes stay internal (a typed decode
@@ -1523,6 +1539,29 @@ void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
     out->aacs_version   = f.data[3];
 }
 
+/* Contract in mos_pure.h. The Profile List feature (0x0000) payload is a
+   sequence of 4-byte Profile Descriptors; we keep the drive-static set of
+   Profile Numbers and ignore the per-descriptor CurrentP bit (which reflects
+   the loaded medium, not the drive). Bounded by the feature's data_len and
+   cap; the feature walk already proved f.data spans data_len bytes in-bounds. */
+void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
+                                           uint16_t *out_codes, uint8_t cap,
+                                           uint8_t *out_count)
+{
+    if (out_count) *out_count = 0;
+    if (!out_codes || cap == 0 || !out_count) return;
+
+    mos_config_feature f;
+    if (!mos_internal_config_find_feature(buf, len, 0x0000, &f)) return;
+    if (!f.data || f.data_len < 4) return;       /* no descriptors */
+
+    uint8_t n = 0;
+    for (size_t i = 0; i + 4u <= f.data_len && n < cap; i += 4u) {
+        out_codes[n++] = (uint16_t)(((uint16_t)f.data[i] << 8) | f.data[i + 1]);
+    }
+    *out_count = n;
+}
+
 /* ==== src/mos_discinfo.c ==== */
 /*
  * mos_discinfo.c — pure, bounds-safe decode of a READ DISC INFORMATION
@@ -2492,6 +2531,16 @@ uint8_t mos_drive_caps_aacs_version(const mos_drive_caps *c)
 bool mos_drive_caps_bus_encryption(const mos_drive_caps *c)
 {
     return c ? c->bus_encryption : false;
+}
+
+uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)
+{
+    return c ? c->profile_count : 0;
+}
+
+uint16_t mos_drive_caps_profile_code(const mos_drive_caps *c, uint8_t i)
+{
+    return (c && i < c->profile_count) ? c->profiles[i] : 0;
 }
 
 /* ---- mos_feature_info accessors (mos_enumerate_features) ------------- */
@@ -6178,6 +6227,12 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
     }
 
     mos_internal_aacs_caps_from_config(buf, sizeof(buf), &h->caps);
+    /* Same RT=0 reply carries the Profile List feature (0x0000); decode the
+       drive-static supported-profile set from it (aacs_caps zeroed the struct
+       first, so profile_count stays 0 if the feature is absent). */
+    mos_internal_profile_list_from_config(buf, sizeof(buf), h->caps.profiles,
+                                          MOS_DRIVE_PROFILE_CAP,
+                                          &h->caps.profile_count);
     *out = &h->caps;
     return MOS_OK;
 }

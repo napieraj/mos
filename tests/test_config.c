@@ -680,8 +680,73 @@ TEST(config_find_feature_absent_or_hostile_is_false)
     return 0;
 }
 
+TEST(profile_list_extracts_drive_static_set)
+{
+    /* GET CONFIG RT=0: 8-byte header (current 0x0010) + Profile List (0x0000)
+       with three 4-byte descriptors — DVD-ROM (CurrentP set), CD-ROM, BD-RE.
+       The per-descriptor CurrentP bit is media-dependent and must be ignored;
+       the extracted set is the drive-static profile numbers in list order. */
+    uint8_t buf[] = {
+        0x00,0x00,0x00,0x14,  0x00,0x00, 0x00,0x10,   /* dlen 20 → total 24 */
+        0x00,0x00, 0x03, 0x0C,                         /* Profile List, add=12 */
+        0x00,0x10, 0x01, 0x00,                         /* DVD-ROM, CurrentP=1  */
+        0x00,0x08, 0x00, 0x00,                         /* CD-ROM               */
+        0x00,0x43, 0x00, 0x00,                         /* BD-RE                */
+    };
+    uint16_t codes[8]; uint8_t n = 99;
+    mos_internal_profile_list_from_config(buf, sizeof buf, codes, 8, &n);
+    EXPECT_EQ(n, 3);
+    EXPECT_EQ(codes[0], 0x0010);
+    EXPECT_EQ(codes[1], 0x0008);
+    EXPECT_EQ(codes[2], 0x0043);
+    EXPECT_STREQ("bd_re", mos_profile_name(codes[2]));
+    return 0;
+}
+
+TEST(profile_list_absent_empty_bounds_and_null)
+{
+    uint16_t codes[2]; uint8_t n = 99;
+
+    /* Feature absent (only Core present) → count 0. */
+    uint8_t plain[] = { 0,0,0,8, 0,0, 0x00,0x10, 0x00,0x01, 0x03, 0x00 };
+    mos_internal_profile_list_from_config(plain, sizeof plain, codes, 2, &n);
+    EXPECT_EQ(n, 0);
+
+    /* Present but empty (add=0) → count 0, not malformed. */
+    uint8_t empty[] = { 0,0,0,8, 0,0, 0,0, 0x00,0x00, 0x03, 0x00 };
+    n = 99;
+    mos_internal_profile_list_from_config(empty, sizeof empty, codes, 2, &n);
+    EXPECT_EQ(n, 0);
+
+    /* Three descriptors but cap = 2 → truncates to cap, no overflow. */
+    uint8_t buf[] = {
+        0,0,0,0x14,  0,0, 0,0,
+        0x00,0x00, 0x03, 0x0C,
+        0x00,0x10, 0x00, 0x00,
+        0x00,0x08, 0x00, 0x00,
+        0x00,0x43, 0x00, 0x00,
+    };
+    n = 99;
+    mos_internal_profile_list_from_config(buf, sizeof buf, codes, 2, &n);
+    EXPECT_EQ(n, 2);
+    EXPECT_EQ(codes[0], 0x0010);
+    EXPECT_EQ(codes[1], 0x0008);
+
+    /* NULL / zero-cap / NULL-buf are safe and yield count 0. */
+    n = 99;
+    mos_internal_profile_list_from_config(NULL, 0, codes, 2, &n);
+    EXPECT_EQ(n, 0);
+    mos_internal_profile_list_from_config(buf, sizeof buf, NULL, 2, &n);
+    EXPECT_EQ(n, 0);
+    mos_internal_profile_list_from_config(buf, sizeof buf, codes, 0, &n);
+    EXPECT_EQ(n, 0);
+    return 0;
+}
+
 void register_config_tests(void)
 {
+    RUN(profile_list_extracts_drive_static_set);
+    RUN(profile_list_absent_empty_bounds_and_null);
     RUN(toc_parses_real_pony_cd_single);
     RUN(aacs_caps_from_real_wh16ns40_capture);
     RUN(aacs_caps_decode_and_fail_closed);

@@ -134,3 +134,26 @@ void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
     out->bus_encryption = (f.data[0] & 0x02u) != 0;
     out->aacs_version   = f.data[3];
 }
+
+/* Contract in mos_pure.h. The Profile List feature (0x0000) payload is a
+   sequence of 4-byte Profile Descriptors; we keep the drive-static set of
+   Profile Numbers and ignore the per-descriptor CurrentP bit (which reflects
+   the loaded medium, not the drive). Bounded by the feature's data_len and
+   cap; the feature walk already proved f.data spans data_len bytes in-bounds. */
+void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
+                                           uint16_t *out_codes, uint8_t cap,
+                                           uint8_t *out_count)
+{
+    if (out_count) *out_count = 0;
+    if (!out_codes || cap == 0 || !out_count) return;
+
+    mos_config_feature f;
+    if (!mos_internal_config_find_feature(buf, len, 0x0000, &f)) return;
+    if (!f.data || f.data_len < 4) return;       /* no descriptors */
+
+    uint8_t n = 0;
+    for (size_t i = 0; i + 4u <= f.data_len && n < cap; i += 4u) {
+        out_codes[n++] = (uint16_t)(((uint16_t)f.data[i] << 8) | f.data[i + 1]);
+    }
+    *out_count = n;
+}

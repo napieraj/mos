@@ -13,6 +13,7 @@
     "revision",
     "serial",
     "capabilities",
+    "profiles",
     "speeds",
     "mechanical",
     "error_recovery"
@@ -68,6 +69,26 @@
         "bus_encryption": {
           "type": ["boolean", "null"],
           "description": "DRIVE-REPORTED bus-encryption support (feature payload byte 0 bit 1, per libaacs/UDFclient agreement), null when aacs is false. A firmware assertion: the cryptographically signed BEC bit lives in the AACS drive certificate behind REPORT KEY, which mos does not issue (scope doctrine)."
+        }
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "description": "Supported-profile set from the GET CONFIGURATION Profile List feature (0x0000) — the drive-static disc types this drive handles (the modern, BD-aware capability set, superseding the legacy MODE SENSE page-0x2A read/write media bits). The per-descriptor Current bit is media-dependent and deliberately omitted; this is what the drive CAN do, irrespective of the loaded disc. Empty array when the feature was absent (data, not an error). A consumer matches a profile by its stable MMC code or its name; an unknown code carries name null and is identified by code.",
+      "items": {
+        "type": "object",
+        "required": ["code", "name"],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^0x[0-9a-f]{4}$",
+            "description": "MMC profile number as lowercase hex (e.g. 0x0008 CD-ROM, 0x0010 DVD-ROM, 0x002b DVD+R DL, 0x0043 BD-RE)."
+          },
+          "name": {
+            "type": ["string", "null"],
+            "description": "Lowercase profile name (mos_profile_name), or null for a code mos does not name (consumer falls back to code)."
+          }
         }
       }
     },

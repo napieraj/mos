@@ -202,10 +202,26 @@ typedef struct mos_drive_caps {
     bool    aacs;            /* feature 0x010D present in the walk      */
     uint8_t aacs_version;    /* payload byte 3; 0 when aacs is false    */
     bool    bus_encryption;  /* payload byte 0 bit 1; false when absent */
+    /* Supported-profile set from the Profile List feature (0x0000), drive-
+       static (the per-descriptor CurrentP bit is media-dependent, ignored).
+       64 covers a conformant max (one-byte Additional Length ⇒ ≤63 codes). */
+    uint8_t  profile_count;
+    uint16_t profiles[64];
 } mos_drive_caps;
+
+#define MOS_DRIVE_PROFILE_CAP 64u
 
 void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
                                         mos_drive_caps *out);
+
+/* Decode the Profile List feature (0x0000) into out_codes[0..cap), setting
+   *out_count. Each descriptor is 4 bytes: [0..1] Profile Number (BE),
+   [2] bit0 CurrentP (media-dependent — NOT recorded), [3] reserved. Bounded
+   by the feature's Additional Length and cap; a trailing partial descriptor
+   is ignored. Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
+                                           uint16_t *out_codes, uint8_t cap,
+                                           uint8_t *out_count);
 
 /* One feature for the public enumeration (mos_enumerate_features) —
    descriptor header facts only; payload bytes stay internal (a typed decode

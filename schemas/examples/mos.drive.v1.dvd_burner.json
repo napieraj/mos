@@ -11,6 +11,18 @@
     "aacs_version": null,
     "bus_encryption": null
   },
+  "profiles": [
+    {"code": "0x0008", "name": "cd_rom"},
+    {"code": "0x0009", "name": "cd_r"},
+    {"code": "0x000a", "name": "cd_rw"},
+    {"code": "0x0010", "name": "dvd_rom"},
+    {"code": "0x0011", "name": "dvd_minus_r"},
+    {"code": "0x001a", "name": "dvd_plus_rw"},
+    {"code": "0x001b", "name": "dvd_plus_r"},
+    {"code": "0x0040", "name": "bd_rom"},
+    {"code": "0x0041", "name": "bd_r"},
+    {"code": "0x0043", "name": "bd_re"}
+  ],
   "speeds": {
     "descriptor_count": 4,
     "max_read_kbps": 10560,

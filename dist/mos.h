@@ -456,6 +456,17 @@ bool    mos_drive_caps_aacs(const mos_drive_caps *c);
 uint8_t mos_drive_caps_aacs_version(const mos_drive_caps *c);
 bool    mos_drive_caps_bus_encryption(const mos_drive_caps *c);
 
+/* Supported-profile set from the Profile List feature (0x0000) — the
+   drive-static disc types this drive handles (the modern, BD-aware "what can
+   this drive read/write", superseding the legacy page-0x2A media bits). The
+   per-descriptor CurrentP bit is media-dependent and deliberately omitted.
+   _count is the number of codes; _code(c, i) returns the i-th MMC profile
+   number (0 for out-of-range i / NULL c). Map a code to a name with
+   mos_profile_name() / mos_profile_class(); an unknown code has a NULL name
+   and is surfaced as its hex value. */
+uint8_t  mos_drive_caps_profile_count(const mos_drive_caps *c);
+uint16_t mos_drive_caps_profile_code(const mos_drive_caps *c, uint8_t i);
+
 /* Drive identity for a held handle — the open-time directory data
    (DiscRecording pre-parsed INQUIRY strings) and the drive service's
    registry entry ID. Zero commands. Strings are borrowed from the
