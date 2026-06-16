@@ -190,9 +190,15 @@ in `AGENTS.md`. The chain of files is the audit trail.
   takes only `SCSICmd_INQUIRY_StandardData*`, no EVPD/PAGE_CODE parameter,
   and the file has no separate VPD/serial method; contrast `ModeSense10`
   (PC/PAGE_CODE) and `GetConfiguration` (RT). Both cheap paths also ruled
-  out: `DRDeviceCopyInfo` has no serial key (dr-field-mapping), and the
+  out: `DRDeviceCopyInfo` has no serial key (dr-field-mapping), the
   standard-INQUIRY vendor tail (bytes 36+) is rejected as device-quirk
-  special-casing. So the serial is a raw INQUIRY VPD 0x80 under the AGENTS
+  special-casing, and the IOKit IORegistry path — checked because a serial
+  could hide under a non-obvious key the way firmware hides under "revision"
+  — defines `kIOPropertyProductSerialNumberKey` ("Serial Number") but the
+  optical kernel stack (`IOSCSIPrimaryCommandsDevice` /
+  `IOSCSIProtocolServices` / `IOATABlockStorageDevice`, source-verified)
+  never populates it: it parses only standard INQUIRY, never VPD 0x80. So
+  the serial is a raw INQUIRY VPD 0x80 under the AGENTS
   layer-1 raw-verb rule: showing (a) satisfied by the header, showing (b)
   the ObtainExclusiveAccess→BUSY-on-mounted analysis (benign — serial is a
   static fact, null-on-busy is graceful). Includes the CDB, pure-parser +
