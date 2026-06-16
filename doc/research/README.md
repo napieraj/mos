@@ -213,16 +213,18 @@ in `AGENTS.md`. The chain of files is the audit trail.
   (the SCSI 4-char rev is a SATL truncation of the ATA 8-char field; macOS
   has no ATA pass-through, QA1179, and 0xA1 collides with MMC BLANK), but a
   firmware *build date* IS reachable and MMC-standard (GET CONFIG feature
-  0x1FF), free on the walk mos already does. Cheap wins, all on already-open
-  paths (no new raw verb, one-of-four count unchanged): physical interconnect
-  (zero-command DR field), supported-profile list (feature 0x0000, BD-aware,
-  carries per-format write), INQUIRY version byte + version descriptors (raw
-  EVPD=0 on the existing handle), firmware date (0x1FF best-effort). Rejected:
-  a boolean "can write" (tautology — mos only opens burners, gated by both
-  the §9.1 attach rule and DR's recorder-only enumeration), VPD 0x83
-  (optical rarely implements), VPD 0x00, GET-CONFIG serial 0x0108
-  (redundant), vendor INQUIRY tail, region/RPC (needs a new REPORT KEY verb).
-  No code change (Process rule 2 / hardware-role ADR).
+  0x1FF), free on the walk mos already does. Cheap wins, all Tier-1 on
+  already-open paths (no new raw verb, one-of-four count unchanged):
+  supported-profile list (feature 0x0000, BD-aware, carries per-format
+  write), INQUIRY version byte + version descriptors (raw EVPD=0 on the
+  existing handle), firmware date (0x1FF best-effort). Rejected: physical
+  interconnect (always a USB-bridge shell in 2026 → near-constant "USB", no
+  signal, and reports the bridge not the drive — the drutil-contract
+  out-of-scope identity), a boolean "can write" (tautology — mos only opens
+  burners, gated by both the §9.1 attach rule and DR's recorder-only
+  enumeration), VPD 0x83 (optical rarely implements), VPD 0x00, GET-CONFIG
+  serial 0x0108 (redundant), vendor INQUIRY tail, region/RPC (needs a new
+  REPORT KEY verb). No code change (Process rule 2 / hardware-role ADR).
 
 (An entry for a `2026-04-26-doctrine-review.md` note previously
 appeared in this index; that file was never committed and the entry
