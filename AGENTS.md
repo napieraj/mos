@@ -608,3 +608,62 @@ table or a bounds/validity rule out of code to cut lines — that remains
 the locality forfeit the comment doctrine refuses. SPEC.md holds
 citations, cross-checks, and undecoded-field notes; it never becomes the
 home of the live parse.
+
+## ADR: fourth raw CDB admitted — INQUIRY VPD page 0x80 (drive serial)
+## (2026-06-16, the one-raw-CDB count goes to one-of-four)
+
+The scope doctrine (layer 1) admits a raw CDB only with two showings:
+(a) no convenience method can carry the information, and (b) the
+nub-collision / exclusive-access analysis. This entry records the fourth
+raw CDB — INQUIRY with EVPD=1, PAGE CODE 0x80 (Unit Serial Number),
+`src/mos_serial.c` / `mos_query_serial`, feeding `mos.drive.v1.serial`.
+Full derivation: `doc/research/2026-06-16-serial-vpd-0x80-feasibility.md`.
+
+**Showing (a) — no convenience or zero-command path carries it — SATISFIED
+from the header, no hardware.** `MMCDeviceInterface`'s `Inquiry` takes only
+`SCSICmd_INQUIRY_StandardData *` — no EVPD bit, no PAGE_CODE parameter
+(contrast `ModeSense10`'s PC/PAGE_CODE, `GetConfiguration`'s RT), and the
+header exposes no separate VPD/serial method — so VPD 0x80 is structurally
+unreachable through it. The two cheap paths are out too: DiscRecording's
+`DRDeviceCopyInfo` has no serial key (it predates the need), and IOKit's
+`kIOPropertyProductSerialNumberKey` slot exists but the optical SCSI kernel
+stack never populates it (only the AHCI block path does, from ATA IDENTIFY
+— source-verified in the feasibility note). This is the same absence/masking
+shape as the §9.7 `GetTrayState` showing and the read-capacity note.
+
+**Showing (b) — nub-collision — simpler than GESN or the tray verbs.**
+INQUIRY is a non-media command: it touches no IOMedia nub and creates no
+§5.5 interleaving exposure. `mos_raw_cdb` stays the SINGLE
+`ObtainExclusiveAccess` call site (ARCHITECTURE §3); `mos_serial.c` adds
+none. Exclusive access is the gate: a mounted volume / other holder makes
+`ObtainExclusiveAccess` fail (BUSY) and the CDB never issues, so the read
+backs off rather than disturb a live nub — same BUSY-on-mounted guard the
+tray verbs inherit. No drive-state change, so no lock-lifetime question
+(unlike the PREVENT verbs — no atexit, no persistence). The one consequence:
+the serial is unreadable while media is mounted (`serial` stays null), which
+is benign — it is a static drive fact, equally readable with the tray empty,
+and an empty tray is the natural inventory moment.
+
+**Count and footprint.** The one-raw-CDB count becomes **one-of-four**:
+GESN (0x4A) + the two tray opcodes (0x1B START STOP UNIT, 0x1E PREVENT
+ALLOW MEDIUM REMOVAL) + INQUIRY (0x12). `mos_raw_cdb` remains the sole
+exclusive-access call site. Privilege footprint (layer 3) is unchanged:
+the same SCSITaskUserClient console grant — no root, no entitlement, no TCC.
+
+**Where it lives, by maintainer decision (2026-06-16).** Serial is read in
+`mos drive` only — a deliberate, infrequent "what IS this drive" ask. It is
+deliberately NOT folded into `mos_query_state` / `mos.state.v1`, which is
+frequent and polled and keeps a no-lock-on-READY shape (a GOOD TUR
+short-circuits without a lock; the raw GESN is taken only on the not-ready
+branch where "not ready ⇒ not mounted ⇒ lock is free", `mos_state_core.c`).
+The `mos watch` extension (grab-once-per-`registry_id`, cached on the event)
+is feasibility-clear but **deferred, not declined** — design captured in the
+feasibility note for a future session when a watch consumer needs it.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR):
+a drive that does not implement page 0x80 (it is optional) answers 5/24/00
+or echoes a different page — the parser's page-code-echo gate classifies it
+to null, expected not a defect; a USB-SATA bridge that synthesizes a bogus
+or truncated page-0x80 reply is caught by the dual-length (O-4) bound and
+the ASCII trim. Each lands as a fixture + dated note with a generic defense,
+never a per-device special-case.
