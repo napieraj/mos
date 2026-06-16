@@ -72,8 +72,8 @@ mos already pays for four data sources. The value of a candidate is mostly
 
 | Candidate | Source | Tier | Optical-populated | Verdict |
 |---|---|---|---|---|
-| **Physical interconnect (bus type)** | DR `kDRDevicePhysicalInterconnect{,Location}Key` | 0 | always | **ship — cheapest, clean** |
-| Write-capability (boolean) | implied by openability | — | always | **skip — tautology (mos only opens burners)** |
+| Physical interconnect (bus type) | DR `kDRDevicePhysicalInterconnect{,Location}Key` | 0 | always | **skip — always USB-bridge today (no signal); bridge identity** |
+| Write-capability (boolean) | implied by openability | — | always | skip — tautology (mos only opens burners) |
 | **Supported-profile list** | GET CONFIG feature 0x0000 | 1 (existing walk) | always | **ship — richest cap fact; carries per-format write** |
 | **Firmware build date** | GET CONFIG feature 0x1FF | 1 (existing walk) | sometimes | **ship best-effort (firmware answer)** |
 | **INQUIRY version + version descriptors** | raw INQUIRY EVPD=0 bytes 2, 58-73 | 1 (existing handle) | partial | **ship — standards the drive claims** |
@@ -87,16 +87,10 @@ mos already pays for four data sources. The value of a candidate is mostly
 
 ### The strong cheap wins
 
-1. **Physical interconnect (bus type).** DR exposes
-   `kDRDevicePhysicalInterconnectKey` (USB / SATA / ATAPI / FireWire /
-   internal-external) zero-command — `doc/dr-field-mapping.md` already flags
-   it "new metadata if wanted." A genuinely useful "what *is* this drive"
-   fact (an external USB burner vs an internal SATA drive), free, no command,
-   works with media mounted. The GET CONFIG Core feature 0x0001 carries the
-   same bus type, but DR is cheaper, so prefer DR; mention 0x0001 only as the
-   command-path fallback if DR ever lacks it.
+(Tier 0 is empty: its one candidate — physical interconnect — is rejected
+below as a near-constant "USB" with no signal. Every cheap win is Tier 1.)
 
-2. **Supported-profile list (feature 0x0000).** The single richest
+1. **Supported-profile list (feature 0x0000).** The single richest
    capability fact and the *modern, BD-aware* answer to "what disc types can
    this drive read/write" — superior to libcdio's page-2A read/write flags,
    whose vocabulary stops at DVD (no Blu-ray). Always present. mos already
@@ -123,7 +117,7 @@ mos already pays for four data sources. The value of a candidate is mostly
    say anything. Only the *granular which-formats* question carries signal,
    and that is the profile list above.
 
-3. **INQUIRY version byte + version descriptors.** A second raw INQUIRY
+2. **INQUIRY version byte + version descriptors.** A second raw INQUIRY
    (EVPD=0, allocation length ≥ 74) on the existing handle yields byte 2
    (SPC compliance level — "SPC-3"/"SPC-4") and bytes 58-73 (up to eight
    codes naming the standards the drive claims: SPC-4, MMC-6, SBC, SAM-4…).
@@ -134,11 +128,24 @@ mos already pays for four data sources. The value of a candidate is mostly
    table is a small static lookup (like mos's other string tables); unknown
    codes emit as hex and never fail (the unknown-enum rule).
 
-4. **Firmware build date (feature 0x1FF).** As above — best-effort, the
+3. **Firmware build date (feature 0x1FF).** As above — best-effort, the
    reachable firmware enrichment, free on the existing walk.
 
 ### The rejections (and why, briefly)
 
+- **Physical interconnect / bus type (DR `kDRDevicePhysicalInterconnectKey`).**
+  Looks like the cheapest win (zero-command DR field, "what bus is this
+  drive"), but it carries no signal on mos's actual hardware: in 2026 every
+  optical drive is a bare mechanism in a **USB-bridge** shell (the Apple USB
+  SuperDrive; bare drives in USB-SATA enclosures — `README.md`,
+  `2026-04-26-silicon-family-map.md`; the serial doc's "pure optical readers
+  are unobtainable, writers themselves a historical artifact"). So
+  `interconnect` is a near-constant `"USB"` — the same no-information shape as
+  the can-write tautology — and what it reports is the **bridge/enclosure's**
+  bus, not the drive's, exactly the "unreliable through USB bridges, out of
+  scope" identity the drutil-contract note (`2026-06-10-drutil-contract.md`)
+  already set aside. Skip. (The GET CONFIG Core 0x0001 bus field is the same
+  near-constant value from a command path — skip for the same reason.)
 - **VPD 0x83 (Device Identification / WWN).** Looks like a better durable ID
   than the vendor-formatted serial, but optical/ATAPI drives commonly don't
   implement 0x80/0x83/0x85 (return 5/24/00) — on mos's target hardware it is
@@ -183,34 +190,34 @@ mos already pays for four data sources. The value of a candidate is mostly
 
 ## Recommendation — cheap wins, tiered by cost
 
-**Tier 0 — zero command (DR directory; works even with media mounted, no
-exclusive access):**
-
-1. **Physical interconnect / bus type** — `kDRDevicePhysicalInterconnectKey`
-   (USB / SATA / ATAPI / FireWire / internal-external). No command at all —
-   the cheapest, cleanest "what *is* this drive" fact. **Best first add.**
+**Tier 0 — zero command (DR directory):** *empty.* Its only candidate,
+physical interconnect, is rejected — in 2026 every optical drive is a
+USB-bridge shell, so the field is a near-constant `"USB"` (no signal) and
+reports the bridge's bus, not the drive's (see rejections).
 
 **Tier 1 — rides a command mos already issues (no new raw verb; the
 one-of-four raw-CDB count is unchanged):**
 
-2. **Supported-profile list** — GET CONFIG feature 0x0000, on the walk mos
+1. **Supported-profile list** — GET CONFIG feature 0x0000, on the walk mos
    already does for AACS. The richest, BD-aware capability fact; it also
    carries the per-format **write** capability (writable-profile presence) —
    so no separate write matrix, and no boolean "can write" (that is a
-   platform tautology, mos only opens burners).
-3. **Firmware build date** — GET CONFIG feature 0x1FF, same walk. Best-effort,
-   null when absent; the firmware answer beyond `revision`.
-4. **INQUIRY version byte + version descriptors** — a second EVPD=0 read on
+   platform tautology, mos only opens burners). **Highest value; best first.**
+2. **INQUIRY version byte + version descriptors** — a second EVPD=0 read on
    the raw INQUIRY handle already opened for the serial. The "standards this
-   drive claims" (SPC-4/MMC-6…) fingerprint.
-5. *(lower value)* **Page-0x2A extra capability bits** — the MODE SENSE 0x2A
+   drive claims" (SPC-4/MMC-6…) fingerprint. Lowest-risk of the raw paths
+   (the handle and showing already exist).
+3. **Firmware build date** — GET CONFIG feature 0x1FF, same walk as #1.
+   Best-effort, null when absent; the firmware answer beyond `revision`.
+4. *(lower value)* **Page-0x2A extra capability bits** — the MODE SENSE 0x2A
    read mos already does for `mechanical` carries more bits (test-write,
    BURN-Proof, C2, multi-session…), but mostly legacy CD-era; surface only if
    an exhaustive capability matrix is wanted.
 
-Suggested build order: 1 → 2 → 4 → 3 (interconnect is lowest-risk; the
-profile list is highest-value; descriptors and firmware-date are additive
-best-effort). All are additive, drive-static, and within the closed-field-set
+Suggested build order: 1 → 2 → 3 (profile list highest-value; descriptors and
+firmware-date additive best-effort; #1 and #3 are one GET-CONFIG payload-
+decode change, #2 is one INQUIRY-EVPD=0 change). All are additive,
+drive-static, and within the closed-field-set
 schema policy (each a new key/block → a `mos.drive.v1` field-set addition,
 pre-tag mutable-in-place per the JSON-schema ADR: schema + example + negative
 fixtures + emitter + docs in one commit). Page-0x2A extras, VPD 0x83, and the
@@ -222,9 +229,10 @@ ATA path are closed as impossible, not deferred.
 
 Per the hardware-role ADR, a run can refute these but never steered them:
 a drive that omits feature 0x1FF (firmware date) or 0x0000 detail, a USB-SATA
-bridge that mis-reports the interconnect or synthesizes bogus version
-descriptors, an optical drive that *does* populate VPD 0x83 (re-opening that
-field's value). Each lands as a committed fixture + dated note with a generic
+bridge that synthesizes bogus version descriptors, an optical drive that
+*does* populate VPD 0x83 (re-opening that field's value), or — the one that
+would revive the interconnect field — a genuine non-USB optical drive
+reappearing on a shipping Mac. Each lands as a committed fixture + dated note with a generic
 validity gate (length-keyed, page-code-echoed), never a per-device special
 case.
 
