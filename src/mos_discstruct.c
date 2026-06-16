@@ -1,15 +1,11 @@
 /*
  * mos_discstruct.c — pure, bounds-safe decode of a READ DISC STRUCTURE
- * (MMC-5 0xAD) Blu-ray Disc Information (DI) reply: the disc's
- * registered Disc Manufacturer ID + Media Type ID.
- *
- * No IOKit. The IOKit shell issues READ DISC STRUCTURE (BD media type,
- * format 0x00) via the ReadDiscStructure convenience method into a
- * fixed, zero-initialized buffer and hands it plus its size here. Every
- * length and string byte is device/disc-reported and therefore hostile;
- * this file keeps the declared length from steering a read outside
- * [buf, buf+len) and copies the ID bytes verbatim into fixed buffers
- * (the CLI layer escapes them at emit, same as INQUIRY).
+ * (MMC-5 0xAD) Blu-ray Disc Information (DI) reply: the disc's registered
+ * Disc Manufacturer ID + Media Type ID. No IOKit: the shell hands us a
+ * fixed zero-init buffer (filled via ReadDiscStructure) and its size.
+ * Every length and string byte is disc-reported, hence hostile — the
+ * declared length must never steer a read outside [buf, buf+len), and ID
+ * bytes are copied verbatim (the CLI escapes them at emit, like INQUIRY).
  *
  * Layout (response buffer):
  *   [0..1] Disc Structure Data Length (BE) — bytes available AFTER this
@@ -24,10 +20,9 @@
  *            [4+111]      Product Revision Number (1 byte) e.g. '0'
  *
  * The DI offsets (8 / 100 / 106 / 111) are MMC-5 / BDA-registered; the
- * undecoded write-parameter region is noted in SPEC.md. Classification
- * (e.g. manufacturer "MILLEN" => M-DISC) is the CONSUMER's, not mos's:
- * this decode surfaces the registered ID bytes faithfully and stops
- * there (scope doctrine).
+ * undecoded write-parameter region is in SPEC.md. Classification (e.g.
+ * "MILLEN" => M-DISC) is the consumer's: this surfaces the registered ID
+ * bytes faithfully and stops there (scope doctrine).
  */
 
 #include "mos_pure.h"
@@ -41,9 +36,8 @@
 #define DI_REVISION  (DI_HDR + 111u)     /* 1 byte                       */
 #define DI_MIN_LEN   (DI_REVISION + 1u)  /* must reach the revision byte */
 
-/* Copy a fixed-width DI field verbatim, NUL-terminate, then strip
-   trailing spaces (the field is space-padded — same convention as the
-   INQUIRY identity copies). `dst` holds n+1 bytes. */
+/* Copy a fixed-width DI field verbatim, NUL-terminate, strip trailing
+   spaces (space-padded, like the INQUIRY identity copies). dst holds n+1. */
 static void mos_internal_di_copy(const uint8_t *src, size_t n, char *dst)
 {
     size_t i;
@@ -59,17 +53,16 @@ bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
     *out = (struct mos_disc_id){0};
     if (!buf) return false;
 
-    /* Need the fixed identity region present per BOTH the buffer and the
-       reply's own declared length. Declared length only ever shrinks the
-       trusted region (computed wide so the +2 cannot wrap). */
+    /* Identity region must be present per BOTH the buffer and the reply's
+       declared length; the declared length can only shrink the trusted
+       region (computed wide so the +2 cannot wrap). */
     if (len < DI_MIN_LEN) return false;
     size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
     size_t end = (len < declared) ? len : declared;
     if (end < DI_MIN_LEN) return false;
 
-    /* The DI signature gates the whole decode: a reply that is not a DI
-       structure (wrong media type, drive returned something else) is
-       refused rather than read as identity. */
+    /* The DI signature gates the whole decode: a non-DI reply (wrong media
+       type, drive returned something else) is refused, not read as identity. */
     if (buf[DI_SIG_HI] != 'D' || buf[DI_SIG_LO] != 'I') return false;
 
     mos_internal_di_copy(&buf[DI_DISCTYPE], 3, out->disc_type);

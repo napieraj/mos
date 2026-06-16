@@ -1,11 +1,9 @@
 /*
  * mos_discinfo.c — pure, bounds-safe decode of a READ DISC INFORMATION
- * (MMC 0x51, standard data type 000b) response.
- *
- * No IOKit. The IOKit shell issues READ DISC INFORMATION into a fixed,
- * zero-initialized buffer and hands that buffer plus its size here. The
- * Disc Information Length is device-reported and therefore hostile; this
- * file keeps it from steering a read outside [buf, buf+len).
+ * (MMC 0x51, standard data type 000b) response. No IOKit: the shell hands
+ * us a fixed zero-init buffer and its size. The Disc Information Length is
+ * device-reported, hence hostile — it must never steer a read outside
+ * [buf, buf+len).
  *
  * Layout (MMC-6, READ DISC INFORMATION standard response, first 12 bytes):
  *
@@ -58,8 +56,7 @@ bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
     out->last_track_last_session  = (uint16_t)(((uint16_t)buf[11] << 8) | buf[6]);
 
     /* BG Format Status (byte 7 bits 1:0): background-format state of
-       DVD+RW / BD-RE / Mount Rainier media — none / inactive / active /
-       complete. Values match Linux CDM_MRW_* (cdrom.h). */
+       DVD+RW / BD-RE / Mount Rainier media. Values match Linux CDM_MRW_*. */
     out->bg_format_status = (uint8_t)(buf[7] & 0x03u);
     return true;
 }

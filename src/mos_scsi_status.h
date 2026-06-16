@@ -1,7 +1,7 @@
 /*
- * mos_scsi_status.h — SAM-5 §5.3 SCSI task status constants. Sole source
- * of truth; no IOKit/CF deps so the contention classifier and its test
- * stay SDK-free. Values match Apple's kSCSITaskStatus_* enums.
+ * mos_scsi_status.h — SAM-5 §5.3 SCSI task status constants. No IOKit/CF
+ * deps, so the contention classifier and its test stay SDK-free. Values
+ * match Apple's kSCSITaskStatus_* enums.
  */
 
 #ifndef MOS_SCSI_STATUS_H

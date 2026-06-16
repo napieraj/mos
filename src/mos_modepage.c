@@ -1,16 +1,16 @@
 /*
  * mos_modepage.c — pure, bounds-safe decode of MODE SENSE(10) replies for
- * the two optical-specific pages the scope doctrine admits (read-only;
- * AGENTS.md scope-doctrine addendum): page 0x2A (CD/DVD Capabilities &
- * Mechanical Status — loading mechanism, eject/lock, buffer size) and
- * page 0x01 (Read/Write Error Recovery — AWRE/ARRE/PER/DCR + read-retry
- * count). NO MODE SELECT: mos reports configuration, never tunes it.
+ * the two optical-specific pages the scope doctrine admits (read-only):
+ * page 0x2A (CD/DVD Capabilities & Mechanical Status — loading mechanism,
+ * eject/lock, buffer size) and page 0x01 (Read/Write Error Recovery —
+ * AWRE/ARRE/PER/DCR + read-retry count). NO MODE SELECT: mos reports
+ * configuration, never tunes it.
  *
- * No IOKit. The IOKit shell issues MODE SENSE(10) via the ModeSense10
- * convenience method into a fixed, zero-initialized buffer and hands it
- * plus its size here. Every length is device-reported and hostile; the
- * shared page walker keeps the declared lengths from steering a read
- * outside [buf, buf+len) and cannot loop (each step strictly advances).
+ * No IOKit: the shell hands us a fixed zero-init buffer (filled via
+ * ModeSense10) and its size. Every length is device-reported, hence
+ * hostile — the shared page walker keeps the declared lengths from
+ * steering a read outside [buf, buf+len) and cannot loop (each step
+ * strictly advances).
  *
  * MODE SENSE(10) mode parameter header:
  *   [0..1] Mode Data Length (BE) — bytes AFTER this field
@@ -33,11 +33,10 @@
 
 #define MP_HDR  8u   /* MODE SENSE(10) parameter header */
 
-/* Locate a page_0-format mode page by code in a MODE SENSE(10) reply.
-   On success sets *poff (page start) and *plen (page length, i.e. data
-   bytes after the 2-byte page header) and returns true. Bounded: every
-   iteration advances off by at least the page header, so a hostile
-   page-length field cannot loop or read out of bounds. */
+/* Locate a page_0-format mode page by code. On success sets *poff (page
+   start) and *plen (data bytes after the 2-byte page header) and returns
+   true. Bounded: every iteration advances off by at least the page header,
+   so a hostile page-length field cannot loop or read out of bounds. */
 static bool mos_internal_mode_page_find(const uint8_t *buf, size_t len,
                                         uint8_t want,
                                         size_t *poff, size_t *plen)
@@ -88,8 +87,8 @@ bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
     size_t poff, plen;
     if (!mos_internal_mode_page_find(buf, len, 0x2A, &poff, &plen))
         return false;
-    /* Need page bytes through 13 (buffer size at page[12..13]); the
-       walker has already bounded poff + 2 + plen to the trusted end. */
+    /* Need page bytes through 13 (buffer size at page[12..13]); the walker
+       already bounded poff + 2 + plen to the trusted end. */
     if (plen < 12u) return false;
 
     const uint8_t *p = &buf[poff];

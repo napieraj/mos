@@ -1,33 +1,26 @@
 /*
- * mos_cdtext.c — pure, bounds-safe decode of the disc-level (album)
- * Title and Performer from a READ TOC/PMA/ATIP format 0101b (CD-TEXT)
- * reply.
- *
- * No IOKit. The IOKit shell issues READ TOC/PMA/ATIP with format 0101b
- * via the non-exclusive ReadTableOfContents convenience method into a
- * fixed, zero-initialized buffer and hands it plus its size here. Every
- * length and text byte is disc-reported and therefore hostile; this file
- * keeps the declared CD-TEXT Data Length from steering a read outside
- * [buf, buf+len) and copies text bytes verbatim into fixed buffers (the
- * CLI layer escapes them at emit, same as the volume name and INQUIRY
- * identity). No payload byte is ever used as an offset or length.
+ * mos_cdtext.c — pure, bounds-safe decode of the disc-level (album) Title
+ * and Performer from a READ TOC/PMA/ATIP format 0101b (CD-TEXT) reply. No
+ * IOKit: the shell hands us a fixed zero-init buffer (filled via the
+ * non-exclusive ReadTableOfContents) and its size. Every text byte is
+ * disc-reported, hence hostile — the declared CD-TEXT Data Length must
+ * never steer a read outside [buf, buf+len), and text is copied verbatim
+ * (the CLI escapes at emit, like the volume name and INQUIRY identity).
+ * No payload byte is ever used as an offset or length.
  *
  * SCOPE — the album Title/Performer (the "which album is in the drive"
  * disambiguator, parallel to the mounted volume name) plus the per-track
  * TITLES and PERFORMERS, all from the FIRST language block (block 0) in
- * single-byte charset. The field types and language blocks deliberately
- * NOT decoded are listed in SPEC.md; a double-byte (DBCC) field reads as
- * absent rather than mis-decoded as Latin-1. CD-TEXT is BEST-EFFORT
- * DISPLAY TEXT, not a
- * fail-closed fingerprint: audio-CD dedup keys ride on the TOC
- * (mos_internal_toc_parse), the fail-closed identity primitive.
+ * single-byte charset. Field types and language blocks NOT decoded are in
+ * SPEC.md; a double-byte (DBCC) field reads as absent, never mis-decoded
+ * as Latin-1. This is BEST-EFFORT DISPLAY TEXT, not a fail-closed
+ * fingerprint: audio-CD dedup keys ride on the TOC (mos_internal_toc_parse).
  *
  * Stream model (MMC / Red Book): within one (pack-type, block) the
  * per-track strings are NUL-separated and chopped across the 12-byte pack
- * payloads; the first pack's Track Number field seeds the running index,
- * so the stream is [track S, track S+1, ...] (S = 0 is album-level for
- * the title/performer types). We walk the block-0 packs in buffer order,
- * reconstruct that stream, and dispatch each string by its track number.
+ * payloads; the first pack's Track Number seeds the running index, so the
+ * stream is [track S, track S+1, ...] (S = 0 is album-level). We walk the
+ * block-0 packs in buffer order and dispatch each string by track number.
  *
  * Pack layout (READ TOC format 0101b, MMC-3 §6.27 / Red Book CD-TEXT;
  * libcdio cross-check in SPEC.md):
@@ -43,8 +36,8 @@
  *            [4..15]  12 text bytes (NUL separates per-track strings)
  *            [16..17] CRC (present; not verified here, as in libcdio)
  *
- * No-OOB / termination gated headless under ASan/UBSan by
- * tests/test_cdtext.c and the fuzz_pure CD-TEXT phase.
+ * No-OOB / termination gated under ASan/UBSan by tests/test_cdtext.c and
+ * the fuzz_pure CD-TEXT phase.
  */
 
 #include "mos_pure.h"
@@ -59,8 +52,7 @@
 #define CDTEXT_PACK_TITLE     0x80u
 #define CDTEXT_PACK_PERFORMER 0x81u
 
-/* Bounded NUL-terminated copy into a fixed buffer (truncates beyond
-   cap-1). Pure — no stdio in this layer. */
+/* Bounded NUL-terminated copy into a fixed buffer (truncates past cap-1). */
 static void cdtext_copy(char *dst, size_t cap, const char *src)
 {
     size_t i = 0;
@@ -68,10 +60,9 @@ static void cdtext_copy(char *dst, size_t cap, const char *src)
     dst[i] = '\0';
 }
 
-/* Dispatch one reconstructed string `s` to its destination by track
-   number: track 0 is the album field (`album_dst`); tracks 1..MAX go to
-   `tracks[track-1]` when `tracks` is non-NULL, bumping *max_track to the
-   highest track number that carried a NON-EMPTY title. */
+/* Dispatch reconstructed string `s` by track number: track 0 → the album
+   field (`album_dst`); tracks 1..MAX → `tracks[track-1]` when `tracks` is
+   non-NULL, bumping *max_track to the highest track with a NON-EMPTY string. */
 static void cdtext_store(const char *s, uint32_t track,
                          char *album_dst, size_t album_cap,
                          char tracks[][MOS_CDTEXT_TRACK_TITLE_CAP],
@@ -88,13 +79,11 @@ static void cdtext_store(const char *s, uint32_t track,
 }
 
 /* Walk the block-0 packs of `want_type` in buffer order, reconstruct the
-   NUL-separated per-track string stream, and store each string by its
-   track number (the first qualifying pack's Track Number field seeds the
-   running index). The album string (track 0) lands in `album_dst`;
-   per-track strings (track 1..) land in `tracks` when non-NULL. Single-
-   byte only: a double-byte (DBCC) STARTING pack decodes nothing (album
-   left ""), a mid-stream DBCC stops the walk keeping the prefix already
-   stored. */
+   NUL-separated per-track stream, and store each string by track number
+   (the first qualifying pack's Track Number seeds the running index).
+   Track 0 → `album_dst`; tracks 1.. → `tracks` when non-NULL. Single-byte
+   only: a DBCC STARTING pack decodes nothing (album left ""); a mid-stream
+   DBCC stops the walk, keeping the prefix already stored. */
 static void cdtext_decode_type(const uint8_t *buf, size_t span,
                                uint8_t want_type,
                                char *album_dst, size_t album_cap,
@@ -136,8 +125,7 @@ static void cdtext_decode_type(const uint8_t *buf, size_t span,
             if (n + 1 < sizeof cur) cur[n++] = (char)c; /* else truncate    */
         }
     }
-    /* Trailing unterminated string (clamped data ended mid-string): keep
-       it, best-effort. */
+    /* Trailing unterminated string (data clamped mid-string): keep it. */
     if (started && n > 0) {
         cur[n] = '\0';
         cdtext_store(cur, track, album_dst, album_cap, tracks, max_track);
@@ -151,9 +139,9 @@ bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
     memset(out, 0, sizeof *out);
     if (!buf || len < CDTEXT_HDR) return false;
 
-    /* Device claim: CD-TEXT Data Length counts bytes AFTER its own two.
-       64-bit total, clamped by the trusted length (O-4) — a lying length
-       can only shrink the span, never extend a read. */
+    /* CD-TEXT Data Length counts bytes AFTER its own two. 64-bit total,
+       clamped by the trusted length (O-4): a lying length can only shrink
+       the span, never extend a read. */
     uint64_t claimed = 2u + (uint64_t)(((uint32_t)buf[0] << 8) | buf[1]);
     size_t   span    = mos_internal_trusted_len(len, len, claimed);
     if (span < CDTEXT_HDR + CDTEXT_PACK_LEN) return false;  /* no whole pack */
@@ -165,9 +153,9 @@ bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
                        out->performer, sizeof out->performer,
                        out->track_performers, &out->track_count);
 
-    /* "have" is the useful-identity gate: an empty result (no album
-       field, no per-track title) is not identity. Return false → the
-       adapter reports no CD-TEXT (null), same as the other media reads. */
+    /* "have" gates useful identity: an empty result (no album field, no
+       per-track title) isn't identity. False → the adapter reports no
+       CD-TEXT (null), like the other media reads. */
     out->have = out->title[0] || out->performer[0] || out->track_count > 0;
     return out->have;
 }
