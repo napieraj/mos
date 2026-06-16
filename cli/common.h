@@ -118,7 +118,7 @@ int mos_cli_count_drives(void);
 bool mos_cli_unit_for_index(int index, int64_t *unit);
 
 /* Command entry points. */
-int mos_cli_run_query(void);   /* status (default) */
+int mos_cli_run_state(void);   /* state (the default verb) */
 int mos_cli_run_metadata(void); /* disc identity (mos.metadata.v1) */
 int mos_cli_run_drive(void);    /* drive facts (mos.drive.v1) */
 int mos_cli_run_features(void); /* MMC feature list (mos.features.v1) */

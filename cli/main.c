@@ -18,7 +18,8 @@ void mos_cli_print_usage(FILE *f)
         "Report the state of a macOS optical drive.\n"
         "\n"
         "Subcommands:\n"
-        "  status [drive]    Report drive state (default when only flags are given).\n"
+        "  state [drive]     Report drive state (default verb; a bare drive\n"
+        "                    selector also runs it, e.g. `mos 2`, `mos disk4`).\n"
         "  list              List all drives with their states.\n"
         "  watch  [drive]    Stream state events (NDJSON) until SIGINT;\n"
         "                    all drives unless a drive narrows it (hot-plug\n"
@@ -125,6 +126,19 @@ static int parse_index(const char *arg)
     return (int)v;
 }
 
+/* True if the argument contains a decimal digit. The bare-selector gate
+   (see main's dispatch block): every valid drive selector carries a digit
+   — index and registry_id are all-digit, a whole-disk BSD form requires a
+   unit digit (mos_internal_bsd_name_is_whole_shape, src/mos_pure.c) —
+   while no subcommand name does. So a digit in argv[1] means "positional
+   drive, not a verb", decided without scanning the verb table. */
+static bool mos_cli_arg_has_digit(const char *s)
+{
+    for (; s && *s; ++s)
+        if (*s >= '0' && *s <= '9') return true;
+    return false;
+}
+
 /* --json takes no argument — each schema name already carries its version
    (AGENTS.md JSON schema ADR). Reject --json=value with a usage error
    rather than accepting it silently; bare --json (v == NULL) is fine. */
@@ -166,19 +180,25 @@ int main(int argc, char **argv)
            unnumbered conversions in one format is UB, so keep all
            conversions here numbered. */
         fprintf(stderr,
-                "%1$s: no subcommand (state is `%1$s status`; drives, `%1$s list`).\n\n",
+                "%1$s: no subcommand (state is `%1$s state` or `%1$s <drive>`; "
+                "drives, `%1$s list`).\n\n",
                 progname);
         mos_cli_print_usage(stderr);
         return EX_USAGE;
     }
 
-    /* A subcommand is recognized only when argv[1] is a bare word;
-       flag-first invocations fall through to getopt unchanged. */
-    if (argc >= 2 && argv[1][0] != '-' && argv[1][0] != '\0') {
+    /* A subcommand is recognized only when argv[1] is a bare, digit-free
+       word; flag-first invocations fall through to getopt unchanged. A
+       digit-bearing argv[1] is a positional drive selector for the default
+       `state` verb (mos_cli_arg_has_digit above), so `mos 2`, `mos disk4`,
+       `mos /dev/disk4` report state with no verb word; a digit-free
+       non-verb still reaches the unknown-subcommand diagnostic. */
+    if (argc >= 2 && argv[1][0] != '-' && argv[1][0] != '\0' &&
+        !mos_cli_arg_has_digit(argv[1])) {
         const char *cmd = argv[1];
 
-        if (strcmp(cmd, "status") == 0) {
-            /* the default; nothing to set. */
+        if (strcmp(cmd, "state") == 0) {
+            /* the default verb; nothing to set. */
         } else if (strcmp(cmd, "list") == 0) {
             flag_list = true;
         } else if (strcmp(cmd, "watch") == 0) {
@@ -215,7 +235,7 @@ int main(int argc, char **argv)
         } else {
             fprintf(stderr, "%s: unknown subcommand: ", progname);
             mos_cli_safe_ascii(stderr, cmd);
-            fputs("\nRecognized: status, list, watch, metadata, drive, "
+            fputs("\nRecognized: state, list, watch, metadata, drive, "
                   "features, tray, capacity"
 #ifdef MOS_CLI_PROBE
                   ", probe"
@@ -400,5 +420,5 @@ int main(int argc, char **argv)
     if (flag_tray) return mos_cli_run_tray();
     if (flag_capacity) return mos_cli_run_capacity();
     if (flag_watch) return mos_cli_run_watch();
-    return mos_cli_run_query();
+    return mos_cli_run_state();
 }

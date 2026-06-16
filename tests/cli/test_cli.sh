@@ -219,11 +219,34 @@ assert_ec          "bad --index watch exit 66"          "66"   "$EC"
 assert_contains    "bad --index watch has mos.error.v1" "$OUT" '"schema":"mos.error.v1"'
 assert_single_line "bad --index watch envelope is one NDJSON line" "$OUT"
 
-# Test 13: 'status' subcommand is an alias for the implicit-status form;
-# with no drive, both produce the same no-device error envelope.
+# Test 13: 'state' is the default verb (renamed from 'status', clean
+# break — there is no 'status' alias). On a driveless runner it produces
+# the no-device error envelope, same as the bare-selector form (Test 13a).
+run_mos state --json --index 99
+assert_ec       "state subcommand exit 66"          "66"   "$EC"
+assert_contains "state subcommand has mos.error.v1" "$OUT" '"schema": "mos.error.v1"'
+
+# Test 13a: the bare drive selector IS the default-state form — no verb
+# word. `mos <selector>` routes to state via the digit gate (a selector
+# always carries a digit; a verb never does). All three selector shapes
+# resolve to state and hit the no-device envelope on a driveless runner.
+run_mos 99 --json
+assert_ec       "bare index selector → state, exit 66"  "66"   "$EC"
+assert_contains "bare index selector → state envelope"  "$OUT" '"schema": "mos.error.v1"'
+run_mos disk99 --json
+assert_ec       "bare bsd selector → state, exit 66"    "66"   "$EC"
+assert_contains "bare bsd selector → state envelope"    "$OUT" '"schema": "mos.error.v1"'
+run_mos 4294967552 --json
+assert_ec       "bare registry selector → state, 66"    "66"   "$EC"
+assert_contains "bare registry selector → no_device"    "$OUT" '"code": "no_device"'
+
+# Test 13b: the rename is a clean break — 'status' is no longer a verb.
+# It is digit-free, so the digit gate routes it to subcommand dispatch,
+# where it hits the unknown-subcommand diagnostic (NOT a bsd-open error).
 run_mos status --json --index 99
-assert_ec       "status subcommand exit 66"          "66"   "$EC"
-assert_contains "status subcommand has mos.error.v1" "$OUT" '"schema": "mos.error.v1"'
+assert_ec       "retired 'status' is unknown subcommand (64)" "64" "$EC"
+ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
+assert_contains "retired 'status' diagnostic"                 "$ERR" "unknown subcommand"
 
 # Test 14: 'list' subcommand under the dispatch path (the canonical
 # and only form). The drives array may be empty on a CI runner.
@@ -240,17 +263,17 @@ assert_single_line "watch subcommand envelope is one NDJSON line" "$OUT"
 
 # Test 16: retired verb flags stay unknown options after an explicit
 # subcommand too — verb-vs-verb states are unrepresentable.
-run_mos status --list
-assert_ec "status + retired --list is unknown option (64)" "64" "$EC"
-run_mos status --watch
-assert_ec "status + retired --watch is unknown option (64)" "64" "$EC"
+run_mos state --list
+assert_ec "state + retired --list is unknown option (64)" "64" "$EC"
+run_mos state --watch
+assert_ec "state + retired --watch is unknown option (64)" "64" "$EC"
 
 # Test 17: unknown subcommand exits 64 with a diagnostic listing the
 # recognized verbs.
 run_mos garbage
 assert_ec "unknown subcommand exits 64" "64" "$EC"
 ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
-assert_contains "unknown subcommand diagnostic names recognized set" "$ERR" "status, list, watch"
+assert_contains "unknown subcommand diagnostic names recognized set" "$ERR" "state, list, watch"
 
 # Test 18 (capacity verb): 'capacity' is a recognized verb (mos.capacity.v1).
 # A selector miss carries the same mos.error.v1 envelope as the others and
@@ -275,22 +298,22 @@ run_mos list --bsd disk4
 assert_ec "list + --bsd rejected with EX_USAGE"   "64" "$EC"
 
 # Test 20: positional drive subject. All-digits parses as an index:
-# `mos status 99` matches the --index 99 contract.
-run_mos status 99
+# `mos state 99` matches the --index 99 contract.
+run_mos state 99
 assert_ec     "positional index: exit 66"     "66" "$EC"
 assert_equals "positional index: stdout empty" ""  "$OUT"
 
 # Test 21: positional + explicit selector is a contradiction (64).
-run_mos status 2 --index 1
+run_mos state 2 --index 1
 assert_ec "positional+--index conflict exits 64" "64" "$EC"
 
 # Test 22: two positional drive arguments are rejected (64).
-run_mos status 1 2
+run_mos state 1 2
 assert_ec "two positionals exit 64" "64" "$EC"
 
 # Test 23: non-digit positional routes as a bsd form; a non-resolving
 # name exits 66 through the open path (same as --bsd).
-run_mos status disk99 --json
+run_mos state disk99 --json
 assert_ec       "positional bsd: exit 66"          "66"   "$EC"
 assert_contains "positional bsd: mos.error.v1"     "$OUT" '"schema": "mos.error.v1"'
 
@@ -300,8 +323,8 @@ run_mos --all
 assert_ec "retired --all is an unknown option (64)" "64" "$EC"
 run_mos watch --all --index 2
 assert_ec "watch + retired --all exits 64" "64" "$EC"
-run_mos status --all
-assert_ec "status + retired --all exits 64" "64" "$EC"
+run_mos state --all
+assert_ec "state + retired --all exits 64" "64" "$EC"
 run_mos watch 2 --all
 assert_ec "positional + retired --all exits 64" "64" "$EC"
 
@@ -312,7 +335,7 @@ assert_ec          "watch sans --json: exit 66"          "66"   "$EC"
 assert_contains    "watch sans --json: envelope present" "$OUT" '"schema":"mos.error.v1"'
 assert_single_line "watch sans --json: one NDJSON line"  "$OUT"
 
-# Test 25a: bare `mos` is an entry point, not a status query, and does NO
+# Test 25a: bare `mos` is an entry point, not a state query, and does NO
 # device work (an entry-point table would ride the GESN exclusive lock,
 # wrong for an intent-free invocation). Exit 64, nothing on stdout, hint +
 # usage on stderr — identical driveless or not, so pin the usage shape and
@@ -322,7 +345,7 @@ assert_ec     "bare mos exits 64 (entry point)"  "64" "$EC"
 assert_equals "bare mos stdout is empty"         ""   "$OUT"
 ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
 assert_contains     "bare mos stderr carries usage"        "$ERR" "Subcommands:"
-assert_contains     "bare mos hint points at status/list"  "$ERR" "no subcommand"
+assert_contains     "bare mos hint points at state/list"  "$ERR" "no subcommand"
 assert_not_contains "bare mos prints no drive table"       "$ERR" "Vendor"
 
 # Test 25b: positional registry-id selector and its dispatch boundary (the
@@ -330,13 +353,13 @@ assert_not_contains "bare mos prints no drive table"       "$ERR" "Vendor"
 # floor the digits resolve as a registry id: absent -> 66 with envelope.
 # One below, they resolve as an index that parse_index rejects (> INT32_MAX)
 # -> 64. Beyond uint64 -> out of range -> 64.
-run_mos status 4294967552 --json
+run_mos state 4294967552 --json
 assert_ec       "registry-id selector absent: exit 66"   "66"   "$EC"
 assert_contains "registry-id selector: error envelope"   "$OUT" '"schema": "mos.error.v1"'
 assert_contains "registry-id selector: no_device"        "$OUT" '"code": "no_device"'
-run_mos status 4294967551
+run_mos state 4294967551
 assert_ec "floor-1 resolves as index, invalid: exit 64"  "64"   "$EC"
-run_mos status 99999999999999999999
+run_mos state 99999999999999999999
 assert_ec "selector beyond uint64: out of range, 64"     "64"   "$EC"
 
 # Test 26: probe subcommand. Bare `mos probe` exits 64 in BOTH build
@@ -424,7 +447,7 @@ run_mos tray eject --persistent --bsd disk0
 assert_ec       "tray eject + --persistent rejected"  "64"  "$EC"
 run_mos tray lock --force --bsd disk0
 assert_ec       "tray lock + --force rejected"        "64"  "$EC"
-run_mos status --force
+run_mos state --force
 assert_ec       "--force outside tray rejected (64)"  "64"  "$EC"
 # tray is a recognized verb: must not trip the unknown/reserved diagnostics.
 run_mos tray eject --bsd disk0
@@ -440,7 +463,7 @@ assert_ec       "tray no-drive JSON exit 66"          "66"  "$EC"
 assert_contains "tray error envelope schema"          "$OUT" '"schema": "mos.error.v1"'
 
 # Test 19 (metadata verb): selector errors carry the same mos.error.v1
-# contract as status; the success path needs a drive, but the error
+# contract as state; the success path needs a drive, but the error
 # envelope and exit-code surface are pinned here.
 run_mos metadata --json --index 99
 assert_ec       "metadata no-drive JSON exit 66"     "66"   "$EC"

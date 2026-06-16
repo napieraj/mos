@@ -253,7 +253,7 @@ endif()
 add_executable(mos
     cli/main.c
     cli/common.c
-    cli/status.c
+    cli/state.c
     cli/metadata.c
     cli/drive.c
     cli/features.c
@@ -461,7 +461,7 @@ if(APPLE AND MOS_BUILD_ADAPTER_FAKE)
         cli/common.c
         cli/io.c
         cli/human.c
-        cli/status.c
+        cli/state.c
         cli/list.c
         cli/metadata.c
         cli/drive.c

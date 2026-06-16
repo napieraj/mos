@@ -74,7 +74,7 @@ int mos_cli_run_watch(void)
     mos_watch_t *w = NULL;
     bool single_target = (opt_bsd || opt_index || opt_registry);
     if (opt_bsd) {
-        /* Same as mos_cli_run_query: the library parse normalizes; don't duplicate. */
+        /* Same as mos_cli_run_state: the library parse normalizes; don't duplicate. */
         w = mos_watch_open_by_bsd_name(opt_bsd, stable_ms, transition_ms, &err);
     } else if (opt_index) {
         w = mos_watch_open_by_index(opt_index, stable_ms, transition_ms, &err);

@@ -65,7 +65,7 @@ bool mos_internal_da_volume(const char *bsd_name,
             }
         } else if (is_url) {
             /* No path buffer: VolumePath presence alone is the mount proof,
-               so a name-only caller (e.g. `mos status`) still sees mounted. */
+               so a name-only caller (e.g. `mos state`) still sees mounted. */
             mounted = true;
         }
         if (mounted)

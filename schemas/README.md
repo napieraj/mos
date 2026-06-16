@@ -67,7 +67,7 @@ register them.
 
 ## Relationship to the emitter
 
-The schemas are derived from the emit code in `cli/` (status.c, common.c, watch.c)
+The schemas are derived from the emit code in `cli/` (state.c, common.c, watch.c)
 (`emit_json`, `emit_unknown_and_fail`, `emit_list_json`,
 `emit_watch_ndjson`). The validator script catches the case where the
 schema and the emit code drift apart, but the schemas are not

@@ -2,7 +2,7 @@
  * test_main.c — aggregates all test modules.
  *
  * Pure-data tests only. Hardware checks live in the mos CLI
- * (status / list / probe) and in the INTEGRATION_HARNESS.md matrix.
+ * (state / list / probe) and in the INTEGRATION_HARNESS.md matrix.
  */
 
 #include "test_harness.h"

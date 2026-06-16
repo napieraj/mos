@@ -51,6 +51,7 @@ define require_cmake
 endef
 
 .PHONY: help configure build build-universal test check-readme \
+        preflight hooks \
         sign sign-universal notarize staple dist release \
         install install-signed uninstall clean
 
@@ -60,6 +61,8 @@ help:
 	@echo "  build-universal  Universal (arm64 + x86_64) release build"
 	@echo "  test             Build + run pure-data unit tests"
 	@echo "  check-readme     Verify README examples track schemas + emit_human"
+	@echo "  preflight        Run all OS-independent CI gates locally (pre-push mirror)"
+	@echo "  hooks            Enable the committed git hooks (.githooks) for this clone"
 	@echo "  install          Install locally (ad-hoc signed by linker)"
 	@echo "  clean            Remove build artifacts"
 	@echo ""
@@ -129,6 +132,24 @@ test: $(BUILD)/CMakeCache.txt
 
 check-readme:
 	python3 schemas/check_readme.py
+
+# ---- Local CI mirror + git hooks ---------------------------------------
+#
+# `preflight` runs every OS-independent gate CI runs (dist/ amalgamation
+# sync, test registration, doc staleness, README contract, pure unit
+# tests) so an operator slip is caught before the push, not after a CI
+# round-trip. `hooks` wires scripts/ into git so `preflight` runs
+# automatically on `git push` (opt-in per clone — git never auto-runs
+# cloned hooks). CI stays the authoritative backstop and is the only place
+# the macOS-only gates run.
+
+preflight:
+	./scripts/preflight.sh
+
+hooks:
+	git config core.hooksPath .githooks
+	@echo "git hooks enabled (.githooks). Pre-push now runs scripts/preflight.sh."
+	@echo "Disable with: git config --unset core.hooksPath"
 
 # ---- Signing -----------------------------------------------------------
 #

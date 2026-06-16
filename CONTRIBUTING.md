@@ -51,7 +51,7 @@ mos/
 ├── cli/
 │   ├── main.c                   # argument parsing + dispatch
 │   ├── common.c / .h            # shared CLI state, list rows, envelopes
-│   ├── status.c / list.c / watch.c  # one file per command
+│   ├── state.c / list.c / watch.c  # one file per command
 │   ├── probe.c                  # diagnostic substrate observer ('mos probe', MOS_CLI_PROBE)
 │   ├── io.c / .h                # output/escaping helpers
 │   └── human.c / .h             # human-readable layout engine
@@ -86,7 +86,12 @@ mos/
 │   └── mos.rb                  # tap formula (HEAD-only between tags)
 └── scripts/
     ├── amalgamate.sh            # stb-style single-file drop-in build
+    │                            #   (--check: diff vs committed, no write)
+    ├── preflight.sh             # run all OS-independent CI gates locally
+    ├── check-test-registration.sh # TEST() <-> RUN() gate (CI + preflight)
     └── release-preflight.sh     # archive hygiene gate
+.githooks/
+└── pre-push                    # runs preflight.sh; enable with `make hooks`
 ```
 
 ## Symbol-naming conventions
@@ -111,7 +116,7 @@ two-tier split rationale). Non-`mos_` symbols fail the build.
 The `nm` check covers the library archives only; the `mos` CLI is a
 separate binary. Within `cli/`, every cross-translation-unit identifier
 (header-declared functions and types) carries a `mos_cli_` prefix —
-`mos_cli_run_query`, `mos_cli_emit_list_table`, `mos_cli_list_row`,
+`mos_cli_run_state`, `mos_cli_emit_list_table`, `mos_cli_list_row`,
 `mos_cli_human_pair`, the `mos_cli_stdout_*` family. File-local `static`
 symbols and the parse-state `extern` globals (`opt_*`, `flag_*`,
 `progname`) are exempt: the prefix exists to keep cross-TU names from
@@ -251,13 +256,13 @@ is `doc/research/2026-06-15-comment-purge-plan.md`):
 
 - **`cli/`** — the CLI front-end, one file per command over a shared
   layer (`main.c` parses with `getopt_long` and dispatches;
-  `status.c`/`list.c`/`watch.c`/`probe.c` implement the verbs; JSON
+  `state.c`/`list.c`/`watch.c`/`probe.c` implement the verbs; JSON
   emission is hand-rolled; the output contract is consumed by
   downstream automation). Links `mos_core`; does not include private
   headers (exception: `cli/probe.c`, a diagnostic compiled in under
   `MOS_CLI_PROBE`, includes `src/mos_pure.h` for the BSD-unit parse).
 
-  On a new machine, `mos list` then `mos status --json` exercise the
+  On a new machine, `mos list` then `mos state --json` exercise the
   full library path; `mos probe --dump` captures the raw DiscRecording
   dictionaries when enumeration disagrees with expectation. (The
   standalone `tools/` probes were consolidated into `mos probe` on
@@ -311,7 +316,30 @@ macro set in `tests/test_harness.h`. No framework dependency.
 
 To add a new test: append a `TEST(name) { ... }` function to the
 appropriate `test_*.c`, register it in that file's
-`register_*_tests()`, and re-run `make test`.
+`register_*_tests()`, and re-run `make test`. (Forgetting the
+registration is caught by `scripts/check-test-registration.sh`, run in
+CI and in `make preflight`.)
+
+### Before you push
+
+```sh
+make preflight    # run every OS-independent CI gate locally
+make hooks        # (once) run preflight automatically on `git push`
+```
+
+`make preflight` mirrors the CI gates that don't need macOS — dist/
+amalgamation sync, test registration, doc staleness, the README contract,
+shell + YAML lint (shellcheck / yamllint, when installed), and the pure
+unit suite — so an operator slip (most often a `src/` edit without a
+`dist/` regen) is caught before the push instead of after a CI round-trip.
+The CI lint job (`lint-scripts`) hash-pins yamllint via
+`.github/requirements-lint.txt` (`--require-hashes`, the same supply-chain
+posture as `schemas/requirements-ci.txt`); shellcheck is the
+runner-provided system tool, no marketplace action. `make hooks` wires `.githooks/pre-push` in for this clone so
+it runs on every push; it is opt-in because git never auto-runs cloned
+hooks. CI is still the authoritative gate, and the only place the
+macOS-only legs (CLI compile, strict-adapter `-Werror`, amalgamated macOS
+test) run.
 
 ## Amalgamated single-file distribution
 

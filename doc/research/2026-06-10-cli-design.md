@@ -1,5 +1,12 @@
 # CLI human-output redesign (drutil-inspired)
 
+> **Superseded in part (2026-06-14):** the default verb named `status`
+> throughout this doc was renamed to `state` (clean break, no alias), and
+> a bare drive selector (`mos 2`, `mos disk4`) now runs it without a verb
+> word. Read every `mos status` below as `mos state`. Rationale + the
+> digit-gated dispatch are in `doc/research/2026-06-14-state-verb-rename.md`;
+> this doc is left as written (append-only history).
+
 Status: IMPLEMENTED 2026-06-10 (pure layer container-verified with
 golden-string tests; tools/adapter layer macOS-CI compile-gated). The plain-mode CLI predates everything else in the
 tool (single bare word, single-drive assumption) and is replaced by a

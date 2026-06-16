@@ -425,6 +425,45 @@ Persistent Prevent state answering 0x02/0x03 with 5/24/00 (classified
 refused_other — already handled). Each lands as a fixture + dated note with
 a generic defense, never a per-device special-case.
 
+## ADR: verb `state` replaces `status`; bare selector is the default subject (2026-06-14)
+
+The default verb was renamed `status` → `state` (clean break, no alias),
+and a bare drive selector now runs it without a verb word: `mos 2`,
+`mos disk4`, `mos /dev/disk4` report that drive's state. Design note +
+full reasoning: `doc/research/2026-06-14-state-verb-rename.md`.
+
+**Why the rename.** `mos status` emitted `mos.state.v1` — a verb↔schema
+mismatch in a one-vocabulary CLI where every other token says *state*
+(`mos_query_state`, the `mos_state` enum, the `State:` row, the project
+name mac-optical-state). `mos state` now agrees with `mos.state.v1`.
+Clean break, not an alias: house style for surface changes (killed
+`--brief`, removed watch plain-mode — one string, one grep), and pre-tag
+there are no consumers to break.
+
+**Why the digit gate looks wrong but isn't.** The bare-selector dispatch
+(cli/main.c) decides "verb vs positional drive" by a single test — does
+`argv[1]` contain a decimal digit? — NOT by scanning the verb table. It
+is correct because two invariants hold: every valid selector carries a
+digit (index/registry are all-digit; a whole-disk BSD form *requires* a
+unit digit — `mos_internal_bsd_name_is_whole_shape`, src/mos_pure.c) and
+no verb name contains one. So digit-bearing ⇒ positional, digit-free ⇒
+subcommand. This is *better* than a verb-table lookup: a mistyped verb is
+digit-free, so it still reaches the `unknown subcommand` diagnostic
+instead of being misread as a BSD name. **Constraint this places on
+future verbs: a verb name may not contain a digit.** Bare `mos` (zero
+args) is unchanged — it errors without touching hardware (the 2026-06-12
+no-probe-on-intent-free-invocation rule); a selector is intent, bare
+`mos` is not.
+
+**Scope.** Output-and-dispatch only: no schema, library-API, or behavior
+change to the query itself; `mos.state.v1` is byte-identical. The
+library's `*_status` identifiers (`mos_disc_status`, `mos_scsi_status`,
+the tray outcome) are a different axis and are untouched. The file
+`cli/status.c` → `cli/state.c` and `mos_cli_run_query` →
+`mos_cli_run_state` completed the vocabulary. The coupled state-enrichment
+direction (D3 in the note — `state` as the canonical cheap dashboard) is
+planned separately and is NOT part of this change.
+
 ## Naming standard: the BSD vocabulary (Apple-canonical, 2026-06-10)
 
 Three concepts, three names, no synonyms:
