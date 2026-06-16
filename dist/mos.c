@@ -5425,20 +5425,17 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
 /*
  * mos_da.c — one-shot DiskArbitration volume lookup.
  *
- * DA's RE-ADMISSION IS NARROW (AGENTS.md append, 2026-06-12): the
- * 2026-06-11 retirement removed DA's CALLBACK roles (the watch's wake
- * legs, the probe's control arm) and those do not return. This file is
- * the other modality: a synchronous DADiskCopyDescription read of what
- * the mounted-volume layer already knows — no session scheduling, no
- * run loop, no callbacks, no commands to the drive. Callers gate on
- * the media nub existing (bsd_unit present); with no IOMedia node
- * there is nothing mounted and DA is never consulted.
+ * Scope is one modality only: a synchronous DADiskCopyDescription read of
+ * what the mounted-volume layer already knows — no session scheduling, no
+ * run loop, no callbacks, no commands to the drive (AGENTS.md scope
+ * doctrine). Callers gate on the media nub existing (bsd_unit present);
+ * with no IOMedia node there is nothing mounted and DA is never consulted.
  *
- * Trust terms: the description dictionary is system-supplied but the
- * values are volume-controlled (a hostile disc names its volume), so
- * string extraction goes through the same bounded, type-checked,
- * fail-to-empty seam as the DR identity copies. The CLI's output
- * escaping guards the terminal/JSON regardless.
+ * Trust terms: the description dictionary is system-supplied but the values
+ * are volume-controlled (a hostile disc names its volume), so string
+ * extraction goes through the same bounded, type-checked, fail-to-empty
+ * seam as the DR identity copies. The CLI's output escaping guards the
+ * terminal/JSON regardless.
  */
 
 
@@ -5485,9 +5482,6 @@ bool mos_internal_da_volume(const char *bsd_name,
             desc, kDADiskDescriptionVolumePathKey);
         bool is_url = path && CFGetTypeID(path) == CFURLGetTypeID();
         if (is_url && path_buf && path_cap) {
-            /* Path requested: render it. A path that exceeds the buffer
-               yields not-mounted rather than a truncated path a consumer
-               might chdir into. */
             if (CFURLGetFileSystemRepresentation((CFURLRef)path, true,
                                                  (UInt8 *)path_buf,
                                                  (CFIndex)path_cap)) {
@@ -5496,11 +5490,9 @@ bool mos_internal_da_volume(const char *bsd_name,
                 path_buf[0] = 0;
             }
         } else if (is_url) {
-            /* Name-only caller (no path buffer): VolumePath presence is
-               the mount proof on its own — rendering the path is not
-               required to know the volume is mounted. Without this branch
-               a name-only caller (e.g. `mos status`) could never observe
-               a mounted volume. */
+            /* Name-only caller (no path buffer): VolumePath presence is the
+               mount proof on its own, so a name-only caller (e.g.
+               `mos status`) can still observe a mounted volume. */
             mounted = true;
         }
         if (mounted)
@@ -6870,25 +6862,22 @@ mos_error mos_query_error_recovery(mos_handle_t *h,
 
 /* ==== src/mos_tray.c ==== */
 /*
- * mos_tray.c — tray-control verbs (v0.4). The first commands mos issues
- * that CHANGE drive state: eject / close (START STOP UNIT 0x1B) and
- * lock / unlock (PREVENT ALLOW MEDIUM REMOVAL 0x1E).
+ * mos_tray.c — tray-control verbs that CHANGE drive state: eject / close
+ * (START STOP UNIT 0x1B) and lock / unlock (PREVENT ALLOW MEDIUM REMOVAL
+ * 0x1E). Each verb is one raw 6-byte CDB on the mos_raw_cdb path, a sense
+ * check in place of a payload decode.
  *
- * Each verb is one raw 6-byte CDB on the existing mos_raw_cdb path — the
- * GET EVENT STATUS NOTIFICATION wrapper's shape (mos_scsi.c
- * mos_internal_mmc_get_tray_state), a sense check in place of a payload
- * decode. mos_raw_cdb is the SINGLE ObtainExclusiveAccess call site
+ * mos_raw_cdb is the SINGLE ObtainExclusiveAccess call site
  * (ARCHITECTURE.md §3); this file adds none, so the BUSY-on-mounted guard
  * the §5.5 nub invariant relies on covers the tray verbs from the other
  * side: a user-initiated lock/eject on a MOUNTED volume returns MOS_ERR_BUSY
  * (exclusive access refused) rather than disturbing a live IOMedia nub.
  *
- * Command surface: still MMC/T10, one-raw-CDB rule becomes one-of-three raw
- * CDBs each with its layer-1 justification (AGENTS.md scope doctrine). The
- * masking-trap analysis (the MMCDeviceInterface SetTrayState convenience
- * cannot surface a 5/53/02 locked-eject refusal — ARCHITECTURE.md §9.7/§9.9)
- * is the "no convenience method carries the information" showing layer 1
- * requires, so these are authored raw.
+ * These are authored raw, not via convenience methods, because the
+ * MMCDeviceInterface SetTrayState convenience cannot surface a 5/53/02
+ * locked-eject refusal (ARCHITECTURE.md §9.7/§9.9) — the layer-1 "no
+ * convenience method carries the information" showing (AGENTS.md scope
+ * doctrine).
  *
  * Lock lifetime: the PREVENT state is per-I_T-nexus and survives a handle
  * close / process exit (T10 04-349r1 §6.18; the macOS SCSITaskUserClient
@@ -6899,9 +6888,7 @@ mos_error mos_query_error_recovery(mos_handle_t *h,
  * single initiator. There is deliberately no atexit ALLOW on the lock path:
  * a single-shot lock that released itself on return would be a no-op, and a
  * persistent lock is exactly what a ripping-robot orchestrator wants to
- * outlive the process (doc/research/2026-06-13-tray-control-feasibility.md
- * Part 4 — narrows the v0.3 "atexit non-negotiable" note in
- * INTEGRATION_HARNESS.md, which predated this derivation).
+ * outlive the process.
  */
 
 
