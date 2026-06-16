@@ -84,11 +84,13 @@ code; this table is the citation, not the parse.
     RFC 3339 UTC string (the format `mos.event.v1`'s `ts` uses). NB: 0x1FF
     (libcdio's `FIRMWARE_DATE`) is *Reserved* in MMC-6 — the feature is 010Ch.
 
-### `src/mos_versiondesc.c` — standard INQUIRY (version + version descriptors)
-- **Spec:** SPC-4 §6.4.2, opcode 0x12 EVPD=0. VERSION byte 2; VERSION
-  DESCRIPTORS bytes 58-73 (eight BE16 codes, 0x0000 = empty slot). Needs a
-  raw read with allocation length ≥74 — the convenience Inquiry returns only
-  the 36-byte header.
+### `src/mos_inqdata.c` — standard INQUIRY data (identity + version + descriptors)
+- **Spec:** SPC-4 §6.4.2, opcode 0x12 EVPD=0. VENDOR bytes 8-15, PRODUCT
+  16-31, PRODUCT REVISION 32-35 (ASCII, space-padded — the drive's
+  self-reported identity, which `mos drive` prefers over the DR cache);
+  VERSION byte 2; VERSION DESCRIPTORS bytes 58-73 (eight BE16 codes, 0x0000 =
+  empty slot). Needs a raw read with allocation length ≥74 — the convenience
+  Inquiry returns only the 36-byte header.
 - **Cross-check:** Linux `include/scsi/scsi.h` (the VERSION value table, as
   `resp[2]+1`); sg3_utils `src/sg_inq_data.c` `sg_version_descriptor_arr`
   (the descriptor code→name table; mos maps the "no version claimed" family

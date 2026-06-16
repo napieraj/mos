@@ -188,8 +188,8 @@ strip_file() {
     echo "/* ==== src/mos_vpd80.c ==== */"
     strip_file "$SRC/mos_vpd80.c"
     echo
-    echo "/* ==== src/mos_versiondesc.c ==== */"
-    strip_file "$SRC/mos_versiondesc.c"
+    echo "/* ==== src/mos_inqdata.c ==== */"
+    strip_file "$SRC/mos_inqdata.c"
     echo
     echo "/* ==== src/mos_result.c ==== */"
     strip_file "$SRC/mos_result.c"
@@ -224,8 +224,8 @@ strip_file() {
     echo "/* ==== src/mos_serial.c ==== */"
     strip_file "$SRC/mos_serial.c"
     echo
-    echo "/* ==== src/mos_standards.c ==== */"
-    strip_file "$SRC/mos_standards.c"
+    echo "/* ==== src/mos_drive_inquiry.c ==== */"
+    strip_file "$SRC/mos_drive_inquiry.c"
     echo
     echo "/* ==== src/mos_tray.c ==== */"
     strip_file "$SRC/mos_tray.c"

@@ -236,26 +236,34 @@ void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
 void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
                                             char *out, size_t out_cap);
 
-/* ---- Standard INQUIRY decode (mos_versiondesc.c) ----------------------- *
+/* ---- Standard INQUIRY decode (mos_inqdata.c) ----------------------- *
  *
- * The version byte and the version-descriptor list from STANDARD INQUIRY
- * data (EVPD=0) — the standards the drive claims. The convenience Inquiry
- * returns only the 36-byte header, so the descriptors (bytes 58-73) need a
- * raw read with allocation length >= 74 (mos_standards.c). spc_version is
- * INQUIRY byte 2; descriptors are up to eight 2-byte BE codes at 58-73, a
- * 0x0000 slot meaning "none" (skipped). New fields append at the END. */
-typedef struct mos_drive_standards {
+ * The drive's self-reported identity from STANDARD INQUIRY data (EVPD=0):
+ * vendor/product/revision AND the SPC version + version-descriptor list (the
+ * standards it claims). `mos drive` issues this raw read for the canonical
+ * truth and prefers it over the DiscRecording cache (DR is fallback). The
+ * convenience Inquiry returns only the 36-byte header, so the descriptors
+ * (bytes 58-73) need allocation length >= 74 (mos_drive_inquiry.c).
+ * descriptors are up to eight 2-byte BE codes, a 0x0000 slot = "none"
+ * (skipped). New fields append at the END. */
+typedef struct mos_drive_inquiry {
+    /* Drive-reported identity, fresh from the wire (SPC-4 field widths,
+       trailing-space trimmed); "" when the reply was too short to carry it. */
+    char     vendor[9];          /* bytes 8-15  */
+    char     product[17];        /* bytes 16-31 */
+    char     revision[5];        /* bytes 32-35 */
     uint8_t  spc_version;        /* INQUIRY byte 2 (SPC compliance level) */
     uint8_t  descriptor_count;   /* non-zero version-descriptor codes     */
     uint16_t descriptors[8];     /* bytes 58-73, BE; 0x0000 slots skipped */
-} mos_drive_standards;
+} mos_drive_inquiry;
 
 /* Decode standard INQUIRY data into *out. True when the reply has at least
-   the 5-byte header (through Additional Length); the descriptor region is
-   bounded by both `len` and the reply's own Additional Length (byte 4,
-   dual-length rule O-4). Pure, no-OOB — fuzz/ASan-gated. */
-bool mos_internal_versiondesc_parse(const uint8_t *buf, size_t len,
-                               mos_drive_standards *out);
+   the 5-byte header (through Additional Length); identity (vendor/product/
+   revision) and the descriptor region are each bounded by both `len` and the
+   reply's own Additional Length (byte 4, dual-length rule O-4) — a field not
+   covered by the reply stays "". Pure, no-OOB — fuzz/ASan-gated. */
+bool mos_internal_inqdata_parse(const uint8_t *buf, size_t len,
+                               mos_drive_inquiry *out);
 
 /* One feature for the public enumeration (mos_enumerate_features) —
    descriptor header facts only; payload bytes stay internal (a typed decode

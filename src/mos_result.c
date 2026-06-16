@@ -247,19 +247,34 @@ const char *mos_drive_caps_firmware_date(const mos_drive_caps *c)
     return (c && c->firmware_date[0]) ? c->firmware_date : NULL;
 }
 
-/* ---- mos_drive_standards accessors (mos_query_drive_standards) ------- */
+/* ---- mos_drive_inquiry accessors (mos_query_drive_inquiry) ------- */
 
-uint8_t mos_drive_standards_spc_version(const mos_drive_standards *s)
+const char *mos_drive_inquiry_vendor(const mos_drive_inquiry *s)
+{
+    return (s && s->vendor[0]) ? s->vendor : NULL;
+}
+
+const char *mos_drive_inquiry_product(const mos_drive_inquiry *s)
+{
+    return (s && s->product[0]) ? s->product : NULL;
+}
+
+const char *mos_drive_inquiry_revision(const mos_drive_inquiry *s)
+{
+    return (s && s->revision[0]) ? s->revision : NULL;
+}
+
+uint8_t mos_drive_inquiry_spc_version(const mos_drive_inquiry *s)
 {
     return s ? s->spc_version : 0;
 }
 
-uint8_t mos_drive_standards_descriptor_count(const mos_drive_standards *s)
+uint8_t mos_drive_inquiry_descriptor_count(const mos_drive_inquiry *s)
 {
     return s ? s->descriptor_count : 0;
 }
 
-uint16_t mos_drive_standards_descriptor_code(const mos_drive_standards *s,
+uint16_t mos_drive_inquiry_descriptor_code(const mos_drive_inquiry *s,
                                              uint8_t i)
 {
     return (s && i < s->descriptor_count) ? s->descriptors[i] : 0;

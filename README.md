@@ -207,6 +207,11 @@ capability (from one GET CONFIGURATION feature walk), max read/write
 speeds, and the two read-only MODE SENSE pages — `mechanical` (loading
 mechanism, eject/lock support, the live media-locked bit, buffer size)
 and `error_recovery` (the drive's read error-recovery configuration).
+`mos drive` is the one verb where you ask for the canonical truth, so
+`Vendor`/`Product`/`Revision` are read FRESH from the raw standard INQUIRY
+it already issues (for `Standards`), falling back to the kernel/DiscRecording
+cache that `mos list`/`mos state` use only when that raw read can't run
+(busy/mounted drive).
 The `serial` is the drive's Unit Serial Number (a raw INQUIRY of VPD
 page 0x80 — the one identity field DiscRecording does not cache); it is
 the durable inventory key that survives replug, where `registry_id` does

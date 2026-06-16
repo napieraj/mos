@@ -1,14 +1,17 @@
 /* cli/drive.c — the drive command: `mos drive [selector] [--json]`.
  *
  * One mos.drive.v1 document: what this drive IS (static facts), vs
- * metadata's "what disc is this". Identity is open-time directory data;
- * capabilities are one GET CONFIGURATION RT=0 walk. The INQUIRY serial is
- * a raw INQUIRY VPD page 0x80 (mos_query_serial) — the durable inventory
- * key DiscRecording does not cache and no convenience method can carry
- * (AGENTS.md scope doctrine §1; design:
- * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md). Best-effort:
- * null on BUSY (mounted media), an unsupported page, or no programmed
- * serial — the natural inventory moment is an empty drive.
+ * metadata's "what disc is this". capabilities/profiles/firmware_date are one
+ * GET CONFIGURATION RT=0 walk. This is the one path where the user asks for
+ * the canonical truth, so identity (vendor/product/revision) + version +
+ * version descriptors come FRESH from a raw standard INQUIRY
+ * (mos_query_drive_inquiry), falling back to the DiscRecording directory cache
+ * (the zero-command source the rest of mos uses) only when that raw read can't
+ * run. The serial is a separate raw INQUIRY VPD page 0x80 (mos_query_serial).
+ * All raw reads self-gate on exclusive access: null/DR-fallback on BUSY
+ * (mounted media) — the natural inventory moment is an empty drive. Design:
+ * doc/research/2026-06-16-drive-identity-enrichment-survey.md,
+ * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md.
  */
 #include "common.h"
 
@@ -26,7 +29,7 @@ typedef struct {
     uint8_t     aacs_version;
     bool        bus_encryption;
     const mos_drive_caps *caps;  /* borrowed; for the supported-profile list */
-    const mos_drive_standards *standards;  /* borrowed; NULL = unreadable (BUSY) */
+    const mos_drive_inquiry *inquiry;  /* borrowed; NULL = unreadable (BUSY) */
     bool        have_speeds;   /* GET PERFORMANCE returned >= 1 descriptor */
     uint16_t    speed_count;
     uint32_t    max_read_kbps;
@@ -85,8 +88,8 @@ static void emit_json(const drive_doc *d)
     /* version: {code, name} when the standard INQUIRY was read; null on BUSY/
        failure (the read self-gates on exclusive access, like the serial). */
     fputs(",\n  \"version\": ", stdout);
-    if (d->standards) {
-        uint8_t v = mos_drive_standards_spc_version(d->standards);
+    if (d->inquiry) {
+        uint8_t v = mos_drive_inquiry_spc_version(d->inquiry);
         const char *vn = mos_spc_version_name(v);
         fprintf(stdout, "{\"code\": %u, \"name\": ", v);
         if (vn) mos_cli_json_str(stdout, vn); else fputs("null", stdout);
@@ -98,10 +101,10 @@ static void emit_json(const drive_doc *d)
     /* version_descriptors: array of {code, name}; empty when unreadable or the
        drive listed none. Unknown code → name null (consumer uses the hex). */
     fputs(",\n  \"version_descriptors\": [", stdout);
-    if (d->standards) {
-        uint8_t dc = mos_drive_standards_descriptor_count(d->standards);
+    if (d->inquiry) {
+        uint8_t dc = mos_drive_inquiry_descriptor_count(d->inquiry);
         for (uint8_t i = 0; i < dc; i++) {
-            uint16_t code = mos_drive_standards_descriptor_code(d->standards, i);
+            uint16_t code = mos_drive_inquiry_descriptor_code(d->inquiry, i);
             const char *dn = mos_version_descriptor_name(code);
             fprintf(stdout, "%s{\"code\": \"0x%04x\", \"name\": ",
                     i ? ", " : "", code);
@@ -219,19 +222,19 @@ static void emit_human(const drive_doc *d)
     /* Standards: SPC level then the version descriptors, e.g.
        "spc_4 — mmc_6, sbc_3, sam_5". NULL row when the read was BUSY. */
     char std_buf[256];
-    if (d->standards) {
+    if (d->inquiry) {
         const char *vn = mos_spc_version_name(
-                             mos_drive_standards_spc_version(d->standards));
+                             mos_drive_inquiry_spc_version(d->inquiry));
         char vhex[8];
         if (!vn) {
             snprintf(vhex, sizeof vhex, "0x%02x",
-                     mos_drive_standards_spc_version(d->standards));
+                     mos_drive_inquiry_spc_version(d->inquiry));
             vn = vhex;
         }
         size_t off = (size_t)snprintf(std_buf, sizeof std_buf, "%s", vn);
-        uint8_t dc = mos_drive_standards_descriptor_count(d->standards);
+        uint8_t dc = mos_drive_inquiry_descriptor_count(d->inquiry);
         for (uint8_t i = 0; i < dc && off < sizeof std_buf; i++) {
-            uint16_t code = mos_drive_standards_descriptor_code(d->standards, i);
+            uint16_t code = mos_drive_inquiry_descriptor_code(d->inquiry, i);
             const char *dn = mos_version_descriptor_name(code);
             char dhex[8];
             if (!dn) { snprintf(dhex, sizeof dhex, "0x%04x", code); dn = dhex; }
@@ -241,7 +244,7 @@ static void emit_human(const drive_doc *d)
             off += (size_t)w;
         }
     }
-    pairs[n++] = (mos_cli_human_pair){ "Standards", d->standards ? std_buf : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Standards", d->inquiry ? std_buf : NULL };
 
     const char *fw = mos_drive_caps_firmware_date(d->caps);
     pairs[n++] = (mos_cli_human_pair){ "Firmware", fw };
@@ -314,24 +317,33 @@ int mos_cli_run_drive(void)
     drive_doc d = {0};
     d.bsd_unit       = mos_handle_bsd_unit(h);
     d.registry_id    = mos_handle_registry_id(h);
-    d.vendor         = mos_handle_vendor(h);
-    d.product        = mos_handle_product(h);
-    d.revision       = mos_handle_revision(h);
     d.caps           = c;
     d.aacs           = mos_drive_caps_aacs(c);
     d.aacs_version   = mos_drive_caps_aacs_version(c);
     d.bus_encryption = mos_drive_caps_bus_encryption(c);
+
+    /* The drive's self-report, fresh from a raw standard INQUIRY — version +
+       version descriptors AND vendor/product/revision. `mos drive` is the one
+       path where the user asks for the canonical truth, and we are already
+       issuing the CDB, so prefer it; same exclusive-access self-gating as the
+       serial (null on BUSY/mounted). */
+    const mos_drive_inquiry *inq = NULL;
+    if (mos_query_drive_inquiry(h, &inq) == MOS_OK) d.inquiry = inq;
+
+    /* Identity: fresh from the drive when the raw INQUIRY succeeded, else the
+       DiscRecording directory cache (the zero-command source used elsewhere). */
+    d.vendor   = mos_drive_inquiry_vendor(inq);
+    if (!d.vendor)   d.vendor   = mos_handle_vendor(h);
+    d.product  = mos_drive_inquiry_product(inq);
+    if (!d.product)  d.product  = mos_handle_product(h);
+    d.revision = mos_drive_inquiry_revision(inq);
+    if (!d.revision) d.revision = mos_handle_revision(h);
 
     /* Serial is best-effort: raw INQUIRY VPD 0x80 returns BUSY on mounted
        media and IO on a drive without the page / no programmed serial — each
        leaves serial null (see file header). */
     const char *serial = NULL;
     if (mos_query_serial(h, &serial) == MOS_OK) d.serial = serial;
-
-    /* Standards (version + version descriptors): best-effort raw standard
-       INQUIRY, same exclusive-access self-gating as the serial — null on BUSY. */
-    const mos_drive_standards *std = NULL;
-    if (mos_query_drive_standards(h, &std) == MOS_OK) d.standards = std;
 
     /* Speeds are best-effort and media-dependent: a failed command or
        empty descriptor list leaves them null (have_speeds false). */
