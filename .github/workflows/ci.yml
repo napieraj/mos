@@ -362,8 +362,11 @@ jobs:
         # schema shape change; this enforces it. Every JSON block in
         # README.md is checked against schemas/mos.*.v*.json, and every
         # `$ mos <verb>` human pair block against cli/<verb>.c emit_human
-        # (label rename / reorder / drop). See schemas/check_readme.py.
-        run: python3 schemas/check_readme.py
+        # (label rename / reorder / drop), and every `mos <verb>` /
+        # `mos.*.v<n>` token in prose resolves. See schemas/check_readme.py.
+        run: |
+          python3 schemas/check_readme.py --selftest
+          python3 schemas/check_readme.py
 
   nub-invariant:
     # Exhaustive proof of the ARCHITECTURE §5.5 nub invariant: the real
