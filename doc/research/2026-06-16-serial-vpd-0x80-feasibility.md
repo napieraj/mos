@@ -53,9 +53,11 @@ hardware run can change this — it is a header fact, the same class of
 proof as the §9.7 `GetTrayState`-masking finding and the 06-13 read-
 capacity note ("`MMCDeviceInterface` has NO READ CAPACITY wrapper").
 
-## The two cheap paths also don't carry it
+## The cheap, no-raw-CDB paths also don't carry it (three of them)
 
-Before reaching for a raw CDB, the two no-command sources are ruled out:
+Before reaching for a raw CDB, the three no-command sources are ruled out
+— including the IOKit-property path, which is the non-obvious one (a serial
+need not be *called* "serial", the way firmware hides under "revision"):
 
 1. **DiscRecording `DRDeviceCopyInfo`** — the zero-command identity dict
    that already feeds vendor/product/revision. Its documented key set
@@ -94,6 +96,43 @@ Before reaching for a raw CDB, the two no-command sources are ruled out:
    ADR (AGENTS.md) forbids. It would also re-introduce a convenience INQUIRY
    call that the DR pivot retired (ARCHITECTURE §9.6). Vendor-tail bytes are
    a redaction concern for fixtures, not a portable serial source.
+
+3. **IOKit IORegistry "Serial Number" property (checked 2026-06-16).** This
+   is the right place to look — mos already walks IOKit at open (bsd_unit,
+   registry_id), and a serial could ride a non-obvious key. IOKit *does*
+   define one: `kIOPropertyProductSerialNumberKey` = `"Serial Number"`,
+   inside the `kIOPropertyDeviceCharacteristicsKey` ("Device
+   Characteristics") dictionary (`IOStorageDeviceCharacteristics.h`,
+   alongside the Vendor/Product/Revision keys the kernel *does* populate).
+   So the slot exists. **The optical stack never fills it.** Verified
+   against the open-source kernel layers that build an optical drive's
+   IORegistry node (apple-oss / aosm `IOSCSIArchitectureModelFamily`):
+   - `IOSCSIPrimaryCommandsDevice.cpp` — the SCSI base class for every
+     peripheral type including optical — parses **standard** INQUIRY and
+     sets vendor/product/revision into Device Characteristics; it issues
+     **no** INQUIRY for VPD page 0x80 and sets **no** serial key. (Standard
+     INQUIRY carries no serial; VPD 0x80 is a separate command the kernel
+     does not send.)
+   - `IOSCSIProtocolServices.cpp` — sets no serial key.
+   - `IOATABlockStorageDevice.cpp` (legacy ATA transport) — sets
+     vendor/product/revision, **not** serial, and does not read ATA
+     IDENTIFY words 10–19.
+
+   Where the key *is* populated is the block-storage/disk path: AHCI
+   (`IOAHCIBlockStorage`, a closed binary kext) sets it for SSDs/HDDs from
+   ATA IDENTIFY — the hard-disk stack, not the optical one. Net: for an
+   optical drive the IORegistry "Serial Number" is generally **absent**.
+   The one place it might appear is a USB-attached drive, where the USB
+   mass-storage transport can surface the **bridge's** `iSerialNumber`
+   descriptor — the enclosure's identity, not the drive's MMC unit serial,
+   and exactly the "unreliable through USB bridges" identity the
+   drutil-contract note (2026-06-10) already put out of scope. So the IOKit
+   property is at best a provenance-impure, often-null best-effort read, and
+   conflating it with the schema's `serial` ("VPD page 0x80") would mix two
+   different identities under one key. It is **not** a substitute for the
+   drive serial; if ever surfaced it must be a distinct, clearly-named
+   field. The reason this path fails is the load-bearing one: **the kernel
+   does not read VPD 0x80 for us**, so there is no free serial to harvest.
 
 ## Therefore: serial = raw INQUIRY VPD 0x80, under the layer-1 raw-verb rule
 
