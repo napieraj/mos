@@ -112,8 +112,10 @@ mos already pays for four data sources. The value of a candidate is mostly
    **The write-capable boolean is a platform tautology — do not surface it.**
    Any drive mos can open is a burner by construction, gated at *both* layers:
    the IOKit attach rule blocks `SCSITaskUserClient` on read-only drives
-   (`ARCHITECTURE.md` §9.1 — "if the drive is a read-only device… access is
-   blocked"), and DR enumerates only recorders (the framework is named Disc
+   (`ARCHITECTURE.md` §9.1, on `kIOPropertySCSITaskAuthoringDevice` — "if the
+   drive is a read-only device… access is blocked… if the drive is capable of
+   writing any media… all access is allowed"), and DR enumerates only
+   recorders (the framework is named Disc
    **Recording**; `DRCopyDeviceArray`'s burner filter ≈ the
    SCSITaskUserClient-openable set — `2026-06-10-media-info-design.md` §"the
    non-burner case is already excluded at every layer"). So "can write: true"
@@ -232,10 +234,13 @@ case.
   https://elatov.github.io/2012/08/determine-disk-vpd-information-from-esx-classic/
 - MakeMKV `osxmmc` — the reverse-engineering writeup of macOS's optical-MMC
   access and the upstream source of the read-only-drive-blocking policy
-  behind the write-cap tautology (its developer's original quip attributed
-  the policy to Apple's "weed"; the in-repo notes paraphrase it as
-  "Cupertino's herbal supply"): https://www.makemkv.com/osxmmc/
+  behind the write-cap tautology: https://www.makemkv.com/osxmmc/. The
+  verbatim rule and its developer's quip — *"our only explanation is that
+  weed is really easily available to designers in Cupertino, CA"* — are
+  already quoted in-repo at `ARCHITECTURE.md` §9.1, with the gating property
+  `kIOPropertySCSITaskAuthoringDevice` (`2026-06-10-media-info-design.md`
+  paraphrases it "Cupertino's herbal supply").
 - In-repo: `doc/dr-field-mapping.md` (DR zero-command keys, interconnect),
-  `AGENTS.md` scope doctrine, `ARCHITECTURE.md` §9.1 (read-only attach
-  block), `2026-06-10-media-info-design.md` §"non-burner case excluded",
+  `AGENTS.md` scope doctrine, `ARCHITECTURE.md` §9.1 (writer-vs-reader attach
+  rule), `2026-06-10-media-info-design.md` §"non-burner case excluded",
   `2026-06-16-serial-vpd-0x80-feasibility.md`.
