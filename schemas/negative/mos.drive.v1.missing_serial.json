@@ -11,6 +11,8 @@
     "bus_encryption": null
   },
   "profiles": [{"code": "0x0008", "name": "cd_rom"}],
+  "version": {"code": 6, "name": "spc_4"},
+  "version_descriptors": [{"code": "0x04e0", "name": "mmc_6"}],
   "speeds": null,
   "mechanical": null,
   "error_recovery": null

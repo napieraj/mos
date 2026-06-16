@@ -11,7 +11,7 @@
     "aacs_version": null,
     "bus_encryption": null
   },
-  "version": {"code": 6, "name": "spc_4"},
+  "profiles": [{"code": "0x0008", "name": "cd_rom"}],
   "version_descriptors": [{"code": "0x04e0", "name": "mmc_6"}],
   "speeds": null,
   "mechanical": null,

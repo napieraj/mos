@@ -14,6 +14,8 @@
     "serial",
     "capabilities",
     "profiles",
+    "version",
+    "version_descriptors",
     "speeds",
     "mechanical",
     "error_recovery"
@@ -88,6 +90,44 @@
           "name": {
             "type": ["string", "null"],
             "description": "Lowercase profile name (mos_profile_name), or null for a code mos does not name (consumer falls back to code)."
+          }
+        }
+      }
+    },
+    "version": {
+      "type": ["object", "null"],
+      "description": "Standard INQUIRY VERSION byte (SPC compliance level), from a raw standard INQUIRY (EVPD=0). null when that read could not be performed (BUSY / mounted media) — the same exclusive-access self-gating as serial.",
+      "required": ["code", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Raw INQUIRY byte 2 (e.g. 6 = SPC-4, 5 = SPC-3)."
+        },
+        "name": {
+          "type": ["string", "null"],
+          "description": "SPC-level token (mos_spc_version_name): spc / spc_2 … spc_5; null for 0 (none), legacy SCSI-1/2, or unknown (consumer uses code)."
+        }
+      }
+    },
+    "version_descriptors": {
+      "type": "array",
+      "description": "The T10/ISO standards the drive claims, from the INQUIRY version descriptors (bytes 58-73 of standard INQUIRY data). Empty array when the standard INQUIRY was unreadable (BUSY) or the drive listed none. Each code is the stable 2-byte descriptor value; a consumer matches by code or name.",
+      "items": {
+        "type": "object",
+        "required": ["code", "name"],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^0x[0-9a-f]{4}$",
+            "description": "Version descriptor code, lowercase hex (e.g. 0x04e0 MMC-6, 0x0460 SPC-4)."
+          },
+          "name": {
+            "type": ["string", "null"],
+            "description": "Standard token (mos_version_descriptor_name) for the 'no version claimed' family codes; null for a specific-revision or non-listed code (consumer uses the hex code)."
           }
         }
       }

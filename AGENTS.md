@@ -667,3 +667,41 @@ to null, expected not a defect; a USB-SATA bridge that synthesizes a bogus
 or truncated page-0x80 reply is caught by the dual-length (O-4) bound and
 the ASCII trim. Each lands as a fixture + dated note with a generic defense,
 never a per-device special-case.
+
+### Addendum: the INQUIRY verb's second mode — EVPD=0 standard data
+### (2026-06-16, narrows the "INQUIRY = EVPD=1 page 0x80" scope above)
+
+The ADR above admitted INQUIRY (0x12) for exactly one mode: EVPD=1, PAGE
+CODE 0x80 (the serial). The drive-standards work (`mos_query_drive_standards`,
+`src/mos_standards.c` / parser `src/mos_stdinq.c`, feeding
+`mos.drive.v1.version` + `version_descriptors`) adds a **second mode of the
+same opcode**: EVPD=0 standard INQUIRY with allocation length ≥74, to read
+the VERSION byte and the version descriptors (bytes 58-73 — the standards the
+drive claims). Design: `doc/research/2026-06-16-drive-identity-enrichment-survey.md`.
+
+**This is not a new raw verb.** It is the same opcode 0x12 on the same
+`mos_raw_cdb` path, so the one-raw-CDB count stays **one-of-four** (GESN +
+two tray opcodes + INQUIRY); the INQUIRY entry now simply covers both of its
+modes. Both layer-1 showings hold unchanged: (a) the convenience `Inquiry`
+returns only the 36-byte standard header (`SCSICmd_INQUIRY_StandardData`), so
+the version descriptors at 58-73 are structurally unreachable through it —
+the same absence showing as the serial; (b) nub-collision is identical —
+INQUIRY is a non-media command, `mos_raw_cdb`'s `ObtainExclusiveAccess`
+fails BUSY on mounted media so the CDB never issues, and there is no
+state change or lock lifetime. Privilege footprint (layer 3) unchanged.
+
+**Placement / cost profile (same rule as the serial).** Read in `mos drive`
+only (a deliberate ask), null-on-BUSY, never folded into the polled
+`mos_query_state`. The VERSION byte → SPC token (`mos_spc_version_name`,
+Linux scsi.h table) and the descriptor codes → standard tokens
+(`mos_version_descriptor_name`, the sg3_utils `sg_version_descriptor_arr`
+"no version claimed" family codes); an unknown/specific-revision code is
+surfaced as hex, never guessed.
+
+**Sibling deferral — firmware build date (GET CONFIG feature 0x1FF).** The
+same survey identified the firmware *build date* (0x1FF) as a reachable
+GET-CONFIGURATION enrichment, but its payload layout could not be confirmed
+against a primary spec (the MMC-6 T10 PDF was unreachable and the MS DDK
+description self-contradicts on the Year field's digit count). Per the
+hardware-role ADR it is **deferred until the layout is pinned to MMC-6 or a
+captured fixture** — not built to a guessed offset table.

@@ -124,6 +124,57 @@ const char *mos_profile_class(uint16_t profile_code)
     }
 }
 
+/* Standard INQUIRY VERSION byte (byte 2) → SPC compliance token. Values from
+   the Linux kernel scsi.h table (SCSI_SPC_* are resp[2]+1; the wire byte is
+   one less). Unknown / legacy SCSI-1/2 values return NULL (numeric fallback). */
+const char *mos_spc_version_name(uint8_t version)
+{
+    switch (version) {
+        case 0x03: return "spc";
+        case 0x04: return "spc_2";
+        case 0x05: return "spc_3";
+        case 0x06: return "spc_4";
+        case 0x07: return "spc_5";
+        default:   return NULL;   /* 0x00 none, legacy SCSI-1/2, or unknown */
+    }
+}
+
+/* Version-descriptor code (INQUIRY bytes 58-73) → standard token. The
+   "no version claimed" family codes from sg3_utils sg_version_descriptor_arr
+   (the ones drives actually emit). A specific-revision or non-listed code
+   returns NULL and is surfaced as hex (the unknown-code rule). Lower_snake. */
+const char *mos_version_descriptor_name(uint16_t code)
+{
+    switch (code) {
+        case 0x0020: return "sam";
+        case 0x0040: return "sam_2";
+        case 0x0060: return "sam_3";
+        case 0x0080: return "sam_4";
+        case 0x00A0: return "sam_5";
+        case 0x00C0: return "sam_6";
+        case 0x0120: return "spc";
+        case 0x0140: return "mmc";
+        case 0x0180: return "sbc";
+        case 0x0240: return "mmc_2";
+        case 0x0260: return "spc_2";
+        case 0x02A0: return "mmc_3";
+        case 0x0300: return "spc_3";
+        case 0x0320: return "sbc_2";
+        case 0x03A0: return "mmc_4";
+        case 0x0420: return "mmc_5";
+        case 0x0460: return "spc_4";
+        case 0x04C0: return "sbc_3";
+        case 0x04E0: return "mmc_6";
+        case 0x05C0: return "spc_5";
+        case 0x0600: return "sbc_4";
+        case 0x1EA0: return "sat";
+        case 0x1EC0: return "sat_2";
+        case 0x1EE0: return "sat_3";
+        case 0x1F00: return "sat_4";
+        default:     return NULL;   /* per-revision / non-listed → hex fallback */
+    }
+}
+
 /* Physical Format Information book-type codes (MMC-5 / Linux uapi dvd_layer
    values), shared by DVD and HD-DVD. Lower_snake_case; unknown codes return
    NULL for numeric fallback. The schema's book-type enum tracks this table

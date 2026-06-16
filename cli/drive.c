@@ -26,6 +26,7 @@ typedef struct {
     uint8_t     aacs_version;
     bool        bus_encryption;
     const mos_drive_caps *caps;  /* borrowed; for the supported-profile list */
+    const mos_drive_standards *standards;  /* borrowed; NULL = unreadable (BUSY) */
     bool        have_speeds;   /* GET PERFORMANCE returned >= 1 descriptor */
     uint16_t    speed_count;
     uint32_t    max_read_kbps;
@@ -81,6 +82,35 @@ static void emit_json(const drive_doc *d)
     }
     fputs("]", stdout);
 
+    /* version: {code, name} when the standard INQUIRY was read; null on BUSY/
+       failure (the read self-gates on exclusive access, like the serial). */
+    fputs(",\n  \"version\": ", stdout);
+    if (d->standards) {
+        uint8_t v = mos_drive_standards_spc_version(d->standards);
+        const char *vn = mos_spc_version_name(v);
+        fprintf(stdout, "{\"code\": %u, \"name\": ", v);
+        if (vn) mos_cli_json_str(stdout, vn); else fputs("null", stdout);
+        fputs("}", stdout);
+    } else {
+        fputs("null", stdout);
+    }
+
+    /* version_descriptors: array of {code, name}; empty when unreadable or the
+       drive listed none. Unknown code → name null (consumer uses the hex). */
+    fputs(",\n  \"version_descriptors\": [", stdout);
+    if (d->standards) {
+        uint8_t dc = mos_drive_standards_descriptor_count(d->standards);
+        for (uint8_t i = 0; i < dc; i++) {
+            uint16_t code = mos_drive_standards_descriptor_code(d->standards, i);
+            const char *dn = mos_version_descriptor_name(code);
+            fprintf(stdout, "%s{\"code\": \"0x%04x\", \"name\": ",
+                    i ? ", " : "", code);
+            if (dn) mos_cli_json_str(stdout, dn); else fputs("null", stdout);
+            fputs("}", stdout);
+        }
+    }
+    fputs("]", stdout);
+
     fputs(",\n  \"speeds\": ", stdout);
     if (d->have_speeds)
         fprintf(stdout,
@@ -125,7 +155,7 @@ static void emit_json(const drive_doc *d)
 
 static void emit_human(const drive_doc *d)
 {
-    mos_cli_human_pair pairs[12];
+    mos_cli_human_pair pairs[13];
     size_t n = 0;
 
     char bsd_buf[24];
@@ -177,6 +207,33 @@ static void emit_human(const drive_doc *d)
         poff += (size_t)w;
     }
     pairs[n++] = (mos_cli_human_pair){ "Profiles", pcount ? prof_buf : NULL };
+
+    /* Standards: SPC level then the version descriptors, e.g.
+       "spc_4 — mmc_6, sbc_3, sam_5". NULL row when the read was BUSY. */
+    char std_buf[256];
+    if (d->standards) {
+        const char *vn = mos_spc_version_name(
+                             mos_drive_standards_spc_version(d->standards));
+        char vhex[8];
+        if (!vn) {
+            snprintf(vhex, sizeof vhex, "0x%02x",
+                     mos_drive_standards_spc_version(d->standards));
+            vn = vhex;
+        }
+        size_t off = (size_t)snprintf(std_buf, sizeof std_buf, "%s", vn);
+        uint8_t dc = mos_drive_standards_descriptor_count(d->standards);
+        for (uint8_t i = 0; i < dc && off < sizeof std_buf; i++) {
+            uint16_t code = mos_drive_standards_descriptor_code(d->standards, i);
+            const char *dn = mos_version_descriptor_name(code);
+            char dhex[8];
+            if (!dn) { snprintf(dhex, sizeof dhex, "0x%04x", code); dn = dhex; }
+            int w = snprintf(std_buf + off, sizeof std_buf - off, "%s%s",
+                             i ? ", " : " — ", dn);
+            if (w < 0 || (size_t)w >= sizeof std_buf - off) break;
+            off += (size_t)w;
+        }
+    }
+    pairs[n++] = (mos_cli_human_pair){ "Standards", d->standards ? std_buf : NULL };
 
     /* 64: worst case "read 4294967295 kB/s, write 4294967295 kB/s (max)"
        is 49 + NUL. */
@@ -259,6 +316,11 @@ int mos_cli_run_drive(void)
        leaves serial null (see file header). */
     const char *serial = NULL;
     if (mos_query_serial(h, &serial) == MOS_OK) d.serial = serial;
+
+    /* Standards (version + version descriptors): best-effort raw standard
+       INQUIRY, same exclusive-access self-gating as the serial — null on BUSY. */
+    const mos_drive_standards *std = NULL;
+    if (mos_query_drive_standards(h, &std) == MOS_OK) d.standards = std;
 
     /* Speeds are best-effort and media-dependent: a failed command or
        empty descriptor list leaves them null (have_speeds false). */
