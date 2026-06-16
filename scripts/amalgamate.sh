@@ -188,8 +188,8 @@ strip_file() {
     echo "/* ==== src/mos_vpd80.c ==== */"
     strip_file "$SRC/mos_vpd80.c"
     echo
-    echo "/* ==== src/mos_stdinq.c ==== */"
-    strip_file "$SRC/mos_stdinq.c"
+    echo "/* ==== src/mos_versiondesc.c ==== */"
+    strip_file "$SRC/mos_versiondesc.c"
     echo
     echo "/* ==== src/mos_result.c ==== */"
     strip_file "$SRC/mos_result.c"

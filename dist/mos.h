@@ -467,6 +467,13 @@ bool    mos_drive_caps_bus_encryption(const mos_drive_caps *c);
 uint8_t  mos_drive_caps_profile_count(const mos_drive_caps *c);
 uint16_t mos_drive_caps_profile_code(const mos_drive_caps *c, uint8_t i);
 
+/* Firmware creation timestamp from the Firmware Information feature (010Ch),
+   as an ISO-8601 GMT string "YYYY-MM-DDTHH:MM:SSZ", or NULL when the drive
+   does not implement the feature. Borrowed from the handle (valid until the
+   next mos_query_drive_caps() / mos_close()). Zero commands beyond the
+   GET CONFIGURATION walk the caps query already performs. */
+const char *mos_drive_caps_firmware_date(const mos_drive_caps *c);
+
 /* Drive identity for a held handle — the open-time directory data
    (DiscRecording pre-parsed INQUIRY strings) and the drive service's
    registry entry ID. Zero commands. Strings are borrowed from the

@@ -1,5 +1,5 @@
 /*
- * mos_stdinq.c — pure decode of STANDARD INQUIRY data (EVPD=0): the version
+ * mos_versiondesc.c — pure decode of STANDARD INQUIRY data (EVPD=0): the version
  * byte (SPC compliance level) and the version-descriptor list (the T10/ISO
  * standards the drive claims). Read raw because macOS's convenience Inquiry
  * returns only the 36-byte header, so the descriptors at bytes 58-73 are
@@ -24,28 +24,28 @@
 
 #include "mos_pure.h"
 
-#define STDINQ_HDR        5u    /* through ADDITIONAL LENGTH (byte 4) */
-#define STDINQ_VD_OFFSET 58u    /* first version descriptor           */
-#define STDINQ_VD_MAX     8u    /* eight descriptor slots, bytes 58-73 */
+#define VD_HDR        5u    /* through ADDITIONAL LENGTH (byte 4) */
+#define VD_OFFSET 58u    /* first version descriptor           */
+#define VD_MAX     8u    /* eight descriptor slots, bytes 58-73 */
 
-bool mos_internal_stdinq_parse(const uint8_t *buf, size_t len,
+bool mos_internal_versiondesc_parse(const uint8_t *buf, size_t len,
                                mos_drive_standards *out)
 {
     if (!out) return false;
     *out = (mos_drive_standards){0};
-    if (!buf || len < STDINQ_HDR) return false;   /* need the fixed header */
+    if (!buf || len < VD_HDR) return false;   /* need the fixed header */
 
     out->spc_version = buf[2];
 
     /* Trusted end: the smaller of the buffer span and the reply's own
        declared total (5 + Additional Length). A lying-long Additional Length
        cannot extend past `len`; an honest-short one shrinks the region. */
-    size_t declared = STDINQ_HDR + (size_t)buf[4];
+    size_t declared = VD_HDR + (size_t)buf[4];
     size_t end = (declared < len) ? declared : len;
 
     uint8_t n = 0;
-    for (uint8_t i = 0; i < STDINQ_VD_MAX; i++) {
-        size_t off = STDINQ_VD_OFFSET + (size_t)i * 2u;
+    for (uint8_t i = 0; i < VD_MAX; i++) {
+        size_t off = VD_OFFSET + (size_t)i * 2u;
         if (off + 2u > end) break;                /* descriptor not present */
         uint16_t code = (uint16_t)(((uint16_t)buf[off] << 8) | buf[off + 1]);
         if (code != 0) out->descriptors[n++] = code;   /* 0x0000 = empty slot */

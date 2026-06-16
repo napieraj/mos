@@ -72,9 +72,27 @@ code; this table is the citation, not the parse.
 - **Cross-check:** page 0x2A offsets against Linux `sr.c`
   `get_capabilities`.
 
-### `src/mos_config.c` — GET CONFIGURATION feature walk
+### `src/mos_config.c` — GET CONFIGURATION feature walk + payload decodes
 - **Spec:** MMC-6 §5.2 feature descriptors. The walker's bounds rules are
-  the inline safety contract.
+  the inline safety contract. Typed payload decodes off the same walk:
+  - **Profile List (0x0000):** MMC-6 §5.3.1 — 4-byte Profile Descriptors
+    (Profile Number BE16, byte 2 bit0 CurrentP); the drive-static code set.
+  - **AACS (0x010D):** the bus-encryption + version bytes (see ARCHITECTURE).
+  - **Firmware Information (010Ch):** MMC-6 r02g §5.3.43, Table 197 — payload
+    Century[2] Year[2] Month[2] Day[2] Hour[2] Minute[2] Second[2]
+    Reserved[2], decimal ASCII, GMT; Additional Length 0x10. Emitted as an
+    RFC 3339 UTC string (the format `mos.event.v1`'s `ts` uses). NB: 0x1FF
+    (libcdio's `FIRMWARE_DATE`) is *Reserved* in MMC-6 — the feature is 010Ch.
+
+### `src/mos_versiondesc.c` — standard INQUIRY (version + version descriptors)
+- **Spec:** SPC-4 §6.4.2, opcode 0x12 EVPD=0. VERSION byte 2; VERSION
+  DESCRIPTORS bytes 58-73 (eight BE16 codes, 0x0000 = empty slot). Needs a
+  raw read with allocation length ≥74 — the convenience Inquiry returns only
+  the 36-byte header.
+- **Cross-check:** Linux `include/scsi/scsi.h` (the VERSION value table, as
+  `resp[2]+1`); sg3_utils `src/sg_inq_data.c` `sg_version_descriptor_arr`
+  (the descriptor code→name table; mos maps the "no version claimed" family
+  codes, unknown → hex).
 
 ### `src/mos_vpd80.c` — INQUIRY VPD page 0x80 (Unit Serial Number)
 - **Spec:** SPC-4 §7.7.13, opcode 0x12 with EVPD=1, PAGE CODE 0x80. Byte 3

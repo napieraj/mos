@@ -673,7 +673,7 @@ never a per-device special-case.
 
 The ADR above admitted INQUIRY (0x12) for exactly one mode: EVPD=1, PAGE
 CODE 0x80 (the serial). The drive-standards work (`mos_query_drive_standards`,
-`src/mos_standards.c` / parser `src/mos_stdinq.c`, feeding
+`src/mos_standards.c` / parser `src/mos_versiondesc.c`, feeding
 `mos.drive.v1.version` + `version_descriptors`) adds a **second mode of the
 same opcode**: EVPD=0 standard INQUIRY with allocation length ≥74, to read
 the VERSION byte and the version descriptors (bytes 58-73 — the standards the
@@ -698,10 +698,19 @@ Linux scsi.h table) and the descriptor codes → standard tokens
 "no version claimed" family codes); an unknown/specific-revision code is
 surfaced as hex, never guessed.
 
-**Sibling deferral — firmware build date (GET CONFIG feature 0x1FF).** The
-same survey identified the firmware *build date* (0x1FF) as a reachable
-GET-CONFIGURATION enrichment, but its payload layout could not be confirmed
-against a primary spec (the MMC-6 T10 PDF was unreachable and the MS DDK
-description self-contradicts on the Year field's digit count). Per the
-hardware-role ADR it is **deferred until the layout is pinned to MMC-6 or a
-captured fixture** — not built to a guessed offset table.
+**Sibling: firmware creation date — admitted, feature 010Ch (not 0x1FF).**
+The same survey identified the firmware *creation date* as a reachable
+GET-CONFIGURATION enrichment, initially (from libcdio/MS-DDK) as feature
+"0x1FF" with an MS-DDK payload whose Year field self-contradicted. The
+maintainer supplied the authoritative MMC-6 r02g spec (§5.3.43, Table 197),
+which corrected BOTH errors: the Firmware Information feature is **010Ch**
+(0x1FF is *Reserved* in MMC-6), and the year is **Century[2] + Year[2]**
+(bytes 4-7, not a single Year[4]). Built to that verified layout:
+`mos_internal_firmware_date_from_config` (`src/mos_config.c`) decodes the
+010Ch payload (Century/Year/Month/Day/Hour/Minute/Second decimal ASCII, GMT)
+into `mos.drive.v1.firmware_date` as an RFC 3339 UTC string — the same
+format as `mos.event.v1`'s `ts`. It rides the existing GET CONFIGURATION
+walk (no new command, no raw verb), null when the optional feature is absent.
+This is the firmware's *creation date*, not a version string — the 4-char
+`revision` remains the firmware version identifier (the fuller ATA version
+string stays unreachable on macOS per the serial-doc finding).

@@ -29,6 +29,7 @@
     {"code": "0x0460", "name": "spc_4"},
     {"code": "0x04e0", "name": "mmc_6"}
   ],
+  "firmware_date": null,
   "speeds": {
     "descriptor_count": 4,
     "max_read_kbps": 10560,

@@ -111,6 +111,14 @@ static void emit_json(const drive_doc *d)
     }
     fputs("]", stdout);
 
+    /* firmware_date: ISO-8601 GMT from feature 010Ch, null when the drive
+       does not implement the Firmware Information feature. */
+    fputs(",\n  \"firmware_date\": ", stdout);
+    {
+        const char *fw = mos_drive_caps_firmware_date(d->caps);
+        if (fw) mos_cli_json_str(stdout, fw); else fputs("null", stdout);
+    }
+
     fputs(",\n  \"speeds\": ", stdout);
     if (d->have_speeds)
         fprintf(stdout,
@@ -155,7 +163,7 @@ static void emit_json(const drive_doc *d)
 
 static void emit_human(const drive_doc *d)
 {
-    mos_cli_human_pair pairs[13];
+    mos_cli_human_pair pairs[14];
     size_t n = 0;
 
     char bsd_buf[24];
@@ -234,6 +242,9 @@ static void emit_human(const drive_doc *d)
         }
     }
     pairs[n++] = (mos_cli_human_pair){ "Standards", d->standards ? std_buf : NULL };
+
+    const char *fw = mos_drive_caps_firmware_date(d->caps);
+    pairs[n++] = (mos_cli_human_pair){ "Firmware", fw };
 
     /* 64: worst case "read 4294967295 kB/s, write 4294967295 kB/s (max)"
        is 49 + NUL. */
