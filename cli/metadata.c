@@ -1,15 +1,13 @@
 /* cli/metadata.c — the metadata command: `mos metadata [selector] [--json]`.
  *
- * One mos.metadata.v1 document — the on-demand disc-identity record
- * (design: doc/research/2026-06-10-media-info-design.md). The `disc`
- * object is THE FINGERPRINT SUBTREE: its key set is FIXED and every
- * identity field is REQUIRED AND NULLABLE, never optional, so the
- * canonical serialization consumers hash is trivial. Unreadable or
- * inapplicable facts emit null — partial readability is the normal
- * regime (a DVD answers disc_info but its TOC is identity-useless; a
- * mounted UDF disc may answer only the volume fields). The verb fails
- * (mos.error.v1) only when no observation was produced at all: open or
- * state-query failure.
+ * One mos.metadata.v1 document — the on-demand disc-identity record. The
+ * `disc` object is the fingerprint subtree: its key set is fixed and every
+ * identity field is required-and-nullable, never optional, so the canonical
+ * serialization consumers hash is trivial. Unreadable or inapplicable facts
+ * emit null — partial readability is the normal regime (a DVD answers
+ * disc_info but its TOC is identity-useless; a mounted UDF disc may answer
+ * only the volume fields). The verb fails (mos.error.v1) only when no
+ * observation was produced at all: open or state-query failure.
  */
 #include "common.h"
 

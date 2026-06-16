@@ -1,20 +1,17 @@
 /*
  * mos_da.c — one-shot DiskArbitration volume lookup.
  *
- * DA's RE-ADMISSION IS NARROW (AGENTS.md append, 2026-06-12): the
- * 2026-06-11 retirement removed DA's CALLBACK roles (the watch's wake
- * legs, the probe's control arm) and those do not return. This file is
- * the other modality: a synchronous DADiskCopyDescription read of what
- * the mounted-volume layer already knows — no session scheduling, no
- * run loop, no callbacks, no commands to the drive. Callers gate on
- * the media nub existing (bsd_unit present); with no IOMedia node
- * there is nothing mounted and DA is never consulted.
+ * Scope is one modality only: a synchronous DADiskCopyDescription read of
+ * what the mounted-volume layer already knows — no session scheduling, no
+ * run loop, no callbacks, no commands to the drive (AGENTS.md scope
+ * doctrine). Callers gate on the media nub existing (bsd_unit present);
+ * with no IOMedia node there is nothing mounted and DA is never consulted.
  *
- * Trust terms: the description dictionary is system-supplied but the
- * values are volume-controlled (a hostile disc names its volume), so
- * string extraction goes through the same bounded, type-checked,
- * fail-to-empty seam as the DR identity copies. The CLI's output
- * escaping guards the terminal/JSON regardless.
+ * Trust terms: the description dictionary is system-supplied but the values
+ * are volume-controlled (a hostile disc names its volume), so string
+ * extraction goes through the same bounded, type-checked, fail-to-empty
+ * seam as the DR identity copies. The CLI's output escaping guards the
+ * terminal/JSON regardless.
  */
 
 #include "mos_internal.h"
@@ -62,9 +59,6 @@ bool mos_internal_da_volume(const char *bsd_name,
             desc, kDADiskDescriptionVolumePathKey);
         bool is_url = path && CFGetTypeID(path) == CFURLGetTypeID();
         if (is_url && path_buf && path_cap) {
-            /* Path requested: render it. A path that exceeds the buffer
-               yields not-mounted rather than a truncated path a consumer
-               might chdir into. */
             if (CFURLGetFileSystemRepresentation((CFURLRef)path, true,
                                                  (UInt8 *)path_buf,
                                                  (CFIndex)path_cap)) {
@@ -73,11 +67,9 @@ bool mos_internal_da_volume(const char *bsd_name,
                 path_buf[0] = 0;
             }
         } else if (is_url) {
-            /* Name-only caller (no path buffer): VolumePath presence is
-               the mount proof on its own — rendering the path is not
-               required to know the volume is mounted. Without this branch
-               a name-only caller (e.g. `mos status`) could never observe
-               a mounted volume. */
+            /* Name-only caller (no path buffer): VolumePath presence is the
+               mount proof on its own, so a name-only caller (e.g.
+               `mos status`) can still observe a mounted volume. */
             mounted = true;
         }
         if (mounted)

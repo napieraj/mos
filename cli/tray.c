@@ -9,9 +9,9 @@
  * 5/53/02 locked-eject refusal — is EX_OK; the refusal rides the `outcome`
  * field, a reported fact, not a CLI failure. Only a transport/lock failure
  * (BUSY on a mounted/contended drive, NO_DEVICE, IO) is a non-zero exit, via
- * the shared mos.error.v1 path. A `lock` persists past this process by
- * design (T10 04-349r1 §6.18); release it with `mos tray unlock` (add
- * --persistent to match a --persistent lock).
+ * the shared mos.error.v1 path. A `lock` persists past this process
+ * (T10 04-349r1 §6.18); release it with `mos tray unlock` (add --persistent
+ * to match a --persistent lock).
  */
 #include "common.h"
 

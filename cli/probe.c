@@ -1,15 +1,12 @@
 /* cli/probe.c — the probe command: diagnostic substrate observer.
- * Relocated from tools/mos_notification_probe.c (2026-06-11) when the
- * standalone probes were consolidated into the CLI; compiled in only
- * under MOS_CLI_PROBE (default ON — see CMakeLists.txt; retiring the
- * command is one default flip).
+ * Compiled in only under MOS_CLI_PROBE (default ON, see CMakeLists.txt).
  *
  * Two modes:
  *
- *   mos probe <drive>   Subscribe to the empirical push-notification
- *                       sources for one optical drive and log each
- *                       event as NDJSON (mos.probe.v0) with monotonic
- *                       + RFC 3339 timestamps, until SIGINT:
+ *   mos probe <drive>   Subscribe to the push-notification sources for one
+ *                       optical drive and log each event as NDJSON
+ *                       (mos.probe.v0) with monotonic + RFC 3339
+ *                       timestamps, until SIGINT:
  *                         - kIOGeneralInterest on the io_service_t
  *                           (IsTerminated, PropertyChange,
  *                           BusyStateChange, WasClosed, ...)
@@ -22,22 +19,12 @@
  *
  *   mos probe --dump    One-shot instead: DRCopyDeviceArray order plus
  *                       each device's DRDeviceCopyInfo / DRDeviceCopyStatus
- *                       dictionary as an XML plist, then exit. This is the
- *                       DR-pivot fixture-capture mode; it answers the
- *                       registry-path-shape and identity-byte-shape
- *                       questions in INTEGRATION_HARNESS.md.
+ *                       dictionary as an XML plist, then exit (the
+ *                       fixture-capture mode).
  *
- * The DiskArbitration legs the standalone tool carried were retired with
- * the consolidation (2026-06-11, ROADMAP append): DA is filesystem-level,
- * the DR doorbell is the design's wake source, and no decision depends on
- * doorbell completeness — doorbells are latency-only over the poll floor
- * and the kernel itself polls media at 1000 ms.
- *
- * The standalone tool deliberately did not link mos_core, so it still
- * built when the library was broken; that build independence was traded
- * away in the consolidation. The OBSERVATION path is still raw — events
- * come straight from IOKit/DiscRecording callbacks and pass through none
- * of mos's state interpretation.
+ * The observation path is raw — events come straight from
+ * IOKit/DiscRecording callbacks and pass through none of mos's state
+ * interpretation.
  */
 #include "common.h"
 
@@ -58,11 +45,9 @@
 #include <sysexits.h>
 #include <time.h>
 
-/* mos_pure.h gives us mos_internal_parse_bsd_unit. It lives in the pure
-   layer (no IOKit, no state interpretation), so the observe-unfiltered
-   design is intact — and it avoids a second, subtly-different BSD-name
-   parse rule in the repo. The only cli/ TU that reaches a private
-   header (CONTRIBUTING.md records the exception). */
+/* mos_internal_parse_bsd_unit lives in the pure layer (no IOKit), reused
+   here to avoid a second BSD-name parse rule. The only cli/ TU that reaches
+   a private header (CONTRIBUTING.md records the exception). */
 #include "../src/mos_pure.h"
 
 /* ---- Signal handling --------------------------------------------- */
@@ -121,9 +106,8 @@ static void format_rfc3339_utc(char *out, size_t cap) {
 
 /* ---- IOKit message-type names ------------------------------------ *
  *
- * Looked up by numeric value. Returns a stable string identifier;
- * unknown messages fall through to "kIOMessageUnknown" with the
- * numeric value preserved in a separate field. */
+ * Unknown messages fall through to "kIOMessageUnknown"; the numeric value
+ * is preserved in a separate field by the caller. */
 static const char *message_type_name(uint32_t mt) {
     switch (mt) {
         case kIOMessageServiceIsTerminated:       return "kIOMessageServiceIsTerminated";
@@ -142,18 +126,15 @@ static const char *message_type_name(uint32_t mt) {
     }
 }
 
-/* Read a CFTypeRef expected to be a CFString into a C buffer. Returns true
-   only if it was a CFString and CFStringGetCString succeeded; on false the
-   buffer is left empty. Pre-escape step for CFString-sourced values
-   (IORegistry property strings, DR dictionary values). */
-
+/* Read a CFString into a C buffer. Returns true only if it was a CFString
+   and CFStringGetCString succeeded; on false the buffer is left empty. */
 static bool cf_string_to_cstr_safe(CFTypeRef cf, char *buf, size_t cap) {
     if (cap == 0) return false;
     buf[0] = '\0';
     if (!cf) return false;
     if (CFGetTypeID(cf) != CFStringGetTypeID()) return false;
-    /* On false, Apple's spec leaves the buffer contents undefined (possibly
-       partial, unterminated), so treat it as a hard failure and clear. */
+    /* On false the buffer contents are undefined (possibly partial,
+       unterminated), so treat it as a hard failure and clear. */
     if (!CFStringGetCString((CFStringRef)cf, buf,
                             (CFIndex)cap, kCFStringEncodingUTF8)) {
         buf[0] = '\0';
@@ -230,9 +211,9 @@ static void emit_shutdown(const char *bsd_name, const char *reason) {
 
 /* ---- IOKit callback wrappers ------------------------------------- *
  *
- * One callback per interest type so the source name is distinguishable
- * at log time (we can't recover the interest type from the message
- * alone — both interests can deliver overlapping message sets). */
+ * One callback per interest type so the source name is distinguishable at
+ * log time: the interest type cannot be recovered from the message alone,
+ * since both interests can deliver overlapping message sets. */
 struct probe_ctx {
     char bsd_name[64];   /* canonical "diskN": NDJSON output + IOKit emit */
 };
@@ -572,11 +553,8 @@ int mos_cli_run_probe(void)
     }
 
     /* Set up the DiscRecording notification source (device-global —
-       DR's center has no per-device filter at registration; the
-       events themselves carry identity). NULL-object registration is
-       itself under test: if StatusChanged never fires here while
-       drutil sees changes, that's a finding about the registration
-       model, not a probe bug. */
+       DR's center has no per-device filter at registration; the events
+       themselves carry identity, registered with a NULL object). */
     DRNotificationCenterRef dr = DRNotificationCenterCreate();
     CFRunLoopSourceRef dr_src = NULL;
     if (!dr) {
@@ -604,13 +582,11 @@ int mos_cli_run_probe(void)
         }
     }
 
-    /* Run the loop until SIGINT — or until stdout dies. The standalone
-       tool relied on default SIGPIPE delivery to exit when its consumer
-       closed the pipe; inside mos, SIGPIPE is ignored process-wide
-       (main.c), writes return EPIPE, and the emitters' fflush latches
-       sticky ferror — which this condition checks. Without it,
-       `mos probe diskN | head` would spin forever against a dead
-       stream. CFRunLoopRunInMode with a short interval lets us notice
+    /* Run the loop until SIGINT — or until stdout dies. SIGPIPE is ignored
+       process-wide (main.c), so a closed consumer makes writes return EPIPE
+       and the emitters' fflush latches sticky ferror, which this condition
+       checks; without it `mos probe diskN | head` would spin forever against
+       a dead stream. CFRunLoopRunInMode with a short interval lets us notice
        both flags promptly. */
     while (!g_interrupted && !ferror(stdout)) {
         CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.25, true);
@@ -630,9 +606,9 @@ int mos_cli_run_probe(void)
                  ? EX_OK : EX_IOERR;
     }
 
-    /* Cleanup. Teardown symmetry rule (fifth review, F12e): remove
-       every observer with its registration-time (observer, name)
-       pair, drop the source, then release. */
+    /* Cleanup. Teardown symmetry: remove every observer with its
+       registration-time (observer, name) pair, drop the source, then
+       release. */
     if (dr) {
         DRNotificationCenterRemoveObserver(dr, &ctx,
                                            kDRDeviceAppearedNotification,
