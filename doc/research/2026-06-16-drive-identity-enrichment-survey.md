@@ -181,28 +181,42 @@ mos already pays for four data sources. The value of a candidate is mostly
   same SCSITaskUserClient console grant already used. No root, no TCC.
 - **Reporter, not controller:** all read-only facts.
 
-## Recommendation (priority order)
+## Recommendation — cheap wins, tiered by cost
 
-If the maintainer wants to enrich `mos drive`, in descending value/cost ratio:
+**Tier 0 — zero command (DR directory; works even with media mounted, no
+exclusive access):**
 
-1. **Physical interconnect (bus type)** — Tier-0 DR field, near-zero cost,
-   clean drive identity. Best first add.
-2. **Supported-profile list** — Tier-1 on the existing GET CONFIG walk; the
-   richest, BD-aware capability fact, and it already carries the per-format
-   write capability (writable-profile presence). Do **not** add a boolean
-   "can write" — it is a platform tautology (mos only opens burners).
-3. **INQUIRY version + version descriptors** — Tier-1 on the existing INQUIRY
-   handle; the "standards this drive claims" fingerprint.
-4. **Firmware build date (0x1FF)** — Tier-1 best-effort; the firmware answer
-   beyond `revision`, null when absent.
+1. **Physical interconnect / bus type** — `kDRDevicePhysicalInterconnectKey`
+   (USB / SATA / ATAPI / FireWire / internal-external). No command at all —
+   the cheapest, cleanest "what *is* this drive" fact. **Best first add.**
 
-Items 1-4 are all additive, drive-static, and within the closed-field-set
-schema policy (each is a new key/block → a `mos.drive.v1` field-set addition,
+**Tier 1 — rides a command mos already issues (no new raw verb; the
+one-of-four raw-CDB count is unchanged):**
+
+2. **Supported-profile list** — GET CONFIG feature 0x0000, on the walk mos
+   already does for AACS. The richest, BD-aware capability fact; it also
+   carries the per-format **write** capability (writable-profile presence) —
+   so no separate write matrix, and no boolean "can write" (that is a
+   platform tautology, mos only opens burners).
+3. **Firmware build date** — GET CONFIG feature 0x1FF, same walk. Best-effort,
+   null when absent; the firmware answer beyond `revision`.
+4. **INQUIRY version byte + version descriptors** — a second EVPD=0 read on
+   the raw INQUIRY handle already opened for the serial. The "standards this
+   drive claims" (SPC-4/MMC-6…) fingerprint.
+5. *(lower value)* **Page-0x2A extra capability bits** — the MODE SENSE 0x2A
+   read mos already does for `mechanical` carries more bits (test-write,
+   BURN-Proof, C2, multi-session…), but mostly legacy CD-era; surface only if
+   an exhaustive capability matrix is wanted.
+
+Suggested build order: 1 → 2 → 4 → 3 (interconnect is lowest-risk; the
+profile list is highest-value; descriptors and firmware-date are additive
+best-effort). All are additive, drive-static, and within the closed-field-set
+schema policy (each a new key/block → a `mos.drive.v1` field-set addition,
 pre-tag mutable-in-place per the JSON-schema ADR: schema + example + negative
 fixtures + emitter + docs in one commit). Page-0x2A extras, VPD 0x83, and the
-GET-CONFIG serial are documented above as deferred/declined with their
-reasons, so a future session doesn't re-derive them. The firmware *version
-string* and the ATA path are closed as impossible, not deferred.
+GET-CONFIG serial are documented above as deferred/declined with reasons so a
+future session doesn't re-derive them. The firmware *version string* and the
+ATA path are closed as impossible, not deferred.
 
 ## What hardware can falsify, never establish
 
