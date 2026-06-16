@@ -1,11 +1,11 @@
 /*
- * test_physstruct.c — READ DISC STRUCTURE / Physical Format Information
+ * test_physstruct.c — READ DISC STRUCTURE Physical Format Information
  * (format 0x00) and Copyright Management Information (format 0x01) decode
- * for the DVD / HD-DVD media-type family. Wire fixtures are built to the
- * kernel's documented byte parse (drivers/cdrom/cdrom.c dvd_read_physical
- * / dvd_read_copyright); the hostile cases pin the no-OOB property the
- * decode exists to hold — a device-controlled Disc Structure Data Length
- * must only ever SHRINK the trusted region, never extend a read.
+ * for the DVD / HD-DVD media-type family. Wire fixtures follow the
+ * kernel's documented byte parse; the hostile cases pin the no-OOB
+ * invariant the decode exists to hold — a device-controlled Disc
+ * Structure Data Length must only SHRINK the trusted region, never
+ * extend a read.
  */
 #include "test_harness.h"
 #include "../src/mos_pure.h"
@@ -95,8 +95,8 @@ TEST(physstruct_dual_layer_otp)
 TEST(physstruct_hd_dvd_book_type)
 {
     /* HD DVD-ROM (book type 0x4): the same media-type-0 structure
-       carries HD-DVD book types — the reason this decode is named
-       "physical structure", not "dvd". */
+       carries HD-DVD book types — why this decode is "physical
+       structure", not "dvd". */
     uint8_t b[22];
     build_phys(b, 0x4 /*hd_dvd_rom*/, 1, 0, 0x0f, 1, 0, 1, 0, 0,
                0x030000, 0x04E000, 0, false);
@@ -110,9 +110,9 @@ TEST(physstruct_hd_dvd_book_type)
 
 TEST(physstruct_copyright_css_region1)
 {
-    /* CSS-protected, region-1-only: RMI bit clear for the playable
-       region (DVD convention). We surface the raw mask; classification
-       is the consumer's. */
+    /* CSS-protected, region-1-only (RMI bit clear = playable, DVD
+       convention). We surface the raw mask; classification is the
+       consumer's. */
     uint8_t b[6];
     build_copyright(b, 0x01 /*CSS/CPPM*/, 0xFE /*region 1 playable*/);
 

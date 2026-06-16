@@ -2,8 +2,8 @@
  * test_bsd_name.c — BSD name normalization regression tests.
  *
  * Exercises the real mos_internal_normalize_bsd_name and
- * mos_internal_bsd_name_is_whole_shape via mos_pure.h. The previous version
- * of this file mirrored the logic; that was drift-prone.
+ * mos_internal_bsd_name_is_whole_shape via mos_pure.h, rather than
+ * mirroring the logic (which would drift).
  */
 
 #include "test_harness.h"
@@ -99,8 +99,8 @@ TEST(self_or_partition_partition_child)
 
 TEST(self_or_partition_rejects_prefix_collisions)
 {
-    /* The classic bug: bare strncmp(reported, "disk4", 5) matched disk40
-       against disk4. The numeric compare makes it 40 != 4 by construction. */
+    /* Regression: strncmp(reported, "disk4", 5) matched disk40 against
+       disk4. The numeric compare makes it 40 != 4 by construction. */
     EXPECT_EQ(mos_internal_bsd_unit_matches("disk40",   4), 0);
     EXPECT_EQ(mos_internal_bsd_unit_matches("disk42",   4), 0);
     EXPECT_EQ(mos_internal_bsd_unit_matches("disk4abc", 4), 0);
@@ -186,9 +186,8 @@ TEST(bsd_name_format_rejects_out_of_domain)
     char b[16];
     /* no media */
     EXPECT(!mos_bsd_name_format(-1, b, sizeof b));            EXPECT_STREQ(b, "");
-    /* one past UINT32_MAX — fits a 16-byte buffer ("disk4294967296"),
-       so this is the case truncation alone would NOT catch: must be
-       rejected by the domain check, not emitted as a valid-looking name. */
+    /* One past UINT32_MAX still fits "disk4294967296" in 16 bytes, so
+       truncation alone wouldn't catch it — the domain check must. */
     EXPECT(!mos_bsd_name_format(4294967296LL, b, sizeof b));  EXPECT_STREQ(b, "");
     /* well past the domain (also truncates) */
     EXPECT(!mos_bsd_name_format(5000000000LL, b, sizeof b));  EXPECT_STREQ(b, "");
@@ -199,9 +198,8 @@ TEST(bsd_name_format_rejects_out_of_domain)
 
 TEST(bsd_name_format_too_small_buffer_returns_false)
 {
-    /* In-domain unit but the caller buffer can't hold "disk12345" (10
-       bytes needed); snprintf truncates and the function must report it
-       AND empty the buffer (documented contract: writes "" on failure
+    /* In-domain unit, buffer too small for "disk12345": must report
+       failure AND empty the buffer per contract (writes "" on failure
        when cap > 0, never a truncated partial name). */
     char small[8];
     small[0] = 'X';
@@ -214,8 +212,7 @@ TEST(bsd_name_format_too_small_buffer_returns_false)
 
 TEST(bsd_name_format_rejects_null_buffer)
 {
-    /* Public footgun: documented as NUL-terminating when cap > 0, but a
-       NULL buf with a non-zero cap must not be dereferenced. Returns
+    /* A NULL buf with non-zero cap must not be dereferenced: returns
        false rather than crashing in snprintf. */
     EXPECT(!mos_bsd_name_format(4, NULL, 16));
     EXPECT(!mos_bsd_name_format(0, NULL, 16));
@@ -226,9 +223,8 @@ TEST(bsd_name_format_rejects_null_buffer)
 
 TEST(leading_zero_units_parse_numerically)
 {
-    /* Pin, don't change: "disk04" parses as unit 4 (digits read
-       numerically), and the canonical render is "disk4" — the
-       round-trip normalizes, it does not preserve the spelling. */
+    /* "disk04" parses as unit 4 and renders canonically as "disk4" —
+       the round-trip normalizes, it does not preserve the spelling. */
     EXPECT_EQ(4, (int)mos_internal_parse_bsd_unit("disk04"));
     EXPECT_EQ(0, (int)mos_internal_parse_bsd_unit("disk000"));
     char buf[16];

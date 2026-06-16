@@ -1,11 +1,9 @@
 /*
  * mos_discinfo.c — pure, bounds-safe decode of a READ DISC INFORMATION
- * (MMC 0x51, standard data type 000b) response.
- *
- * No IOKit. The IOKit shell issues READ DISC INFORMATION into a fixed,
- * zero-initialized buffer and hands that buffer plus its size here. The
- * Disc Information Length is device-reported and therefore hostile; this
- * file keeps it from steering a read outside [buf, buf+len).
+ * (MMC 0x51, standard data type 000b) response. No IOKit: the shell hands
+ * us a fixed zero-init buffer and its size. The Disc Information Length is
+ * device-reported, hence hostile — it must never steer a read outside
+ * [buf, buf+len).
  *
  * Layout (MMC-6, READ DISC INFORMATION standard response, first 12 bytes):
  *
@@ -22,16 +20,13 @@
  *   [9]    Number of Sessions (MSB)
  *   [10]   First Track Number in Last Session (MSB)
  *   [11]   Last Track Number in Last Session (MSB)
- *   (bytes 12+ : Disc Identification, lead-in / lead-out addresses, bar
- *    code, OPC table — not decoded; informational, not the status.)
+ *   (bytes 12+ : undecoded — see SPEC.md.)
  *
- * Safety contract (the device controls the length here):
- *   - `len` is the only trusted ceiling; the Disc Information Length can
- *     only shrink the trusted region (clamped under `len`), never extend it.
- *   - The fixed numeric region (through byte 11) must be present per both
- *     `len` and the declared length; a shorter response is refused.
- *
- * No-OOB property gated headless under ASan/UBSan by tests/test_discinfo.c.
+ * Safety contract (the device controls the length): `len` is the only
+ * trusted ceiling; the Disc Information Length can only shrink the trusted
+ * region, never extend it. The fixed numeric region (through byte 11) must
+ * be present per both `len` and the declared length; a shorter response is
+ * refused.
  */
 
 #include "mos_pure.h"
@@ -41,13 +36,11 @@ bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
 {
     if (!buf || !out) return false;
 
-    /* The fixed numeric fields this decode promises run through byte 11, so
-       the trusted region must reach at least byte 12. */
+    /* Fixed numeric fields run through byte 11; trusted region must reach 12. */
     if (len < 12) return false;
 
-    /* Disc Information Length (bytes 0-1) counts bytes AFTER itself, so the
-       response occupies declared + 2 bytes. Clamp the trusted region to the
-       smaller of that and len — a device length only ever shrinks it. */
+    /* Disc Information Length (bytes 0-1) counts bytes AFTER itself; clamp the
+       trusted region to the smaller of declared+2 and len. */
     size_t declared_end = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
     size_t end = (len < declared_end) ? len : declared_end;
     if (end < 12) return false;        /* device declares fewer bytes than the fields */
@@ -62,11 +55,8 @@ bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
     out->first_track_last_session = (uint16_t)(((uint16_t)buf[10] << 8) | buf[5]);
     out->last_track_last_session  = (uint16_t)(((uint16_t)buf[11] << 8) | buf[6]);
 
-    /* BG Format Status (byte 7 bits 1:0): the background-format state of
-       DVD+RW / BD-RE / Mount Rainier media — none / inactive (started,
-       not running) / active (in progress) / complete. Byte 7 is inside
-       the through-byte-11 region already proven present above, so no
-       extra bound is needed. Values match Linux CDM_MRW_* (cdrom.h). */
+    /* BG Format Status (byte 7 bits 1:0): background-format state of
+       DVD+RW / BD-RE / Mount Rainier media. Values match Linux CDM_MRW_*. */
     out->bg_format_status = (uint8_t)(buf[7] & 0x03u);
     return true;
 }

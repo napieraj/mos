@@ -1,18 +1,11 @@
 /*
- * mos_query.c — the typed MMC query surface. Each mos_query_* verb issues
- * one MMCDeviceInterface convenience command, hands the raw reply to a pure
- * decoder in src/mos_<feature>.c, caches the result on the handle, and
- * returns a borrowed pointer. Split out of mos_scsi.c (which keeps the
- * device handle, enumeration, open/close, the MMC convenience primitives
- * the state core uses, and the one raw-CDB path) so the file that owns the
- * wire stays separate from the verb catalogue.
+ * mos_query.c — the typed MMC query surface. Each mos_query_* verb issues one
+ * MMCDeviceInterface convenience command, hands the reply to a pure decoder,
+ * caches the result on the handle, and returns a borrowed pointer.
  *
- * Every command here is a NON-EXCLUSIVE convenience method: none takes
+ * Every command here is a NON-EXCLUSIVE convenience method — none takes
  * ObtainExclusiveAccess. That call site stays solely in mos_scsi.c's
- * mos_raw_cdb (AGENTS scope-doctrine layer 1 / §3) — this file adds none.
- *
- * Internal symbols are `static` or `mos_internal_`-prefixed; same
- * static-link hygiene as the rest of the library (see mos_scsi.c).
+ * mos_raw_cdb (AGENTS scope-doctrine layer 1 / §3); this file adds none.
  */
 
 #include "mos_internal.h"
@@ -24,14 +17,11 @@ mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out)
     if (out) *out = NULL;
     if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
-    /* 34 bytes = the MMC standard response's fixed numeric region plus
-       the lead-in/lead-out address fields — the exact shape of the
-       committed fixtures (tests/fixtures/readdiscinfo_*.bin), which the
-       pure decoder is built to. The convenience method reports no
-       realized count, so sizeof buf is the trusted length (dual-length
-       rule O-4); the reply's own Disc Information Length can only
-       shrink the decode, never extend it. Convenience = non-exclusive:
-       no lock interaction, safe at any state. */
+    /* 34 bytes: the fixed numeric region plus lead-in/lead-out addresses,
+       matching the readdiscinfo_*.bin fixtures. The convenience method
+       reports no realized count, so sizeof buf is the trusted length
+       (dual-length rule O-4); the reply's own Disc Information Length can
+       only shrink the decode, never extend it. */
     uint8_t         buf[34] = {0};
     SCSITaskStatus  st      = 0;
     SCSI_Sense_Data sd      = {0};
@@ -40,18 +30,17 @@ mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out)
         h->mmc, buf, (UInt16)sizeof(buf), &st, &sd);
 
     if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
-        /* Same convention as get_current_profile above: transport
-           failures map their IOReturn; a command that reached the
-           drive but returned no usable data (no medium, units that
-           reject 0x51) is MOS_ERR_IO — out-of-band, so it can never
-           masquerade as a real all-zero disc-info answer. */
+        /* Transport failure maps its IOReturn; a command that reached the
+           drive but gave no usable data (no medium, a unit that rejects
+           0x51) is MOS_ERR_IO — out-of-band, never mistakable for a real
+           all-zero answer. This convention repeats across the verbs below. */
         return (rc != kIOReturnSuccess)
                    ? mos_internal_ioreturn_to_mos_error(rc)
                    : MOS_ERR_IO;
     }
 
     if (!mos_internal_disc_info_parse(buf, sizeof(buf), &h->disc_info)) {
-        return MOS_ERR_IO;   /* truncated/short reply — refused whole */
+        return MOS_ERR_IO;   /* short reply — refused whole */
     }
     *out = &h->disc_info;
     return MOS_OK;
@@ -63,10 +52,9 @@ mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
     if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
     /* Format 0000b worst case: 4-byte header + 100 descriptors
-       (99 tracks + lead-out) x 8. The convenience method reports no
-       realized count, so sizeof buf is the trusted length (O-4); the
-       reply's own TOC Data Length only ever shrinks the parse. MSF=0
-       (LBA), starting track 0 (= from first). Non-exclusive: no lock. */
+       (99 tracks + lead-out) x 8. sizeof buf is the trusted length (O-4);
+       the reply's own TOC Data Length only shrinks the parse. MSF=0 (LBA),
+       starting track 0 (= from first). */
     uint8_t         buf[4 + 100 * 8] = {0};
     SCSITaskStatus  st               = 0;
     SCSI_Sense_Data sd               = {0};
@@ -82,7 +70,7 @@ mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
     }
 
     if (!mos_internal_toc_parse(buf, sizeof(buf), &h->toc)) {
-        return MOS_ERR_IO;   /* incoherent/hostile TOC — refused whole */
+        return MOS_ERR_IO;   /* incoherent TOC — refused whole */
     }
     *out = &h->toc;
     return MOS_OK;
@@ -94,12 +82,10 @@ mos_error mos_query_cdtext(mos_handle_t *h, const mos_cdtext **out)
     if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
     /* READ TOC/PMA/ATIP format 0101b (CD-TEXT). 256 packs (4612 bytes)
-       holds the album-level blocks of any real disc several times over;
-       a longer hostile reply is simply clamped — sizeof buf is the
-       trusted length (O-4), and the reply's own CD-TEXT Data Length only
-       ever shrinks the parse. Same convenience method and trust terms as
-       mos_query_toc above; non-exclusive, no lock. The track/session
-       parameter is reserved for format 0101b — passed 0. */
+       holds any real disc's album-level blocks several times over; a longer
+       reply is clamped to sizeof buf (the trusted length, O-4) and the
+       reply's own CD-TEXT Data Length only shrinks the parse. The
+       track/session parameter is reserved here — passed 0. */
     uint8_t         buf[4 + 256 * 18] = {0};
     SCSITaskStatus  st                = 0;
     SCSI_Sense_Data sd                = {0};
@@ -126,14 +112,11 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
     if (out) *out = NULL;
     if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
-    /* RT=0: header + every feature the drive implements. 1024 bytes
-       holds real-world feature lists several times over (a loaded
-       BD-RE's full list runs ~400 bytes); a longer hostile claim is
-       simply clamped — the walker trusts sizeof buf, and the reply's
-       own lengths only ever shrink the walk (O-4). Decode is the pure,
-       fuzz-checked mos_internal_aacs_caps_from_config: feature absent
-       (every non-BD drive) reads as aacs=false, which is data, not an
-       error. Non-exclusive convenience call: no lock interaction. */
+    /* RT=0: header + every feature the drive implements. 1024 bytes holds
+       real feature lists several times over (a loaded BD-RE runs ~400
+       bytes); a longer claim is clamped to sizeof buf, and the reply's own
+       lengths only shrink the walk (O-4). Feature absent (every non-BD
+       drive) decodes to aacs=false — data, not an error. */
     uint8_t         buf[1024] = {0};
     SCSITaskStatus  st        = 0;
     SCSI_Sense_Data sd        = {0};
@@ -163,9 +146,8 @@ mos_error mos_enumerate_features(mos_handle_t *h,
 {
     if (!h || !h->mmc || !cb) return MOS_ERR_INVALID_ARG;
 
-    /* Same issuance and trust terms as mos_query_drive_caps above:
-       RT=0 into a zero-init 1024-byte buffer, sizeof buf is the
-       trusted length, reply lengths only shrink the walk (O-4). */
+    /* Same issuance and trust terms as mos_query_drive_caps: RT=0 into a
+       1024-byte buffer, sizeof buf trusted, reply lengths shrink-only (O-4). */
     uint8_t         buf[1024] = {0};
     SCSITaskStatus  st        = 0;
     SCSI_Sense_Data sd        = {0};
@@ -189,7 +171,7 @@ mos_error mos_enumerate_features(mos_handle_t *h,
             .persistent = feat.persistent,
             .version    = feat.version,
         };
-        if (!cb(&info, ctx)) break;     /* caller stop, not an error */
+        if (!cb(&info, ctx)) break;     /* caller-requested stop, not an error */
     }
     return MOS_OK;
 }
@@ -199,17 +181,14 @@ mos_error mos_query_disc_id(mos_handle_t *h, const mos_disc_id **out)
     if (out) *out = NULL;
     if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
-    /* One-shot read of the full BD Disc Information into a fixed,
-       zero-init buffer (BD DI maxes ~3588 bytes; 4096 covers it). We
-       deliberately do NOT do dvd+rw-mediainfo's two-phase
-       read-the-length-then-reallocate dance: a single fixed buffer
-       means no device-reported length ever drives an allocation or a
-       second transfer. sizeof buf is the trusted length handed to the
-       pure decoder (O-4); the reply's own Disc Structure Data Length
-       can only SHRINK the parse, never extend it, and an under-filled
-       reply leaves zeros that fail the 'DI' gate. MEDIA_TYPE=1 (BD),
-       FORMAT=0x00 (Disc Information), ADDRESS/LAYER 0. Non-exclusive
-       convenience call: no lock. */
+    /* One-shot read of the full BD Disc Information into a fixed buffer
+       (BD DI maxes ~3588 bytes; 4096 covers it). Deliberately not
+       dvd+rw-mediainfo's two-phase read-length-then-realloc: a single
+       fixed buffer means no device-reported length ever drives an
+       allocation or second transfer. sizeof buf is the trusted length
+       (O-4); the reply's own Disc Structure Data Length only shrinks the
+       parse, and an under-filled reply leaves zeros that fail the 'DI'
+       gate. MEDIA_TYPE=1 (BD), FORMAT=0x00 (DI), ADDRESS/LAYER 0. */
     uint8_t         buf[4096] = {0};
     SCSITaskStatus  st        = 0;
     SCSI_Sense_Data sd        = {0};
@@ -242,16 +221,13 @@ mos_error mos_query_physical_structure(mos_handle_t *h,
     if (out) *out = NULL;
     if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
-    /* Two convenience reads of READ DISC STRUCTURE for the DVD/HD-DVD
-       media type (MEDIA_TYPE=0): FORMAT 0x00 (Physical Format
-       Information) and FORMAT 0x01 (Copyright Management Information).
-       Each into a fixed zero-init buffer — sizeof buf is the trusted
-       length (O-4); the reply's own Disc Structure Data Length can only
-       SHRINK the parse, and an under-filled reply fails the per-format
-       min-length gate. Both halves merge into one handle-owned struct;
-       the reads are independent (partial-readability ladder), so a drive
-       that answers one format but not the other still yields the half it
-       gave. No lock (convenience). */
+    /* Two READ DISC STRUCTURE reads for DVD/HD-DVD (MEDIA_TYPE=0):
+       FORMAT 0x00 (Physical Format Info) and 0x01 (Copyright Management).
+       sizeof buf is the trusted length (O-4); the reply's own length only
+       shrinks the parse, and an under-filled reply fails the per-format
+       min-length gate. The two reads are independent (partial-readability
+       ladder), so a drive that answers one format but not the other still
+       yields the half it gave; both merge into one handle-owned struct. */
     struct mos_physical_structure *d = &h->physical_structure;
     *d = (struct mos_physical_structure){0};
 
@@ -285,7 +261,7 @@ mos_error mos_query_physical_structure(mos_handle_t *h,
         (void)mos_internal_copyright_mgmt_parse(buf, sizeof(buf), d);
 
     if (!d->have_physical && !d->have_copyright) {
-        return MOS_ERR_IO;   /* neither format answered (non-DVD, or refused) */
+        return MOS_ERR_IO;   /* neither format answered (non-DVD or refused) */
     }
     *out = d;
     return MOS_OK;
@@ -296,15 +272,13 @@ mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
     if (out) *out = NULL;
     if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
-    /* READ TRACK INFORMATION (0x52) for the first track via the
-       convenience method. ADDRESS_TYPE = 01b (logical track number),
-       ADDRESS = 1 (the first track) — well-defined on any media with a
-       track. 64 bytes covers the Track Information Block (the core block
-       is 36 bytes; MMC-6 extends it slightly). sizeof buf is the trusted
-       length (O-4); the reply's Track Information Length only shrinks the
-       parse. No lock (convenience). Signature confirmed against
-       SCSITaskLib.h (ADDRESS_NUMBER_TYPE, LBA/track/session, buffer,
-       bufferSize, taskStatus, senseData). */
+    /* READ TRACK INFORMATION (0x52), first track. ADDRESS_TYPE = 01b
+       (logical track number), ADDRESS = 1 — well-defined on any media with
+       a track. 64 bytes covers the Track Information Block (core 36 bytes;
+       MMC-6 extends it slightly). sizeof buf is the trusted length (O-4);
+       the reply's Track Information Length only shrinks the parse.
+       Signature confirmed against SCSITaskLib.h (ADDRESS_NUMBER_TYPE,
+       LBA/track/session, buffer, bufferSize, taskStatus, senseData). */
     uint8_t         buf[64] = {0};
     SCSITaskStatus  st      = 0;
     SCSI_Sense_Data sd      = {0};
@@ -323,7 +297,7 @@ mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
     }
 
     if (!mos_internal_track_info_parse(buf, sizeof(buf), &h->track_info)) {
-        return MOS_ERR_IO;   /* truncated/short reply — refused whole */
+        return MOS_ERR_IO;   /* short reply — refused whole */
     }
     *out = &h->track_info;
     return MOS_OK;
@@ -337,24 +311,20 @@ mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out)
     struct mos_capacity *c = &h->capacity;
     *c = (struct mos_capacity){0};
 
-    /* Refresh the media-scoped identity so a held handle reports the
-       CURRENT disc's size, not the open-time disc's (held-handle freshness
-       — see mos_internal_refresh_media_identity). */
+    /* Held-handle freshness: re-resolve so the size reflects the current
+       disc, not the open-time one (mos_internal_refresh_media_identity). */
     mos_internal_refresh_media_identity(h);
 
-    /* (a) The whole-disk byte capacity — the kernel's own attach-time
-       READ CAPACITY, cached on the IOMedia node (no command, no exclusive
-       access, works on mounted media). 0 == absent: a blank/absent disc
-       has no whole-disk node. */
+    /* (a) Whole-disk byte capacity from the kernel's attach-time READ
+       CAPACITY, cached on the IOMedia node (no command, works on mounted
+       media). 0 == absent: a blank/absent disc has no whole-disk node. */
     c->media_bytes = h->media_bytes;
     c->block_bytes = h->media_block_bytes;
 
-    /* (b) The recordable / append-state view — a fresh READ TRACK
-       INFORMATION through the same non-exclusive convenience read.
-       Best-effort and independent of (a): a drive that rejects 0x52 (an
-       empty drive, or a pressed disc with no readable first track) just
-       leaves have_recordable false. Guard on the MMC interface so a
-       handle that somehow lacks it still returns the media size half. */
+    /* (b) Recordable / append-state via a fresh READ TRACK INFORMATION.
+       Best-effort and independent of (a): a drive that rejects 0x52 just
+       leaves have_recordable false. Guard on the MMC interface so a handle
+       lacking it still returns the media-size half. */
     if (h->mmc) {
         const mos_track_info *t = NULL;
         if (mos_query_track_info(h, &t) == MOS_OK && t) {
@@ -370,11 +340,9 @@ mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out)
     return MOS_OK;
 }
 
-/* One GET PERFORMANCE (0xAC) Performance Data read in the given
-   direction (WRITE=0 read, WRITE=1 write). TOLERANCE=10b nominal,
-   EXCEPT=0 (nominal performance), STARTING_LBA=0. Returns MOS_OK and the
-   decoded max performance (kB/s) + descriptor count, or a non-OK code on
-   command failure. Convenience method: no lock. */
+/* One GET PERFORMANCE (0xAC) Performance Data read in the given direction
+   (WRITE=0 read, WRITE=1 write). TOLERANCE=10b nominal, EXCEPT=0,
+   STARTING_LBA=0. Returns the decoded max kB/s + descriptor count. */
 static mos_error mos_internal_get_perf(mos_handle_t *h, uint8_t write,
                                        uint32_t *max_kbps, uint16_t *count)
 {
@@ -408,11 +376,10 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
     if (out) *out = NULL;
     if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
-    /* Two Performance Data reads — read direction (WRITE=0) and write
-       direction (WRITE=1) — assembled into one result. The read read is
-       the gate (its success defines `have`); the write read is
-       best-effort (a read-only drive or non-writable medium simply
-       leaves max_write_kbps 0). */
+    /* Two Performance Data reads assembled into one result. The read
+       direction is the gate (defines `have`); the write direction is
+       best-effort (read-only drive or non-writable medium leaves
+       max_write_kbps 0). */
     struct mos_drive_perf *p = &h->drive_perf;
     *p = (struct mos_drive_perf){0};
 
@@ -427,17 +394,16 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
     p->descriptor_count = rd_cnt;
     p->max_read_kbps    = rd_max;
     p->max_write_kbps   = wr_max;
-    p->have             = (rd_cnt > 0);   /* read read is the gate (see above) */
+    p->have             = (rd_cnt > 0);   /* read direction is the gate */
     *out = p;
     return MOS_OK;
 }
 
 /* Shared MODE SENSE(10) issuance for the two read-only optical pages
-   (AGENTS scope addendum 2026-06-13). Signature confirmed against
-   SCSITaskLib.h (LLBAA, DBD, PC, PAGE_CODE, buffer, bufferSize,
-   taskStatus, senseData). PC = 00b (current values); DBD=1 (no block
-   descriptor) keeps the reply compact, though the pure walker tolerates
-   a descriptor either way. Non-exclusive convenience: no lock. */
+   (AGENTS.md scope doctrine, layer 2). Signature confirmed against
+   SCSITaskLib.h (LLBAA, DBD, PC, PAGE_CODE, buffer, bufferSize, taskStatus,
+   senseData). PC = 00b (current values); DBD=1 (no block descriptor) keeps
+   the reply compact, though the walker tolerates a descriptor either way. */
 static mos_error mos_internal_mode_sense10(mos_handle_t *h, uint8_t page,
                                            uint8_t *buf, size_t buf_len)
 {

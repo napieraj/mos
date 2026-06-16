@@ -2,26 +2,13 @@
  * test_render.c — hostile-input pinning for mos_json_escape and
  * mos_safe_ascii.
  *
- * These functions render drive-controlled bytes (INQUIRY vendor and
- * product strings, sense fields surfaced as part of error contexts)
- * to JSON and to plain tty output. The fixtures here cover:
- *
- *   - Bounds: NULL input, empty input, single-character.
- *   - JSON-mandatory escape forms (RFC 8259): ", \, \b, \f, \n, \r, \t.
- *   - Control bytes < 0x20 not covered by named forms (\u00XX).
- *   - 0x7F (DEL) escaped to defend against terminal-aware consumers.
- *   - High bytes 0x80-0xFF escaped to keep JSON encoding-portable.
- *   - Realistic terminal-injection payloads:
- *       * ANSI color sequence (ESC [ 31 m red ESC [ 0 m)
- *       * OSC 52 clipboard write attempt (ESC ] 52 ; c ; <BASE64> BEL)
- *       * Title-bar manipulation (ESC ] 0 ; <title> BEL)
- *       * Cursor-position report request (ESC [ 6 n)
- *   - Truncation: returns required length on a too-small buffer,
- *     guarantees NUL termination when out_cap >= 1.
- *   - Zero-capacity buffer: no write, accurate length still returned.
- *
- * No I/O, no allocation, no globals. Each fixture is a pure
- * input→output assertion.
+ * Both render drive-controlled bytes (INQUIRY vendor/product strings,
+ * sense fields in error contexts) to JSON and to plain tty output.
+ * Coverage: bounds (NULL/empty/single char), RFC 8259 escape forms,
+ * unnamed control bytes, DEL, high bytes, terminal-injection payloads
+ * (ANSI color, OSC 52 clipboard, title-bar, cursor report), and
+ * truncation / zero-capacity buffer behavior. Each fixture is a pure
+ * input->output assertion.
  */
 
 #include "test_harness.h"
@@ -94,10 +81,8 @@ TEST(json_escapes_unnamed_control_bytes_as_u00XX)
 
 TEST(json_escapes_NUL_via_strlen_boundary)
 {
-    /* C strings end at NUL; mos_json_escape is strlen-bound. A NUL
-       in the middle of a buffer is just end-of-string from its
-       perspective. Pinning this behavior so callers don't expect
-       embedded-NUL handling. */
+    /* strlen-bound: an embedded NUL is end-of-string. Pinned so
+       callers don't expect embedded-NUL handling. */
     char in[] = "ab";  /* 'a' 'b' '\0' */
     char out[16];
     size_t n = mos_json_escape(in, out, sizeof(out));
@@ -108,9 +93,8 @@ TEST(json_escapes_NUL_via_strlen_boundary)
 
 TEST(json_escapes_DEL_0x7F)
 {
-    /* 0x7F (DEL) is escaped defensively. RFC 8259 doesn't mandate
-       this but terminal-aware downstream consumers can mishandle
-       raw DEL bytes. */
+    /* DEL escaped defensively: RFC 8259 doesn't require it, but
+       terminal-aware consumers mishandle raw DEL. */
     char in[]  = "a\x7f" "b";
     char out[32];
     mos_json_escape(in, out, sizeof(out));
@@ -131,8 +115,7 @@ TEST(json_escapes_high_bytes_as_u00XX)
 
 TEST(json_escapes_ansi_color_sequence)
 {
-    /* ESC [ 31 m red ESC [ 0 m — what a hostile drive's vendor
-       string could contain to color-bomb a tty if not escaped. */
+    /* ESC [ 31 m red ESC [ 0 m — a vendor string color-bombing a tty. */
     char in[]  = "\x1b[31mred\x1b[0m";
     char out[64];
     mos_json_escape(in, out, sizeof(out));
@@ -142,9 +125,8 @@ TEST(json_escapes_ansi_color_sequence)
 
 TEST(json_escapes_osc52_clipboard_payload)
 {
-    /* OSC 52 ; c ; PAYLOAD BEL — terminal-mediated clipboard write.
-       The most dangerous escape in this fixture set; never let a
-       drive emit one. */
+    /* OSC 52 ; c ; PAYLOAD BEL — terminal-mediated clipboard write,
+       the most dangerous payload here. */
     char in[]  = "\x1b]52;c;cm9vdGtpdA==\x07";
     char out[128];
     mos_json_escape(in, out, sizeof(out));
@@ -164,10 +146,8 @@ TEST(json_escapes_title_bar_manipulation)
 
 TEST(json_truncation_returns_required_length)
 {
-    /* Buffer too small; verify truncation behavior:
-       1. Return value is the full required length.
-       2. Output is still NUL-terminated.
-       3. Output is a prefix of what would have been written. */
+    /* Too-small buffer: return is the full required length, output
+       stays NUL-terminated and is a prefix of the full result. */
     char out[8];
     size_t n = mos_json_escape("hello\"world", out, sizeof(out));
     EXPECT_EQ((size_t)12, n);  /* h e l l o \" w o r l d = 12 bytes */
@@ -178,8 +158,8 @@ TEST(json_truncation_returns_required_length)
 
 TEST(json_zero_capacity_no_write_accurate_length)
 {
-    /* out_cap == 0: no NUL termination, no write, but the return
-       value still tells the caller how big a buffer would suffice. */
+    /* out_cap == 0: no write, but the return still reports the
+       required buffer size. */
     char out[16];
     memset(out, '!', sizeof(out));
     size_t n = mos_json_escape("hello", out, 0);

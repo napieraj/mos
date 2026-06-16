@@ -8,16 +8,14 @@ static void emit_human(const mos_state_result *r, int index1,
                        bool invoked_by_index, bool invoked_by_registry,
                        const char *volume_name)
 {
-    /* Five-tier order (doc/research/2026-06-10-cli-design.md): answer,
-       evidence, media, addressing, identity. Suppression mirrors the
-       JSON contract (pairs the schema suppresses are not in the array);
-       structural addressing/identity rows show "-" via NULL instead. */
+    /* Order: addressing, answer, evidence, media, identity. Suppression
+       mirrors the JSON contract (omitted pairs absent); structural rows
+       show "-" via NULL. */
     mos_cli_human_pair pairs[11];
     size_t n = 0;
 
-    /* Addressing header first: Index, Registry ID, BSD. The selector the
-       caller invoked with is dropped (they typed it); BSD always stays
-       — it is the pasteable, downstream-useful handle. */
+    /* Index, Registry ID, BSD. The selector the caller typed is dropped;
+       BSD always stays — the pasteable, downstream-useful handle. */
     char idx_buf[12];
     if (!invoked_by_index) {
         if (index1 > 0) {
@@ -52,11 +50,9 @@ static void emit_human(const mos_state_result *r, int index1,
     mos_state_result_sense(r, &sk, &asc, &ascq);
     char sense_buf[16];
     if (sk || asc || ascq) {
-        /* Raw triplet only: its decoded MEANING is the State line above
-           (the library's whole job); no public sense-text catalog
-           exists and the design review declined to invent one for an
-           edge-case row. The triplet is what you compare against the
-           MMC tables. */
+        /* Raw triplet only: its meaning is the State line above, and there
+           is no public sense-text catalog. The triplet is what you compare
+           against the MMC tables. */
         snprintf(sense_buf, sizeof sense_buf, "%02x/%02x/%02x",
                  sk, asc, ascq);
         pairs[n++] = (mos_cli_human_pair){ "Sense", sense_buf };
@@ -67,8 +63,8 @@ static void emit_human(const mos_state_result *r, int index1,
     if (mos_cli_profile_present(profile)) {
         const char *pn = mos_profile_name(profile);
         const char *pc = mos_profile_class(profile);
-        /* Coarse → precise; joining is safe only because every token
-           is space-free (identity fields are not — see below). */
+        /* Coarse -> precise; joining is safe because every token is
+           space-free (identity fields are not — see below). */
         if (pn && pc)
             snprintf(prof_buf, sizeof prof_buf, "%s  %s  (0x%04x)",
                      pc, pn, profile);
@@ -79,10 +75,9 @@ static void emit_human(const mos_state_result *r, int index1,
         pairs[n++] = (mos_cli_human_pair){ "Profile", prof_buf };
     }
 
-    /* Volume name: the second identical-drives disambiguator (media
-       class above is the first). Disc-controlled bytes — escaped here
-       like the identity rows below. Suppressed (no row) when
-       unmounted, mirroring the JSON suppression. */
+    /* Volume name: the second identical-drives disambiguator (media class
+       is the first). Disc-controlled bytes, escaped like the identity rows
+       below; no row when unmounted, mirroring the JSON suppression. */
     char vol_esc[MOS_CLI_ESC_CAP(256)];
     if (volume_name && volume_name[0]) {
         (void)mos_safe_ascii(volume_name, vol_esc, sizeof vol_esc);
@@ -92,14 +87,11 @@ static void emit_human(const mos_state_result *r, int index1,
     const char *v  = mos_state_result_vendor(r);
     const char *p  = mos_state_result_product(r);
     const char *rv = mos_state_result_revision(r);
-    /* Identity strings are drive-originated bytes via DR's closed
-       parse — an unverifiable intermediary that plausibly launders
-       most hostile content but provably cannot be RELIED on for ESC
-       (C0 controls survive every encoding in the chain). The human
-       layout engine prints verbatim (layout only, by contract), so
-       escape HERE — \xNN per mos_safe_ascii. Three rows, never one
-       joined line: product may contain interior spaces, so a joined
-       line has unrecoverable field boundaries. */
+    /* Identity strings are drive-originated bytes (DR's closed parse can't
+       be relied on to strip C0 controls). The human layout engine prints
+       verbatim by contract, so escape HERE — \xNN per mos_safe_ascii.
+       Three rows, never one joined line: product may contain interior
+       spaces, which would make field boundaries unrecoverable. */
     char v_esc[MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];
     char p_esc[MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
     char rv_esc[MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];
@@ -134,27 +126,21 @@ static void emit_json(const mos_state_result *r, int index1,
             (unsigned long long)mos_state_result_registry_id(r));
     fprintf(stdout, ",\n  \"index\": %d", index1 > 0 ? index1 : 0);
 
-    /* Profile is always printed as 0xNNNN where N is a hex digit; no
-       JSON-escape-unsafe characters possible, so fprintf directly. */
+    /* Always 0xNNNN hex — no JSON-unsafe bytes, so fprintf directly. */
     fprintf(stdout, ",\n  \"current_profile\": \"0x%04x\"", profile);
 
-    /* current_profile_name only when there's actually a current profile.
-       0x0000 is the SCSI sentinel "no current profile"; surfacing the
-       string form ("no_current_profile") as a profile name is confusing —
-       it implies a named profile is set when none is. The state-core
-       contract is that current_profile is populated only when state ==
-       READY; for every other state it's 0x0000. Suppress the name in
-       that case so open/empty/busy/unknown JSON doesn't carry a stale
-       "no_current_profile" label, matching the example fixtures. */
+    /* Name only when a profile is actually current. current_profile is
+       populated only when state == READY (state-core contract; 0x0000
+       otherwise, ARCHITECTURE §9), so suppressing at the sentinel keeps
+       open/empty/busy/unknown JSON from carrying a stale
+       "no_current_profile" label. */
     if (mos_cli_profile_present(profile) && profile_name) {
         fputs(",\n  \"current_profile_name\": ", stdout);
         mos_cli_json_str(stdout, profile_name);
     }
-    /* Coarse media class, same suppression rule as the name: derived
-       entirely from the profile already in hand, so it ships with zero
-       extra wire traffic. This is the first disambiguator for the
-       identical-drives case; the volume name joins it in the v0.4
-       media-info work (doc/research/2026-06-10-media-info-design.md). */
+    /* Coarse media class, same suppression as the name; derived from the
+       profile in hand, so no extra command. The first identical-drives
+       disambiguator (volume name is the second). */
     {
         const char *media_class = mos_profile_class(profile);
         if (mos_cli_profile_present(profile) && media_class) {
@@ -163,9 +149,8 @@ static void emit_json(const mos_state_result *r, int index1,
         }
     }
 
-    /* Mounted-volume name (DA one-shot, mos_query_volume). Same
-       suppression convention as vendor/product: present only when
-       non-empty — key absence means unmounted or unlabeled. */
+    /* Mounted-volume name (DA one-shot). Present only when non-empty —
+       key absence means unmounted or unlabeled. */
     if (volume_name && volume_name[0]) {
         fputs(",\n  \"volume_name\": ", stdout);
         mos_cli_json_str(stdout, volume_name);
@@ -196,9 +181,6 @@ static void emit_json(const mos_state_result *r, int index1,
     fputs("\n}\n", stdout);
 }
 
-/* Map mos_error to its JSON contract code string. The set of codes is
-   pinned in include/mos.h alongside the enum; downstream automation
-   relying on the JSON contract pattern-matches on these strings. */
 int mos_cli_run_query(void)
 {
     mos_error err = MOS_OK;
@@ -206,9 +188,8 @@ int mos_cli_run_query(void)
     int index1 = 0;
 
     if (opt_bsd) {
-        /* No pre-normalization here: mos_open_by_bsd_name's parse already
-           accepts disk4 / rdisk4 / /dev/-prefixed forms (mos_pure.c). A
-           CLI-side strip was a weaker duplicate of that authority. */
+        /* No pre-normalization: mos_open_by_bsd_name already accepts
+           disk4 / rdisk4 / /dev/ forms (mos_pure.c). */
         h = mos_open_by_bsd_name(opt_bsd, &err);
     } else if (opt_index) {
         index1 = opt_index;
@@ -217,15 +198,10 @@ int mos_cli_run_query(void)
         /* index1 stays 0; resolved from the result's registry_id below. */
         h = mos_open_by_registry_id(opt_registry, &err);
     } else {
-        /* No selector: fine with exactly one drive; with several this
-           is EX_USAGE — no first-burner magic (CLI design 2026-06-10).
-           mos_cli_open_sole_drive opens the lone drive inside the same
-           enumeration that counts, so the happy path probes ONCE (the
-           pre-pivot collect-then-reopen double probe died with the DR
-           pivot). The multi-drive failure still carries the mini-list
-           (one table implementation) so the human gets the overview
-           they wanted, plus the retry path — the mini-list's probe
-           pass only runs on this error path. */
+        /* No selector: fine with one drive, EX_USAGE with several (no
+           first-burner magic). The lone-drive open happens in the same
+           enumeration that counts, so the happy path probes once; the
+           multi-drive mini-list runs only on this error path. */
         int total = 0;
         h = mos_cli_open_sole_drive(&err, &total);
         if (total > 1) {
@@ -247,11 +223,9 @@ int mos_cli_run_query(void)
     mos_error qerr = mos_query_state(h, &r);
 
     if (qerr != MOS_OK) {
-        /* Format the handle's device node for the failure envelope.
-           Read the unit (a value, not borrowed storage) before
-           mos_close(); mos_bsd_dev_node writes "" and returns
-           false for a no-media unit (-1), so the envelope omits the
-           field in that case. */
+        /* Device node for the failure envelope. Read the unit (a value,
+           not borrowed storage) before mos_close; a no-media unit (-1)
+           yields false / "", and the envelope omits the field then. */
         char bsd_buf[24];
         if (!mos_bsd_dev_node(mos_handle_bsd_unit(h), bsd_buf, sizeof bsd_buf)) {
             bsd_buf[0] = 0;
@@ -261,17 +235,14 @@ int mos_cli_run_query(void)
                                      bsd_buf[0] ? bsd_buf : NULL);
     }
 
-    /* Index for the emitters: explicit -i is authoritative; a bsd- or
-       default-opened handle resolves via registry match (0 = "-"). */
+    /* Index for the emitters: explicit -i wins; otherwise resolve by
+       registry match (0 = "-"). */
     if (!index1) index1 = mos_cli_resolve_index_of(mos_state_result_registry_id(r));
 
-    /* Emit before closing: r is a handle-owned object whose string fields
-       point into h's internal buffers (see mos.h — "valid only until the
-       next mos_query_state() call or mos_close()"). Freeing the handle
-       first would leave r dangling. */
-    /* Volume label (stage 1): one DA description read, gated inside
-       the library on the media nub. Failure or unmounted just means
-       no field — never affects state reporting. */
+    /* Emit before closing: r's string fields point into the handle's
+       buffers (mos.h — valid only until the next query or mos_close). */
+    /* Volume label: one DA read, gated in the library on the media nub.
+       Failure or unmounted just drops the field; state is unaffected. */
     char volume[256] = "";
     bool mounted = false;
     (void)mos_query_volume(h, &mounted, volume, sizeof volume, NULL, 0);
@@ -280,11 +251,9 @@ int mos_cli_run_query(void)
     else           emit_human(r, index1, opt_index > 0, opt_registry != 0,
                               mounted ? volume : NULL);
 
-    /* Exit 0 on any state including unknown — state is stdout data, not
-       exit status. unknown means "drive reachable, classification
-       inconclusive" — an observation, not a failure.
-       Reserve non-zero exit for cases where no observation was produced
-       (handled by mos_cli_emit_unknown_and_fail above). */
+    /* Exit 0 on any state, unknown included — state is stdout data, not
+       exit status, and unknown is still an observation. Non-zero is
+       reserved for "no observation produced" (handled above). */
     mos_close(h);
     return mos_cli_finalize_oneshot_stdout(EX_OK);
 }

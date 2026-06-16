@@ -12,12 +12,9 @@
 void mos_cli_json_str(FILE *f, const char *s)
 {
     if (!s) { fputs("null", f); return; }
-    /* Size first (out=NULL,cap=0 returns the escaped length excluding the
-       NUL), then escape into an exactly-sized buffer — a fixed-cap buffer
-       would truncate, and truncation can land mid-escape (after a
-       backslash, or inside a \uXXXX), emitting invalid JSON. A small stack
-       buffer covers the common short fields; longer strings (e.g. CF
-       properties via the notification probe) fall back to malloc. */
+    /* Size first, then escape into an exactly-sized buffer: a fixed cap
+       could truncate mid-escape (after a backslash, inside a \uXXXX) and
+       emit invalid JSON. Stack buffer for short fields, malloc beyond. */
     char stack[256];
     size_t need = mos_json_escape(s, NULL, 0);
     char *buf = stack;
@@ -36,6 +33,10 @@ void mos_cli_json_str(FILE *f, const char *s)
 void mos_cli_safe_ascii(FILE *f, const char *s)
 {
     if (!s) return;
+    /* Fixed 4 KiB buffer; input beyond it is dropped. Every call site
+       (argv, env, SPC identity strings) is far below that, and \xNN
+       truncation can't split into something dangerous the way JSON mid-
+       escape truncation can — so no two-pass sizing. */
     char buf[4096];
     mos_safe_ascii(s, buf, sizeof buf);
     fputs(buf, f);
@@ -43,14 +44,10 @@ void mos_cli_safe_ascii(FILE *f, const char *s)
 
 void mos_cli_bsd_dev_node(FILE *f, int64_t unit)
 {
-    char path[24];
-    /* The JSON `bsd` field carries the full canonical device node
-       ("/dev/diskN") — pasteable, pipeable, always a valid `--bsd`
-       argument when non-null (doc/research/2026-06-10-cli-design.md).
-       mos_bsd_dev_node refuses unit < 0 (no media) and units above
-       UINT32_MAX, so the value is null or a valid node — never a
-       corrupted one. (24 bytes always holds an in-domain unit:
-       "/dev/disk4294967295".) */
+    char path[24];     /* fits "/dev/disk4294967295" */
+    /* mos_bsd_dev_node refuses unit < 0 (no media) and units above
+       UINT32_MAX, so the result is `null` or a valid node, never a
+       corrupted one. */
     if (!mos_bsd_dev_node(unit, path, sizeof path)) {
         fputs("null", f);
         return;
@@ -60,22 +57,14 @@ void mos_cli_bsd_dev_node(FILE *f, int64_t unit)
 
 mos_cli_stdout_status mos_cli_stdout_finalize(void)
 {
-    /* ferror is the authoritative "did a write fail" signal: it is sticky,
-       so a failure that latched in an earlier buffered fputs/fputc/fprintf
-       (or a buffer-full auto-flush) is still visible here, not only one in
-       this final flush.
-
-       errno only distinguishes EPIPE from other failures, and is read
-       WITHOUT being cleared: whenever ferror is set OR fflush returns EOF,
-       some write/flush syscall failed during this emission and set errno —
-       and the no-op writes that follow a latch (stdio short-circuits once
-       the error flag is set) do not touch it. So errno is fresh whenever
-       we reach the classification line. We do not clear errno ourselves:
-       clearing it immediately before fflush would make correct
-       classification depend on fflush re-setting errno after a latch that
-       already emptied the buffer — true on glibc, but not guaranteed by
-       C/POSIX, and a needless dependency. (We also never clearerr(): that
-       would drop the sticky failure signal and could report a false OK.) */
+    /* ferror is sticky, so a failure latched in an earlier buffered write
+       still shows here, not just one from this final flush. errno is read
+       without clearing: when ferror is set or fflush returns EOF, a syscall
+       failed during this emission and set it, and the no-op writes after a
+       latch leave it untouched — so it's fresh at classification. Clearing
+       it would make us depend on fflush re-setting errno (glibc-true, not
+       C/POSIX-guaranteed); clearerr() would drop the sticky signal and risk
+       a false OK. */
     if (fflush(stdout) == 0 && !ferror(stdout)) return MOS_CLI_STDOUT_OK;
     return (errno == EPIPE) ? MOS_CLI_STDOUT_PIPE_CLOSED
                             : MOS_CLI_STDOUT_WRITE_ERROR;

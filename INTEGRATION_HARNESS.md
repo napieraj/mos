@@ -158,7 +158,7 @@ the §5.5 nub invariant, TUR exclusivity, IOReturn pins, the GESN CDB
    *Status 2026-06-11, phase 2 (tests/test_adapter_watch.c): the
    watch lifecycle and identity semantics joined the same job — the
    REAL mos_watch.c on a fake clock replays snapshot/state-change/
-   removal (notification AND poll-floor paths), the F1 and replug
+   removal (notification AND poll-floor paths), the media-swap and replug
    registry-ID re-mints, stream_open_ms constancy and uniqueness
    across streams, the error-backoff cadence in exact fake
    milliseconds, watch-all join/leave/rejoin with the doorbell-or-fail

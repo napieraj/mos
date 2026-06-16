@@ -27,13 +27,11 @@
 #include <assert.h>
 
 /* ---- Wire-format compile-time invariants -------------------------- */
-/* Pin the 18-byte assumption at compile time, two ways:
-   (1) sizeof(SCSI_Sense_Data) == kSenseDefaultSize — Apple's own
-       documented size matches their struct layout.
-   (2) kSenseDefaultSize == 18 — Apple's constant matches the literal
-       18 baked into mos.h and mos_internal.h's sense[18] signatures.
-   A failure of (1) means Apple broke their internal contract; of (2)
-   means the public API's sense[18] literal needs updating. */
+/* Pin the 18-byte sense assumption two ways: (1) Apple's struct matches
+   their own kSenseDefaultSize; (2) that constant is 18, the literal baked
+   into the sense[18] signatures in mos.h / mos_internal.h. A (1) failure
+   means Apple broke an internal contract; (2) means the public API literal
+   needs updating. */
 _Static_assert(sizeof(SCSI_Sense_Data) == kSenseDefaultSize,
                "SCSI_Sense_Data size no longer matches kSenseDefaultSize");
 _Static_assert(kSenseDefaultSize == 18,
@@ -44,10 +42,10 @@ _Static_assert(kSenseDefaultSize == 18,
 /* The pure BSD-name helpers live in src/mos_pure.c (declared in mos_pure.h,
    re-included via mos_internal.h) so they link into the pure-only tests. */
 
-/* Read an OSNumber registry property off `node` as a uint64. Returns 0
-   (the "absent" sentinel the capacity contract uses) on a missing,
-   non-numeric, or non-positive value. Used for the whole-disk IOMedia
-   size/block-size — the kernel's cached READ CAPACITY result, no command. */
+/* Read an OSNumber registry property as uint64, or 0 (the "absent"
+   sentinel) when missing, non-numeric, or non-positive. Used for the
+   whole-disk IOMedia size/block-size — the kernel's cached READ CAPACITY,
+   no command. */
 static uint64_t mos_internal_cf_number_u64(io_registry_entry_t node,
                                            CFStringRef key)
 {
@@ -62,15 +60,14 @@ static uint64_t mos_internal_cf_number_u64(io_registry_entry_t node,
     return (uint64_t)out;
 }
 
-/* Resolve the whole-disk BSD unit (the N in "diskN") for an IOKit service,
-   or -1 if none (e.g. an empty/open-tray drive with no IOMedia child), and
-   capture the whole-disk IOMedia registry entry ID into *media_id_out (0 if
-   none). When *media_bytes_out / *block_bytes_out are non-NULL they receive
-   the whole-disk node's kernel-cached byte size and natural block size
-   (kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey — the result of the
-   kernel's own attach-time READ CAPACITY; 0 if absent). The transient
-   "diskN" name buffers below never escape this function — only the parsed
-   integer identity does. */
+/* Resolve the whole-disk BSD unit (N in "diskN") for an IOKit service, or
+   -1 if none (empty/open-tray drive, no IOMedia child). Captures the
+   whole-disk IOMedia registry entry ID into *media_id_out (0 if none), and,
+   when non-NULL, the node's kernel-cached size/block-size into
+   *media_bytes_out / *block_bytes_out (kIOMediaSizeKey /
+   kIOMediaPreferredBlockSizeKey — the kernel's attach-time READ CAPACITY;
+   0 if absent). The transient "diskN" name buffers never escape — only the
+   parsed integer identity does. */
 static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
                                      uint64_t *media_bytes_out,
                                      uint32_t *block_bytes_out)
@@ -85,15 +82,13 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
     }
 
     /* Two-pass selection:
-       1. Normal: an IOMedia whole-disk child exists. Prefer it —
-          kIOMediaWholeKey reliably discriminates "disk4" from partition
-          children ("disk4s1") on mounted media.
-       2. Fallback: some USB bridges expose a BSD name on a non-standard
-          IOMedia node with no "Whole" property. Accept any whole-disk-shaped
-          name (disk\d+ / rdisk\d+, no partition suffix).
-       Pass 1 wins if it finds anything — a Whole node is authoritative.
-       Refcounts auto-release via MOS_IO_AUTO / MOS_CF_AUTO (see
-       mos_internal.h). */
+       1. Prefer a whole-disk IOMedia child — the "Whole" property cleanly
+          separates "disk4" from partitions ("disk4s1").
+       2. Fallback: some USB bridges expose a BSD name on a node with no
+          "Whole" property. Accept any whole-disk-shaped name (disk\d+ /
+          rdisk\d+, no partition suffix).
+       A Whole node is authoritative and wins. Refcounts auto-release via
+       MOS_IO_AUTO / MOS_CF_AUTO. */
     char whole_name[MOS_BSD_NAME_CAP] = {0};
     char fallback_name[MOS_BSD_NAME_CAP] = {0};
     uint64_t whole_id = 0;
@@ -109,9 +104,8 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
         CFTypeRef bsd MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
                 child, CFSTR(kIOBSDNameKey), kCFAllocatorDefault, 0);
         if (bsd && CFGetTypeID(bsd) == CFStringGetTypeID()) {
-            /* CFStringGetCString may write partial bytes before returning
-               false (Apple spec); clear so the empty check below stays
-               authoritative. */
+            /* CFStringGetCString may write partial bytes before failing
+               (Apple spec); clear so the empty check below stays valid. */
             if (!CFStringGetCString((CFStringRef)bsd, this_name,
                                     sizeof(this_name),
                                     kCFStringEncodingUTF8)) {
@@ -122,10 +116,10 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
         if (this_name[0] == 0) continue;
 
         /* Pass 1: the authoritative Whole node. Require IOMedia conformance
-           — some descendant nodes carry a "Whole" boolean without being
-           media. (The string-name IOObjectConformsTo avoids needing
-           <IOKit/storage/IOMedia.h>.) The fallback below still takes
-           whole-disk-shaped names on non-IOMedia nodes for USB bridges. */
+           — some descendants carry a "Whole" boolean without being media.
+           (String-name IOObjectConformsTo avoids including IOMedia.h.) The
+           fallback still takes whole-disk-shaped names on non-IOMedia
+           bridge nodes. */
         CFTypeRef whole MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
                 child, CFSTR("Whole"), kCFAllocatorDefault, 0);
         bool is_whole = (whole &&
@@ -135,16 +129,15 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
 
         if (is_whole && whole_name[0] == 0) {
             strlcpy(whole_name, this_name, sizeof(whole_name));
-            /* Capture the whole-disk IOMedia registry entry ID while we
-               hold the node — this is the F1 media-swap fingerprint. On
-               failure the id stays 0 (the "unavailable" sentinel), which
-               the watch core treats as "don't infer a swap". */
+            /* Capture the IOMedia registry entry ID — the media-swap
+               fingerprint — while we hold the node. On failure it stays 0
+               (the "unavailable" sentinel; the watch core won't infer a
+               swap from it). */
             if (IORegistryEntryGetRegistryEntryID(child, &whole_id) != KERN_SUCCESS) {
                 whole_id = 0;
             }
-            /* Same node, same tier: the kernel-cached capacity. Read here
-               while we hold the Whole IOMedia node rather than re-resolving
-               by media_id later — open-time, like the identity above. */
+            /* Kernel-cached capacity off the same node, captured now rather
+               than re-resolved by media_id later. */
             whole_bytes = mos_internal_cf_number_u64(child,
                               CFSTR(kIOMediaSizeKey));
             whole_block = (uint32_t)mos_internal_cf_number_u64(child,
@@ -152,18 +145,13 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
         } else if (!is_whole && fallback_name[0] == 0 &&
                    mos_internal_bsd_name_is_whole_shape(this_name)) {
             strlcpy(fallback_name, this_name, sizeof(fallback_name));
-            /* Deliberately NO id capture on this branch. media_id's
-               contract is "whole-disk IOMedia registry entry ID"
-               (mos_pure.h) — re-minted on a physical swap. A
-               non-IOMedia bridge node's ID identifies the BRIDGE, not
-               the medium, and plausibly survives a swap; a stale
-               non-zero fingerprint disarms BOTH swap detectors at
-               once (id_changed needs both ids non-zero-and-different;
-               the profile-class fallback needs both zero —
-               mos_watch_core.c). Zero is the documented "unavailable,
-               don't infer a swap" sentinel and keeps the no-id
-               fallback armed. Whether real bridges take this branch
-               at all is a rig question (hardware checklist). */
+            /* No id capture here. media_id must be the whole-disk IOMedia
+               entry ID (mos_pure.h), re-minted on a swap; a bridge node's
+               ID identifies the BRIDGE and may survive a swap, so a stale
+               non-zero value would disarm both swap detectors at once
+               (mos_watch_core.c). Leaving it 0 keeps the no-id fallback
+               armed. Whether real bridges hit this branch is a rig
+               question. */
         }
 
         if (whole_name[0] != 0) break; /* Whole found, done */
@@ -174,31 +162,23 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
                        : NULL;
     if (!chosen) return -1;
     if (media_id_out) *media_id_out = whole_name[0] ? whole_id : 0;
-    /* Size rides with the Whole node only: the fallback (non-IOMedia
-       bridge) branch captured none — its node's size, like its id, is
-       not the medium's (same reasoning as media_id above). */
+    /* Size and id ride the Whole node only — the fallback bridge node's are
+       not the medium's (see the no-id reasoning above). */
     if (media_bytes_out) *media_bytes_out = whole_name[0] ? whole_bytes : 0;
     if (block_bytes_out) *block_bytes_out = whole_name[0] ? whole_block : 0;
-    /* parse_bsd_unit normalizes any rdisk/ /dev/ prefix (some USB bridges
-       expose only a raw entry), rejects partition/non-whole shapes, and
-       returns the unit or -1. Identity is an integer from here; the
-       canonical "diskN" is reconstructed only at output via
-       mos_bsd_name_format(). */
+    /* parse_bsd_unit normalizes any rdisk/ /dev/ prefix, rejects
+       partition/non-whole shapes, and returns the unit or -1. Identity is
+       an integer from here; "diskN" is reconstructed only at output. */
     return mos_internal_parse_bsd_unit(chosen);
 }
 
-/* Re-resolve the handle's MEDIA-SCOPED identity — whole-disk bsd_unit,
-   the media_id swap fingerprint, and the kernel-cached size/block bytes —
-   from its stable drive service. The drive service (h->svc) is fixed for
-   the handle's life; the IOMedia whole-disk child under it is NOT: it
-   appears on insert and vanishes on eject. A single open-time capture
-   therefore goes stale on a handle held across a media change (an empty
-   drive opened, then loaded, kept reporting -1). The media-scoped queries
-   call this first so they report CURRENT media — the held-handle analog
-   of the watch's reopen-per-probe, but without the reopen: a local
-   IORegistry walk off h->svc, no SCSI command, no exclusive access, the
-   same cost as the open-time resolve. Single-threaded by the handle
-   contract (same as every other handle mutation). */
+/* Re-resolve the handle's media-scoped identity (bsd_unit, media_id swap
+   fingerprint, cached size/block bytes) off its stable drive service.
+   h->svc is fixed for the handle's life; the IOMedia child under it is not
+   — it appears on insert, vanishes on eject — so a single open-time capture
+   goes stale across a media change. Media-scoped queries call this first to
+   report CURRENT media: a local IORegistry walk, no SCSI command, no
+   exclusive access. Single-threaded like every handle mutation. */
 void mos_internal_refresh_media_identity(mos_handle_t *h)
 {
     if (!h) return;
@@ -215,14 +195,11 @@ void mos_enumerate_devices(mos_enumerate_cb cb, void *ctx)
 {
     if (!cb) return;
 
-    /* DR-backed (the directory — mos_dr.c): the snapshot arrives in
-       DR device-array order, which is the public ordering contract
-       (the same array drutil enumerates; drutil parity by provenance,
-       not by sort approximation). DR already dedups — one DRDevice
-       per drive — so the pre-pivot class-walk dedup died with the
-       walk. Identity strings ride the snapshot but mos_device_info_t
-       deliberately doesn't surface them yet: identity is handle data
-       (open the device), not enumeration data — unchanged contract. */
+    /* DR-backed (mos_dr.c): the snapshot arrives in DR device-array order,
+       the public ordering contract (same array drutil enumerates), already
+       deduped to one DRDevice per drive. Identity strings ride the snapshot
+       but mos_device_info_t doesn't surface them — identity is handle data,
+       not enumeration data. */
     mos_internal_dr_snapshot snap[MOS_ENUM_CAP];
     size_t n = mos_internal_dr_copy_snapshot(snap, MOS_ENUM_CAP);
 
@@ -235,24 +212,20 @@ void mos_enumerate_devices(mos_enumerate_cb cb, void *ctx)
     }
 }
 
-/* Enumeration yields bsd_unit + registry_id only (identity is handle
-   data — see mos_enumerate_devices). Returns -1 for an empty/open-tray
-   drive. */
+/* Enumeration yields bsd_unit + registry_id only; -1 for an empty drive. */
 int64_t mos_device_info_bsd_unit(const mos_device_info_t *i) { return i ? i->bsd_unit : -1; }
 uint64_t mos_device_info_registry_id(const mos_device_info_t *i) { return i ? i->registry_id : 0; }
 
-/* Handle-side accessor. Surfaces the bsd_unit a handle was opened
-   against, for partial-failure paths where mos_open_by_*() succeeded but
-   a later call (mos_query_state, mos_raw_cdb) returned an error. */
+/* The bsd_unit a handle was opened against, for partial-failure paths where
+   open succeeded but a later call errored. -1 for an empty drive. */
 int64_t mos_handle_bsd_unit(const mos_handle_t *h)
 {
-    /* -1: an empty/open-tray drive carries no unit. */
     return h ? h->bsd_unit : -1;
 }
 
 io_service_t mos_internal_handle_get_service(mos_handle_t *h) {
-    /* No retain taken — caller must IOObjectRetain before mos_close(h).
-       Lifecycle contract in mos_internal.h. */
+    /* No retain taken — caller must IOObjectRetain before mos_close(h)
+       (contract in mos_internal.h). */
     return h ? h->svc : IO_OBJECT_NULL;
 }
 
@@ -263,20 +236,15 @@ static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
     mos_handle_t *h = calloc(1, sizeof(*h));
     if (!h) { IOObjectRelease(svc); if (err) *err = MOS_ERR_OOM; return NULL; }
     h->svc = svc;
-    /* Attachment identity, captured once at open. Best-effort like
-       bsd_unit below: a failed call leaves the calloc'd 0, which the
-       result/JSON contract documents as "unavailable" — never a
-       fabricated ID. */
+    /* Attachment identity, captured once. Best-effort: a failed call leaves
+       the calloc'd 0, documented as "unavailable", never fabricated. */
     if (IORegistryEntryGetRegistryEntryID(svc, &h->drive_registry_id)
             != KERN_SUCCESS) {
         h->drive_registry_id = 0;
     }
-    /* Best-effort, not a gate (same posture as the enumeration snapshot):
-       a nameless empty drive opens fine since the MMC plug-in and queries
-       run off `svc`. The resolve assigns unconditionally — the handle is
-       calloc'd, so an unset bsd_unit would read 0 ("disk0"), a valid unit,
-       not "no media". The media-scoped queries re-run this same resolve
-       per call so a handle held across an insert/eject stays current. */
+    /* Best-effort, not a gate: a nameless empty drive opens fine (plug-in
+       and queries run off svc). Media-scoped queries re-run this per call
+       so a handle held across insert/eject stays current. */
     mos_internal_refresh_media_identity(h);   /* sets bsd_unit/-1, media_id, size */
 
     SInt32 score = 0;
@@ -286,8 +254,8 @@ static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
         kIOCFPlugInInterfaceID,
         &h->plugin, &score);
     if (kr != KERN_SUCCESS || !h->plugin) {
-        /* Apple's kext declined to attach SCSITaskUserClient. See KNOWN
-           UNKNOWNS — the match behavior has shifted across macOS releases. */
+        /* Apple's kext declined to attach SCSITaskUserClient (match
+           behavior has shifted across macOS releases — see KNOWN UNKNOWNS). */
         if (err) *err = MOS_ERR_DRIVER_REJECTED;
         mos_close(h);
         return NULL;
@@ -298,19 +266,17 @@ static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
         CFUUIDGetUUIDBytes(kIOMMCDeviceInterfaceID),
         (LPVOID *)&h->mmc);
     if (hr != S_OK || !h->mmc) {
-        /* COM contract says a failed QueryInterface leaves the out
-           pointer untouched (it's calloc-NULL here); NULL it anyway so
-           mos_close can never Release a garbage value if an Apple
-           plug-in ever violates that contract. */
+        /* COM leaves the out pointer untouched on failure (calloc-NULL
+           here); NULL it anyway so mos_close never Releases garbage if a
+           plug-in violates that. */
         h->mmc = NULL;
         if (err) *err = MOS_ERR_DRIVER_REJECTED;
         mos_close(h);
         return NULL;
     }
 
-    /* Identity from the DR directory (device-static; the open-time
-       INQUIRY retired with the DR pivot). Non-fatal on failure —
-       empty strings, the same contract the INQUIRY path had. */
+    /* Identity from the DR directory (device-static). Non-fatal on
+       failure — empty strings. */
     (void)mos_internal_dr_copy_identity_for_service(
         h->svc,
         h->vendor_str,   sizeof h->vendor_str,
@@ -326,25 +292,18 @@ mos_handle_t *mos_open_by_bsd_name(const char *want, mos_error *err_out)
     if (err_out) *err_out = MOS_ERR_INVALID_ARG;
     if (!want) return NULL;
 
-    /* parse_bsd_unit accepts disk4 / rdisk4 / /dev/ forms and returns -1 for
-       anything invalid. An empty drive has no unit, so this never resolves to
-       "whichever nameless drive came first" — empty drives are index/
-       enumeration-only. (err_out is already MOS_ERR_INVALID_ARG.) This gate
-       also preserves the CLI contract: malformed name = invalid_arg/64,
-       well-formed-but-absent = no_device/66. */
+    /* parse_bsd_unit accepts disk4 / rdisk4 / /dev/ forms, -1 otherwise.
+       Empty drives have no unit, so this never resolves a nameless drive —
+       they're index/enumeration-only. Preserves the CLI contract: malformed
+       name = invalid_arg/64, well-formed-but-absent = no_device/66. */
     int64_t want_unit = mos_internal_parse_bsd_unit(want);
     if (want_unit < 0) return NULL;
 
-    /* DR resolves the name (the directory). Reconstruct the canonical
-       "diskN" form first — DRDeviceCopyDeviceForBSDName documents the
-       plain /dev entry name, and normalization authority stays with
-       parse_bsd_unit, not with whatever prefix the caller typed. The
-       resulting registry ID reopens atomically below, same TOCTOU
-       posture as open-by-index: a name that DR resolved but whose
-       entry terminated in between returns NO_DEVICE, never a
-       different drive. This replaced the pre-pivot class-walk-and-
-       match enumeration (and dissolved ARCHITECTURE's never-built
-       walk-up resolution). */
+    /* Reconstruct canonical "diskN" before asking DR — it documents the
+       plain /dev entry name, and normalization stays with parse_bsd_unit,
+       not the caller's prefix. The resulting registry ID reopens atomically
+       below (same TOCTOU posture as open-by-index): a name DR resolved but
+       whose entry then terminated returns NO_DEVICE, never another drive. */
     char disk_name[MOS_BSD_NAME_CAP];
     if (!mos_bsd_name_format(want_unit, disk_name, sizeof disk_name)) {
         return NULL;
@@ -367,11 +326,9 @@ mos_handle_t *mos_open_by_registry_id(uint64_t registry_id,
     return mos_internal_open_by_registry_id(registry_id, err_out);
 }
 
-/* Collects registry IDs (not BSD names) for by-index reopen: BSD names can
-   shift on hot-plug / IOMedia reattach between the enumerate and reopen
-   passes (a TOCTOU race), whereas a registry entry ID is stable for the
-   io_service_t's lifetime and reopens atomically via
-   IORegistryEntryIDMatching. */
+/* Collects registry IDs (not BSD names) for by-index reopen: names can
+   shift on hot-plug between enumerate and reopen (TOCTOU), while a registry
+   entry ID is stable and reopens atomically via IORegistryEntryIDMatching. */
 typedef struct {
     uint64_t ids[MOS_ENUM_CAP];
     size_t   count;
@@ -388,10 +345,9 @@ static bool mos_internal_collect_cb(const mos_device_info_t *info, void *ctx)
     return true;
 }
 
-/* Reopen a device by registry entry ID — the race-free counterpart to
-   open-by-name (kernel resolves the match atomically). Used by
-   mos_open_by_index; non-static for the watch adapter's per-probe reopen.
-   Contract in mos_internal.h. */
+/* Reopen by registry entry ID — race-free (kernel resolves the match
+   atomically). Used by mos_open_by_index; non-static for the watch
+   adapter's per-probe reopen. Contract in mos_internal.h. */
 mos_handle_t *mos_internal_open_by_registry_id(uint64_t id,
                                                mos_error *err_out)
 {
@@ -404,15 +360,13 @@ mos_handle_t *mos_internal_open_by_registry_id(uint64_t id,
         return NULL;
     }
 
-    /* IOServiceGetMatchingService consumes the matching dictionary
-       reference (Apple IOKit ownership rule), regardless of whether
-       a match is found. No CFRelease needed here. */
+    /* IOServiceGetMatchingService consumes the dictionary reference
+       (IOKit ownership rule) whether or not it matches — no CFRelease here. */
     io_service_t svc = IOServiceGetMatchingService(kIOMainPortDefault, m);
     if (svc == IO_OBJECT_NULL) {
-        /* The drive enumerated earlier in this session is no longer
-           in the registry — hot-unplugged between enumeration and
-           open. Return NO_DEVICE so callers can distinguish this
-           from a genuinely-bad index. */
+        /* Enumerated earlier but gone now — hot-unplugged between
+           enumeration and open. NO_DEVICE distinguishes this from a bad
+           index. */
         if (err_out) *err_out = MOS_ERR_NO_DEVICE;
         return NULL;
     }
@@ -425,12 +379,10 @@ mos_handle_t *mos_open_by_index(int one_based, mos_error *err_out)
     if (err_out) *err_out = MOS_ERR_INVALID_ARG;
     if (one_based < 1) return NULL;
 
-    /* Two-stage but race-free: enumerate to collect registry IDs in
-       DR device-array order (the public index contract), then reopen the
-       captured ID via IORegistryEntryIDMatching. The kernel resolves that
-       second match atomically, so a hot-plug between passes either succeeds
-       or returns NO_DEVICE — never silently opens a different drive that
-       inherited the original BSD name. */
+    /* Two-stage but race-free: enumerate to collect registry IDs in DR
+       order (the index contract), then reopen the captured ID atomically.
+       A hot-plug between passes either succeeds or returns NO_DEVICE, never
+       opens a different drive that inherited the BSD name. */
 
     mos_internal_id_collect c = { {0}, 0 };
     mos_enumerate_devices(mos_internal_collect_cb, &c);
@@ -447,10 +399,9 @@ mos_handle_t *mos_open_device(const mos_device_info_t *info,
     if (err_out) *err_out = MOS_ERR_INVALID_ARG;
     if (!info || info->registry_id == 0) return NULL;
 
-    /* The info's registry ID reopens atomically (IORegistryEntryIDMatching
-       — see mos_internal_open_by_registry_id), so opening from inside the
-       enumeration callback carries no TOCTOU window and no re-enumeration:
-       this is the one-snapshot path the CLI list/status use. */
+    /* The registry ID reopens atomically, so opening from inside the
+       enumeration callback has no TOCTOU window and no re-enumeration —
+       the one-snapshot path CLI list/status use. */
     return mos_internal_open_by_registry_id(info->registry_id, err_out);
 }
 
@@ -469,16 +420,16 @@ void mos_close(mos_handle_t *h)
 
 /* ---- MMC convenience wrappers ------------------------------------- *
  *
- * Do NOT require exclusive access (that's the point of using MMC vs raw
- * SCSITaskDeviceInterface). Can still return kIOReturnExclusiveAccess
- * when another client holds the drive — that's a caller-sees-BUSY.
+ * No exclusive access required (the point of MMC vs raw
+ * SCSITaskDeviceInterface). Can still return kIOReturnExclusiveAccess when
+ * another client holds the drive — that's a caller-sees-BUSY.
  *
  * Signatures verified against the macOS 26.5 SDK SCSITaskLib.h.
  */
 
-/* Pin the IOKit symbolic constants to the literals the pure mapping
-   expects, so a hypothetical SDK renumbering breaks the build loudly
-   instead of silently miscategorizing IOReturn codes. */
+/* Pin the IOKit constants to the literals the pure mapping expects, so an
+   SDK renumbering breaks the build loudly instead of miscategorizing
+   IOReturn codes. */
 _Static_assert((uint32_t)kIOReturnSuccess         == 0x00000000u,
                "kIOReturnSuccess mapping in mos_pure.c is out of date");
 _Static_assert((uint32_t)kIOReturnNoMemory        == 0xE00002BDu,
@@ -501,10 +452,9 @@ _Static_assert((uint32_t)kIOReturnTimeout         == 0xE00002D6u,
 _Static_assert((uint32_t)kIOReturnNotAttached     == 0xE00002D9u,
                "kIOReturnNotAttached mapping in mos_pure.c is out of date");
 
-/* mos_raw_cdb passes mos_xfer_dir straight to SetScatterGatherEntries with
-   a (UInt8) cast, so the public values MUST equal the SDK's
-   kSCSIDataTransfer_* enumerators. Pin them — an SDK renumbering fails the
-   build instead of silently sending CDBs in the wrong direction. */
+/* mos_raw_cdb passes mos_xfer_dir straight to SetScatterGatherEntries, so
+   the public values MUST equal the SDK's kSCSIDataTransfer_* enumerators —
+   a renumbering would send CDBs in the wrong direction. Pin them. */
 _Static_assert((int)MOS_XFER_NONE        == (int)kSCSIDataTransfer_NoDataTransfer,
                "MOS_XFER_NONE no longer matches kSCSIDataTransfer_NoDataTransfer "
                "— mos_raw_cdb passes mos_xfer_dir directly to "
@@ -518,19 +468,16 @@ _Static_assert((int)MOS_XFER_FROM_TARGET == (int)kSCSIDataTransfer_FromTargetToI
                "kSCSIDataTransfer_FromTargetToInitiator — see MOS_XFER_NONE "
                "assertion above for the rationale.");
 
-/* mos_raw_cdb returns the raw SDK task status (uint32_t) which the pure
-   tray classifier (mos_pure.c) compares against MOS_SCSI_STATUS_GOOD. The
-   pure layer can't include the SDK to check the values agree, so pin it
-   here — the one TU that sees both names — exactly as the IOReturn map is
-   pinned above. */
+/* The pure tray classifier (mos_pure.c) compares mos_raw_cdb's task status
+   against MOS_SCSI_STATUS_GOOD but can't include the SDK to check they
+   agree — pin it here, the one TU that sees both names. */
 _Static_assert((int)MOS_SCSI_STATUS_GOOD == (int)kSCSITaskStatus_GOOD,
                "MOS_SCSI_STATUS_GOOD no longer matches kSCSITaskStatus_GOOD "
                "— the pure tray classifier would misclassify GOOD status.");
 
-/* Thin shim over the pure mapping in mos_pure.c (int32_t in, so it can be
-   fixture-tested without IOKit — tests/test_ioreturn.c covers every code).
-   CHECK CONDITION rides taskStatus/sense, not IOReturn, so this maps only
-   transport-layer failures. */
+/* Thin shim over the pure mapping in mos_pure.c (int32_t in, fixture-tested
+   without IOKit). Maps transport-layer failures only — CHECK CONDITION
+   rides taskStatus/sense, not IOReturn. */
 mos_error mos_internal_ioreturn_to_mos_error(IOReturn rc)
 {
     return mos_internal_ioreturn_to_error((int32_t)rc);
@@ -540,17 +487,16 @@ mos_error mos_internal_mmc_get_tray_state(mos_handle_t *h, bool *tray_open)
 {
     if (!h || !tray_open) return MOS_ERR_INVALID_ARG;
 
-    /* Raw GET EVENT STATUS NOTIFICATION (opcode 0x4A), Media class, Polled.
-       We deliberately do NOT call the MMCDeviceInterface GetTrayState
-       convenience method: on a GESN failure it hard-codes (closed, success)
-       (ARCHITECTURE.md §4.2, §9.7), masking the failure as a confident "closed."
-       Issuing the CDB ourselves keeps a failure a failure, so the state core
-       can fork on the TUR sense instead of trusting a fabricated verdict.
+    /* Raw GET EVENT STATUS NOTIFICATION (0x4A), Media class, Polled. We do
+       NOT use the GetTrayState convenience method: on a GESN failure it
+       hard-codes (closed, success) (ARCHITECTURE.md §4.2, §9.7), masking the
+       failure. Issuing the CDB ourselves keeps a failure a failure so the
+       state core can fork on the TUR sense.
 
-       Reached only on the not-ready path (TUR already proved the drive
-       reachable and not mounted), so taking exclusive access here is free of
-       the usual mount conflict. mos_raw_cdb acquires and RELEASES the lock
-       per call — a single-shot poll, never held for the handle's lifetime.
+       Reached only on the not-ready path (TUR already proved reachable and
+       not mounted), so exclusive access is free of mount conflict.
+       mos_raw_cdb acquires and releases the lock per call — single-shot,
+       never held.
 
        CDB and response byte map: ARCHITECTURE.md §4.2. */
     const uint8_t cdb[10] = {
@@ -576,11 +522,11 @@ mos_error mos_internal_mmc_get_tray_state(mos_handle_t *h, bool *tray_open)
     if (task_status != kSCSITaskStatus_GOOD)        /* CHECK CONDITION etc.        */
         return MOS_ERR_IO;
 
-    /* Validity gates (NEA, Media class, device-reported full span) live in the
-       pure decoder so they are fuzz/ASan-checked headless. We pass the buffer
-       span as the bound — the decoder trusts the reply's own Event Data Length
-       field, not the transport's realized count (some USB bridges under-report
-       it). A false return means "no authoritative bit" — fork on the TUR sense. */
+    /* Validity gates (NEA, Media class, full span) live in the pure decoder
+       so they're fuzz/ASan-checked headless. The buffer span is the bound;
+       the decoder trusts the reply's own Event Data Length, not the
+       transport's realized count (some USB bridges under-report it). A false
+       return means "no authoritative bit" — fork on the TUR sense. */
     if (!mos_internal_gesn_media_door_open(resp, sizeof resp, tray_open))
         return MOS_ERR_IO;
 
@@ -593,16 +539,15 @@ mos_error mos_internal_mmc_test_unit_ready(mos_handle_t *h,
 {
     if (!h || !h->mmc || !status || !sense) return MOS_ERR_INVALID_ARG;
 
-    /* TestUnitReady reports a non-IOKit failure via outTaskStatus == CHECK
-       CONDITION with valid sense; IOReturn only covers transport errors. */
+    /* A non-IOKit failure surfaces as outTaskStatus == CHECK CONDITION with
+       valid sense; IOReturn covers only transport errors. */
     SCSITaskStatus  task_status  = 0;
     SCSI_Sense_Data sense_struct = {0};
 
     IOReturn rc = (*h->mmc)->TestUnitReady(h->mmc, &task_status, &sense_struct);
     if (rc != kIOReturnSuccess) {
-        /* On transport failure, zero both outputs and return the mapped
-           error. Callers see MOS_OK vs !=MOS_OK; *status is only
-           meaningful on MOS_OK. */
+        /* Transport failure: zero outputs, return the mapped error.
+           *status is meaningful only on MOS_OK. */
         *status = 0;
         memset(sense, 0, 18);
         return mos_internal_ioreturn_to_mos_error(rc);
@@ -613,18 +558,12 @@ mos_error mos_internal_mmc_test_unit_ready(mos_handle_t *h,
     return MOS_OK;
 }
 
-/* RETURN-CONVENTION NOTE: this function returns MOS_ERR_IO for
-   command-reached-drive-but-unusable replies (non-GOOD status,
-   truncated GOOD) rather than clearing the out-param in-band. That is
-   load-bearing, not pedantry: the profile's in-band "absent" value,
-   0x0000, is a REAL drive answer ("no current profile"), so a
-   malformed reply must be distinguishable out-of-band or it
-   masquerades as legitimate no-media — the exact silent-0x0000 bug
-   the third review fixed. (Identity strings, by contrast, have no
-   such collision — an empty vendor is never a meaningful drive answer
-   — which is why the retired INQUIRY path, and the DR identity seam
-   that replaced it, clear in-band and stay non-fatal.) The caller
-   treats both shapes as non-fatal enrichment skips. */
+/* RETURN-CONVENTION: returns MOS_ERR_IO for reached-but-unusable replies
+   (non-GOOD status, truncated GOOD) rather than clearing the out-param.
+   Load-bearing: 0x0000 is a REAL answer ("no current profile"), so a
+   malformed reply must be distinguishable out-of-band or it masquerades as
+   no-media. (Identity strings have no such collision, so that seam clears
+   in-band.) The caller treats both shapes as non-fatal enrichment skips. */
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile)
 {
     if (!h || !h->mmc || !profile) return MOS_ERR_INVALID_ARG;
@@ -644,20 +583,18 @@ mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profil
 
     if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
         *profile = 0x0000;
-        /* Distinguish transport failure (map the IOReturn) from a non-GOOD
-           status (command reached the drive but returned no usable data) —
-           report I/O failure, not a misleading "no profile". Enrichment is
-           optional, so the state core ignores a non-OK here. */
+        /* Distinguish transport failure (map the IOReturn) from non-GOOD
+           status (reached the drive, no usable data) — report I/O failure,
+           not a misleading "no profile". */
         return (rc != kIOReturnSuccess) ? mos_internal_ioreturn_to_mos_error(rc)
                                         : MOS_ERR_IO;
     }
 
-    /* Gate the profile extraction on the reply's Feature Header Data Length
-       (pure decoder, fuzz-checked): a drive that returns GOOD with a short
-       transfer must surface as "no profile" rather than a silent 0x0000 that
-       reads like real "no media". The buffer is the bound; the reply's own
-       Data Length is the validity check (the convenience GetConfiguration
-       reports no realized count). */
+    /* Gate extraction on the reply's Feature Header Data Length (pure
+       decoder, fuzz-checked): a GOOD-but-short transfer must surface as "no
+       profile", not a silent 0x0000 that reads like no-media. Buffer is the
+       bound; the reply's own Data Length is the validity check (convenience
+       GetConfiguration reports no realized count). */
     uint16_t parsed = 0x0000;
     if (!mos_internal_config_current_profile(buf, sizeof(buf), &parsed)) {
         *profile = 0x0000;
@@ -667,9 +604,8 @@ mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profil
     return MOS_OK;
 }
 
-/* Open-time directory identity, exposed for the drive verb: zero
-   commands, same borrowed-string terms as the state result's copies
-   (which point into these same buffers). */
+/* Open-time directory identity for the drive verb: zero commands, borrowed
+   strings pointing into the handle's buffers (same as the state result). */
 const char *mos_handle_vendor(const mos_handle_t *h)
 {
     return (h && h->vendor_str[0]) ? h->vendor_str : NULL;
@@ -690,14 +626,10 @@ uint64_t mos_handle_registry_id(const mos_handle_t *h)
     return h ? h->drive_registry_id : 0;
 }
 
-/* The open-time INQUIRY (and its fixed-width SPC-4 string copier with
-   per-call-site _Static_assert width pins) retired with the DR pivot:
-   identity is directory data from DRDeviceCopyInfo — the same INQUIRY
-   bytes, pre-parsed by the framework — copied through the bounded
-   truncating seam in mos_dr.c. The output layer's escaping
-   (mos_cli_json_str / mos_cli_safe_ascii) is unchanged: it guards the
-   terminal and the JSON encoding against hostile bytes regardless of
-   which substrate produced the string. */
+/* Identity is directory data from DRDeviceCopyInfo (framework-parsed
+   INQUIRY bytes), copied through the bounded truncating seam in mos_dr.c.
+   Hostile bytes are escaped at the output layer (mos_cli_json_str /
+   mos_cli_safe_ascii). */
 
 /* ---- Raw CDB (diagnostic only) ------------------------------------- */
 
@@ -710,10 +642,9 @@ mos_error mos_raw_cdb(mos_handle_t *h,
                       uint8_t   sense[18],
                       uint64_t *bytes_transferred)
 {
-    /* SetCommandDescriptorBlock only accepts 6, 10, 12, or 16 (see
-       kSCSICDBSize_* in SCSITask.h). Reject other lengths at the API
-       boundary so callers get MOS_ERR_INVALID_ARG instead of an opaque
-       execute-time failure. */
+    /* SetCommandDescriptorBlock accepts only 6/10/12/16 (kSCSICDBSize_*).
+       Reject other lengths here so callers get MOS_ERR_INVALID_ARG, not an
+       opaque execute-time failure. */
     if (!h || !h->mmc || !cdb || !scsi_task_status || !sense)
         return MOS_ERR_INVALID_ARG;
     if (cdb_len != 6 && cdb_len != 10 && cdb_len != 12 && cdb_len != 16)
@@ -727,15 +658,14 @@ mos_error mos_raw_cdb(mos_handle_t *h,
     } else {
         if (data_len == 0 || data_buf == NULL) return MOS_ERR_INVALID_ARG;
     }
-    /* Reject timeout 0 — SetTimeoutDuration reads it as "Wait Forever",
-       which would hang on a non-responsive command. */
+    /* Timeout 0 means "Wait Forever" to SetTimeoutDuration — reject it so a
+       non-responsive command can't hang. */
     if (timeout_ms == 0)
         return MOS_ERR_INVALID_ARG;
 
-    /* Zero outputs after arg validation: any error path below returns non-OK
-       but leaves consumers who inspect buffers without checking the return a
-       deterministic zero state. Validation failures above leave outputs
-       untouched — "never started", caller's buffers presumed uninitialized. */
+    /* Zero outputs after arg validation so error paths leave a deterministic
+       zero state for consumers who skip the return check. Validation
+       failures above leave outputs untouched ("never started"). */
     *scsi_task_status = 0;
     memset(sense, 0, 18);
     if (bytes_transferred) *bytes_transferred = 0;
@@ -746,8 +676,7 @@ mos_error mos_raw_cdb(mos_handle_t *h,
         if (!h->std) return MOS_ERR_DRIVER_REJECTED;
     }
 
-    /* Raw CDB requires exclusive access. Route the IOReturn through the
-       shared mapper, like every other site in this file. */
+    /* Raw CDB requires exclusive access. */
     if (!h->have_exclusive) {
         IOReturn rx = (*h->std)->ObtainExclusiveAccess(h->std);
         if (rx != kIOReturnSuccess)
@@ -757,19 +686,17 @@ mos_error mos_raw_cdb(mos_handle_t *h,
 
     SCSITaskInterface **t = (*h->std)->CreateSCSITask(h->std);
     if (!t) {
-        /* Release the lock — by the function's invariant it was
-           acquired above (every exit path below clears have_exclusive,
-           so it is always false on entry; the conditional acquire
-           exists for that documented invariant, not for a held-lock
-           entry case). Holding it serves no purpose without a task. */
+        /* Release the lock acquired above (every exit clears
+           have_exclusive, so it's always false on entry) — holding it is
+           pointless without a task. */
         (*h->std)->ReleaseExclusiveAccess(h->std);
         h->have_exclusive = false;
         return MOS_ERR_IO;
     }
 
-    /* Check each Set* IOReturn — ignoring them ships a malformed task and
-       turns into a baffling execute-time error. Cleanup is identical, so
-       all three converge on one label. */
+    /* Check each Set* IOReturn — ignoring one ships a malformed task and a
+       baffling execute-time error. Identical cleanup, so all converge on
+       one label. */
     IOReturn sr;
     sr = (*t)->SetCommandDescriptorBlock(t, (UInt8 *)cdb, (UInt8)cdb_len);
     if (sr != kIOReturnSuccess) goto setup_failed;
@@ -785,8 +712,7 @@ mos_error mos_raw_cdb(mos_handle_t *h,
     sr = (*t)->SetTimeoutDuration(t, timeout_ms);
     if (sr != kIOReturnSuccess) goto setup_failed;
 
-    /* sense was already zeroed in the zero-outputs block after arg
-       validation; nothing between there and here writes it. */
+    /* sense was zeroed in the zero-outputs block; nothing writes it since. */
     SCSI_Sense_Data sense_struct = {0};
     SCSITaskStatus   st           = 0;
     UInt64           xferred      = 0;
@@ -794,17 +720,15 @@ mos_error mos_raw_cdb(mos_handle_t *h,
     IOReturn er = (*t)->ExecuteTaskSync(t, &sense_struct, &st, &xferred);
     (*t)->Release(t);
 
-    /* Release before returning: a diagnostic command must not hold the drive
-       locked for the handle's lifetime (would block Finder / MakeMKV / DA
-       mounts). Released on both success and IO-failure paths; only the
-       InvalidArg exits skip it, having never acquired. */
+    /* Release before returning: a diagnostic command must not hold the lock
+       for the handle's lifetime (would block Finder / MakeMKV / DA mounts).
+       Released on success and IO-failure; only the InvalidArg exits skip it,
+       never having acquired. */
     (*h->std)->ReleaseExclusiveAccess(h->std);
     h->have_exclusive = false;
 
-    /* On transport failure, outputs stay at the zeros set above (defined,
-       not stack garbage); st/sense/xferred are not copied. Whether the API
-       populates anything useful before a non-success IOReturn is undocumented
-       — revisit under the v0.4 hardware-gate fixtures. */
+    /* Transport failure: outputs stay at the zeros above (defined, not
+       garbage); st/sense/xferred aren't copied. */
     if (er != kIOReturnSuccess) {
         return mos_internal_ioreturn_to_mos_error(er);
     }

@@ -2,19 +2,14 @@
  * mos_trackinfo.c — pure, bounds-safe decode of a READ TRACK INFORMATION
  * (MMC 0x52) Track Information Block: the capacity / append-state surface
  * (track start, next writable address, free blocks, track size, last
- * recorded address) plus the track/data mode and blank/damage bits.
+ * recorded address) plus track/data mode and blank/damage bits. No IOKit:
+ * the shell hands us a fixed zero-init buffer (filled via
+ * ReadTrackInformation) and its size. Every length is device-reported,
+ * hence hostile — the declared length must never steer a read outside
+ * [buf, buf+len); only fixed offsets are read.
  *
- * No IOKit. The IOKit shell issues READ TRACK INFORMATION via the
- * ReadTrackInformation convenience method into a fixed, zero-initialized
- * buffer and hands that buffer plus its size here. Every length and
- * value byte is device-reported and therefore hostile; this file keeps
- * the declared length from steering a read outside [buf, buf+len) and
- * reads only fixed offsets.
- *
- * Wire layout (the MMC Track Information Block; offsets taken VERBATIM
- * from the Linux kernel's `struct track_information` in
- * include/uapi/linux/cdrom.h, which the kernel reads directly off the
- * 0x52 reply — a packed struct, so field order == byte order):
+ * Wire layout (the MMC Track Information Block; cdrom.h cross-check in
+ * SPEC.md):
  *   [0..1]  Track Information Length (BE) — bytes AFTER this field
  *   [2]     Track Number (LSB)
  *   [3]     Session Number (LSB)
@@ -30,12 +25,9 @@
  *   [28..31] Last Recorded Address (BE)   — valid iff lra_v
  *   [32..33] Track / Session Number MSB   — MMC-6 longer reply, optional
  *
- * The NWA and LRA are surfaced only when their *_v validity bit is set
- * (the kernel and libburn both gate on these); otherwise the *_valid
- * accessor is false and the value is meaningless — the consumer must
- * check. No payload byte is ever used as an offset. No-OOB property
- * gated headless under ASan/UBSan by tests/test_trackinfo.c and
- * tests/fuzz_pure.c.
+ * NWA and LRA are meaningful only when their *_v validity bit is set; the
+ * consumer must check the *_valid accessor. No payload byte is ever used
+ * as an offset.
  */
 
 #include "mos_pure.h"
@@ -74,8 +66,8 @@ bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
     out->track_size     = mos_internal_ti_be32(&buf[24]);
     out->last_recorded  = mos_internal_ti_be32(&buf[28]);
 
-    /* MMC-6 longer reply folds the high byte of track/session number in
-       at 32/33; only if the trusted region reaches them. */
+    /* MMC-6 longer reply carries the track/session high byte at 32/33;
+       only when the trusted region reaches them. */
     if (end >= TI_MSB_LEN) {
         out->track_number   = (uint16_t)(out->track_number   | (buf[32] << 8));
         out->session_number = (uint16_t)(out->session_number | (buf[33] << 8));

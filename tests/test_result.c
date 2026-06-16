@@ -1,9 +1,8 @@
 /*
  * test_result.c — accessors over the opaque mos_state_result /
- * mos_watch_event objects. Constructs the internal struct directly (the
- * full layout is visible via mos_pure.h, as it is to the core and the
- * Apple fill paths) and checks each accessor returns the field, plus the
- * NULL-object safety contract.
+ * mos_watch_event objects. Builds the internal struct directly (layout
+ * is visible via mos_pure.h) and checks each accessor returns its field,
+ * plus the NULL-object safety contract.
  */
 #include "test_harness.h"
 #include "../src/mos_pure.h"

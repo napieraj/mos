@@ -3,40 +3,15 @@
  *
  * Drives mos_internal_watch_pump() with a fake mos_watch_ops_t whose
  * probe, mono_ms, and wall_ms callbacks are scripted by the fixture.
- * No IOKit, no real time, no real sleep — every scenario is a
- * deterministic sequence.
+ * No IOKit, no real time, no real sleep — every scenario is
+ * deterministic.
  *
- * Two-clock fixture: the fake separates the monotonic clock from the
- * wall clock. This is structural: the v0.3-dev tree had a bug where
- * the Apple-side adapter passed wall_clock_ms() as the scheduling
- * start_ms while wiring now_ms to monotonic uptime, producing a
- * first-poll deadline ~55 years in the future. The fix split the
- * vtable into mono_ms (scheduling) and wall_ms (timestamps); this
- * test fixture mirrors that split. The regression-prevention test
- * test_clock_domains_separate runs mono in the thousands and wall
- * in the trillions to pin the contract: the pump must never use
- * wall-clock values for scheduling decisions.
- *
- * Coverage targets:
- *   - First pump emits snapshot with correct prev_state=UNKNOWN
- *   - Two-clock separation: mono used for scheduling, wall for ts/sid
- *   - No-change pump returns SLEEP_UNTIL without emitting
- *   - State change emits state_changed with prev_state set correctly
- *   - Backoff: stable state schedules stable_poll_ms; transitional
- *     state schedules transition_poll_ms
- *   - notify_wake pulls next_poll_at_mono_ms forward to 0
- *   - notify_removed makes the next pump emit device_removed and
- *     the one after that TERMINAL without re-emitting
- *   - notify_removed BEFORE any snapshot still emits device_removed
- *     with prev_state=unknown (was a regression in v0.3-dev)
- *   - MOS_ERR_NO_DEVICE from a probe auto-terminates (was a regression:
- *     poll-only mode used to spin emitting error events forever)
- *   - Other probe errors emit error event without updating last_state,
- *     reschedule at transition rate
- *   - Sequence numbers are monotonic across event types
- *   - Stream ID is stable across the watch invocation
- *   - Latency is computed from probe entry to probe exit (mono)
- *   - RFC 3339 timestamp formatting works (sourced from wall_ms)
+ * Two-clock fixture: the fake separates the monotonic clock (scheduling,
+ * latency) from the wall clock (timestamps, session identity). The split
+ * is structural — an adapter passing wall ms as the scheduling start_ms
+ * while wiring now_ms to monotonic uptime gets a first-poll deadline ~55
+ * years out. test_clock_domains_separate runs mono in the thousands and
+ * wall in the trillions to pin that scheduling never reads the wall clock.
  */
 
 #include "test_harness.h"
@@ -49,11 +24,9 @@
 
 /* ---- Fake clocks + probe ---------------------------------------------- *
  *
- * Two independent clock fields. Tests typically use the same value
- * for both, but the clock-domain regression test deliberately holds
- * them orders of magnitude apart. The auto_advance fields let
- * latency tests script elapsed probe time without breaking the
- * scheduling clock. */
+ * Two independent clock fields, usually equal but held orders of
+ * magnitude apart by the clock-domain test. The auto_advance fields let
+ * latency tests script elapsed probe time without moving scheduling. */
 
 typedef struct {
     /* Monotonic clock: scheduling and latency. */
@@ -75,11 +48,9 @@ typedef struct {
     int            probe_count;
     int            probe_calls;
 
-    /* When set, the probe drops the monotonic clock to 10 as a side
-       effect — emulating a backward clock step between the pump's
-       probe-start and probe-end reads (test_latency_saturates_on_
-       backward_clock). Real CLOCK_MONOTONIC never does this; a buggy
-       adapter's ops table could. */
+    /* When set, the probe drops the monotonic clock to 10 — emulating a
+       backward step between the pump's probe-start and probe-end reads.
+       Real CLOCK_MONOTONIC never does this; a buggy ops table could. */
     bool           flip_mono_on_probe;
 } fake_watch_ctx;
 
@@ -104,8 +75,8 @@ static mos_error fake_probe(void *vctx, mos_state_result *out)
     fake_watch_ctx *c = (fake_watch_ctx *)vctx;
     if (c->flip_mono_on_probe) c->mono_clock_ms = 10;
     if (c->probe_count <= 0) {
-        /* Fixture bug: a pump reached the probe with nothing scripted.
-           Fail loudly rather than index probe_err[-1]. */
+        /* Pump reached the probe with nothing scripted; fail loudly
+           rather than index probe_err[-1]. */
         fprintf(stderr, "fake_probe: probe_count == 0 (fixture misconfigured)\n");
         abort();
     }
@@ -114,26 +85,23 @@ static mos_error fake_probe(void *vctx, mos_state_result *out)
 
     if (c->probe_err[idx] != MOS_OK) {
         /* Seam contract E-1: out-params are UNDEFINED on error. Poison
-           the result so any core read of an error-path field changes an
-           assertion somewhere — the old leave-untouched behavior masked
-           the obligation entirely (census B4). 0xEE fill makes state,
-           unit, media_id, and profile all simultaneously garbage. */
+           with 0xEE so any core read of an error-path field (state,
+           unit, media_id, profile) breaks an assertion; a
+           leave-untouched fake would mask the obligation. */
         memset(out, 0xEE, sizeof(*out));
         return c->probe_err[idx];
     }
 
     memset(out, 0, sizeof(*out));
     out->state           = c->probe_state[idx];
-    /* Realistic media identity: a drive with no media (open tray / empty)
-       has no BSD disk node, so report -1; otherwise the media node is 4.
-       The watch core now sources an event's bsd_unit from the probe, so
-       this lets fixtures exercise media appearing and disappearing. */
+    /* No-media states (open/empty) have no BSD disk node -> -1, else 4.
+       The core sources event bsd_unit from the probe, so this lets
+       fixtures exercise media appearing and disappearing. */
     out->bsd_unit        = (out->state == MOS_STATE_OPEN ||
                             out->state == MOS_STATE_EMPTY) ? -1 : 4;
     out->media_id        = c->probe_media_id[idx];
-    /* Profile: 0 in the fixture means "use the BD-ROM default"; the MMC
-       reserved value 0xFFFF scripts a genuine 0 on the wire (transient
-       enrichment failure), which 0 itself cannot express here. */
+    /* Fixture profile 0 means "BD-ROM default"; 0xFFFF scripts a genuine
+       wire 0 (transient enrichment failure) that 0 itself can't express. */
     out->current_profile = c->probe_profile[idx] == 0xFFFF ? 0
                          : c->probe_profile[idx] ? c->probe_profile[idx]
                          : 0x0040;
@@ -146,8 +114,8 @@ static const mos_watch_ops_t fake_ops = {
     .wall_ms = fake_wall,
 };
 
-/* Initialize the fake to "both clocks coincide" — convenient default
-   for tests that don't care about the two-clock distinction. */
+/* Both clocks coincide — default for tests that don't care about the
+   two-clock split. */
 static void init_default(fake_watch_ctx *c, uint64_t t)
 {
     memset(c, 0, sizeof(*c));
@@ -185,12 +153,10 @@ TEST(test_snapshot_emitted_on_first_pump)
 
 TEST(test_zero_registry_id_passes_through)
 {
-    /* No adapter path produces token 0 (watch open fails closed if the
-       registry ID can't be captured; xnu lazily assigns an ID to every
-       attached entry, so a matchable service always has one). Direct
-       pure-layer callers can pass 0, and it flows through as a plain
-       value with no special case — unambiguous, because real registry
-       IDs are >= 2^32+256 by kernel reservation. */
+    /* No adapter path produces token 0 (open fails closed if the
+       registry ID can't be captured, and xnu assigns one to every
+       attached entry). A direct pure-layer 0 flows through unspecial-
+       cased — unambiguous, since real IDs are >= 2^32+256 by reservation. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_OPEN;
@@ -208,17 +174,12 @@ TEST(test_zero_registry_id_passes_through)
 
 TEST(test_empty_drive_yields_unit_minus_one_and_session_identity)
 {
-    /* Empty-drive contract in the pure watch core: initialized with
-       bsd_unit == -1 (an empty/open-tray drive has no unit), the snapshot
-       event's bsd_unit must be -1 — but session identity
-       (registry_id + stream_open_wall_ms) is present and ordinary,
-       because the registry-entry token exists precisely when the BSD
-       name doesn't. (Watching an empty drive waiting for an insert is
-       the primary watch use case; this was the original argument for
-       retiring the BSD-derived composition.) The unit is event-time: it
-       comes from the probe; session identity is open-time-stable. The
-       companion test below pins that a later non-empty probe surfaces the
-       fresh media unit rather than staying frozen at the open-time value. */
+    /* Empty/open-tray drive (init unit -1): the snapshot's bsd_unit must
+       be -1, but session identity (registry_id + stream_open_wall_ms) is
+       present and ordinary — the registry token exists precisely when the
+       BSD name doesn't. Unit is event-time (from the probe); identity is
+       open-time-stable. The companion test below pins that a later
+       non-empty probe surfaces the fresh unit. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_EMPTY;
@@ -243,11 +204,9 @@ TEST(test_empty_drive_yields_unit_minus_one_and_session_identity)
 
 TEST(test_media_appears_after_empty_open_uses_probe_unit)
 {
-    /* The reviews' release-blocking scenario, pinned in the pure core:
-       a watch opened on an empty/open-tray drive (init unit -1) must
-       surface the FRESH media unit once a disc appears, not stay frozen
-       at the open-time -1. Session identity, by contrast, stays the stable
-       open-time identity for the life of the stream. */
+    /* A watch opened empty (init unit -1) must surface the fresh media
+       unit once a disc appears, not stay frozen at -1. Session identity
+       stays open-time-stable for the stream's life. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_EMPTY;   /* empty at open -> unit -1 */
@@ -262,7 +221,7 @@ TEST(test_media_appears_after_empty_open_uses_probe_unit)
                             /*start_wall_ms=*/1000,
                             /*stable=*/2000, /*transition=*/200);
 
-    /* Pump 1: empty snapshot — unit -1, watch-form stream id. */
+    /* Pump 1: empty snapshot, unit -1. */
     mos_watch_decision d1 = mos_internal_watch_pump(&w);
     EXPECT_EQ(MOS_EVENT_SNAPSHOT, d1.event.kind);
     EXPECT_EQ(MOS_STATE_EMPTY,    d1.event.state);
@@ -275,10 +234,9 @@ TEST(test_media_appears_after_empty_open_uses_probe_unit)
     EXPECT_EQ(MOS_EVENT_STATE_CHANGED,     d2.event.kind);
     EXPECT_EQ(MOS_STATE_READY,             d2.event.state);
     EXPECT_EQ(MOS_STATE_EMPTY,             d2.event.prev_state);
-    /* The fix: the event carries the probe's fresh media unit, not the
-       frozen open-time -1. */
+    /* Fresh probe unit, not the frozen open-time -1. */
     EXPECT_EQ(4, (int)d2.event.bsd_unit);
-    /* Session identity remains stable at its open-time values. */
+    /* Session identity stable at open-time values. */
     EXPECT_EQ(4242, (int)d2.event.registry_id);
     EXPECT_EQ(1000, (int)d2.event.stream_open_wall_ms);
     return 0;
@@ -286,10 +244,9 @@ TEST(test_media_appears_after_empty_open_uses_probe_unit)
 
 TEST(test_media_changed_on_same_state_ready_swap)
 {
-    /* F1: the drive stays READY across probes but the disc is physically
-       replaced — the whole-disk IOMedia registry id changes. The core must
-       emit media_changed (not state_changed, since state is unchanged), and
-       a same-disc poll in between must emit nothing. */
+    /* Same-state swap: stays READY but the disc is physically replaced
+       (IOMedia registry id changes). The core emits media_changed (not
+       state_changed), and a same-disc poll between emits nothing. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_READY; c.probe_media_id[0] = 0x1111;
@@ -320,9 +277,8 @@ TEST(test_media_changed_on_same_state_ready_swap)
 
 TEST(test_no_media_changed_when_id_unavailable)
 {
-    /* media_id == 0 is the "unavailable" sentinel (a bridge exposing no
-       stable IOMedia registry id). The core must never infer a swap from
-       an unknown id — no spurious media_changed. */
+    /* media_id == 0 means "unavailable" (a bridge with no stable IOMedia
+       id). The core must never infer a swap from an unknown id. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_READY; c.probe_media_id[0] = 0;
@@ -344,10 +300,9 @@ TEST(test_no_media_changed_when_id_unavailable)
 
 TEST(test_media_changed_on_profile_class_swap_without_id)
 {
-    /* Finding 3: a bridge that never exposes a stable media_id (both 0) still
-       reveals a cross-class swap through a changed non-zero current_profile.
-       CD-ROM (0x08) → DVD-ROM (0x10), staying READY, must emit media_changed
-       via the last_profile fallback fingerprint. */
+    /* With no stable media_id (both 0), a cross-class swap still shows in
+       a changed current_profile. CD-ROM (0x08) -> DVD-ROM (0x10), staying
+       READY, must emit media_changed via the last_profile fallback. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_READY; c.probe_media_id[0] = 0; c.probe_profile[0] = 0x0008;
@@ -412,15 +367,13 @@ TEST(test_no_media_changed_on_same_profile_without_id)
 
 TEST(test_media_changed_after_late_media_id)
 {
-    /* REGRESSION FIXTURE (fingerprint staleness): the whole-disk IOMedia
-       child often registers a beat after TUR goes GOOD, so the snapshot can
-       land READY with media_id == 0 and the id arrives on the next probe
-       with no event in between. Pre-fix, the no-change pump never refreshed
-       the fingerprint, so last_media_id stayed 0 for the session: id_changed
-       requires both ids non-zero and the profile fallback requires
-       r.media_id == 0 — a later physical swap was undetectable. The id
-       arriving late must be adopted silently (no fabricated event), and the
-       swap after it must emit media_changed. */
+    /* REGRESSION (fingerprint staleness): the IOMedia child often
+       registers a beat after TUR goes GOOD, so the snapshot lands READY
+       with media_id 0 and the id arrives on the next probe. If a
+       no-change pump never refreshes the fingerprint, last_media_id stays
+       0 all session and a later swap is undetectable. The late id must be
+       adopted silently (no event), and the swap after it must emit
+       media_changed. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_READY; c.probe_media_id[0] = 0;       /* id not yet registered */
@@ -450,12 +403,11 @@ TEST(test_media_changed_after_late_media_id)
 
 TEST(test_media_changed_across_transient_zero_id)
 {
-    /* A known identity is KEPT across an unavailability gap (zero never
-       overwrites non-zero). A swap whose new id first appears after a
-       transient id == 0 probe must still compare against the pre-gap
-       identity and emit media_changed — overwriting the fingerprint with 0
-       would silently miss the swap forever. The gap probe itself must not
-       fabricate an event. */
+    /* A known identity is KEPT across an unavailability gap (0 never
+       overwrites non-zero). A swap whose new id appears after a transient
+       0 probe must still compare against the pre-gap identity and emit
+       media_changed; overwriting with 0 would miss the swap forever. The
+       gap probe itself fabricates no event. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_READY; c.probe_media_id[0] = 0x1111;  /* disc A */
@@ -483,12 +435,12 @@ TEST(test_media_changed_across_transient_zero_id)
 
 TEST(test_profile_fallback_after_late_profile)
 {
-    /* The profile-fallback twin of the late-id case, on a bridge that never
-       exposes a media_id: enrichment fails transiently at snapshot time
-       (profile 0 on the wire), the real profile arrives on the next probe
-       (adopted silently), and a later cross-class swap must fire the
-       last_profile fallback. Pre-fix, last_profile stayed 0 and the fallback
-       (which requires both profiles non-zero) was disarmed for the session. */
+    /* Profile-fallback twin of the late-id case, on a bridge with no
+       media_id: enrichment fails at snapshot (wire profile 0), the real
+       profile arrives next probe (adopted silently), and a later
+       cross-class swap fires the last_profile fallback. If last_profile
+       stayed 0, the fallback (needs both non-zero) is disarmed all
+       session. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_READY; c.probe_media_id[0] = 0; c.probe_profile[0] = 0xFFFF; /* wire 0 */
@@ -516,10 +468,9 @@ TEST(test_profile_fallback_after_late_profile)
 
 TEST(test_poll_class_pinned_for_every_state)
 {
-    /* Finding 2: pin the poll class of EVERY mos_state value, so a new
-       state can't silently inherit "stable." The snapshot pump schedules the
-       next poll by the observed state's class; with the mono clock not
-       auto-advancing, the deadline is start + (transition|stable)_poll_ms. */
+    /* Pin the poll class of EVERY mos_state, so a new state can't
+       silently inherit "stable." With mono not auto-advancing, the
+       snapshot deadline is start + (transition|stable)_poll_ms. */
     const uint64_t STABLE = 2000, TRANS = 200, START = 1000;
     struct { mos_state s; bool transitional; } cases[] = {
         { MOS_STATE_OPEN,             false },
@@ -552,9 +503,8 @@ TEST(test_poll_class_pinned_for_every_state)
 
 TEST(test_state_change_takes_precedence_over_media_changed)
 {
-    /* When both the state and the media id change, it is a state
-       transition, not a same-state swap: the state-change branch is
-       evaluated first. */
+    /* State + media id both change: it's a transition, not a swap — the
+       state-change branch is evaluated first. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_READY; c.probe_media_id[0] = 0x1111;
@@ -575,13 +525,10 @@ TEST(test_state_change_takes_precedence_over_media_changed)
     return 0;
 }
 
-/* REGRESSION FIXTURE: the two clocks are in different numeric
-   domains by 10+ orders of magnitude. Pre-fix, this would have
-   put next_poll_at_ms in the trillions (from wall_clock_ms()) but
-   now_ms in the thousands (from monotonic_ms()), and the first
-   pump would return SLEEP_UNTIL with a deadline ~55 years out.
-   With the fix, the scheduling start_mono_ms == ops->mono_ms so
-   the first poll fires immediately. */
+/* REGRESSION: the two clocks differ by 10+ orders of magnitude.
+   Crossing them puts next_poll in the trillions (wall) while now is in
+   the thousands (mono), so the first pump would SLEEP_UNTIL ~55 years
+   out. With start_mono_ms == ops->mono_ms the first poll fires now. */
 TEST(test_clock_domains_separate)
 {
     fake_watch_ctx c;
@@ -595,34 +542,26 @@ TEST(test_clock_domains_separate)
     c.probe_count    = 1;
 
     mos_watch_state w;
-    /* The init call exercises the exact production shape:
-       start_mono_ms from monotonic_ms(), start_wall_ms from
-       wall_clock_ms(). The numbers are deliberately implausible
-       as a unified clock to keep the contract obvious. */
+    /* Production shape: start_mono_ms from mono, start_wall_ms from wall,
+       deliberately implausible as a unified clock. */
     mos_internal_watch_init(&w, &fake_ops, &c, 4, 4242,
                             /*start_mono_ms=*/12345,
                             /*start_wall_ms=*/1746526503000ULL,
                             2000, 200);
 
     mos_watch_decision d = mos_internal_watch_pump(&w);
-    /* MUST be EMIT_EVENT with a snapshot. If this is SLEEP_UNTIL,
-       the time-domain regression has come back: scheduling is
-       reading wall-clock values somewhere it shouldn't. */
+    /* SLEEP_UNTIL here means the regression is back: scheduling read a
+       wall-clock value. */
     EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT, d.kind);
     EXPECT_EQ(MOS_EVENT_SNAPSHOT,          d.event.kind);
     EXPECT_EQ(MOS_STATE_EMPTY,             d.event.state);
-    /* stream_open MUST tag the wall-clock epoch ms, not the
-       monotonic value. */
+    /* stream_open tags the wall epoch ms, not the mono value. */
     EXPECT_EQ((long long)1746526503000LL,
               (long long)d.event.stream_open_wall_ms);
-    /* ts MUST be derived from wall_clock_ms, not monotonic.
-       1746526503000 ms → 2025-05-06T10:15:03Z. */
+    /* ts from wall: 1746526503000 ms -> 2025-05-06T10:15:03Z. */
     EXPECT_STREQ("2025-05-06T10:15:03Z", d.event.ts);
-    /* next_poll deadline MUST be in the monotonic domain. The
-       fake didn't advance mono past 12345, so the next poll
-       is 12345 + stable_poll_ms (2000) = 14345. If this comes
-       back as a trillion-shaped number, scheduling is reading
-       the wrong clock. */
+    /* next_poll is mono: mono didn't advance past 12345, so
+       12345 + 2000 = 14345. A trillion-shaped value = wrong clock. */
     EXPECT_EQ(14345, (int)w.next_poll_at_mono_ms);
     return 0;
 }
@@ -783,11 +722,9 @@ TEST(test_notify_removed_emits_device_removed_then_terminal)
     return 0;
 }
 
-/* REGRESSION FIXTURE: termination before any successful snapshot.
-   Pre-v0.3-dev, the device_removed event was gated on have_last_state
-   being true, so a removal that fired before the first probe was
-   silently dropped — TERMINAL with no terminal event. The schema
-   contract promises a device_removed event closes every stream. */
+/* REGRESSION: removal before any successful snapshot. Gating
+   device_removed on have_last_state would drop it (TERMINAL with no
+   event); the schema promises device_removed closes every stream. */
 TEST(test_notify_removed_before_snapshot_still_emits_removed)
 {
     fake_watch_ctx c;
@@ -813,12 +750,10 @@ TEST(test_notify_removed_before_snapshot_still_emits_removed)
     return 0;
 }
 
-/* REGRESSION FIXTURE: probe → MOS_ERR_NO_DEVICE is terminal.
-   Pre-v0.3-dev, this was treated as a transient error and the loop
-   spun emitting MOS_EVENT_ERROR every transition_poll_ms when the
-   drive was unplugged in poll-only mode (no kIOGeneralInterest
-   notification registered). The fix routes NO_DEVICE through the
-   terminal path with a device_removed event. */
+/* REGRESSION: probe -> MOS_ERR_NO_DEVICE is terminal. Treated as
+   transient, the loop would spin emitting ERROR every transition_poll_ms
+   when the drive is unplugged in poll-only mode. NO_DEVICE must route
+   through the terminal path with a device_removed event. */
 TEST(test_probe_no_device_terminates_with_removed_event)
 {
     fake_watch_ctx c;
@@ -884,14 +819,11 @@ TEST(test_probe_error_emits_error_event_no_state_update)
 
 TEST(test_error_event_unit_reflects_last_observed_not_open_time)
 {
-    /* Third review, finding 3 (layering): error/device_removed events have
-       no fresh probe, so fill_event_base falls back to the core's own
-       bsd_unit — which must be the last OBSERVED unit, adopted by the core
-       itself on successful probes. Before the fix, only the Apple adapter
-       kept it current (a direct w->core.bsd_unit write), so in a pure-only
-       context — i.e., for any second adapter — this sequence reported the
-       open-time -1 on the error event. Sequence: open empty (unit -1),
-       media appears (unit 4), then a probe error. */
+    /* Error/device_removed events have no fresh probe, so the base falls
+       back to the core's own bsd_unit, which must be the last OBSERVED
+       unit (adopted by the core, not just an adapter — else a pure-only
+       context reports the open-time -1). Sequence: open empty (-1), media
+       appears (4), then a probe error. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_EMPTY;  c.probe_err[0] = MOS_OK;
@@ -916,17 +848,16 @@ TEST(test_error_event_unit_reflects_last_observed_not_open_time)
     mos_watch_decision d3 = mos_internal_watch_pump(&w);   /* error */
     EXPECT_EQ(MOS_EVENT_ERROR, d3.event.kind);
     /* THE assertion: the fallback unit is the last observed (4), not the
-       open-time -1. Fails against the pre-fix core. */
+       open-time -1. */
     EXPECT_EQ(4, (int)d3.event.bsd_unit);
     return 0;
 }
 
 TEST(test_error_backoff_escalates_and_caps)
 {
-    /* P2: consecutive identical probe errors double the retry interval
-       from transition_poll_ms (200) toward stable_poll_ms (2000):
-       200, 400, 800, 1600, 2000 (capped), 2000, ... Every pump still
-       emits an error event — only the spacing grows. */
+    /* Consecutive identical errors double the retry interval from
+       transition (200) toward stable (2000): 200, 400, 800, 1600, 2000
+       (capped), 2000. Every pump still emits an error; only spacing grows. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_UNKNOWN;
@@ -1055,12 +986,9 @@ TEST(test_latency_ms_measures_probe_duration)
     mos_watch_state w;
     mos_internal_watch_init(&w, &fake_ops, &c, 4, 4242, 5000, 5000, 2000, 200);
 
-    /* Auto-advance the MONO clock by 50 ms on each fake_mono call.
-       Wall clock stays constant. Sequence during a snapshot pump:
-         1. Pre-probe time check (returns 5000, advances to 5050)
-         2. probe_start was just captured
-         3. probe_end after probe runs (returns 5050, advances to 5100)
-       So latency = 5050 - 5000 = 50. */
+    /* Mono auto-advances 50 ms per read; wall stays put. Across a
+       snapshot pump the probe-start read returns 5000 and probe-end
+       returns 5050, so latency = 50. */
     c.mono_auto_advance_ms = 50;
 
     mos_watch_decision d = mos_internal_watch_pump(&w);
@@ -1071,11 +999,9 @@ TEST(test_latency_ms_measures_probe_duration)
 
 TEST(test_ts_saturates_at_year_9999_boundary)
 {
-    /* Fourth review, finding 1 (the real defect): the clock is an input,
-       and the schema requires a 4-digit year. Boundary-valid, boundary+1s,
-       and absurd values must all yield schema-shaped ts — the last two by
-       saturating to 9999-12-31T23:59:59Z, never a 5-digit year (strftime
-       returns 21 chars for those) and never "". */
+    /* The schema requires a 4-digit year. Max, max+1s, and absurd wall
+       values must all yield schema-shaped ts — the last two saturating
+       to 9999-12-31T23:59:59Z, never a 5-digit year and never "". */
     static const struct { uint64_t wall; const char *want; } cases[] = {
         { 253402300799000ULL, "9999-12-31T23:59:59Z" },  /* exactly max   */
         { 253402300800000ULL, "9999-12-31T23:59:59Z" },  /* +1s, clamped  */
@@ -1100,32 +1026,24 @@ TEST(test_ts_saturates_at_year_9999_boundary)
 
 TEST(test_latency_saturates_on_backward_clock)
 {
-    /* Fourth review, finding 8 (donated regression test, adapted to house
-       style): the latency clamp (end < start -> 0) was live but
-       unexercised — the mutation campaign deleted it and the suite stayed
-       green, because every latency fixture used a forward clock. A
-       backward step between probe-start and probe-end must clamp to 0,
-       not underflow to a ~49-day wrapped value. Verified to kill the
-       raw-subtraction mutant. */
+    /* The latency clamp (end < start -> 0) goes unexercised by any
+       forward-clock fixture: a deleted clamp would still pass. A backward
+       step between probe-start and probe-end must clamp to 0, not
+       underflow to a ~49-day wrapped value. */
     fake_watch_ctx c;
     init_default(&c, 1000);
     c.probe_state[0] = MOS_STATE_READY;
     c.probe_err[0]   = MOS_OK;
     c.probe_count    = 1;
-    /* First mono read (probe start) = 1000 via init_default; step the
-       clock BACKWARD before the pump's end-read by pre-positioning: the
-       fake returns mono_clock_ms on every call, so set it low and init
-       the watch with a HIGHER start... the pump reads start and end
-       around the probe from the same fake value. Instead, drive the
-       backward step with the auto-advance: negative steps aren't
-       expressible, so emulate by giving the pump a start deadline in the
-       past and flipping the clock between reads via probe side effect. */
+    /* The backward step is driven by the probe side effect: it flips the
+       clock to 10 between the pump's probe-start and probe-end reads
+       (negative auto-advance isn't expressible). */
     c.flip_mono_on_probe    = true;   /* probe drops the clock to 10 */
     c.mono_clock_ms         = 1000;
-    /* Seam audit C-3: guard the flip itself. With a forward auto-advance,
-       a silently no-op flip yields latency == advance (non-zero) and the
-       0-assertion below FAILS — so the backward-step mechanism cannot rot
-       into a static clock that passes for the wrong reason. */
+    /* Seam contract C-3: guard the flip itself. A forward auto-advance
+       means a no-op flip yields non-zero latency and the 0-assertion
+       below fails — so the backward step can't rot into a static clock
+       that passes for the wrong reason. */
     c.mono_auto_advance_ms  = 7;
     mos_watch_state w;
     mos_internal_watch_init(&w, &fake_ops, &c, 4, 4242, 1000, 1000, 2000, 200);
@@ -1141,9 +1059,8 @@ TEST(test_session_identity_stable_across_pumps_uses_wall_ms)
     fake_watch_ctx c;
     memset(&c, 0, sizeof(c));
     c.mono_clock_ms = 1000;
-    /* Wall ms recorded as stream_open — deliberately a real-looking
-       epoch value, distinct from the mono value, to verify the
-       stream_open comes from the wall-clock source. */
+    /* Wall ms distinct from mono, so stream_open is shown to come from
+       the wall source. */
     c.wall_clock_ms = 1746526503000ULL;
     c.probe_state[0] = MOS_STATE_READY;
     c.probe_state[1] = MOS_STATE_OPEN;
@@ -1178,8 +1095,8 @@ TEST(test_rfc3339_format_uses_wall_ms)
     fake_watch_ctx c;
     memset(&c, 0, sizeof(c));
     c.mono_clock_ms = 1000;
-    /* 2026-05-01T00:00:00Z = 1777593600 unix seconds = 1777593600000 ms.
-       Distinct from mono so the test pins that ts comes from wall_ms. */
+    /* 1777593600000 ms = 2026-05-01T00:00:00Z, distinct from mono so ts
+       is pinned to wall_ms. */
     c.wall_clock_ms  = 1777593600000ULL;
     c.probe_state[0] = MOS_STATE_READY;
     c.probe_err[0]   = MOS_OK;
@@ -1190,8 +1107,7 @@ TEST(test_rfc3339_format_uses_wall_ms)
                             1000, 1777593600000ULL, 2000, 200);
 
     mos_watch_decision d = mos_internal_watch_pump(&w);
-    /* ts MUST be formatted from the wall clock, not the monotonic
-       1000 (which would render as 1970-01-01T00:00:01Z). */
+    /* ts from wall, not mono 1000 (which renders 1970-01-01T00:00:01Z). */
     EXPECT_STREQ("2026-05-01T00:00:00Z", d.event.ts);
     return 0;
 }
@@ -1199,14 +1115,13 @@ TEST(test_rfc3339_format_uses_wall_ms)
 /* ---- Suite registration ----------------------------------------------- */
 
 
-/* ---- Watch-all multiplexer (DR pivot Phase 2b) --------------------- *
+/* ---- Watch-all multiplexer ----------------------------------------- *
  *
- * The multiplexer is pure fan-in: these tests pin the four properties
- * the adapter relies on — deterministic ascending-registry_id
- * interleave, stream-global seq, mid-stream join relabeling
- * (snapshot → device_appeared), and per-slot (non-terminal) removal.
- * Each slot core gets its own fake ctx/clock; the multiplexer itself
- * never touches a clock. */
+ * Pure fan-in. These tests pin the four properties the adapter relies
+ * on: ascending-registry_id interleave, stream-global seq, mid-stream
+ * join relabeling (snapshot -> device_appeared), and per-slot
+ * (non-terminal) removal. Each slot has its own fake ctx/clock; the
+ * multiplexer touches no clock. */
 
 TEST(all_empty_stream_sleeps_unbounded)
 {

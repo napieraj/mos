@@ -1,18 +1,14 @@
 /*
  * mos_perf.c — pure, bounds-safe decode of a GET PERFORMANCE (MMC 0xAC)
- * Performance Data response (the data type the Apple GetPerformance
- * convenience method retrieves — TYPE 00h; the convenience signature
- * exposes TOLERANCE/WRITE/EXCEPT but NOT the TYPE field, so write-speed
- * descriptors, TYPE 03h, are unreachable without a raw CDB and stay out
- * of scope). The read-vs-write direction is the WRITE bit in the CDB, so
- * the adapter issues this twice (WRITE=0, WRITE=1) and this decode
- * returns the max performance found in one reply.
+ * Performance Data response, TYPE 00h — the type Apple's GetPerformance
+ * retrieves (the TYPE 03h write-speed carve-out is in SPEC.md). Direction
+ * is the CDB WRITE bit, so the adapter issues this twice (WRITE=0/1); this
+ * decode returns the max performance found in one reply.
  *
- * No IOKit. The IOKit shell issues GET PERFORMANCE via GetPerformance
- * into a fixed, zero-initialized buffer and hands that buffer plus its
- * size here. Every length and value byte is device-reported and hostile;
- * this file keeps the declared length from steering a read outside
- * [buf, buf+len) and reads only fixed offsets within each descriptor.
+ * No IOKit: the shell hands us a fixed zero-init buffer (filled via
+ * GetPerformance) and its size. Every length is device-reported, hence
+ * hostile — the declared length must never steer a read outside
+ * [buf, buf+len); only fixed offsets within each descriptor are read.
  *
  * Wire layout (MMC GET PERFORMANCE, Performance Data, TYPE 00h):
  *   [0..3]  Performance Data Length (BE) — bytes AFTER byte 3
@@ -23,14 +19,10 @@
  *     desc[8..11]  End LBA
  *     desc[12..15] End Performance (kB/s, BE)
  *
- * SPEC-DERIVED, no in-repo capture yet: the Performance Data descriptor
- * layout is the MMC-6 Nominal Performance Descriptor. Per the AGENTS
- * hardware ADR this is built to spec; a real GET PERFORMANCE capture is
- * a falsifier, it does not steer the offsets. The list may be empty (a
- * drive that declines the direction) — that is data (count 0), not an
- * error. No payload byte is ever used as an offset. No-OOB property
- * gated headless under ASan/UBSan by tests/test_perf.c and
- * tests/fuzz_pure.c.
+ * Layout is the MMC-6 Nominal Performance Descriptor, built to spec (per
+ * the hardware ADR a capture falsifies, it does not steer offsets). An
+ * empty list (drive declines the direction) is data (count 0), not an
+ * error. No payload byte is ever used as an offset.
  */
 
 #include "mos_pure.h"
@@ -45,10 +37,9 @@ static uint32_t mos_internal_gp_be32(const uint8_t *p)
            (uint32_t)p[2] << 8  | p[3];
 }
 
-/* Decode one GET PERFORMANCE Performance Data reply: the maximum
-   performance (kB/s) across its descriptors and the descriptor count.
-   True when the 8-byte header is present and coherent (the descriptor
-   list may be empty). */
+/* Decode one Performance Data reply: max performance (kB/s) across its
+   descriptors and the count. True when the 8-byte header is present and
+   coherent (the descriptor list may be empty). */
 bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
                                   uint32_t *max_kbps, uint16_t *count)
 {
@@ -56,9 +47,9 @@ bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
     if (count)    *count = 0;
     if (!buf || len < GP_HDR) return false;
 
-    /* Performance Data Length counts bytes AFTER byte 3, so the response
-       occupies 4 + value bytes. Declared only ever shrinks the trusted
-       region; computed wide so the +4 cannot wrap. */
+    /* Performance Data Length counts bytes AFTER byte 3 (response = 4 +
+       value). Declared can only shrink the trusted region; computed wide
+       so the +4 cannot wrap. */
     size_t declared = (size_t)mos_internal_gp_be32(&buf[0]) + 4u;
     size_t end = (len < declared) ? len : declared;
     if (end < GP_HDR) return false;

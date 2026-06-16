@@ -141,8 +141,8 @@ are the two of these; do not add a second internal typedef alias.
 
 ## Comment doctrine
 
-Two rules keep commentary useful and bounded (the survey behind them
-is `doc/research/2026-06-11-comment-refactor-plan.md`):
+These rules keep commentary useful and bounded (the survey behind them
+is `doc/research/2026-06-15-comment-purge-plan.md`):
 
 1. **Budget scales with audience.**
    - `include/mos.h` is the documentation of record for external
@@ -163,9 +163,33 @@ is `doc/research/2026-06-11-comment-refactor-plan.md`):
    Implementation why → `.c`, at the relevant lines. Decisions, dates,
    review/audit provenance → `ARCHITECTURE.md` / `doc/history/` /
    `doc/research/`, with a `§` pointer from code. Spec byte layouts →
-   the `.c` that does the parsing. File headers: at most three lines
+   the `.c` that does the parsing; the spec *citation*, external offset
+   cross-checks, and undecoded-field reference → `SPEC.md` (the parser
+   points there rather than restating them). File headers: at most three lines
    (what the file is, plus the one constraint that governs it).
    Cross-reference, never restate.
+
+3. **No changelog in code.** A comment never records what the code used
+   to do, when a decision was made, which review or commit produced it,
+   or what it supersedes. Dates, `v0.x` tags, "(Commit D)", "seam audit
+   Item 2", "has bitten us before" — none of it belongs at the code.
+   Durable rationale moves to a doc with a `§` pointer; everything else
+   is deleted. The code is present tense: it documents what is, not the
+   path that got here. (One exception: a `_Static_assert`/`#error`
+   message that says a value "no longer matches" a platform constant is
+   a runtime guard, not history — it stays.)
+
+4. **Survivors are rewritten, not sliced.** When trimming, a comment
+   that earns its place is re-read in context and tightened by hand —
+   not left as a truncated fragment of a longer block. Spec byte-layout
+   tables and adversarial-input safety contracts (the parsing `.c`
+   files) are tightened, never gutted: they are protected by the
+   hardware/spec ADRs in `AGENTS.md`, and removing a spec citation to
+   hit a line target needs a dated ADR rebuttal, not a quiet cut.
+
+5. **New files comply at birth.** A file added to `src/` or `cli/`
+   meets these rules on its first commit. The tiers are not a cleanup
+   project that runs once; they are the standing budget.
 
 ## What goes in which file
 

@@ -1,17 +1,15 @@
 /* cli/tray.c — the tray command: `mos tray <action> [selector] [flags]`.
  *
- * action ∈ {eject, close, lock, unlock}. eject takes --force (ALLOW before
- * eject); lock/unlock take --persistent (the Persistent Prevent state).
- * Emits one mos.tray.v1 document (--json) or a human line.
+ * action ∈ {eject, close, lock, unlock}. eject takes --force (ALLOW first);
+ * lock/unlock take --persistent (the Persistent Prevent state). Emits one
+ * mos.tray.v1 document or a human line.
  *
- * Control verb, not a query: it issues START STOP UNIT / PREVENT ALLOW
- * MEDIUM REMOVAL (mos_tray_*). A command the drive ANSWERED — including a
- * 5/53/02 locked-eject refusal — is EX_OK; the refusal rides the `outcome`
- * field, a reported fact, not a CLI failure. Only a transport/lock failure
- * (BUSY on a mounted/contended drive, NO_DEVICE, IO) is a non-zero exit, via
- * the shared mos.error.v1 path. A `lock` persists past this process by
- * design (T10 04-349r1 §6.18); release it with `mos tray unlock` (add
- * --persistent to match a --persistent lock).
+ * A control verb (START STOP UNIT / PREVENT ALLOW MEDIUM REMOVAL), not a
+ * query. A command the drive ANSWERED — including a 5/53/02 locked-eject
+ * refusal — is EX_OK: the refusal rides the `outcome` field as a reported
+ * fact. Only a transport/lock failure (BUSY, NO_DEVICE, IO) is non-zero,
+ * via the shared mos.error.v1 path. A `lock` persists past this process
+ * (T10 04-349r1 §6.18); release with `mos tray unlock` (match --persistent).
  */
 #include "common.h"
 
@@ -51,9 +49,9 @@ static void emit_json(const tray_doc *d)
     fputs(",\n  \"action\": ", stdout);
     mos_cli_json_str(stdout, action_word(d->act));
 
-    /* force / persistent are present only on the verbs they modify, null
-       elsewhere — the field set stays closed (additionalProperties:false)
-       while staying honest about which modifier applied. */
+    /* force / persistent carry a value only on the verb they modify, null
+       elsewhere — keeps the field set closed while staying honest about
+       which modifier applied. */
     fputs(",\n  \"force\": ", stdout);
     if (d->act == ACT_EJECT) fputs(d->force ? "true" : "false", stdout);
     else                     fputs("null", stdout);
@@ -66,10 +64,9 @@ static void emit_json(const tray_doc *d)
     fputs(",\n  \"outcome\": ", stdout);
     mos_cli_json_str(stdout, mos_tray_outcome_description(d->outcome));
 
-    /* Sense is reported only when the triple is actually known: the public
-       mos_tray_* API surfaces outcome, not raw sense, and REFUSED_LOCKED is
-       definitionally 5/53/02 (the classifier). REFUSED_OTHER carries bytes
-       the public API does not expose → null, not a fabricated 0/0/0. */
+    /* Sense only when the triple is actually known. REFUSED_LOCKED is
+       definitionally 5/53/02; REFUSED_OTHER's bytes come back via the
+       out-param → null when absent, never a fabricated 0/0/0. */
     bool have_sense = (d->sk || d->asc || d->ascq);
     fputs(",\n  \"sense\": ", stdout);
     if (have_sense)
@@ -110,9 +107,8 @@ static void emit_human(const tray_doc *d)
     (void)mos_cli_human_block(stdout, pairs, n);
 }
 
-/* Map action_word + flags onto a tray_act, validating the modifier matches
-   the verb. Returns false (with a stderr diagnostic) on an unknown action or
-   a misapplied modifier. */
+/* Parse the action word and check the modifier matches the verb. Returns
+   false with a stderr diagnostic on an unknown action or misapplied flag. */
 static bool parse_action(tray_act *act)
 {
     if (!opt_tray_action) {
@@ -179,10 +175,9 @@ int mos_cli_run_tray(void)
     d.persistent  = flag_persistent;
     d.outcome     = MOS_TRAY_DONE;
 
-    /* The public verbs carry the drive's sense triple back via the optional
-       out-param: all-zero on DONE, the real {key,asc,ascq} on any refusal
-       (5/53/02 for refused_locked, whatever the drive reported for
-       refused_other — e.g. 5/24/00 for unsupported Persistent Prevent). */
+    /* The verbs return the drive's sense triple via the out-param: all-zero
+       on DONE, the real {key,asc,ascq} on any refusal (5/53/02 for
+       refused_locked, e.g. 5/24/00 for an unsupported Persistent Prevent). */
     uint8_t sense[3] = {0};
     mos_error op;
     switch (act) {

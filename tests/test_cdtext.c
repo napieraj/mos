@@ -1,11 +1,10 @@
 /*
  * test_cdtext.c — READ TOC/PMA/ATIP format 0101b (CD-TEXT) decode.
- * Spec-derived packs (no in-repo capture yet — a real CD-TEXT reply is a
- * falsifier per the hardware ADR) plus the hostile-buffer cases the
- * decode exists to neutralize: a device-controlled CD-TEXT Data Length
- * must only ever SHRINK the trusted span, never extend a read, and the
- * fixed-stride pack walk must stay in bounds whatever the drive claims.
- * No payload byte is ever used as an offset.
+ * Spec-derived packs (no in-repo capture yet) plus the hostile-buffer
+ * cases the decode exists to neutralize: a device-controlled CD-TEXT
+ * Data Length must only SHRINK the trusted span, never extend a read,
+ * and the fixed-stride pack walk stays in bounds whatever the drive
+ * claims. No payload byte is ever used as an offset.
  */
 #include "test_harness.h"
 #include "../src/mos_pure.h"
@@ -29,12 +28,11 @@ static size_t put_pack(uint8_t *b, size_t off, uint8_t type, uint8_t track,
     return off + 18;
 }
 
-/* Pack a DENSE NUL-separated text stream (`stream`, `len` bytes — the
-   real CD-TEXT wire form: strings concatenated and chopped at 12-byte
-   boundaries, NOT one padded pack per string) into packs of `type`,
-   block 0. The first pack carries `start_track` in its Track Number
-   field; continuation packs' field is left 0 (the decoder seeds from the
-   first pack and ignores the rest). Returns the new offset. */
+/* Pack a DENSE NUL-separated text stream into `type` packs, block 0 —
+   the real CD-TEXT wire form: strings concatenated and chopped at 12-byte
+   boundaries, NOT one padded pack per string. Only the first pack carries
+   `start_track`; the decoder seeds from it and ignores the rest. Returns
+   the new offset. */
 static size_t put_stream(uint8_t *b, size_t off, uint8_t type,
                          uint8_t start_track, const uint8_t *stream, size_t len)
 {

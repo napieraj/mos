@@ -1,27 +1,17 @@
 /*
- * test_ioreturn.c — Pure unit tests for the IOReturn → mos_error mapper.
+ * test_ioreturn.c — pure unit tests for the IOReturn → mos_error mapper.
  *
- * Pins the production adapter's IOReturn translation behavior. Uses the
- * numeric IOReturn values from <IOKit/IOReturn.h> directly rather than
- * the symbolic constants so the test compiles in the pure layer without
- * IOKit. The src/mos_scsi.c adapter contains _Static_asserts that bind
- * the symbolic constants to these literals, so any drift between Apple's
- * SDK and this fixture would fail the macOS build loudly.
+ * Uses numeric IOReturn values rather than the symbolic <IOKit/IOReturn.h>
+ * constants so the test compiles in the pure layer without IOKit;
+ * _Static_asserts in src/mos_scsi.c bind the symbols to these literals, so
+ * SDK drift fails the macOS build loudly.
  *
- * Why this fixture exists: prior to v0.3-dev, the IOReturn mapping was a
- * static function inside src/mos_scsi.c that collapsed kIOReturnNoDevice
- * and allocation failures into the catch-all MOS_ERR_IO. The watch core
- * was correctly designed to treat MOS_ERR_NO_DEVICE from a probe as
- * terminal removal — but in production, kIOReturnNoDevice (the actual
- * code returned when a drive is unplugged mid-probe) never produced
- * MOS_ERR_NO_DEVICE because the mapping was wrong. Pure watch tests
- * passed because they invoked the pump with MOS_ERR_NO_DEVICE directly,
- * bypassing the IOReturn layer.
- *
- * Moving the mapping to mos_pure.c under fixture coverage closes that
- * gap: pure tests now exercise the actual production translation, so a
- * future regression in the IOReturn switch fails the test suite rather
- * than escaping to hardware integration.
+ * Why it exists: the watch core treats MOS_ERR_NO_DEVICE from a probe as
+ * terminal removal, so kIOReturnNoDevice (drive unplugged mid-probe) MUST
+ * map to MOS_ERR_NO_DEVICE, not collapse into catch-all MOS_ERR_IO. A pure
+ * watch test invoking the pump with MOS_ERR_NO_DEVICE directly bypasses
+ * this layer and can't catch a mapping bug — so the mapping is fixtured
+ * here against the real production switch.
  */
 
 #include "test_harness.h"
@@ -30,11 +20,9 @@
 
 #include <stdint.h>
 
-/* IOReturn constants. These are stable ABI from IOKit/IOReturn.h:
-     iokit_common_err(code) = (0x38<<26) | (0<<14) | code
-                            = 0xE0000000 | code
-   The literal values below are pinned by _Static_asserts in
-   src/mos_scsi.c against the symbolic IOKit constants. */
+/* IOReturn constants, stable ABI from IOKit/IOReturn.h:
+     iokit_common_err(code) = (0x38<<26) | (0<<14) | code = 0xE0000000 | code
+   Literals pinned by _Static_asserts in src/mos_scsi.c. */
 #define IOK_SUCCESS           ((int32_t)0x00000000)
 #define IOK_NO_MEMORY         ((int32_t)0xE00002BDu)
 #define IOK_NO_RESOURCES      ((int32_t)0xE00002BEu)
@@ -59,11 +47,8 @@ TEST(test_ioreturn_success_maps_to_ok)
     return 0;
 }
 
-/* REGRESSION FIXTURE for the v0.3-dev watch-terminal-removal break.
-   This is the test that would have caught the prior pure-only fix
-   not reaching production. kIOReturnNoDevice MUST map to
-   MOS_ERR_NO_DEVICE so the watch core's terminal-removal path fires
-   on real-hardware drive unplug. */
+/* Regression: kIOReturnNoDevice MUST map to MOS_ERR_NO_DEVICE so the
+   watch core's terminal-removal path fires on drive unplug. */
 TEST(test_ioreturn_no_device_maps_to_no_device)
 {
     EXPECT_EQ(MOS_ERR_NO_DEVICE,
@@ -71,9 +56,8 @@ TEST(test_ioreturn_no_device_maps_to_no_device)
     return 0;
 }
 
-/* The sibling "device went away mid-call" code. Also routes to
-   NO_DEVICE so the watch terminates cleanly regardless of which
-   variant the kernel surfaced. */
+/* Sibling "device went away mid-call" code; also routes to NO_DEVICE
+   so the watch terminates whichever variant the kernel surfaced. */
 TEST(test_ioreturn_not_attached_maps_to_no_device)
 {
     EXPECT_EQ(MOS_ERR_NO_DEVICE,
@@ -88,11 +72,9 @@ TEST(test_ioreturn_no_memory_maps_to_oom)
     return 0;
 }
 
-/* NoResources is runtime resource exhaustion, not "driver wouldn't
-   attach" — OOM is the right category. The DRIVER_REJECTED semantic
-   is reserved for the GetSCSITaskDeviceInterface / MMCDeviceInterface
-   factory returning NULL, which is checked directly without going
-   through this mapping. */
+/* NoResources is runtime exhaustion, not "driver wouldn't attach" —
+   OOM is the right category. DRIVER_REJECTED is reserved for the
+   interface factory returning NULL, checked outside this mapping. */
 TEST(test_ioreturn_no_resources_maps_to_oom)
 {
     EXPECT_EQ(MOS_ERR_OOM,
@@ -135,9 +117,7 @@ TEST(test_ioreturn_unsupported_maps_to_unsupported)
     return 0;
 }
 
-/* Default category: anything not in the explicit map falls through
-   to MOS_ERR_IO. Exercises representative codes to pin the fallback
-   behavior. */
+/* Anything not in the explicit map falls through to MOS_ERR_IO. */
 TEST(test_ioreturn_unmapped_falls_through_to_io)
 {
     EXPECT_EQ(MOS_ERR_IO,
@@ -148,7 +128,7 @@ TEST(test_ioreturn_unmapped_falls_through_to_io)
               mos_internal_ioreturn_to_error(IOK_OFFLINE));
     EXPECT_EQ(MOS_ERR_IO,
               mos_internal_ioreturn_to_error(IOK_ABORTED));
-    /* A completely synthetic value, not in IOKit at all. */
+    /* Synthetic values not in IOKit at all. */
     EXPECT_EQ(MOS_ERR_IO,
               mos_internal_ioreturn_to_error((int32_t)0xDEADBEEFu));
     EXPECT_EQ(MOS_ERR_IO,

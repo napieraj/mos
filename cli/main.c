@@ -1,6 +1,5 @@
-/* cli/main.c — argument parsing, usage, dispatch. One file per
- * command over cli/common; adding a verb = a new cli/<verb>.c + a
- * dispatch line below. */
+/* cli/main.c — argument parsing, usage, dispatch. One file per command;
+ * a new verb is a new cli/<verb>.c plus a dispatch line below. */
 #include "common.h"
 #include "mos_pure.h"   /* mos_internal_value_is_registry_id (selector floor) */
 
@@ -10,14 +9,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sysexits.h>
-
-/* The v0.4 typed-verb surface is complete: every reserved name has
-   shipped — "identity" became metadata + drive, "features" the
-   feature-list verb, "tray" the control verbs, "speed" folded into
-   drive's GET PERFORMANCE "speeds", and "capacity" landed 2026-06-13 as
-   mos.capacity.v1. The reserved-name machinery (a placeholder diagnostic
-   for not-yet-implemented names) retired with the last name; a future
-   reserved name reintroduces it. */
 
 void mos_cli_print_usage(FILE *f)
 {
@@ -94,13 +85,6 @@ static void print_version(void)
     printf("%s %s\n", progname, mos_version_string());
 }
 
-/* ---- JSON output (hand-coded, no library) ----------------------------- */
-
-/* JSON-string and safe-ASCII writing is shared via cli/io
-   (mos_cli_json_str / mos_cli_safe_ascii) — see the #include above. */
-
-/* ---- Argument parsing -------------------------------------------------- */
-
 enum {
     OPT_BSD = 1000,
     OPT_VERSION,
@@ -114,18 +98,17 @@ enum {
 static const struct option long_options[] = {
     { "index",   required_argument, 0, 'i' },
     { "bsd",     required_argument, 0, OPT_BSD },
-    /* tray-only modifiers; validated against the verb below (an unrelated
-       subcommand seeing them is rejected, like --dump outside probe). */
+    /* tray-only; the verb match is enforced below. */
     { "force",      no_argument,    0, OPT_FORCE },
     { "persistent", no_argument,    0, OPT_PERSISTENT },
 #ifdef MOS_CLI_PROBE
-    /* Compiled out with the probe so an OFF build rejects --dump as an
-       unknown option (usage + 64) instead of half-recognizing it. */
+    /* Compiled out so an OFF build rejects --dump as unknown rather than
+       half-recognizing it. */
     { "dump",    no_argument,       0, OPT_DUMP },
 #endif
-    /* optional_argument, not no_argument: lets --json=v2 reach the
-       legacy-rejection diagnostic (no_argument would silently discard the
-       =value). Bare --json works — optarg defaults to NULL. */
+    /* optional_argument so --json=value reaches the rejection diagnostic
+       below rather than being silently discarded; bare --json gives a
+       NULL optarg. */
     { "json",    optional_argument, 0, 'j' },
     { "help",    no_argument,       0, 'h' },
     { "version", no_argument,       0, OPT_VERSION },
@@ -142,13 +125,12 @@ static int parse_index(const char *arg)
     return (int)v;
 }
 
-/* --json takes no argument — schema names carry their own version
-   (AGENTS.md, JSON schema ADR). Reject --json=value so a caller
-   expecting per-invocation pinning gets a clear usage error instead of
-   silent acceptance; bare --json (v == NULL) is fine. */
+/* --json takes no argument — each schema name already carries its version
+   (AGENTS.md JSON schema ADR). Reject --json=value with a usage error
+   rather than accepting it silently; bare --json (v == NULL) is fine. */
 static bool reject_legacy_json_version(const char *v)
 {
-    if (!v) return true;  /* bare --json is fine */
+    if (!v) return true;  /* bare --json */
     fprintf(stderr,
             "%s: --json no longer takes a version argument "
             "(schemas carry their own version: mos.state.v1, "
@@ -166,29 +148,23 @@ int main(int argc, char **argv)
         progname = s ? s + 1 : argv[0];
     }
 
-    /* CLI-only (never in libmos — a library must not change global signal
-       disposition). Default SIGPIPE kills the process on a closed
-       downstream pipe; ignoring it makes writes return EPIPE instead, which
-       the watch emitters detect (fflush + ferror) and turn into a clean
-       EX_OK exit. Installed for all subcommands, not just watch: even
-       `mos --json | head -c0` can race SIGPIPE between printf and flush.
-       Invariant: the emit paths must keep honoring fflush return values —
-       discarding them reintroduces the kill-on-pipe-close bug. signal()
-       here cannot fail (SIG_IGN is always installable). */
+    /* CLI-only — a library must not touch global signal disposition.
+       Default SIGPIPE kills the process when a downstream pipe closes;
+       ignoring it makes writes return EPIPE, which the emitters detect
+       (fflush + ferror) and turn into a clean EX_OK. Installed for every
+       subcommand, not just watch: even `mos --json | head -c0` can race
+       SIGPIPE between printf and flush. The emit paths must keep checking
+       fflush returns — dropping them reintroduces the kill-on-close bug. */
     signal(SIGPIPE, SIG_IGN);
 
-    /* Bare `mos` is an entry point, not an implicit status (the
-       single-drive default was a carryover from the one-word-stdout
-       era; retired 2026-06-12) — and not a probe either: the drive
-       table's state column rides the not-ready GESN branch, which
-       takes the exclusive lock, and an intent-free invocation must
-       not touch hardware (same-day revision of the table-at-entry
-       shape). Usage + hint, EX_USAGE; the table is one deliberate
-       `mos list` away. */
+    /* Bare `mos` is an entry point, not an implicit status: an intent-free
+       invocation must not touch hardware (a state probe would ride the
+       not-ready GESN branch, which takes the exclusive lock). Usage + hint,
+       EX_USAGE. */
     if (argc == 1) {
-        /* %1$s: POSIX numbered conversions — one progname argument,
-           reused; mixing numbered and unnumbered in one format is UB,
-           so every conversion here must stay numbered. */
+        /* %1$s reuses the one progname argument; mixing numbered and
+           unnumbered conversions in one format is UB, so keep all
+           conversions here numbered. */
         fprintf(stderr,
                 "%1$s: no subcommand (state is `%1$s status`; drives, `%1$s list`).\n\n",
                 progname);
@@ -196,15 +172,13 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 
-    /* Subcommands are additive aliases for the flag forms, recognized only
-       when argv[1] is a bare word (flag-first invocations reach getopt
-       unchanged). The remaining v0.4 names are reserved so a premature use gets
-       a clearer diagnostic than "unknown subcommand". */
+    /* A subcommand is recognized only when argv[1] is a bare word;
+       flag-first invocations fall through to getopt unchanged. */
     if (argc >= 2 && argv[1][0] != '-' && argv[1][0] != '\0') {
         const char *cmd = argv[1];
 
         if (strcmp(cmd, "status") == 0) {
-            /* implicit-status default; nothing to set. */
+            /* the default; nothing to set. */
         } else if (strcmp(cmd, "list") == 0) {
             flag_list = true;
         } else if (strcmp(cmd, "watch") == 0) {
@@ -217,11 +191,10 @@ int main(int argc, char **argv)
             flag_features = true;
         } else if (strcmp(cmd, "tray") == 0) {
             flag_tray = true;
-            /* tray takes an action word (eject/close/lock/unlock) before
-               any drive/flags. Capture it here so the shared getopt +
-               positional parser handle --force/--persistent and the
-               selector uniformly; the second shift below removes it from
-               getopt's view. A missing/flag-shaped action is left NULL and
+            /* tray takes an action word (eject/close/lock/unlock) ahead of
+               any drive/flags. Capture it here; the second shift below
+               hides it from getopt so the shared selector/flag parsing runs
+               unchanged. A missing or flag-shaped action stays NULL and is
                diagnosed by mos_cli_run_tray. */
             if (argc >= 3 && argv[2][0] != '-' && argv[2][0] != '\0')
                 opt_tray_action = argv[2];
@@ -231,9 +204,9 @@ int main(int argc, char **argv)
 #ifdef MOS_CLI_PROBE
             flag_probe = true;
 #else
-            /* Known verb, compiled out — a specific diagnostic, not the
-               unknown-subcommand message (which would mislead: the verb
-               exists, it just was not built into this binary). */
+            /* Known verb, compiled out: a specific diagnostic, not the
+               unknown-subcommand message — the verb exists, this binary
+               just lacks it. */
             fprintf(stderr, "%s: 'probe' is not built into this binary "
                     "(diagnostic subcommand; rebuild with "
                     "-DMOS_CLI_PROBE=ON)\n", progname);
@@ -250,20 +223,17 @@ int main(int argc, char **argv)
                   ".\n", stderr);
             return EX_USAGE;
         }
-        /* Shift past the subcommand word so getopt parses the
-           remaining args from position 1. Copy the real program name
-           into the slot getopt will see as argv[0] first: getopt's
-           own diagnostics keep the real progname on every libc
-           (glibc prints argv[0]; Apple's warnx/getprogname never
-           reads it). The subcommand word was already consumed by the
-           dispatch above — nothing references it past this point. */
+        /* Shift past the subcommand word so getopt starts at position 1.
+           Copy the real program name into the new argv[0] first, so
+           getopt's own diagnostics keep it (glibc prints argv[0]; Apple's
+           warnx/getprogname never reads it). */
         argv[1] = argv[0];
         argc--;
         argv++;
 
-        /* tray's action word now sits at argv[1] (the string opt_tray_action
-           still points to — only pointers moved). Shift again so getopt
-           sees only --force/--persistent and the drive selector. */
+        /* tray's action word now sits at argv[1] (opt_tray_action still
+           points to it — only pointers moved). Shift again so getopt sees
+           only the modifiers and the selector. */
         if (flag_tray && opt_tray_action) {
             argv[1] = argv[0];
             argc--;
@@ -306,11 +276,11 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Positional drive subject: one bare argument, SYNTACTIC dispatch —
-       non-digit = a bsd form (disk4 / rdisk4 / /dev/diskN); all digits
-       split on the xnu registry-ID floor (mos_pure.h): at/above
-       2^32+256 = registry id, below = drutil-style index. Disjoint by
-       kernel construction, so no fallback chain. */
+    /* Positional drive subject, dispatched by syntax: a non-digit is a bsd
+       form (disk4 / rdisk4 / /dev/diskN); all-digits split on the xnu
+       registry-ID floor (mos_pure.h) — at/above 2^32+256 is a registry id,
+       below is a drutil-style index. Disjoint by kernel construction, no
+       fallback chain. */
     if (optind < argc) {
         const char *subject = argv[optind];
         if (optind + 1 < argc) {
@@ -357,8 +327,7 @@ int main(int argc, char **argv)
         optind++;
     }
 
-    /* list enumerates everything — a positional subject alongside it is
-       the same contradiction as the flag forms below. */
+    /* list enumerates everything; a drive subject contradicts it. */
     if (flag_list && (opt_index > 0 || opt_bsd != NULL || opt_registry)) {
         fprintf(stderr,
                 "%s: list takes no drive argument (it enumerates all)\n",
@@ -372,10 +341,9 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 
-    /* --force / --persistent belong to tray (eject and lock/unlock
-       respectively); reject them on any other verb the way --dump is
-       rejected outside probe. The verb-specific eject-vs-lock match is
-       checked in mos_cli_run_tray, where the action word is known. */
+    /* --force / --persistent belong to tray; reject them on any other verb
+       the way --dump is rejected outside probe. The finer eject-vs-lock
+       match happens in mos_cli_run_tray, where the action word is known. */
     if ((flag_force || flag_persistent) && !flag_tray) {
         fprintf(stderr,
                 "%s: --force/--persistent apply only to the tray subcommand\n",
@@ -383,13 +351,9 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 
-    /* (list + selector is rejected above, where the positional
-       subject also lands — one guard, one message.) */
-
 #ifdef MOS_CLI_PROBE
-    /* (Verb-vs-verb contradictions are unrepresentable since verbs come
-       only from the one-word dispatch — flags-as-commands retired
-       2026-06-12.) */
+    /* Verb-vs-verb contradictions can't arise — verbs come only from the
+       one-word dispatch. */
     if (flag_dump && !flag_probe) {
         fprintf(stderr, "%s: --dump requires the probe subcommand\n",
                 progname);
@@ -407,27 +371,23 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
     if (flag_probe && !flag_dump && opt_registry) {
-        /* probe resolves its io_service_t by BSD name (cli/probe.c walks
-           the IOMedia up to the SCSI peripheral); a registry-id selector
-           has no resolution path there. The other selector-taking
-           subcommands accept registry ids via mos_open_by_registry_id —
-           probe is index/BSD only by design. Reject it with an accurate
-           message rather than falling through to the "requires a drive"
-           guard below, which would misreport a drive that *was* given. */
+        /* probe resolves by BSD name only (cli/probe.c walks IOMedia up to
+           the SCSI peripheral); a registry-id selector has no path there.
+           Reject it explicitly rather than fall through to the "requires a
+           drive" guard, which would misreport a drive that WAS given. */
         fprintf(stderr, "%s: probe does not accept registry-id selectors; "
                         "use an index (see 'mos list') or a BSD form\n",
                 progname);
         return EX_USAGE;
     }
     if (flag_probe && !flag_dump && !opt_index && !opt_bsd) {
-        /* No sole-drive default here: the probe is a diagnostic aimed
-           at one explicit drive (or --dump for the whole directory). */
+        /* No sole-drive default: the probe targets one explicit drive (or
+           --dump for the whole directory). */
         fprintf(stderr, "%s: probe requires a drive (index or BSD form) "
                         "or --dump\n", progname);
         return EX_USAGE;
     }
-    /* probe's event stream is NDJSON unconditionally; --json is a
-       no-op there, same documented rule as watch. */
+    /* probe streams NDJSON unconditionally; --json is a no-op, as in watch. */
 #endif
 
 #ifdef MOS_CLI_PROBE

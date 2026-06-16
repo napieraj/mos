@@ -539,3 +539,33 @@ internal `typedef ... mos_feature_info` alias was dropped so the struct
 mirrors `struct mos_device_info` exactly — tagged internally, `_t` alias
 only in `include/mos.h`. Both pre-first-tag, no external consumers; the
 public `mos_state` enum value names (`MOS_STATE_*`) are unchanged.
+
+## ADR: SPEC.md centralizes spec citations; parsed layouts stay inline
+## (2026-06-15, narrows the "spec byte layouts → the parsing .c" rule)
+
+The comment doctrine (CONTRIBUTING.md §2) and the hardware-role ADR put
+spec byte layouts in the parsing `.c`. This entry records a narrow split,
+not a reversal: a parser's **parsed byte-offset table and safety contract
+stay inline** — they guard the parse and are verified by proximity to the
+code, so delocalizing them would forfeit the no-drift property the rule
+exists for. What moved to `SPEC.md` (new, root, UPPERCASE source of truth)
+is the material that is reference-only or repeats: the authoritative spec
+document per parser, the external offset cross-checks (Linux `cdrom.h` /
+`cdrom.c` / `sr.c`, libcdio), and the fields each parser deliberately does
+**not** decode. Each parser header names its command and points to
+SPEC.md instead of restating the citation.
+
+**Why this is additive.** The rule homed *parsed* layouts; it never homed
+the undecoded-field reference or the cross-check provenance, which had
+accreted into the `.c` headers as prose. SPEC.md gives those a single
+home (the genuine N:1 repetition is the spec-document citation, which
+recurred across parsers), while the parse-guarding offsets stay exactly
+where the rule put them. SPEC.md is under the doc-staleness gate (now
+exclusion-based: every tracked `*.md` is checked except the append-only
+archives), so the registry cannot silently drift from the parsers.
+
+**What stays foreclosed.** This is not licence to move a parsed offset
+table or a bounds/validity rule out of code to cut lines — that remains
+the locality forfeit the comment doctrine refuses. SPEC.md holds
+citations, cross-checks, and undecoded-field notes; it never becomes the
+home of the live parse.

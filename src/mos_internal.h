@@ -1,11 +1,7 @@
 /*
- * mos_internal.h — internal library declarations. Not part of the
- * public ABI. Consumers should include only <mos.h>.
- *
- * Pure-data prototypes (sense parser, BSD-name normalization,
- * status classifier, IOReturn mapper, watch-core state machine)
- * live in mos_pure.h so tests can include them without pulling in
- * IOKit.
+ * mos_internal.h — internal library declarations; not public ABI
+ * (consumers include only <mos.h>). The IOKit-free pure-data prototypes
+ * live in mos_pure.h so tests can include them without IOKit.
  */
 
 #ifndef MOS_INTERNAL_H
@@ -24,9 +20,9 @@
 
 struct mos_handle {
     io_service_t              svc;
-    uint64_t                  drive_registry_id; /* IORegistryEntryGetRegistryEntryID(svc);
-                                                    0 if the call failed. The attachment
-                                                    identity (same value the watch emits). */
+    uint64_t                  drive_registry_id; /* IORegistryEntryGetRegistryEntryID(svc),
+                                                    0 on failure; the attachment identity
+                                                    (same value the watch emits). */
     IOCFPlugInInterface     **plugin;
     MMCDeviceInterface      **mmc;
     SCSITaskDeviceInterface **std;   /* lazy; only allocated on first raw CDB */
@@ -36,11 +32,10 @@ struct mos_handle {
     /* Whole-disk identity (the BSD unit, kIOBSDUnitKey); -1 = no whole-disk IOMedia node (media absent). The string
        buffers below back the variable-length INQUIRY fields. */
     int64_t                   bsd_unit;
-    uint64_t                  media_id;        /* whole-disk IOMedia registry
-                                                  entry ID, 0 == no media;
-                                                  re-resolved with bsd_unit per
-                                                  media-scoped query (F1 swap
-                                                  fingerprint) */
+    uint64_t                  media_id;        /* whole-disk IOMedia entry ID,
+                                                  0 == no media; re-resolved with
+                                                  bsd_unit per media-scoped query
+                                                  (swap fingerprint) */
     uint64_t                  media_bytes;     /* kIOMediaSizeKey off the same
                                                   whole-disk node; 0 == absent
                                                   (query-time, like bsd_unit) */
@@ -102,13 +97,12 @@ struct mos_device_info {
 
 /* ---- DiscRecording-linked internal prototypes (mos_dr.c) ----------- *
  *
- * The directory half of the DR pivot: discovery, identity, addressing
- * (doc/research/2026-06-10-dr-pivot-implementation-plan.md). Never
- * state — that stays with the MMC seam below. */
+ * The directory half: discovery, identity, addressing. Never state —
+ * that stays with the MMC seam below. */
 
-/* One enumerated device, extracted from DR's dictionaries into plain C
-   at the adapter seam (no CF types cross this line). Identity buffers
-   carry the SPC-4 INQUIRY field widths — DR pre-parses the same bytes. */
+/* One enumerated device, extracted from DR's dictionaries into plain C at
+   the adapter seam (no CF types cross this line). Identity buffers carry
+   the SPC-4 INQUIRY field widths. */
 typedef struct {
     uint64_t registry_id;     /* path → entry → ID; never 0 in a snapshot */
     int64_t  bsd_unit;        /* -1 = no whole-disk IOMedia node (media absent) */
@@ -117,11 +111,10 @@ typedef struct {
     char     revision[5];     /* 4 chars + NUL */
 } mos_internal_dr_snapshot;
 
-/* Fill up to `cap` slots in DR device-array order (the same array
-   drutil enumerates — the index provenance contract). Returns the
-   count. Devices whose registry path cannot be resolved to an entry
-   ID are skipped (an un-reopenable index entry would violate the
-   enumeration/index correspondence). */
+/* Fill up to `cap` slots in DR device-array order (the array drutil
+   enumerates — the index-provenance contract); returns the count. Devices
+   whose registry path won't resolve to an entry ID are skipped (an
+   un-reopenable index entry would break enumeration/index correspondence). */
 size_t mos_internal_dr_copy_snapshot(mos_internal_dr_snapshot *slots,
                                      size_t cap);
 
@@ -140,23 +133,21 @@ void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap);
 
 /* One-shot DiskArbitration mounted-volume lookup (mos_da.c). True only
    when mounted; gate calls on bsd_unit present. No callbacks, no run
-   loop — see the narrow re-admission terms at the top of mos_da.c. */
+   loop — see the re-admission terms at the top of mos_da.c. */
 bool mos_internal_da_volume(const char *bsd_name,
                             char *name_buf, size_t name_cap,
                             char *path_buf, size_t path_cap);
 
-/* Extract one device's snapshot (registry id, bsd unit, identity) from
-   a DRDeviceRef passed as CFTypeRef (mos_internal.h stays free of
-   DiscRecording types). False when the device's registry path doesn't
-   resolve — the same skip gate the array snapshot applies. Used by the
-   snapshot builder and the watch-all Appeared handler. */
+/* Extract one device's snapshot (registry id, bsd unit, identity) from a
+   DRDeviceRef passed as CFTypeRef (this header stays free of DiscRecording
+   types). False when the registry path doesn't resolve — the same skip gate
+   the array snapshot uses. Shared with the watch-all Appeared handler. */
 bool mos_internal_dr_device_snapshot(CFTypeRef device_ref,
                                      mos_internal_dr_snapshot *s);
 
 /* Device-static identity strings for an already-opened service, via
    DR's registry-path lookup. Best-effort: returns false (and empties
-   the buffers) when DR cannot see the service — the same non-fatal
-   contract the retired open-time INQUIRY had. */
+   the buffers) when DR cannot see the service (non-fatal). */
 bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                                                char *vendor, size_t vcap,
                                                char *product, size_t pcap,
@@ -164,83 +155,62 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
 
 /* ---- IOKit-linked internal prototypes ------------------------------ *
  *
- * MMC convenience wrappers for the query path (mos_state.c). The
- * open-time INQUIRY wrapper retired with the DR pivot — identity is
- * directory data now. */
+ * MMC convenience wrappers for the query path (mos_state.c). */
 mos_error mos_internal_mmc_get_tray_state     (mos_handle_t *h, bool *tray_open);
 mos_error mos_internal_mmc_test_unit_ready    (mos_handle_t *h,
                                                uint32_t *status,
                                                uint8_t sense[18]);
 mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile);
 
-/* Thin shim over the pure IOReturn→mos_error map (mos_pure.c). Defined in
-   mos_scsi.c; exposed so the typed query surface (mos_query.c) maps
-   transport failures identically to the convenience wrappers and
-   mos_raw_cdb. CHECK CONDITION rides task status/sense, not IOReturn, so
-   this maps only transport-layer failures. */
+/* Thin shim over the pure IOReturn→mos_error map (mos_scsi.c), so the typed
+   query surface (mos_query.c) maps transport failures identically to the
+   convenience wrappers and mos_raw_cdb. CHECK CONDITION rides task
+   status/sense, not IOReturn, so this maps only transport failures. */
 mos_error mos_internal_ioreturn_to_mos_error(IOReturn rc);
 
 /* Re-resolve the handle's media-scoped identity (whole-disk bsd_unit,
    media_id swap fingerprint, kernel-cached size/block bytes) from its
-   stable drive service — the per-query freshness the media-scoped queries
-   (state, capacity, volume) call first so a handle held across an
-   insert/eject reports current media. Local IORegistry walk off h->svc;
-   no SCSI command, no exclusive access. Defined in mos_scsi.c. */
+   stable drive service — the freshness the media-scoped queries (state,
+   capacity, volume) call first so a handle held across an insert/eject
+   reports current media. Local IORegistry walk off h->svc; no SCSI
+   command, no exclusive access (mos_scsi.c). */
 void mos_internal_refresh_media_identity(mos_handle_t *h);
 
 /* Issue one 6-byte tray CDB (START STOP UNIT 0x1B / PREVENT ALLOW MEDIUM
-   REMOVAL 0x1E) on the mos_raw_cdb path and classify the result. Returns a
-   negative mos_error on transport/lock failure (BUSY on a mounted/contended
-   drive, NO_DEVICE, IO); on any command the drive ANSWERED returns MOS_OK and
-   sets *outcome (DONE / REFUSED_LOCKED / REFUSED_OTHER). sense_out, when
-   non-NULL, receives {sk, asc, ascq}; it is zeroed on MOS_OK with no sense.
-   The single ObtainExclusiveAccess call site stays mos_raw_cdb (§3) — this
-   wrapper adds none. Shared by the four public mos_tray_* verbs. */
+   REMOVAL 0x1E) via mos_raw_cdb and classify the result. Negative mos_error
+   on transport/lock failure (BUSY, NO_DEVICE, IO); on an ANSWERED command,
+   MOS_OK with *outcome (DONE / REFUSED_LOCKED / REFUSED_OTHER). sense_out,
+   when non-NULL, gets {sk, asc, ascq} (zeroed on MOS_OK with no sense). Adds
+   no ObtainExclusiveAccess — that stays mos_raw_cdb (§3). Shared by the four
+   mos_tray_* verbs. */
 mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
                                 mos_tray_outcome *outcome, uint8_t sense_out[3]);
 
 
 
-/* Open a drive by its IORegistry entry ID — the identity-stable
-   primitive: the kernel resolves IORegistryEntryIDMatching atomically,
-   so this returns the SAME entry the ID came from or NO_DEVICE if it
-   terminated; a recycled BSD name cannot rebind it to a different
-   drive. The watch's authority for which drive a session probes. Not
-   public: registry IDs are IOKit-specific. *err_out: NO_DEVICE or IO. */
+/* Open a drive by its IORegistry entry ID — the identity-stable primitive:
+   IORegistryEntryIDMatching resolves atomically, returning the SAME entry
+   the ID came from or NO_DEVICE if it terminated; a recycled BSD name can't
+   rebind it elsewhere. The watch's authority for which drive a session
+   probes. Not public (registry IDs are IOKit-specific). *err_out: NO_DEVICE
+   or IO. */
 mos_handle_t *mos_internal_open_by_registry_id(uint64_t id,
                                                mos_error *err_out);
 
 /* The validated io_service_t a handle was opened against — identity
-   transfer without a second BSD lookup (which would be a TOCTOU window).
-   IO_OBJECT_NULL on NULL input. The caller MUST IOObjectRetain the
-   result before mos_close(h) drops the handle's own reference; the
-   caller then owns the extra retain and must IOObjectRelease it. */
+   transfer with no second BSD lookup (which would be a TOCTOU window).
+   IO_OBJECT_NULL on NULL input. The caller MUST IOObjectRetain before
+   mos_close(h) drops the handle's reference, then owns and releases it. */
 io_service_t mos_internal_handle_get_service(mos_handle_t *h);
 
 /* ---- Auto-cleanup helpers for IOKit / CoreFoundation refcounts ----- *
  *
- * The cleanup attribute is a gcc/clang extension that runs the named
- * callback when the variable goes out of scope. We use it to make
- * refcount discipline automatic in functions with multiple early-exit
- * paths (iterator loops, two-pass property lookups) where an explicit
- * release is easy to miss on one branch.
- *
- * Usage:
- *   io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
- *   CFTypeRef prop  MOS_CF_AUTO = IORegistryEntryCreateCFProperty(...);
- *   // ... use, no explicit release ...
- *   // child and prop are released at scope exit
- *
- * Ownership transfer (when handing off to a longer-lived owner):
- *   io_service_t local MOS_IO_AUTO = IOIteratorNext(it);
- *   // ... validate ...
- *   io_service_t consumed = local;
- *   local = IO_OBJECT_NULL;   // disable cleanup; consumer now owns it
- *   return some_consumer(consumed);
- *
- * The cleanup callbacks check for the sentinel value before releasing
- * and clear the variable after, so manual release-and-clear and
- * auto-cleanup coexist safely. */
+ * The gcc/clang cleanup attribute runs the callback at scope exit, so
+ * refcount discipline holds across early exits. To hand a reference to a
+ * longer-lived owner, null the variable to disable cleanup:
+ *   io_service_t consumed = local; local = IO_OBJECT_NULL;
+ * The callbacks check the sentinel before releasing and clear after, so
+ * manual release-and-clear and auto-cleanup coexist safely. */
 
 static inline void mos_internal_cleanup_cftype(CFTypeRef *p)
 {

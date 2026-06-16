@@ -1,26 +1,20 @@
 /*
- * test_state_core.c — Decision-tree integration tests using a fake
- * mos_mmc_ops_t. Each scenario scripts the three callback responses
- * and asserts the resulting mos_state_result. No IOKit, runs on any
- * platform that compiles mos_pure.
+ * test_state_core.c — decision-tree integration tests over a fake
+ * mos_mmc_ops_t. Each scenario scripts the three callbacks and asserts the
+ * mos_state_result. No IOKit; runs anywhere mos_pure compiles.
  *
- * The scenarios cover every branch the v0.3 decision tree can take
- * (TUR-first presence; raw-GESN tray bit only on the not-ready
- * branch; sense enrichment that never overturns GESN's verdict):
+ * Branches covered (TUR-first presence; raw-GESN tray bit only on the
+ * not-ready branch; sense enrichment that never overturns GESN):
  *   - TUR GOOD → READY short-circuit, no tray probe, no lock
  *   - TUR not-ready + GESN authoritative open/closed (both invariants)
  *   - GESN silent → tray fork on the TUR sense (3A/02, 3A/01, 3A/00)
- *   - Each mapped sense triple on the closed branch (§5.3)
- *   - TUR issued exactly ONCE — no UA retry exists (§4.1)
+ *   - each mapped sense triple on the closed branch (§5.3)
+ *   - TUR issued exactly ONCE — no UA retry (§4.1)
  *   - SAM-5 contention statuses → BUSY
- *   - Transport errors (BUSY/EXCLUSIVE_ACCESS → state BUSY; others
- *     surface as negative mos_error)
- *   - Profile enrichment guards (READY only; profile failure never
- *     downgrades the state)
- *   - Descriptor-format sense parsed correctly
- *
- * Each fake_mmc instance is a tiny scripted vtable set up by the test
- * before invoking mos_internal_query_state_core().
+ *   - transport errors (BUSY/EXCLUSIVE_ACCESS → BUSY; others → negative
+ *     mos_error)
+ *   - profile enrichment guards (READY only; failure never downgrades)
+ *   - descriptor-format sense parsed correctly
  */
 
 #include "test_harness.h"
@@ -39,9 +33,9 @@ typedef struct {
     bool      tray_open;
     int       tray_calls;
 
-    /* TUR response. Single slot on purpose: the decision tree issues
-       TUR exactly once (no UA retry — ARCHITECTURE §4.1), and
-       state_tur_issued_once pins that with the tur_calls counter. */
+    /* TUR response. Single slot on purpose: the tree issues TUR exactly
+       once (no UA retry — ARCHITECTURE §4.1), pinned by the tur_calls
+       counter in state_tur_issued_once. */
     mos_error tur_err;
     uint32_t  tur_status;
     uint8_t   tur_sense[18];
@@ -53,17 +47,13 @@ typedef struct {
     int       profile_calls;
 } fake_mmc;
 
-/* SEAM CONTRACT E-1 ENFORCEMENT (seam audit): on a non-OK return,
-   out-params are UNDEFINED and the core must not read them. The fakes
-   used to leave error-path out-params untouched, which masked a
-   divergence from the adapter (whose TUR zeroes them — census B4) and
-   left E-1 unguarded: a core that leaked an error-path value into its
-   result would have passed the suite. The fakes now POISON every
-   out-param on error, so any read of one changes an assertion
-   somewhere. (The contract rule chosen is "undefined on error" — the
-   adapter's TUR zeroing remains a harmless implementation detail, and
-   a second adapter is bound only to never require its outputs to be
-   read on failure.) */
+/* SEAM CONTRACT E-1: on a non-OK return, out-params are UNDEFINED and the
+   core must not read them. A fake leaving error-path out-params untouched
+   would mask a core that leaked an error-path value into its result. So the
+   fakes POISON every out-param on error — any read of one shifts an
+   assertion. (The rule is "undefined on error"; the adapter's TUR zeroing
+   is a harmless implementation detail, and a second adapter is bound only
+   to never require its outputs read on failure.) */
 static mos_error fake_get_tray_state(void *ctx, bool *tray_open)
 {
     fake_mmc *f = (fake_mmc *)ctx;
@@ -115,9 +105,8 @@ static mos_state_env_t make_env(fake_mmc *f)
     return env;
 }
 
-/* Helper: write a fixed-format sense triple, matching SPC-4 §4.5.3
-   byte layout (response code 0x70, key in byte 2, ASC in byte 12,
-   ASCQ in byte 13). */
+/* Fixed-format sense triple, SPC-4 §4.5.3 layout (response code 0x70, key
+   byte 2, ASC byte 12, ASCQ byte 13). */
 static void fake_set_fixed_sense(fake_mmc *f,
                                  uint8_t key, uint8_t asc, uint8_t ascq)
 {
@@ -127,8 +116,8 @@ static void fake_set_fixed_sense(fake_mmc *f,
     f->tur_sense[13] = ascq;
 }
 
-/* Same but descriptor-format (response code 0x72, key in byte 1,
-   ASC in byte 2, ASCQ in byte 3) — SPC-4 §4.5.2. */
+/* Descriptor-format sense, SPC-4 §4.5.2 (response code 0x72, key byte 1,
+   ASC byte 2, ASCQ byte 3). */
 static void fake_set_descriptor_sense(fake_mmc *f,
                                       uint8_t key, uint8_t asc, uint8_t ascq)
 {
@@ -140,22 +129,21 @@ static void fake_set_descriptor_sense(fake_mmc *f,
 
 /* ---- Scenarios --------------------------------------------------------- *
  *
- * Flow under test (v0.3.1-dev): convenience TUR first (PRESENCE); GOOD
- * short-circuits READY with NO tray probe; only a not-ready TUR reaches
- * get_tray_state (the raw-GESN tray bit). MOS_OK from it is authoritative
- * open/closed; any error forks on the TUR sense. The closed branch is then
- * refined by the sense — without ever overturning GESN's open/closed.
+ * Flow under test: convenience TUR first (PRESENCE); GOOD short-circuits
+ * READY with NO tray probe; only a not-ready TUR reaches get_tray_state (the
+ * raw-GESN tray bit). MOS_OK from it is authoritative open/closed; any error
+ * forks on the TUR sense, which then refines the closed branch without ever
+ * overturning GESN.
  *
  * Fixture convention: tray_err == MOS_OK + tray_open models a GESN that
- * answered; tray_err != MOS_OK models GESN unavailable/silent (lock denied
- * or command failed) so the core must fork on sense. */
+ * answered; tray_err != MOS_OK models GESN silent (lock denied / command
+ * failed) so the core forks on sense. */
 
 TEST(state_ready_short_circuits_without_tray_probe)
 {
-    /* GOOD ⇒ closed + present + ready. The whole point of trusting the
-       convenience TUR for presence is that READY never takes the exclusive
-       lock — so get_tray_state must NOT be called. A rip in progress stays
-       undisturbed. The tray_calls counter pins that invariant. */
+    /* GOOD ⇒ READY without taking the exclusive lock — get_tray_state must
+       NOT be called, so a rip in progress stays undisturbed. The tray_calls
+       counter pins the invariant. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_GOOD;
@@ -171,8 +159,8 @@ TEST(state_ready_short_circuits_without_tray_probe)
 
 TEST(state_open_from_gesn_after_not_ready)
 {
-    /* TUR not ready (no medium), GESN door bit set → OPEN. TUR fired first;
-       the tray bit is consulted exactly once; no profile on a non-READY. */
+    /* Not-ready (no medium) + GESN door open → OPEN. TUR first, tray bit
+       consulted once, no profile on a non-READY. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;
@@ -209,9 +197,9 @@ TEST(state_empty_from_gesn_closed_no_medium)
 
 TEST(state_gesn_closed_is_not_invalidated_by_open_sense)
 {
-    /* THE INVARIANT: TUR sense is 3A/02 ("tray open"), but GESN says CLOSED.
-       Enrich, don't invalidate — the closed verdict stands and the ASCQ's
-       open hint is discarded. Result is EMPTY (closed, no medium), NOT OPEN. */
+    /* THE INVARIANT: TUR sense 3A/02 ("tray open") but GESN says CLOSED.
+       Enrich, don't invalidate — the closed verdict stands, the sense hint
+       is discarded. Result EMPTY (closed, no medium), NOT OPEN. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;
@@ -228,8 +216,8 @@ TEST(state_gesn_closed_is_not_invalidated_by_open_sense)
 
 TEST(state_gesn_open_is_not_invalidated_by_closed_sense)
 {
-    /* Mirror invariant: TUR sense is 3A/01 ("tray closed"), GESN says OPEN.
-       GESN owns the tray; result is OPEN regardless of the sense hint. */
+    /* Mirror invariant: TUR sense 3A/01 ("tray closed"), GESN says OPEN.
+       GESN owns the tray; result OPEN regardless of the sense hint. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;
@@ -246,8 +234,7 @@ TEST(state_gesn_open_is_not_invalidated_by_closed_sense)
 
 TEST(state_empty_from_3A01_sense_fork_when_gesn_silent)
 {
-    /* GESN unavailable (lock denied / command failed). Fork on sense:
-       3A/01 → tray closed → EMPTY. */
+    /* GESN silent; fork on sense: 3A/01 → tray closed → EMPTY. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;
@@ -281,8 +268,8 @@ TEST(state_open_from_3A02_sense_fork_when_gesn_silent)
 
 TEST(state_empty_or_open_when_gesn_silent_and_sense_3A00)
 {
-    /* GESN silent AND sense is generic 3A/00 — no medium, but the tray is
-       genuinely unobservable. The honest union: EMPTY_OR_OPEN. */
+    /* GESN silent + generic 3A/00: no medium but the tray is unobservable.
+       The honest union is EMPTY_OR_OPEN. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;
@@ -314,9 +301,8 @@ TEST(state_loading_from_0401_gesn_closed)
 
 TEST(state_loading_from_0402_gesn_closed)
 {
-    /* 04/02 with the tray known CLOSED = present-but-stopped → LOADING.
-       (The open-tray-as-04/02 case is the door-open branch, tested above.)
-       This is the disambiguation that used to need a watch-persistence hack. */
+    /* 04/02 with tray known CLOSED = present-but-stopped → LOADING.
+       (Open-tray 04/02 is the door-open branch, tested above.) */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;
@@ -365,17 +351,14 @@ TEST(state_media_unreadable_from_medium_error_gesn_closed)
 
 TEST(state_kernel_nub_preserving_sense_never_locks)
 {
-    /* Seam audit, Item 2 (the headline): PollForMedia sets mediaFound on
-       CC + ASC/ASCQ 00/00 INDEPENDENT of the sense key, and only keys
-       {NOT_READY, MEDIUM_ERROR, HARDWARE_ERROR, BLANK_CHECK} get the
-       eject reset. For every other key, 00/00 means the kernel KEEPS the
-       IOMedia nub — so mos taking the exclusive raw-GESN lock would be
-       exactly the collision §5.5 promises cannot happen. The old gate
-       (sk==0 && asc==0 && ascq==0) let these through; exhaustive
-       enumeration (tests/audit/nub_invariant_check.c) found exactly 11
-       such inputs. Representative keys: RECOVERED ERROR, ILLEGAL
-       REQUEST, UNIT ATTENTION. The tray_calls counter pins the
-       no-lock obligation; the state is UNKNOWN (nothing mos may probe). */
+    /* At CC + 00/00 the kernel keeps the IOMedia nub for every key OUTSIDE
+       {NOT_READY, MEDIUM_ERROR, HARDWARE_ERROR, BLANK_CHECK} (only those
+       get the eject reset). Taking the exclusive raw-GESN lock against a
+       surviving nub is exactly the §5.5 collision. A naive gate (sk==0 &&
+       asc==0 && ascq==0) lets these through; exhaustive enumeration
+       (tests/audit/nub_invariant_check.c) finds 11 such inputs. Keys here:
+       RECOVERED ERROR, ILLEGAL REQUEST, UNIT ATTENTION. tray_calls pins the
+       no-lock obligation; state is UNKNOWN (nothing to probe). */
     static const uint8_t keys[] = { 0x01, 0x05, 0x06 };
     for (size_t i = 0; i < sizeof keys; i++) {
         fake_mmc f = {0};
@@ -396,12 +379,10 @@ TEST(state_kernel_nub_preserving_sense_never_locks)
 
 TEST(state_kernel_ejecting_sense_still_probes)
 {
-    /* The other half of the same predicate: at 00/00 the kernel EJECTS
-       for NOT_READY — no nub survives, the lock is free, and mos's GESN
-       probe is legitimate. A blunt key-independent gate would wrongly
-       skip the lock here (and the audit's branch census proved the
-       04/00/00 device_fault test below pins the HARDWARE ERROR arm).
-       This pins the NOT_READY arm: 02/00/00 must still reach the lock. */
+    /* The other half of the predicate: at 00/00 the kernel EJECTS for
+       NOT_READY — no nub survives, the lock is free, the GESN probe is
+       legitimate. A blunt key-independent gate would wrongly skip the lock.
+       Pins the NOT_READY arm: 02/00/00 must reach the lock. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;
@@ -417,17 +398,11 @@ TEST(state_kernel_ejecting_sense_still_probes)
 
 TEST(state_kernel_eject_set_all_four_keys_probe)
 {
-    /* Mutation finding (2026-06-10 pre-tag pass): the eject set was
-       pinned only at 0x02 and 0x04 — dropping 0x03 (MEDIUM ERROR) or
-       0x08 (BLANK CHECK at 00/00, the keep-list keeps only 64/00) from
-       the predicate survived the suite. The kernel ejects for ALL of
-       {0x02, 0x03, 0x04, 0x08} at 00/00 (mmc_device.cpp switch arms;
-       proven exhaustively by tests/audit/nub_invariant_check.c, which
-       DOES drive the live core through instrumented ops and would
-       catch the divergence — but the checker runs only in its own CI
-       job, in neither `make test` nor the mutation harness, so the
-       fast suite needs its own pin; fifth review F9 corrected the
-       earlier blindness claim here). Each key must reach the lock. */
+    /* The kernel ejects for ALL of {0x02, 0x03, 0x04, 0x08} at 00/00
+       (mmc_device.cpp switch arms; 0x08 BLANK CHECK keeps only 64/00).
+       tests/audit/nub_invariant_check.c proves this exhaustively but runs
+       only in its own CI job (not `make test` or the mutation harness), so
+       the fast suite keeps its own pin: each key must reach the lock. */
     static const uint8_t eject_keys[] = { 0x02, 0x03, 0x04, 0x08 };
     for (size_t i = 0; i < sizeof eject_keys; i++) {
         fake_mmc f = {0};
@@ -446,11 +421,9 @@ TEST(state_kernel_eject_set_all_four_keys_probe)
 
 TEST(state_registry_id_copies_through_verbatim)
 {
-    /* Mutation finding (same pass): zeroing the env->result
-       registry_id copy survived. The field is the state<->event join
-       key (mos.state.v1, CLI design 2026-06-10) — pin the passthrough
-       on both a success and a no-lock path, plus the accessor's NULL
-       contract. */
+    /* registry_id is the state<->event join key (mos.state.v1); it must
+       copy env->result verbatim. Pinned on a success and a no-lock path,
+       plus the accessor's NULL contract. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_GOOD;
@@ -508,9 +481,9 @@ TEST(state_busy_from_0408_gesn_closed)
 
 TEST(state_busy_from_contention_status_skips_tray)
 {
-    /* A SAM-5 contention status on the TUR itself resolves to BUSY before
-       the tray bit is ever consulted. RESERVATION_CONFLICT shown here; the
-       full set is exercised in tests/test_scsi_status.c. */
+    /* A SAM-5 contention status on the TUR resolves to BUSY before the tray
+       bit is consulted. RESERVATION_CONFLICT here; full set in
+       tests/test_scsi_status.c. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_RESERVATION_CONFLICT;
@@ -525,9 +498,8 @@ TEST(state_busy_from_contention_status_skips_tray)
 
 TEST(state_tur_transport_busy_maps_busy)
 {
-    /* The convenience TUR is non-exclusive, but if a transport surfaces a
-       BUSY/EXCLUSIVE_ACCESS anyway, the drive is contended → BUSY, not an
-       unreachable error. */
+    /* If the non-exclusive TUR's transport surfaces BUSY/EXCLUSIVE_ACCESS,
+       the drive is contended → BUSY, not an error. */
     fake_mmc f = {0};
     f.tur_err = MOS_ERR_BUSY;
 
@@ -541,8 +513,8 @@ TEST(state_tur_transport_busy_maps_busy)
 
 TEST(state_tur_transport_error_is_returned)
 {
-    /* COMMS_FAIL: a transport error reaching TUR means we cannot observe
-       state at all. Surfaced as the negative code, distinct from any state. */
+    /* A transport error at TUR means state is unobservable; surfaced as the
+       negative code, distinct from any state. */
     fake_mmc f = {0};
     f.tur_err = MOS_ERR_IO;
 
@@ -554,9 +526,9 @@ TEST(state_tur_transport_error_is_returned)
 
 TEST(state_profile_set_only_when_ready)
 {
-    /* current_profile is populated only on READY: many firmwares (LG) cache
-       the last disc's profile for minutes after eject (ARCHITECTURE.md §9),
-       so surfacing it on a not-present state would imply media. */
+    /* current_profile only on READY: some firmwares (LG) cache the last
+       disc's profile for minutes after eject (ARCHITECTURE §9), so surfacing
+       it on a not-present state would imply media. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_GOOD;
@@ -577,7 +549,7 @@ TEST(state_profile_set_only_when_ready)
 TEST(state_profile_failure_does_not_change_ready)
 {
     /* Enrichment is metadata-only — a failed profile lookup must not
-       downgrade a READY result. */
+       downgrade READY. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_GOOD;
@@ -593,8 +565,8 @@ TEST(state_profile_failure_does_not_change_ready)
 
 TEST(state_descriptor_sense_3A01_maps_empty)
 {
-    /* Descriptor-format sense (response code 0x72) from USB-ATAPI bridges
-       reaches the same 3A/01 → EMPTY mapping via the sense fork. */
+    /* Descriptor-format sense (0x72) from USB-ATAPI bridges reaches the same
+       3A/01 → EMPTY mapping via the sense fork. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;
@@ -610,11 +582,11 @@ TEST(state_descriptor_sense_3A01_maps_empty)
 
 TEST(state_tur_issued_once)
 {
-    /* TUR is a single shot, like the macOS peers — UNIT ATTENTION is NOT
-       drained (the kernel consumed the power-on/reset UA before mos had a
-       handle). So a lone UA reply is taken at face value: TUR is called
-       exactly once, and a UA sense that the closed branch can't classify
-       surfaces as UNKNOWN with the raw sense attached. */
+    /* TUR is a single shot (like the macOS peers): UNIT ATTENTION is NOT
+       drained — the kernel consumed the power-on/reset UA before mos had a
+       handle. A lone UA reply is taken at face value: TUR called once, and a
+       UA the closed branch can't classify → UNKNOWN with the raw sense
+       attached. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;
@@ -635,8 +607,8 @@ TEST(state_tur_issued_once)
 
 TEST(state_empty_bsd_unit_passthrough)
 {
-    /* bsd_unit == -1 (no IOMedia child) propagates verbatim. Use a
-       not-ready + GESN-open scenario just so the query returns cleanly. */
+    /* bsd_unit == -1 (no IOMedia child) propagates verbatim; not-ready +
+       GESN-open just so the query returns cleanly. */
     fake_mmc f = {0};
     f.tur_err    = MOS_OK;
     f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;

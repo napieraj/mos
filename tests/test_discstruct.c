@@ -77,11 +77,9 @@ TEST(discstruct_fail_closed_on_hostile_buffers)
     EXPECT(!mos_internal_bd_disc_id_parse(b, sizeof b, &id));
     EXPECT(id.manufacturer[0] == 0);
 
-    /* Lying Disc Structure Data Length: a huge declared length must NOT
-       extend the read past the real buffer. Hand the parser a buffer
-       SHORTER than the identity region but with a declared length that
-       claims the full structure — it must refuse on the true `len`, not
-       trust the claim. */
+    /* Lying Disc Structure Data Length: a buffer SHORTER than the
+       identity region but declaring the full structure must refuse on
+       the true `len`, never extend the read to the claim. */
     build_di(b, "BDR", "MILLEN", "MR1", '0');
     b[0] = 0xFF; b[1] = 0xFF;                 /* declared ~64KB */
     EXPECT(!mos_internal_bd_disc_id_parse(b, 64, &id));   /* len < DI region */

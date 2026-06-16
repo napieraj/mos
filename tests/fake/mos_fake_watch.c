@@ -1,33 +1,29 @@
 /*
- * mos_fake_watch.c — phase-2 of the link-seam fake: the notification
- * and time symbols mos_watch.c imports, so the REAL watch adapter runs
+ * mos_fake_watch.c — phase-2 of the link-seam fake: the notification and
+ * time symbols mos_watch.c imports, so the REAL watch adapter runs
  * headless with deterministic time. Control surface: mos_fake_watch.h.
- * Design record: doc/research/2026-06-11-headless-adapter-emulation.md
- * §12; mechanism probes: tests/test_adapter_seam_probe.c (all six PASS on
- * CI 2026-06-11 — AppleClang 17, macos-latest, ASan/UBSan).
+ * Design record: doc/research/2026-06-11-headless-adapter-emulation.md §12.
  *
  * Two halves:
  *
  *   1. The eight Apple symbols (IONotificationPort* +
  *      IOServiceAddInterestNotification, DRNotificationCenter*).
- *      Run-loop sources are REAL version-0 CFRunLoopSources (CF is
- *      linked real); firing enqueues an event and signals the source,
- *      so the adapter's callbacks run inside its own
- *      CFRunLoopRunInMode wait, exactly as on hardware.
+ *      Run-loop sources are REAL version-0 CFRunLoopSources (CF is linked
+ *      real); firing enqueues an event and signals the source, so the
+ *      adapter's callbacks run inside its own CFRunLoopRunInMode wait, as
+ *      on hardware.
  *
  *   2. The interposed time seam: clock_gettime / nanosleep /
- *      CFRunLoopRunInMode definitions here win cross-TU resolution
- *      over libSystem/CoreFoundation for every TU statically linked
- *      into this executable (probe A1/A2/C1); the real functions stay
- *      reachable via dlsym(RTLD_NEXT) for pass-through (probe C2).
- *      INVARIANT the whole design hangs on: while the clock is faked,
- *      BOTH sleep primitives advance it — a fake clock under a real
- *      wait deadlocks (the pump computes the interval from fake time,
- *      real CF waits real seconds, fake time never moves).
+ *      CFRunLoopRunInMode definitions here win cross-TU resolution over
+ *      libSystem/CoreFoundation for every TU in this executable; the real
+ *      functions stay reachable via dlsym(RTLD_NEXT) for pass-through.
+ *      INVARIANT the design hangs on: while the clock is faked, BOTH
+ *      sleep primitives advance it — a fake clock under a real wait
+ *      deadlocks (the pump derives the interval from fake time, real CF
+ *      waits real seconds, fake time never moves).
  *
- * Capacity model matches the adapter's actual usage: ONE notification
- * port and ONE DR center live at a time (one watch per test); a
- * double-create aborts with a message naming the test bug.
+ * Capacity: ONE notification port and ONE DR center at a time (one watch
+ * per test); a double-create aborts naming the test bug.
  */
 
 #include "mos_fake_watch.h"
@@ -45,21 +41,18 @@
 #include <string.h>
 #include <time.h>
 
-/* Must mirror MOS_WATCH_RUN_LOOP_MODE in src/mos_watch.c. Drift is
-   caught loudly: an interposed CFRunLoopRunInMode call in any other
-   mode while the fake clock is enabled aborts below. */
+/* Must mirror MOS_WATCH_RUN_LOOP_MODE in src/mos_watch.c. Drift aborts:
+   an interposed call in any other mode under the fake clock fails below. */
 #define FAKE_WATCH_MODE CFSTR("io.github.napieraj.mos.watch")
 
-/* The DR device sentinel delivered as the notification `object`. A
-   per-TU CFSTR is fine: mos_fake_apple.c's DRDeviceCopyInfo/CopyStatus
-   ignore their device argument, and the adapter never compares device
-   refs by pointer — it resolves identity via the Info dict's registry
-   path. */
+/* DR device sentinel delivered as the notification `object`. A per-TU
+   CFSTR is fine: the fake's DRDeviceCopyInfo/CopyStatus ignore their
+   device argument, and the adapter resolves identity via the Info
+   dict's registry path, never by pointer. */
 #define FAKE_DEV_WATCH ((DRTypeRef)CFSTR("mos.fake.device"))
 
-/* The center handle handed to the adapter must be a REAL CF object:
-   mos_watch.c CFReleases it at teardown. Immortal CFSTR sentinel,
-   retained per Create — the same pattern phase 1 uses for FAKE_DEV. */
+/* The center handle must be a REAL CF object: mos_watch.c CFReleases it
+   at teardown. Immortal CFSTR sentinel, retained per Create. */
 #define FAKE_CENTER ((DRNotificationCenterRef)CFSTR("mos.fake.drcenter"))
 
 #define FAKE_NOTIFY_TOKEN ((io_object_t)11)
@@ -171,8 +164,8 @@ static void dr_drain(void *info)
         g_dr.npending--;
         memmove(&g_dr.pending[0], &g_dr.pending[1],
                 g_dr.npending * sizeof g_dr.pending[0]);
-        /* Snapshot the observer list: a callback may mutate it (the
-           adapter doesn't today, but the drain shouldn't assume). */
+        /* A callback may mutate the observer list; the drain doesn't
+           assume it won't. */
         for (size_t i = 0; i < g_dr.nobs; ++i) {
             if (CFEqual(g_dr.obs[i].name, name) && g_dr.obs[i].cb) {
                 g_dr.obs[i].cb(FAKE_CENTER, (void *)g_dr.obs[i].observer,
@@ -193,8 +186,8 @@ static bool any_pending(void)
 static void io_port_teardown(void)
 {
     if (g_io.src) {
-        CFRunLoopSourceInvalidate(g_io.src); /* before release: a stale
-            signal must never perform into a dead port in a later test */
+        CFRunLoopSourceInvalidate(g_io.src); /* before release: no stale
+            signal may perform into a dead port in a later test */
         CFRelease(g_io.src);
     }
     memset(&g_io, 0, sizeof g_io);
@@ -311,8 +304,8 @@ CFRunLoopSourceRef IONotificationPortGetRunLoopSource(IONotificationPortRef noti
         ctx.perform = io_drain;
         g_io.src = CFRunLoopSourceCreate(NULL, 0, &ctx);
     }
-    /* Port-owned: the caller must not release it (IOKit contract; the
-       adapter only ever removes it from the loop). */
+    /* Port-owned: caller must not release it (IOKit contract); it only
+       removes it from the loop. */
     return g_io.src;
 }
 
@@ -365,8 +358,8 @@ CFRunLoopSourceRef DRNotificationCenterCreateRunLoopSource(DRNotificationCenterR
     ctx.perform = dr_drain;
     g_dr.src = CFRunLoopSourceCreate(NULL, 0, &ctx);
     if (!g_dr.src) return NULL;
-    /* Create-rule: the caller owns one reference and releases it at
-       teardown (mos_watch.c does); g_dr.src above is OUR reference. */
+    /* Create-rule: caller owns and releases one reference at teardown;
+       g_dr.src above is OUR reference. */
     return (CFRunLoopSourceRef)CFRetain(g_dr.src);
 }
 
@@ -399,20 +392,19 @@ void DRNotificationCenterRemoveObserver(DRNotificationCenterRef center,
             break;
         }
     }
-    /* The adapter removes its observers only at teardown, so the count
-       reaching zero is the observable "center died" moment (its actual
-       CFRelease lands on the immortal sentinel and can't be seen).
-       The source object stays valid for the adapter's own
-       RemoveSource/CFRelease that follow — it holds its own retain. */
+    /* The adapter removes observers only at teardown, so the count
+       reaching zero is the observable "center died" moment (its
+       CFRelease lands on the immortal sentinel, invisible). The source
+       stays valid for the adapter's own RemoveSource/CFRelease, which
+       hold their own retain. */
     if (g_dr.nobs == 0) dr_center_teardown();
 }
 
 /* ---- Interposed time seam ------------------------------------------- *
  *
- * Definitions win cross-TU resolution for mos_watch.c's calls (probes
- * A1/A2/C1). Pass through to the real functions whenever the fake
- * clock is disabled, so process startup, CF internals reached via
- * dlsym, and non-clock tests behave normally.
+ * These definitions win cross-TU resolution for mos_watch.c's calls.
+ * When the fake clock is disabled they pass through to the real
+ * functions, so startup, CF internals, and non-clock tests are normal.
  */
 
 int clock_gettime(clockid_t clock_id, struct timespec *ts)
@@ -432,8 +424,8 @@ int clock_gettime(clockid_t clock_id, struct timespec *ts)
     return 0;
 }
 
-/* Advance fake time to `target_ms`, executing due timeline steps in
-   order as the clock passes them. Shared by nanosleep and the run-loop
+/* Advance fake time to `target_ms`, running due timeline steps in order
+   as the clock passes them. Shared by nanosleep and the run-loop
    interpose's timeout arm. */
 static void advance_to(uint64_t target_ms)
 {
@@ -465,18 +457,17 @@ SInt32 CFRunLoopRunInMode(CFStringRef mode, CFTimeInterval seconds,
     if (!g_clock.enabled) {
         return real_run_in_mode()(mode, seconds, returnAfterSourceHandled);
     }
-    /* The only interposed caller in this binary is mos_watch.c's pump,
-       always in its private mode. Any other mode here means the mode
-       string drifted between mos_watch.c and FAKE_WATCH_MODE. */
+    /* The only interposed caller is mos_watch.c's pump, always in its
+       private mode. Any other mode means the mode string drifted from
+       FAKE_WATCH_MODE. */
     if (!CFEqual(mode, FAKE_WATCH_MODE)) {
         fake_abort("CFRunLoopRunInMode in an unexpected mode under the "
                    "fake clock (mode-constant drift?)");
     }
 
     /* Reconstruct the pump's absolute deadline from the interval it
-       derived from our own fake clock (ms-scale doubles round-trip
-       losslessly). Saturate: an unbounded user timeout passes a huge
-       interval. */
+       derived from our fake clock (ms-scale doubles round-trip
+       losslessly). Saturate an unbounded timeout's huge interval. */
     uint64_t wait_end;
     if (seconds >= 9.0e15) {  /* ~285 My: anything near UINT64_MAX/1000 */
         wait_end = UINT64_MAX;
@@ -492,9 +483,9 @@ SInt32 CFRunLoopRunInMode(CFStringRef mode, CFTimeInterval seconds,
                                      "emits nothing and never times out)");
 
         /* 1. Pending notifications deliver before time moves: delegate
-           ONE batch to the real run loop, whose source perform invokes
-           the adapter's registered callbacks (they CFRunLoopStop, as on
-           hardware). Return after the batch — the pump re-pumps. */
+           ONE batch to the real run loop, whose perform invokes the
+           adapter's callbacks (they CFRunLoopStop, as on hardware).
+           Return after the batch; the pump re-pumps. */
         if (any_pending()) {
             g_drained = false;
             SInt32 r = real_run_in_mode()(mode, 0.05,
@@ -506,8 +497,8 @@ SInt32 CFRunLoopRunInMode(CFStringRef mode, CFTimeInterval seconds,
             return r;
         }
 
-        /* 2. Next scripted step within this wait: advance to it, run
-           it, loop (it may have fired notifications or moved state). */
+        /* 2. Next scripted step within this wait: advance to it, run it,
+           loop (it may fire notifications or move state). */
         if (g_step_next < g_step_count &&
             g_steps[g_step_next].at_ms <= wait_end) {
             size_t i = g_step_next++;
@@ -518,9 +509,9 @@ SInt32 CFRunLoopRunInMode(CFStringRef mode, CFTimeInterval seconds,
             continue;
         }
 
-        /* 3. Nothing left inside this wait: time out at the pump's own
-           deadline. An UNBOUNDED wait with an exhausted timeline can
-           never end — that's a scenario-authoring bug, name it. */
+        /* 3. Nothing left in this wait: time out at the pump's deadline.
+           An unbounded wait with an exhausted timeline never ends — a
+           scenario-authoring bug; name it. */
         if (wait_end == UINT64_MAX) {
             fake_abort("unbounded run-loop wait with an empty timeline");
         }

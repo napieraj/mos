@@ -1,40 +1,21 @@
 /* tests/test_watch_lifetime.c — macOS integration test that pins the
  * watch-event string-lifetime contract under AddressSanitizer.
  *
- * WHAT IT GUARDS
- * --------------
- * mos.h documents that the string pointers in a mos_watch_event
- * (vendor / product / revision) remain valid
- * until the next mos_watch_next_event() call or mos_watch_close().
- * watch_probe() upholds that by re-homing the handle-borrowed strings
- * into watch-owned buffers before it closes the per-probe handle.
+ * Contract: a mos_watch_event's string pointers (vendor / product /
+ * revision) stay valid until the next mos_watch_next_event() or
+ * mos_watch_close(). The watch upholds it by homing drive-controlled
+ * strings into watch-owned buffers before the per-probe handle closes.
  *
- * The v0.3.2-dev `revision` use-after-free was a miss in exactly that
- * re-home: vendor and product were copied into watch storage, revision
- * rode the `*out = tmp` struct copy and dangled into the freed handle,
- * and the pure core forwarded the dangling pointer to the consumer.
+ * The hazard is a dangling field — e.g. one string riding a `*out = tmp`
+ * struct copy into the freed handle while the others were copied out.
+ * This test reads every string field AFTER the probe handle is closed;
+ * under ASan a dangling field reads poisoned memory and traps as
+ * heap-use-after-free, intact bytes or not. A pure unit test can't catch
+ * this: the free is in the IOKit adapter, below the pure layer's horizon.
  *
- * This test reads every drive-controlled string field AFTER the
- * probe's handle has been closed. Under ASan that read is the trap:
- * freed memory is poisoned, so a dangling field triggers
- * heap-use-after-free immediately — whether or not the freed bytes
- * happen to survive intact. A pure unit test cannot catch this; the
- * free happens in the IOKit adapter, below the pure layer's horizon
- * (see the ADAPTER POINTER-LIFETIME AUDIT RULE in src/mos_watch.c).
- *
- * SCOPE / LIMITATION
- * ------------------
- * It needs a real optical drive attached. With none present it SKIPS
- * (exit 0) — so in headless CI it is a no-op guard; run it on a Mac
- * with a drive for the real coverage. Insert/eject a disc while it
- * runs to drive extra STATE_CHANGED events through the same path.
- * The lifetime contract this pins survived the DR pivot's Phase 2a
- * mechanism change: identity is now captured ONCE at watch open into
- * watch-owned buffers (device-static directory data) and per-probe
- * results are repointed at them, so there is no per-probe re-home to
- * get wrong — but the observable contract (event strings valid until
- * the next call) is identical, and this test still pins it end to end
- * under ASan on the integrated IOKit path.
+ * Needs a real optical drive; with none present it SKIPs (exit 0), so in
+ * headless CI it is a no-op guard. Insert/eject a disc while it runs to
+ * push extra STATE_CHANGED events through the same path.
  *
  * BUILD (macOS, against the built static lib):
  *   cc -std=c11 -O1 -fsanitize=address,undefined \
@@ -59,15 +40,14 @@ int main(void)
 }
 #else
 
-/* Force an actual read of each drive-controlled string. The snprintf
- * dereferences the pointer; if it dangles, ASan fires here. We do not
- * trust the bytes — only that touching them is legal. */
+/* Force an actual read of each drive-controlled string: snprintf
+ * dereferences the pointer, so a dangling one fires ASan here. We test
+ * that touching them is legal, not that the bytes are right. */
 static void touch_event_strings(const mos_watch_event *ev)
 {
     char sink[64];
-    /* bsd_unit is a value (Commit D), not a borrowed pointer, so it has
-       no post-close lifetime concern; touch it as an int for completeness.
-       The string fields below are the real subjects of this test. */
+    /* bsd_unit and registry_id are values, not borrowed pointers — no
+       lifetime concern; the string fields are the real subjects. */
     const char *vendor    = mos_watch_event_vendor(ev);
     const char *product   = mos_watch_event_product(ev);
     const char *revision  = mos_watch_event_revision(ev);
@@ -116,9 +96,8 @@ int main(void)
             return 1;
         }
 
-        /* The handle that produced this event has already been closed
-         * inside watch_probe. Reading the strings now is the regression
-         * trap: a dangling field is a poisoned-memory read under ASan. */
+        /* The handle that produced this event is already closed inside
+         * the probe; reading its strings now is the regression trap. */
         touch_event_strings(ev);
         events++;
         timeouts = 0;

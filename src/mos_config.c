@@ -1,14 +1,10 @@
 /*
  * mos_config.c — pure, bounds-safe iteration over a GET CONFIGURATION
- * (MMC) response buffer.
- *
- * No IOKit. The IOKit shell issues GET_CONFIGURATION into a fixed,
- * zero-initialized buffer and hands that buffer plus the byte count it
- * trusts (sizeof the buffer — the MMC convenience GetConfiguration
- * returns no realized-transfer count) to the walker below. Every length
- * in the payload is device-reported and therefore hostile; this file is
- * the choke point that keeps those lengths from steering a read outside
- * [buf, buf+len).
+ * (MMC) response buffer. No IOKit: the shell hands us a fixed zero-init
+ * buffer plus the byte count it trusts (sizeof the buffer — the MMC
+ * GetConfiguration reports no realized-transfer count). Every payload
+ * length is device-reported, hence hostile; this file is the choke point
+ * keeping those lengths from steering a read outside [buf, buf+len).
  *
  * Layout (MMC-6 §5.2, GET CONFIGURATION response):
  *
@@ -35,11 +31,8 @@
  *     Additional Length cannot wrap the cursor.
  *   - The bool return is intentionally undifferentiated: false means
  *     "stop" — end of list OR a malformed/over-long descriptor, alike.
- *     Callers walk this as a plain `while (next(...))` and never need to
- *     tell the two apart (libcdio's long-standing model); the malformed
+ *     Callers walk this as a plain `while (next(...))`; the malformed
  *     branch is unreachable on conformant hardware.
- *
- * No-OOB property gated headless under ASan/UBSan by tests/test_config.c.
  */
 
 #include "mos_pure.h"
@@ -49,11 +42,10 @@ bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
 {
     if (!buf || !cursor || !out) return false;
 
-    /* Trusted end of the walk. Start at the hard buffer ceiling, then let
-       the device's Data Length pull it IN if (and only if) it claims
-       less. Computed in 64-bit so the +4 cannot wrap before the compare;
-       a wrapped or oversized claim simply fails to shrink and `len`
-       stands — device length only ever shortens the walk. */
+    /* Trusted end. Start at the buffer ceiling, then let the device's Data
+       Length pull it IN iff it claims less. 64-bit so the +4 cannot wrap
+       before the compare; a wrapped or oversized claim fails to shrink, so
+       `len` stands — device length only ever shortens the walk. */
     size_t end = len;
     if (len >= 4) {
         uint64_t dlen = ((uint64_t)buf[0] << 24) | ((uint64_t)buf[1] << 16)
@@ -64,18 +56,16 @@ bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
 
     size_t c = *cursor;
 
-    /* Descriptor header must fit. `c > end` also catches a cursor already
-       past the trusted region; `end - c` is computed only once c <= end,
-       so it cannot wrap. */
+    /* Descriptor header must fit. `c > end` also catches a cursor past the
+       trusted region; `end - c` is computed only when c <= end, no wrap. */
     if (c > end || end - c < 4) return false;
 
     uint8_t add  = buf[c + 3];                    /* Additional Length, 0..255 */
 
-    /* MMC requires Additional Length to be a multiple of 4. A value that
-       is not is malformed; tolerating it would let a hostile device
-       desync the walk so later descriptors decode from misaligned bytes
-       (in-bounds, but attacker-chosen feature codes). Fail closed: end
-       the walk at the first malformed descriptor. */
+    /* MMC requires Additional Length to be a multiple of 4. Tolerating a
+       non-multiple would let a hostile device desync the walk so later
+       descriptors decode from misaligned (in-bounds but attacker-chosen)
+       bytes. Fail closed at the first malformed descriptor. */
     if (add & 3u) return false;
 
     size_t  span = (size_t)4 + add;               /* >= 4, cannot wrap        */
@@ -95,9 +85,8 @@ bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
     return true;
 }
 
-/* Find one feature by code: the walker applied until a match. Same
-   trust bounds by construction; first match wins (MMC lists each
-   feature at most once — a duplicate from a hostile device yields the
+/* Find one feature by code: walk until a match. Same trust bounds; first
+   match wins (MMC lists each feature once — a hostile duplicate yields the
    earlier copy, never a re-scan). */
 bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
                                       uint16_t feature_code,
@@ -112,11 +101,10 @@ bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
     return false;
 }
 
-/* Current Profile = feature-header bytes 6-7, gated on the header's own
-   Data Length (bytes 0-3, counting bytes that FOLLOW it): the profile
-   field exists only when the drive claims >= 4 following bytes. The gate
-   is what keeps a truncated reply from being read as profile 0x0000
-   (= "no media"). Header layout above; contract in mos_pure.h. */
+/* Current Profile = feature-header bytes 6-7, gated on the header's Data
+   Length (bytes 0-3, counting bytes that FOLLOW it): the field exists only
+   when the drive claims >= 4 following bytes. The gate keeps a truncated
+   reply from reading as profile 0x0000 (= "no media"). Contract in mos_pure.h. */
 bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
                                          uint16_t *profile)
 {

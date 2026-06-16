@@ -1,13 +1,11 @@
 /*
- * test_adapter_oneshot.c — runs the REAL one-shot adapter TUs
- * (mos_scsi.c / mos_state.c / mos_dr.c) headless against the link-seam
- * fake of IOKit + DiscRecording (tests/fake/mos_fake_apple.c), fed
- * committed MMC fixture bytes. Phase 1 of
- * doc/research/2026-06-11-headless-adapter-emulation.md.
+ * test_adapter_oneshot.c — runs the REAL one-shot adapter TUs (mos_scsi.c /
+ * mos_state.c / mos_dr.c) headless against the link-seam fake of IOKit +
+ * DiscRecording (tests/fake/mos_fake_apple.c), fed committed MMC fixtures.
+ * Phase 1 of doc/research/2026-06-11-headless-adapter-emulation.md.
  *
- * This is a separate test program from mos_tests (which links mos_pure
- * only): it links the adapter object code + the fake + real
- * CoreFoundation, with NO IOKit / DiscRecording frameworks.
+ * Separate program from mos_tests (mos_pure only): links the adapter object
+ * code + the fake + real CoreFoundation, NO IOKit/DiscRecording frameworks.
  */
 
 #include "mos.h"
@@ -40,9 +38,8 @@ TEST(adapter_open_index_query_ready)
 {
     mos_fake_reset();
 
-    /* Replay the committed DVD-ROM GET CONFIGURATION reply. The adapter's
-       get_current_profile issues RT=2 and reads the 8-byte feature
-       header; this fixture's header carries current profile 0x0010. */
+    /* Committed DVD-ROM GET CONFIGURATION reply. get_current_profile issues
+       RT=2 and reads the 8-byte header; this fixture carries profile 0x0010. */
     uint8_t cfg[64];
     size_t  cfg_len = load_fixture("getconfig_dvdrom_current.bin", cfg, sizeof cfg);
     mos_fake_set_getconfig_reply(0x00 /*GOOD*/, cfg, cfg_len);
@@ -61,9 +58,9 @@ TEST(adapter_open_index_query_ready)
     EXPECT_EQ(0x0010, mos_state_result_current_profile(r));
 
     /* Identity flowed through the DR directory seam. Reading the string
-       accessors under ASan is the O-3 lifetime check (seam contract):
-       the pointers must reference handle-owned storage valid while the
-       result lives — a dangle is an ASan abort here, not a lucky read. */
+       accessors under ASan is seam contract O-3: the pointers must
+       reference handle-owned storage valid while the result lives — a
+       dangle aborts ASan here, not a lucky read. */
     EXPECT_EQ(4, mos_handle_bsd_unit(h));
     const char *vendor  = mos_state_result_vendor(r);
     const char *product = mos_state_result_product(r);
@@ -100,9 +97,9 @@ static void make_sense(uint8_t out[18], uint8_t sk, uint8_t asc, uint8_t ascq)
     out[13] = ascq;
 }
 
-/* 8-byte GESN media-event reply: Event Data Length 6 (excludes its own
-   two bytes), NEA clear, class Media (4), supported-class bit Media,
-   media status byte 5 (bit0 = DoorOpen). */
+/* 8-byte GESN media-event reply: Event Data Length 6 (excludes its own two
+   bytes), NEA clear, class Media (4), supported-class bit Media, media
+   status byte 5 (bit0 = DoorOpen). The field map other tests cite. */
 static void make_gesn(uint8_t out[8], bool door_open)
 {
     memset(out, 0, 8);
@@ -133,8 +130,8 @@ static int query_not_ready(uint8_t sk, uint8_t asc, uint8_t ascq,
     EXPECT_EQ(MOS_OK, mos_query_state(h, &r));
     *state = (int32_t)mos_state_result_state(r);
 
-    /* O-1 shape: profile is suppressed on every non-READY state — a
-       fresh query on an empty drive must report 0, never garbage. */
+    /* O-1 shape: profile suppressed on every non-READY state — an empty
+       drive reports 0, never garbage. */
     EXPECT_EQ(0x0000, mos_state_result_current_profile(r));
 
     mos_close(h);
@@ -149,8 +146,8 @@ TEST(adapter_not_ready_gesn_closed_is_empty)
     if (rc) return rc;
     EXPECT_EQ(MOS_STATE_EMPTY, state);
 
-    /* §5.5, now LIVE: the GESN probe must have taken the exclusive lock
-       exactly once and released it — acquired-and-released, not skipped. */
+    /* §5.5 LIVE: the GESN probe took the exclusive lock exactly once and
+       released it — acquired-and-released, not skipped. */
     EXPECT_EQ(1, mos_fake_lock_acquires());
     EXPECT_EQ(0, mos_fake_lock_balance());
 
@@ -190,9 +187,8 @@ TEST(adapter_becoming_ready_is_loading)
 TEST(adapter_lock_denied_falls_back_to_sense)
 {
     /* Another client holds the drive: ObtainExclusiveAccess fails, GESN
-       yields no authoritative bit, and 3A/00 alone cannot place the
-       tray — the honest answer is EMPTY_OR_OPEN. The lock must never
-       have been acquired. */
+       yields no bit, and 3A/00 alone can't place the tray → EMPTY_OR_OPEN.
+       The lock must never have been acquired. */
     mos_fake_reset();
     mos_fake_set_exclusive_denied(true);
 
@@ -217,7 +213,7 @@ TEST(adapter_lock_denied_falls_back_to_sense)
 
 TEST(adapter_disc_info_replays_fixtures)
 {
-    /* The two committed READ DISC INFORMATION fixtures through the real
+    /* Two committed READ DISC INFORMATION fixtures through the real
        convenience wrapper: blank CD-R and finalized CD-ROM. */
     uint8_t buf[64];
     size_t  n;
@@ -245,9 +241,9 @@ TEST(adapter_disc_info_replays_fixtures)
 
 TEST(adapter_toc_round_trip_and_fail_closed)
 {
-    /* Synthetic two-track audio TOC, format 0000b: header (len=26,
-       first=1, last=2), tracks 1 (lba 0) and 2 (lba 18000), lead-out
-       0xAA (lba 210895). Same shape the pure parser's fixtures pin. */
+    /* Synthetic two-track audio TOC, format 0000b: header (len=26, first=1,
+       last=2), tracks 1 (lba 0) / 2 (lba 18000), lead-out 0xAA (lba 210895).
+       Same shape the pure parser's fixtures pin. */
     static const uint8_t toc[] = {
         0x00, 0x1A, 0x01, 0x02,
         0x00, 0x10, 0x01, 0x00,  0x00, 0x00, 0x00, 0x00,
@@ -306,8 +302,8 @@ TEST(adapter_da_volume_lookup_modalities)
     EXPECT(strcmp(name, "ARRIVAL") == 0);
     EXPECT(strcmp(path, "/Volumes/ARRIVAL") == 0);
 
-    /* Present but unmounted (description without VolumePath):
-       false, both empty — DA describes unmounted media too. */
+    /* Present but unmounted (description without VolumePath): false, both
+       empty — DA describes unmounted media too. */
     mos_fake_set_da_volume("GHOST", NULL);
     EXPECT(!mos_internal_da_volume("disk4", name, sizeof name,
                                    path, sizeof path));
@@ -326,8 +322,8 @@ TEST(adapter_query_volume_gates_on_nub)
     char name[256], path[1024];
     bool mounted = true;
 
-    /* Media absent (bsd_unit -1): MOS_OK, unmounted, DA never asked —
-       the fake would have answered (da_volume set) if consulted. */
+    /* Media absent (bsd_unit -1): MOS_OK, unmounted, DA never asked — the
+       fake (da_volume set) would have answered if consulted. */
     mos_fake_reset();
     mos_fake_set_bsd_unit(-1);
     mos_fake_set_da_volume("SHOULD_NOT_SURFACE", "/Volumes/NO");
@@ -359,8 +355,8 @@ TEST(adapter_query_volume_gates_on_nub)
 
 TEST(adapter_drive_caps_roundtrip_and_absent)
 {
-    /* RT=0 reply: feature header (profile 0x0040) + Profile List +
-       AACS feature (BEC set, AACS version 68). */
+    /* RT=0 reply: header (profile 0x0040) + Profile List + AACS feature
+       (BEC set, AACS version 68). */
     static const uint8_t cfg_aacs[] = {
         0,0,0,16,  0,0, 0x00,0x40,
         0x00,0x00, 0x03, 0x00,
@@ -469,8 +465,8 @@ TEST(adapter_disc_id_decodes_and_fails_closed)
     EXPECT(strcmp(mos_disc_id_media_type(id), "MR1") == 0);
     EXPECT(strcmp(mos_disc_id_revision(id), "0") == 0);
 
-    /* Non-BD media (or any reply without a 'DI' structure): GOOD status
-       but the decode refuses -> MOS_ERR_IO, *out NULL. */
+    /* Non-BD media (no 'DI' structure): GOOD status but the decode refuses
+       → MOS_ERR_IO, *out NULL. */
     static const uint8_t notdi[116] = { 0x00, 114, 0,0, 'X','X' };
     mos_fake_set_disc_structure_reply(0x00, notdi, sizeof notdi);
     EXPECT_EQ(MOS_ERR_IO, mos_query_disc_id(h, &id));
@@ -486,8 +482,8 @@ TEST(adapter_disc_id_decodes_and_fails_closed)
 }
 
 /* Pin one tray verb: script a raw reply, issue it, assert the authored CDB
-   bytes, that the lock balanced (acquire-on-call / release-on-return), and
-   the classified outcome. */
+   bytes, the balanced lock (acquire-on-call / release-on-return), and the
+   classified outcome. */
 static int pin_tray_cdb(mos_handle_t *h, mos_error (*call)(mos_handle_t *,
                         mos_tray_outcome *), const uint8_t want[6],
                         mos_tray_outcome want_outcome)
@@ -557,8 +553,8 @@ TEST(adapter_tray_eject_force_is_unlock_then_eject)
     mos_tray_outcome out = (mos_tray_outcome)-1;
     EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/true, &out, NULL));
     EXPECT_EQ(MOS_TRAY_DONE, out);
-    /* Two CDBs, each its own acquire/release — net balance 0, and the LAST
-       authored CDB is the eject (the ALLOW preceded it). */
+    /* Two CDBs, each its own acquire/release — net balance 0; the LAST
+       authored CDB is the eject (ALLOW preceded it). */
     EXPECT_EQ(0, mos_fake_lock_balance());
     EXPECT_EQ(2, mos_fake_lock_acquires());
     uint8_t cdb[16];
@@ -601,9 +597,9 @@ TEST(adapter_tray_refused_other_carries_its_sense)
     mos_handle_t *h = mos_open_by_index(1, &err);
     EXPECT(h != NULL);
 
-    /* A drive without Persistent Prevent rejects 0x03 with 5/24/00
-       ILLEGAL REQUEST / INVALID FIELD IN CDB — refused_other, and the
-       sense triple must reach the caller (the gap Plan A closed). */
+    /* A drive without Persistent Prevent rejects 0x03 with 5/24/00 (INVALID
+       FIELD IN CDB) — refused_other, and the sense triple must reach the
+       caller (the gap Plan A closed). */
     uint8_t sense[18] = {0};
     sense[0] = 0x70; sense[2] = 0x05; sense[12] = 0x24; sense[13] = 0x00;
     mos_fake_set_raw_reply(0x02 /*CHECK CONDITION*/, NULL, 0, 0, sense);

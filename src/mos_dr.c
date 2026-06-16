@@ -1,34 +1,19 @@
 /*
  * mos_dr.c — DiscRecording-side adapter: the directory.
  *
- * Doctrine (doc/research/2026-06-10-dr-pivot-implementation-plan.md):
- * DR is the doorbell and the directory; MMC is the inspector. This TU
- * supplies discovery, identity, and addressing from the DiscRecording
- * C API; it never decides drive STATE — the TUR⊕GESN core in
- * mos_state_core.c remains the sole authority (the §5.5 nub gate runs
- * on TUR sense bytes DR does not expose).
+ * Supplies discovery, identity, and addressing from the DiscRecording C API;
+ * it never decides drive STATE — the TUR⊕GESN core in mos_state_core.c is the
+ * sole authority (the §5.5 nub gate runs on TUR sense bytes DR does not
+ * expose). DR is not a SCSI command author (AGENTS.md scope doctrine): it is
+ * a substrate above the same kext the MMC path uses, and mos still authors
+ * exactly one raw CDB (GESN, mos_scsi.c).
  *
- * Command-surface note (AGENTS.md scope doctrine): DR is not a SCSI
- * command author from mos's point of view — it is a substrate above
- * the same kext the MMC path uses. mos still authors exactly one raw
- * CDB (GESN, mos_scsi.c).
- *
- * The one surviving IOKit step (dr-field-mapping §identity): DR
- * exposes a device's IORegistry *path* (kDRDeviceIORegistryEntryPathKey),
- * not its entry ID. mos's identity currency — registry_id in events,
- * the reopen authority, the F1 fingerprint — is the uint64 entry ID,
- * so each path is resolved path → entry → ID here. A node that cannot
- * be resolved is skipped, preserving the enumeration/index ↔
- * open-by-index correspondence the public API documents (same gate
- * the pre-pivot visit_collect applied).
- *
- * KNOWN UNKNOWN (hardware falsification target, plan §coexistence):
- * whether DR's registry path lands on the same IO*BlockStorageDevice
- * node mos's IOKit matching used to produce, or on a neighbor in the
- * stack (e.g. the SCSI peripheral nub). If it's a neighbor, the MMC
- * plug-in attach in mos_internal_open_service fails DRIVER_REJECTED
- * and the Phase 0 probe's Info dumps will show the path shape — fix
- * lands as a path normalization HERE, never as a caller workaround.
+ * Identity resolution: DR exposes a device's IORegistry *path*
+ * (kDRDeviceIORegistryEntryPathKey), not its entry ID. mos's identity
+ * currency — registry_id, the reopen authority, the media-swap fingerprint —
+ * is the uint64 entry ID, so each path resolves path → entry → ID here. An
+ * unresolvable node is skipped, preserving the index ↔ open-by-index
+ * correspondence the public API documents.
  */
 
 #ifndef _DARWIN_C_SOURCE
@@ -46,17 +31,14 @@
 
 #include <string.h>
 
-/* Bounded CFString-ish → C-buffer copy. CFStringGetCString FAILS
-   outright (no partial-write contract we may rely on) when the buffer
-   is too small, so conversion goes through a generous temp: values up
-   to 255 bytes convert and then strlcpy-truncate to the SPC-4 field
-   width; anything larger fails the conversion and yields "" — for
-   identity fields whose real domain is ≤16 bytes, an absurdly long
-   value is hostile data and empty is the right answer. dst is always
-   NUL-terminated. Non-string values (a hostile or surprising
-   dictionary) also yield "". Shared with the DA volume lookup
-   (mos_da.c), which reads volume-controlled strings under the same
-   trust terms (decl in mos_internal.h). */
+/* Bounded CFString → C-buffer copy. CFStringGetCString fails outright (no
+   usable partial-write contract) on too-small buffers, so conversion goes
+   through a 256-byte temp: values up to 255 bytes convert then strlcpy to
+   the SPC-4 field width; longer values fail conversion and yield "" — for
+   identity fields whose real domain is ≤16 bytes, an absurdly long value is
+   hostile and empty is correct. Non-string values also yield "". dst is
+   always NUL-terminated. Shared with the DA volume lookup (mos_da.c), which
+   reads volume-controlled strings under the same trust terms. */
 void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap)
 {
     if (!dst || cap == 0) return;
@@ -72,9 +54,8 @@ void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap)
 }
 
 /* path → IORegistry entry → uint64 entry ID; 0 on any failure (the
-   documented "unavailable" sentinel, never a fabricated ID). Exported
-   to the watch adapter: the DR doorbell's per-device filter resolves
-   the notifying device the same way (decl in mos_internal.h). */
+   documented "unavailable" sentinel, never a fabricated ID). Also used by
+   the watch adapter's DR-doorbell per-device filter. */
 uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path)
 {
     io_string_t p;
@@ -93,16 +74,16 @@ uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path)
     return id;
 }
 
-/* Strip trailing spaces (SPC wire padding; the closed DR layer may or
-   may not have trimmed). Leading/interior spaces are data and stay. */
+/* Strip trailing spaces (SPC wire padding DR may or may not have trimmed).
+   Leading/interior spaces are data and stay. */
 static void mos_internal_dr_strip_trailing_spaces(char *s)
 {
     size_t n = strlen(s);
     while (n > 0 && s[n - 1] == ' ') s[--n] = 0;
 }
 
-/* The ONE extraction of the three identity strings — every reader
-   funnels through here. Buffers keep the SPC-4 field widths. */
+/* The single extraction of the three identity strings; every reader funnels
+   through here. Buffers keep the SPC-4 field widths. */
 static void mos_internal_dr_copy_identity_from_info(CFDictionaryRef info,
                                                     char *vendor, size_t vcap,
                                                     char *product, size_t pcap,
@@ -132,10 +113,9 @@ static void mos_internal_dr_fill_from_info(CFDictionaryRef info,
                                             s->revision, sizeof s->revision);
 }
 
-/* The media BSD name lives in the Status dictionary's media-info
-   sub-dictionary (kDRDeviceMediaInfoKey → kDRDeviceMediaBSDNameKey),
-   media-scoped exactly like the pre-pivot IOMedia walk: absent when
-   no media is loaded, hence unit -1. */
+/* The media BSD name lives in the Status dict's media-info sub-dictionary
+   (kDRDeviceMediaInfoKey → kDRDeviceMediaBSDNameKey), media-scoped: absent
+   with no media loaded, hence unit -1. */
 static int64_t mos_internal_dr_bsd_unit_from_status(CFDictionaryRef status)
 {
     CFTypeRef mi = CFDictionaryGetValue(status, kDRDeviceMediaInfoKey);
@@ -146,8 +126,8 @@ static int64_t mos_internal_dr_bsd_unit_from_status(CFDictionaryRef status)
         CFDictionaryGetValue((CFDictionaryRef)mi, kDRDeviceMediaBSDNameKey),
         name, sizeof name);
     if (name[0] == 0) return -1;
-    /* parse_bsd_unit normalizes rdisk/ /dev/ forms and rejects
-       partition shapes — same authority as everywhere else. */
+    /* Normalizes rdisk//dev/ forms and rejects partition shapes — same
+       authority as everywhere else. */
     return mos_internal_parse_bsd_unit(name);
 }
 
@@ -165,7 +145,7 @@ bool mos_internal_dr_device_snapshot(CFTypeRef device_ref,
         mos_internal_dr_fill_from_info(info, s);
         CFRelease(info);
     }
-    /* No reopenable identity ⇒ not usable (see header comment). */
+    /* No reopenable identity ⇒ not usable (header). */
     if (s->registry_id == 0) return false;
 
     CFDictionaryRef status = DRDeviceCopyStatus(dev);
@@ -188,10 +168,9 @@ size_t mos_internal_dr_copy_snapshot(mos_internal_dr_snapshot *slots,
     size_t out = 0;
     for (CFIndex i = 0; i < n && out < cap; ++i) {
         CFTypeRef dev = CFArrayGetValueAtIndex(arr, i);
-        /* Skip-not-fail per device: an unresolvable entry must not hide
-           its siblings. The index is the position among reopenable
-           devices — DR array order whenever every device resolves, the
-           expected case. */
+        /* Skip-not-fail: an unresolvable entry must not hide its siblings.
+           The index is the position among reopenable devices — DR array
+           order when every device resolves, the expected case. */
         if (mos_internal_dr_device_snapshot(dev, &slots[out])) out++;
     }
     CFRelease(arr);
@@ -206,8 +185,7 @@ uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name)
                                               disk_name,
                                               kCFStringEncodingUTF8);
     if (!s) return 0;
-    /* The header documents the plain "diskN" form for this call —
-       callers pass the canonical mos_bsd_name_format rendering. */
+    /* Callers pass the canonical "diskN" form (mos_bsd_name_format). */
     DRDeviceRef dev = DRDeviceCopyDeviceForBSDName(s);
     CFRelease(s);
     if (!dev) return 0;
@@ -243,8 +221,7 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
 
     DRDeviceRef dev = DRDeviceCopyDeviceForIORegistryEntryPath(cfpath);
     CFRelease(cfpath);
-    if (!dev) return false; /* identity stays empty — same non-fatal
-                               contract the INQUIRY failure path had */
+    if (!dev) return false; /* identity stays empty, non-fatal */
 
     bool ok = false;
     CFDictionaryRef info = DRDeviceCopyInfo(dev);

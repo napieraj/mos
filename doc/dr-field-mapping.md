@@ -56,7 +56,7 @@ cannot see. Two DR dictionaries:
 |---|---|---|---|
 | bsd_unit (diskN) | walk IOMedia child, parse unit | `kDRDeviceMediaBSDNameKey` | status | media node directly; **media-scoped (absent when no media)** — same shape as today |
 | 1-N index | sort enumerated services by registry ID (approximates drutil) | position in `DRCopyDeviceArray` | — | **identical to drutil by construction** — drutil sits on this same array |
-| media_id (F1 swap fingerprint) | IORegistryEntryGetRegistryEntryID (uint64) | **no direct DR equivalent** | — | DR has registry *path* (`kDRDeviceIORegistryEntryPathKey`), not entry ID. To keep F1 unchanged: path → IORegistryEntryFromPath → GetRegistryEntryID = the one surviving IOKit step |
+| media_id (swap fingerprint) | IORegistryEntryGetRegistryEntryID (uint64) | **no direct DR equivalent** | — | DR has registry *path* (`kDRDeviceIORegistryEntryPathKey`), not entry ID. To keep media_id unchanged: path → IORegistryEntryFromPath → GetRegistryEntryID = the one surviving IOKit step |
 | device reopen target | IORegistryEntryIDMatching (atomic, TOCTOU-safe) | `DRDeviceRef` (opaque, held) OR `DRDeviceCopyDeviceForIORegistryEntryPath` | — | DRDeviceRef may be the stable handle to hold; or recover entry-ID per above |
 
 ## Two things the headers settle
@@ -88,7 +88,7 @@ cannot see. Two DR dictionaries:
   recognized; our READY means TUR returned GOOD. A spun-down or
   becoming-ready disc could read MediaPresent in DR while TUR would still say
   not-ready. The state mapping needs a decision on which definition mos exports.
-- **F1 fingerprint costs one IOKit step under DR** (path→entry→ID), or changes
+- **The media_id fingerprint costs one IOKit step under DR** (path→entry→ID), or changes
   identity model to DRDeviceRef/path. The audit consolidated the registry-ID
   rationale so this is now a clean either/or, but DR retiring discinfo+features+
   INQUIRY means that one IOKit step is the lone MMC/IOKit holdout in an
@@ -104,7 +104,7 @@ The pivot landed (implementation plan, Phases 0–2b). Row disposition:
 - **Identity-for-open rows: ADOPTED with the predicted IOKit step.**
   Index = DR array position; `kDRDeviceIORegistryEntryPathKey` →
   entry → ID is the discovery path; `DRDeviceCopyDeviceForBSDName`
-  resolves `--bsd`. The F1 `media_id` keeps the IOMedia walk at open —
+  resolves `--bsd`. The `media_id` keeps the IOMedia walk at open —
   the "lone holdout" this table predicted, accepted as such.
 - **State rows: NOT ADOPTED, by design.** The feasibility note's
   same-day revision (2026-06-10-dr-pivot-feasibility.md) showed the

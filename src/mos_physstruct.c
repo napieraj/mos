@@ -1,22 +1,17 @@
 /*
  * mos_physstruct.c — pure, bounds-safe decode of READ DISC STRUCTURE
  * (MMC-5 0xAD) replies for the DVD / HD-DVD media-type family
- * (MEDIA_TYPE = 0): the Physical Format Information (format 0x00) and
- * the Copyright Management Information (format 0x01).
+ * (MEDIA_TYPE = 0): Physical Format Information (format 0x00) and
+ * Copyright Management Information (format 0x01).
  *
- * "Physical structure" rather than "DVD": the same READ DISC STRUCTURE
- * media-type-0 reply carries HD-DVD book types (0x4..0x6) alongside the
- * DVD ones, so this decode is not DVD-specific. The BD half (Disc
- * Information / DI) is a different media type and lives in
- * mos_discstruct.c (mos_disc_id).
+ * "Physical structure", not "DVD": the same media-type-0 reply carries
+ * HD-DVD book types (0x4..0x6) alongside DVD, so this is not DVD-specific.
+ * The BD half (DI) is a different media type — mos_discstruct.c.
  *
- * No IOKit. The IOKit shell issues READ DISC STRUCTURE (DVD/HD-DVD media
- * type) via the ReadDiscStructure convenience method into a fixed, zero-
- * initialized buffer and hands that buffer plus its size here. Every
- * length and value byte is device/disc-reported and therefore hostile;
- * this file keeps the declared length from steering a read outside
- * [buf, buf+len) and reads only fixed offsets — no payload byte is ever
- * used as an offset or length.
+ * No IOKit: the shell hands us a fixed zero-init buffer (filled via
+ * ReadDiscStructure) and its size. Every length is device-reported, hence
+ * hostile — the declared length must never steer a read outside
+ * [buf, buf+len); only fixed offsets are read.
  *
  * Wire layout (both formats share the READ DISC STRUCTURE 4-byte header):
  *   [0..1] Disc Structure Data Length (BE) — bytes AFTER this field;
@@ -39,20 +34,9 @@
  *     buf[4] Copyright Protection System Type (CPST)
  *     buf[5] Region Management Information (RMI)
  *
- * Offsets and the exact byte arithmetic are taken VERBATIM from the
- * Linux kernel's wire parse — drivers/cdrom/cdrom.c dvd_read_physical
- * (`base = &buf[4]`; book/version base[0], rate/size base[1],
- * layer_type/track_path/nlayers base[2], densities base[3],
- * start_sector base[5]<<16|base[6]<<8|base[7], end_sector base[9..11],
- * end_sector_l0 base[13..15], bca base[16]>>7) and dvd_read_copyright
- * (cpst buf[4], rmi buf[5]) — cross-checked against the field set
- * redumper print_physical_structure decodes. Classification (book_type
- * => media name, cpst => "CSS-protected") is the CONSUMER's; this decode
- * surfaces the registered values faithfully and stops there, same
- * division as the BD DI decode (mos_discstruct.c).
- *
- * No-OOB property gated headless under ASan/UBSan by
- * tests/test_physstruct.c and tests/fuzz_pure.c.
+ * The Linux cdrom.c cross-check is in SPEC.md. Classification (book_type
+ * => media name, cpst => "CSS-protected") is the consumer's; this surfaces
+ * the registered values faithfully and stops there (scope doctrine).
  */
 
 #include "mos_pure.h"
@@ -63,9 +47,8 @@
 /* Copyright (0x01): must reach the RMI byte, buf[5]. */
 #define COPY_MIN_LEN  6u
 
-/* Trusted end: the smaller of the real buffer and the reply's own
-   declared length (+2 for the length field itself). Computed wide so
-   the +2 cannot wrap. */
+/* Trusted end: the smaller of the buffer and the reply's declared length
+   (+2 for the length field). Computed wide so the +2 cannot wrap. */
 static size_t mos_internal_ps_trusted_end(const uint8_t *buf, size_t len)
 {
     size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
@@ -87,8 +70,7 @@ bool mos_internal_physical_format_parse(const uint8_t *buf, size_t len,
     out->max_rate       = (uint8_t)(b[1] & 0x0f);
     out->layer_type     = (uint8_t)(b[2] & 0x0f);
     out->track_path     = (uint8_t)((b[2] >> 4) & 0x01);
-    /* MMC "Number of Layers": 0 => 1 layer, 1 => 2 layers. Surface the
-       human count (1 or 2), not the raw code. */
+    /* MMC "Number of Layers" code 0/1 => human count 1/2. */
     out->num_layers     = (uint8_t)(((b[2] >> 5) & 0x03) + 1u);
     out->linear_density = (uint8_t)(b[3] >> 4);
     out->track_density  = (uint8_t)(b[3] & 0x0f);

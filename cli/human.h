@@ -1,32 +1,12 @@
 /*
- * cli/human.h — layout engine for the human-readable CLI views.
+ * cli/human.h — layout engine for the human-readable CLI views. Writes to
+ * a FILE*, knows no result struct; the caller owns vocabulary and
+ * suppression (a suppressed pair is simply absent).
  *
- * Pure: writes to a FILE* (tests use open_memstream), no I/O of its
- * own, no knowledge of result structs. The CLI assembles (key, value)
- * pairs / table cells from accessor values; THIS layer owns alignment,
- * gutters, and width computation, so the golden-string tests in
- * tests/test_human.c pin the exact bytes of the design mocks
- * (doc/research/2026-06-10-cli-design.md).
- *
- * Conventions:
- *   - Aligned key blocks: keys right-aligned to the longest key,
- *     ":" then two-space gutter, one pair per line.
- *   - Suppression is the CALLER's job: a pair the schema suppresses is
- *     simply not in the array. A pair with val == NULL renders "-"
- *     (structural rows — addressing/identity — show absence, they do
- *     not vanish).
- *   - Tables: per-column width = max(header, widest cell); columns
- *     separated by two spaces; right_align flags per column (Index);
- *     NULL cells render "-".
- *   - All strings are emitted verbatim — vocabulary, including enum
- *     values, is the caller's contract with the schemas.
- *
- * SANITIZATION CONTRACT: this is a LAYOUT engine — keys, values, and
- * cells are printed verbatim (fputs). Any drive-controlled bytes
- * (identity strings) must arrive pre-escaped; the sanitization sites
- * are cli/status.c emit_human and cli/common.c query_row, both via
- * mos_safe_ascii. Library-controlled vocabulary (state names, profile
- * names, formatted units/ids) is printable ASCII by construction.
+ * SANITIZATION CONTRACT: keys/values/cells print verbatim (fputs), so any
+ * drive-controlled bytes (identity strings) must arrive pre-escaped via
+ * mos_safe_ascii — done in cli/status.c emit_human and cli/common.c
+ * query_row. Library vocabulary is printable ASCII by construction.
  */
 #ifndef MOS_CLI_HUMAN_H
 #define MOS_CLI_HUMAN_H

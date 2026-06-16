@@ -1,16 +1,16 @@
 /*
  * mos_modepage.c — pure, bounds-safe decode of MODE SENSE(10) replies for
- * the two optical-specific pages the scope doctrine admits (read-only;
- * AGENTS.md 2026-06-13 addendum): page 0x2A (CD/DVD Capabilities &
- * Mechanical Status — loading mechanism, eject/lock, buffer size) and
- * page 0x01 (Read/Write Error Recovery — AWRE/ARRE/PER/DCR + read-retry
- * count). NO MODE SELECT: mos reports configuration, never tunes it.
+ * the two optical-specific pages the scope doctrine admits (read-only):
+ * page 0x2A (CD/DVD Capabilities & Mechanical Status — loading mechanism,
+ * eject/lock, buffer size) and page 0x01 (Read/Write Error Recovery —
+ * AWRE/ARRE/PER/DCR + read-retry count). NO MODE SELECT: mos reports
+ * configuration, never tunes it.
  *
- * No IOKit. The IOKit shell issues MODE SENSE(10) via the ModeSense10
- * convenience method into a fixed, zero-initialized buffer and hands that
- * buffer plus its size here. Every length is device-reported and hostile;
- * the shared page walker keeps the declared lengths from steering a read
- * outside [buf, buf+len) and cannot loop (each step strictly advances).
+ * No IOKit: the shell hands us a fixed zero-init buffer (filled via
+ * ModeSense10) and its size. Every length is device-reported, hence
+ * hostile — the shared page walker keeps the declared lengths from
+ * steering a read outside [buf, buf+len) and cannot loop (each step
+ * strictly advances).
  *
  * MODE SENSE(10) mode parameter header:
  *   [0..1] Mode Data Length (BE) — bytes AFTER this field
@@ -21,27 +21,22 @@
  *     page[2..] page data (n bytes). (Sub-page format SPF=1 has a 4-byte
  *     header with a BE16 length; pages 0x2A/0x01 are page_0 format.)
  *
- * Page 0x2A offsets (relative to page start) are from the Linux kernel
- * sr.c get_capabilities() — loading mechanism page[6]>>5, eject
- * page[6]&0x08 — plus the standard MMC-3 page-2A buffer size (page[12..13]
- * BE, KB) and lock bits (page[6] bit1 supported, bit2 state). Page 0x01
- * is the canonical SPC Read/Write Error Recovery page. The buffer-size
- * and lock-bit positions have no in-repo capture yet (kernel confirms
- * only loadmech+eject) — a real MODE SENSE capture is a falsifier per the
- * hardware ADR, not a design input. No payload byte is ever used as an
- * offset. No-OOB property gated headless under ASan/UBSan by
- * tests/test_modepage.c and tests/fuzz_pure.c.
+ * Page 0x2A offsets (relative to page start): loading mechanism page[6]>>5
+ * and eject page[6]&0x08 (sr.c cross-check in SPEC.md), buffer size
+ * page[12..13] BE KB and lock bits page[6] bit1 supported / bit2 state
+ * (MMC-3 page-2A). Page 0x01 is the canonical SPC Read/Write Error
+ * Recovery page. A real MODE SENSE capture is a falsifier per the hardware
+ * ADR, not a design input. No payload byte is ever used as an offset.
  */
 
 #include "mos_pure.h"
 
 #define MP_HDR  8u   /* MODE SENSE(10) parameter header */
 
-/* Locate a page_0-format mode page by code in a MODE SENSE(10) reply.
-   On success sets *poff (page start) and *plen (page length, i.e. data
-   bytes after the 2-byte page header) and returns true. Bounded: every
-   iteration advances off by at least the page header, so a hostile
-   page-length field cannot loop or read out of bounds. */
+/* Locate a page_0-format mode page by code. On success sets *poff (page
+   start) and *plen (data bytes after the 2-byte page header) and returns
+   true. Bounded: every iteration advances off by at least the page header,
+   so a hostile page-length field cannot loop or read out of bounds. */
 static bool mos_internal_mode_page_find(const uint8_t *buf, size_t len,
                                         uint8_t want,
                                         size_t *poff, size_t *plen)
@@ -92,8 +87,8 @@ bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
     size_t poff, plen;
     if (!mos_internal_mode_page_find(buf, len, 0x2A, &poff, &plen))
         return false;
-    /* Need page bytes through 13 (buffer size at page[12..13]); the
-       walker has already bounded poff + 2 + plen to the trusted end. */
+    /* Need page bytes through 13 (buffer size at page[12..13]); the walker
+       already bounded poff + 2 + plen to the trusted end. */
     if (plen < 12u) return false;
 
     const uint8_t *p = &buf[poff];

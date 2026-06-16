@@ -1,6 +1,8 @@
 /*
- * cli/human.c — see human.h. Layout only; vocabulary and
- * suppression belong to the caller.
+ * cli/human.c — see human.h. Layout only; vocabulary and suppression are
+ * the caller's. The exact bytes (alignment, two-space gutters, NULL -> "-",
+ * right-aligned columns and headers) are pinned by the golden-string tests
+ * in tests/test_human.c.
  */
 #include "human.h"
 
@@ -57,9 +59,9 @@ bool mos_cli_human_table(FILE *f,
         }
     }
 
-    /* One line: leading space, cells padded to w[c], two-space
-       gutters, no trailing whitespace (last column unpadded when
-       left-aligned). */
+    /* Leading space, cells padded to w[c], two-space gutters, no trailing
+       whitespace (last left-aligned column unpadded). Pinned by the
+       golden-string tests. */
     for (size_t r = 0; r <= nrows; r++) {
         const bool header_row = (r == 0);
         fputc(' ', f);
@@ -69,9 +71,8 @@ bool mos_cli_human_table(FILE *f,
             size_t l   = strlen(s);
             size_t pad = w[c] - l;
             bool   ra  = right_align && right_align[c] && !header_row;
-            /* Headers sit over their column: right-aligned columns get
-               right-aligned headers too, so "Index" lines up with its
-               numerals. */
+            /* A right-aligned column gets a right-aligned header too, so
+               "Index" lines up over its numerals. */
             if (right_align && right_align[c] && header_row) ra = true;
             if (ra) {
                 for (size_t s2 = 0; s2 < pad; s2++) fputc(' ', f);

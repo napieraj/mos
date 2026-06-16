@@ -1,9 +1,9 @@
 /*
  * mos_pure.c — the IOKit-free pure surface: BSD-name predicates, the
- * SCSI-status contention test, identity-string rehoming, and the
- * IOReturn→mos_error mapping. No IOKit or CoreFoundation, so the whole
- * pure layer compiles, links, and is fuzz/ASan-tested without any Apple
- * framework. See ARCHITECTURE.md §3 and AGENTS.md rule 3.
+ * SCSI-status contention test, tray-outcome and IOReturn→mos_error
+ * classifiers, TOC/GESN decoders, and the dual-length helper. No IOKit or
+ * CoreFoundation, so the whole pure layer is fuzz/ASan-tested without any
+ * Apple framework. See ARCHITECTURE.md §3 and AGENTS.md rule 3.
  */
 
 #include "mos_pure.h"
@@ -56,7 +56,7 @@ const char *mos_internal_normalize_bsd_name(const char *in)
 
 /* See mos_pure.h. Normalize, reject non-whole-disk shapes, parse digits to
    an int64 unit with a 32-bit overflow guard (-1 on any reject). Reuses
-   normalize + is_whole_shape so the accepted-form rules stay defined once. */
+   normalize + is_whole_shape so the accepted-form rules live in one place. */
 int64_t mos_internal_parse_bsd_unit(const char *name)
 {
     const char *n = mos_internal_normalize_bsd_name(name);
@@ -85,22 +85,17 @@ bool mos_internal_status_is_contended(uint32_t status)
            status == MOS_SCSI_STATUS_ACA_ACTIVE;
 }
 
-/* Tray-command outcome classifier (SPC-4 / MMC-6 START STOP UNIT 0x1B,
-   PREVENT ALLOW MEDIUM REMOVAL 0x1E). Pure so it is fuzz/ASan-checked and
-   test_tray.c exercises the real disjunction, not a mirror.
-
-   A command that ANSWERED is a reported fact, never a transport error:
-     GOOD                       -> DONE
-     CHECK CONDITION 5/53/02    -> REFUSED_LOCKED  (MEDIA REMOVAL PREVENTED:
-                                   an eject/close hit a basic Prevent lock —
-                                   T10 04-349r1 §6.18.3.3 / Table 9)
-     any other non-GOOD         -> REFUSED_OTHER   (e.g. a drive without the
-                                   PDTE Persistent Prevent state answering a
-                                   0x02/0x03 with ILLEGAL REQUEST 5/24/00 per
-                                   04-349r1 Table 2 note a)
-   The caller maps a transport/lock failure (BUSY on a mounted or contended
-   drive, NO_DEVICE, IO) out-of-band as a negative mos_error before this runs;
-   this function only classifies a command the drive actually answered. */
+/* Tray-command outcome classifier (START STOP UNIT 0x1B, PREVENT ALLOW
+   MEDIUM REMOVAL 0x1E). A command that ANSWERED is a reported fact, not a
+   transport error:
+     GOOD                    -> DONE
+     CHECK CONDITION 5/53/02 -> REFUSED_LOCKED  (eject/close hit a basic
+                                Prevent lock; 04-349r1 §6.18.3.3 / Table 9)
+     any other non-GOOD      -> REFUSED_OTHER   (e.g. a drive without the
+                                PDTE Persistent Prevent state answering
+                                0x02/0x03 with 5/24/00)
+   The caller maps transport/lock failure (BUSY, NO_DEVICE, IO) to a
+   negative mos_error before this runs; here only answered commands. */
 mos_tray_outcome mos_internal_tray_classify(uint32_t scsi_status,
                                             uint8_t sk, uint8_t asc, uint8_t ascq)
 {
@@ -109,35 +104,22 @@ mos_tray_outcome mos_internal_tray_classify(uint32_t scsi_status,
     return MOS_TRAY_REFUSED_OTHER;
 }
 
-/* IOReturn → mos_error mapping. Pure: takes int32_t, returns mos_error.
-   The Apple adapter casts IOReturn to int32_t at the call site; the
-   src/mos_scsi.c adapter file contains static_asserts that pin every
-   symbolic constant to the numeric value this function expects, so a
-   future SDK change would fail the build loudly.
+/* IOReturn → mos_error mapping. Pure (int32_t in); the Apple adapter casts
+   at the call site, and mos_scsi.c static_asserts every SDK constant to
+   the numeric value here so an SDK change fails the build loudly.
 
-   IOReturn values are built from IOKit/IOReturn.h as:
-     iokit_common_err(code) = sys_iokit | sub_iokit_common | code
-                            = (0x38 << 26) | (0 << 14) | code
-                            = 0xE0000000 | code
-   The codes below are the ones the convenience-method documentation
-   surfaces, plus a few others useful for diagnostic CDB. Notable
-   groupings:
-     kIOReturnNoDevice / kIOReturnNotAttached → MOS_ERR_NO_DEVICE
-       — "device went away"; the watch core treats NO_DEVICE as terminal
-         removal, so these must not collapse to generic MOS_ERR_IO.
-     kIOReturnNoMemory / kIOReturnNoResources → MOS_ERR_OOM
-       — runtime resource exhaustion in a convenience method. (Distinct
-         from MOS_ERR_DRIVER_REJECTED, which mos_scsi.c produces only when
-         the SCSITask/MMC interface factory returns NULL — the true "driver
-         did not attach" case.)
+   IOReturn = 0xE0000000 | code (sys_iokit | sub_iokit_common, IOReturn.h).
+   Two groupings carry weight:
+     NoDevice / NotAttached → MOS_ERR_NO_DEVICE — must NOT collapse to
+       MOS_ERR_IO; the watch core treats NO_DEVICE as terminal removal.
+     NoMemory / NoResources → MOS_ERR_OOM — runtime exhaustion; distinct
+       from MOS_ERR_DRIVER_REJECTED (mos_scsi.c, factory returned NULL).
 
-   Pinned by tests/test_ioreturn.c — every case below has a test. */
+   Pinned by tests/test_ioreturn.c — every case has a test. */
 mos_error mos_internal_ioreturn_to_error(int32_t rc)
 {
-    /* Switch on uint32_t to dodge implementation-defined behavior for
-       large positive constants overflowing signed int. IOReturn values
-       use the high bit (0xE0000000 prefix), so the literals would
-       otherwise be negative ints. */
+    /* Switch on uint32_t: the 0xE0000000-prefixed case literals would
+       otherwise be negative ints (implementation-defined). */
     switch ((uint32_t)rc) {
         case 0x00000000u: return MOS_OK;                  /* kIOReturnSuccess         */
         case 0xE00002BDu: return MOS_ERR_OOM;             /* kIOReturnNoMemory        */
@@ -156,16 +138,16 @@ mos_error mos_internal_ioreturn_to_error(int32_t rc)
 /* READ TOC/PMA/ATIP format 0000b layout (MMC-6 §6.27.2.3): 2-byte TOC
    Data Length (BE, counts bytes AFTER itself), first/last track; then
    8-byte descriptors — [1]=ADR<<4|CONTROL, [2]=track (0xAA=lead-out),
-   [4..7]=start LBA (BE, MSF=0). Cross-checked against Linux sr.c /
-   cdrom.h TOC ioctls and libcdio. Contract in mos_pure.h. */
+   [4..7]=start LBA (BE, MSF=0). Cross-checked against Linux sr.c / cdrom.h
+   and libcdio. Contract in mos_pure.h. */
 bool mos_internal_toc_parse(const uint8_t *buf, size_t len, mos_toc *out)
 {
     if (!out) return false;
     memset(out, 0, sizeof *out);
     if (!buf || len < 4) return false;
 
-    /* Device claim: TOC Data Length counts bytes AFTER its own two.
-       64-bit total, clamped by the trusted length (O-4). */
+    /* TOC Data Length counts bytes AFTER its own two; 64-bit total,
+       clamped by the trusted length (O-4). */
     uint64_t claimed = 2u + (uint64_t)(((uint32_t)buf[0] << 8) | buf[1]);
     size_t span = mos_internal_trusted_len(len, len, claimed);
     if (span < 4) return false;
@@ -202,18 +184,17 @@ bool mos_internal_toc_parse(const uint8_t *buf, size_t len, mos_toc *out)
         }
         cursor += 8;
     }
-    /* A trailing partial descriptor inside the claimed span is a
-       malformed TOC, not padding. */
+    /* A trailing partial descriptor in the claimed span is malformed, not
+       padding. */
     if (cursor != span) return false;
 
-    /* The header's range bytes are hostile input too. The walk above
-       proves the descriptors well-formed; identity additionally needs
-       them to BE the table the header declares — ascending + unique +
-       count == last-first+1 + matching endpoints forces exactly
-       first..last (pigeonhole). A TOC that omits declared tracks, or
-       declares an inverted or out-of-range header, is rejected whole:
-       a fingerprint hashed over it would be falsely stable across
-       genuinely different discs. */
+    /* The header range bytes are hostile too. The walk proved the
+       descriptors well-formed; identity also needs them to BE the table
+       the header declares — ascending + unique + count == last-first+1 +
+       matching endpoints forces exactly first..last (pigeonhole). A TOC
+       that omits declared tracks or declares an inverted/out-of-range
+       header is rejected whole: a fingerprint over it would be falsely
+       stable across genuinely different discs. */
     if (out->first_track < 1 || out->first_track > 99) return false;
     if (out->last_track < out->first_track || out->last_track > 99) return false;
     if (out->track_count != out->last_track - out->first_track + 1) return false;
@@ -226,18 +207,16 @@ size_t mos_internal_trusted_len(size_t allocated, size_t transferred,
                                 uint64_t claimed)
 {
     /* Allocator and transport are both on our side of the seam; the
-       smaller of the two is the largest region that provably contains
-       only bytes the kernel wrote this transfer. (transferred >
-       allocated would itself be a transport fault; min() handles it
-       without needing to decide whose bug it is.) */
+       smaller of the two is the largest region provably containing only
+       bytes the kernel wrote this transfer. (transferred > allocated is
+       itself a transport fault; min() handles it either way.) */
     size_t trusted = allocated < transferred ? allocated : transferred;
 
-    /* The device claim is hostile input. It participates only as a
-       clamp: a drive may honestly tell us it returned LESS than we
-       asked for, and we believe that; a drive claiming MORE than the
-       transfer is lying or broken, and the claim is ignored. The
-       comparison is performed in uint64_t so a caller-computed total
-       like `data_length + header` cannot have wrapped on the way in. */
+    /* The device claim is hostile, and participates only as a clamp: a
+       drive honestly reporting it returned LESS is believed; one claiming
+       MORE than the transfer is lying and ignored. Compared in uint64_t so
+       a caller-computed total (e.g. `data_length + header`) cannot have
+       wrapped on the way in. */
     if (claimed < (uint64_t)trusted)
         trusted = (size_t)claimed;
 
@@ -245,23 +224,20 @@ size_t mos_internal_trusted_len(size_t allocated, size_t transferred,
 }
 
 /* Decode the Door/Tray-open bit from a GET EVENT STATUS NOTIFICATION (0x4A)
-   Media-class polled reply. See ARCHITECTURE.md §4.2 for the byte map and
-   research/2026-05-29-gesn-single-poll.md for the validity discipline.
+   Media-class polled reply. Byte map: ARCHITECTURE.md §4.2.
 
-   Returns true and sets *door_open ONLY when the reply carries an
-   authoritative Media event descriptor — ALL of:
-     - at least 6 bytes present (4-byte header + ≥2 descriptor bytes),
-     - the device's own Event Data Length (bytes 0-1, big-endian, excludes
-       itself) claims ≥6 following bytes (full-span, not a NEA stub),
-     - the NEA "No Event Available" bit (byte 2, 0x80) is clear,
-     - the header Notification Class (byte 2, low 3 bits) is Media (4).
-   Otherwise returns false — "no authoritative bit" — and the state core
-   forks on the TUR sense instead of trusting a fabricated verdict. This is
-   the honesty the GetTrayState convenience wrapper throws away (it reports
-   closed+success on a GESN failure).
+   True + *door_open ONLY for an authoritative Media event descriptor —
+   ALL of:
+     - >= 6 bytes present (4-byte header + >=2 descriptor bytes),
+     - Event Data Length (bytes 0-1, BE, excludes itself) claims >= 6
+       following bytes (full-span, not a NEA stub),
+     - NEA bit (byte 2, 0x80) clear,
+     - Notification Class (byte 2, low 3 bits) == Media (4).
+   Otherwise false ("no authoritative bit") and the state core forks on the
+   TUR sense — the honesty GetTrayState discards (it reports closed+success
+   on a GESN failure).
 
-   Bit positions per Linux drivers/scsi/sr.c media_event_desc. Pure and
-   bounds-checked, so the offsets are fuzz/ASan-verifiable headless. */
+   Bit positions per Linux sr.c media_event_desc. */
 bool mos_internal_gesn_media_door_open(const uint8_t *resp, size_t len,
                                        bool *door_open)
 {
