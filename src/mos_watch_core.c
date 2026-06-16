@@ -3,43 +3,37 @@
  *
  * Drives the poll loop:
  *
- *   - When to probe (next_poll_at_mono_ms, with two backoff rates by
- *     whether the last state was "transitional" or "stable").
- *   - What to emit (snapshot on first probe; state_changed when state
- *     differs from last; media_changed on a same-state ready disc swap;
- *     error on transient probe failure; device_removed when notify_removed
- *     fires OR a probe returns MOS_ERR_NO_DEVICE).
+ *   - When to probe (next_poll_at_mono_ms, two backoff rates by whether the
+ *     last state was transitional or stable).
+ *   - What to emit (snapshot on first probe; state_changed on a state
+ *     delta; media_changed on a same-state READY disc swap; error on
+ *     transient probe failure; device_removed on notify_removed or a probe
+ *     returning MOS_ERR_NO_DEVICE).
  *   - How to label it (monotonic seq; RFC 3339 ts from ops->wall_ms;
- *     registry_id + stream_open_wall_ms values; bsd_unit int).
- *   - When to stop (terminated flag from notify_removed, or auto-set on
- *     probe → NO_DEVICE).
+ *     registry_id + stream_open_wall_ms; bsd_unit).
+ *   - When to stop (terminated flag, set by notify_removed or probe →
+ *     NO_DEVICE).
  *
- * Two time domains, separated at the type level so a mixup cannot be
- * introduced silently — the signatures distinguish them at every callsite:
+ * Two time domains, distinct at the type level so a mixup can't slip in:
+ *   - ops->mono_ms() — MONOTONIC. Scheduling/latency only.
+ *   - ops->wall_ms() — WALL-CLOCK ms since epoch. stream_open_wall_ms and
+ *     event ts only; can jump backward, never used for scheduling.
  *
- *   - ops->mono_ms() — MONOTONIC. Poll scheduling and latency only; never
- *     human-readable output.
- *   - ops->wall_ms() — WALL-CLOCK ms since Unix epoch. stream_open_wall_ms
- *     and event ts only; can jump backward on NTP, so never used for
- *     scheduling.
- *
- * The caller's pump loop owns blocking — this core never sleeps or calls
- * the OS. It returns a decision: EMIT_EVENT (write and re-pump),
- * SLEEP_UNTIL (block, then re-pump), TERMINAL (close). mos_watch.c maps
- * SLEEP_UNTIL to CFRunLoopRunInMode so a notification can wake early; the
- * test driver maps it to advancing a fake clock. Every transition is
- * testable without IOKit.
+ * The caller's pump owns blocking — this core never sleeps. It returns a
+ * decision: EMIT_EVENT (write and re-pump), SLEEP_UNTIL (block then
+ * re-pump), TERMINAL (close). mos_watch.c maps SLEEP_UNTIL to
+ * CFRunLoopRunInMode; the test driver advances a fake clock. Every
+ * transition is testable without IOKit.
  */
 
-/* Mirrors mos_watch.c: no BSD-only helper here today, but the define
-   keeps BSD extensions visible if one is added (and keeps the amalgamated
-   feature-macro environment consistent). */
+/* Mirrors mos_watch.c: no BSD-only helper here yet, but the define keeps
+   the amalgamated feature-macro environment consistent. */
 #ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE 1
 #endif
 
-/* gmtime_r requires POSIX.1-2008 (200809L) on glibc; Apple's time.h
-   exposes it unconditionally. Define before any header inclusion. */
+/* gmtime_r needs POSIX.1-2008 on glibc (Apple exposes it unconditionally).
+   Define before any header. */
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -52,34 +46,27 @@
 
 /* ---- Defaults ----------------------------------------------------- */
 
-/* The two backoff rates. "stable" (open / empty / ready) is not a
-   transition window — changes arrive via OS notifications (insert,
-   eject). "transition" (loading / busy / unknown) is mid-transition, so
-   short polls catch the resolution faster than waiting for one. Defaults
-   are conservative (2s / 200ms): stable still notices an insert within a
-   couple of seconds without notifications, transition observes ready
-   resolution with no perceptible delay. Both configurable per watch. */
+/* Two backoff rates. "stable" (open/empty/ready) isn't a transition window
+   — changes arrive via OS notifications. "transition" (loading/busy/
+   unknown) polls fast to catch the resolution. Defaults (2s / 200ms) are
+   conservative: stable still notices an insert within a couple seconds
+   without notifications. Both configurable per watch. */
 #define MOS_WATCH_DEFAULT_STABLE_MS     2000U
 #define MOS_WATCH_DEFAULT_TRANSITION_MS  200U
 
 /* ---- Time formatting --------------------------------------------- */
 
-/* Format milliseconds-since-epoch as RFC 3339 UTC in YYYY-MM-DDTHH:MM:SSZ.
-   Writes 21 bytes including NUL into the buffer (size must be >= 21).
-   The seconds component is integer; sub-second precision is not
-   surfaced in events. Input is WALL-CLOCK ms — feeding monotonic ms
-   would produce nonsense like 1970-01-01T00:00:12Z.
+/* Format wall-clock ms-since-epoch as RFC 3339 UTC (YYYY-MM-DDTHH:MM:SSZ),
+   21 bytes incl NUL (cap must be >= 21). Integer seconds; no sub-second
+   precision. Feeding monotonic ms produces nonsense like
+   1970-01-01T00:00:12Z.
 
-   SATURATING: the schema pattern requires a 4-digit year, and the clock
-   is an INPUT to this pure layer — the hostile-input discipline applies
-   to ops->wall_ms exactly as it does to drive-controlled bytes; an insane
-   host clock, NTP step, or fuzzed ops table must not produce a schema-
-   invalid line. Values past 9999-12-31T23:59:59Z clamp to that instant; a
-   5-digit year from strftime (21 chars) and an empty string from a
-   gmtime_r failure are both schema violations, so neither can escape.
-   Post-clamp, gmtime_r and strftime cannot fail for any uint64 input; the
-   fallback writes the clamp constant anyway so the contract holds
-   unconditionally. */
+   SATURATING: the clock is hostile INPUT to this pure layer, so an insane
+   host clock, NTP step, or fuzzed ops table must not emit a schema-invalid
+   line (the schema requires a 4-digit year). Values past
+   9999-12-31T23:59:59Z clamp to that instant; post-clamp gmtime_r/strftime
+   cannot fail, and the fallback writes the clamp constant anyway, so the
+   contract holds unconditionally. */
 #define MOS_TS_MAX_SECS 253402300799ULL   /* 9999-12-31T23:59:59Z */
 static void format_rfc3339(uint64_t wall_ms, char *out, size_t cap)
 {
@@ -91,22 +78,19 @@ static void format_rfc3339(uint64_t wall_ms, char *out, size_t cap)
     if (s64 > MOS_TS_MAX_SECS) s64 = MOS_TS_MAX_SECS;
     time_t secs = (time_t)s64;
     struct tm tm;
-    /* gmtime_r: POSIX.1-2008, present on every platform this project
-       compiles on (macOS targets, Linux pure-test CI). Deliberately no
-       _WIN32/gmtime_s branch — Windows is neither a build nor a test
-       target, and untestable code is unverifiable. */
+    /* gmtime_r: POSIX.1-2008, present on every platform we build/test on.
+       No _WIN32/gmtime_s branch — Windows isn't a target. */
     if (gmtime_r(&secs, &tm) != NULL) {
-        /* All-numeric strftime specifiers (%Y %m %d %H %M %S) are
-           POSIX-defined as locale-independent — locale only affects textual
-           ones (%A, %B, %p, %c/%x/%X) we don't use. strftime also sidesteps a
-           -Wformat-truncation false positive that a hand-rolled snprintf
-           hits under -O2 (GCC sees tm_year as unbounded int). */
+        /* The numeric strftime specifiers used here are POSIX locale-
+           independent. strftime also sidesteps a -Wformat-truncation false
+           positive a hand-rolled snprintf hits under -O2 (GCC sees tm_year
+           as unbounded). */
         if (strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &tm) == 20) {
             return;
         }
     }
-    /* Unreachable post-clamp on a conforming libc; the contract holds
-       even if a libc misbehaves. */
+    /* Unreachable post-clamp on a conforming libc; holds the contract if
+       one misbehaves. */
     memcpy(out, "9999-12-31T23:59:59Z", 21);
 }
 /* ---- Public-via-mos_pure.h init / pump --------------------------- */
@@ -132,20 +116,18 @@ void mos_internal_watch_init(mos_watch_state *w,
     w->last_media_id          = 0;
     w->last_profile           = 0;
     w->next_seq               = 1;
-    /* Schedule the first probe at start_mono_ms (i.e. immediately).
-       This is a MONOTONIC value; the pump compares against ops->mono_ms. */
+    /* First probe at start_mono_ms (immediately). Monotonic value. */
     w->next_poll_at_mono_ms   = start_mono_ms;
     w->terminated             = false;
     w->removed_event_emitted  = false;
     w->bsd_unit               = bsd_unit;   /* -1 == no media */
 
-    /* Session identity: two plain values, no composite token. The
-       registry_id is the attachment identity (xnu mints real IDs from a
-       never-reused monotone counter >= 2^32+256; 0 is only reachable from
-       direct pure-layer callers). start_wall_ms is recorded as
-       stream_open_wall_ms on every event; the adapter monotonicizes it
-       per process so the (registry_id, stream_open_wall_ms) pair is unique
-       per session even for same-millisecond reopens of the same drive. */
+    /* Session identity: two plain values. registry_id is the attachment
+       identity (xnu mints non-reused IDs >= 2^32+256; 0 only from direct
+       pure-layer callers). start_wall_ms rides every event as
+       stream_open_wall_ms; the adapter monotonicizes it per process so
+       (registry_id, stream_open_wall_ms) is unique per session even for
+       same-ms reopens of the same drive. */
     w->registry_id         = registry_id;
     w->stream_open_wall_ms = start_wall_ms;
 }
@@ -159,20 +141,17 @@ void mos_internal_watch_notify_removed(mos_watch_state *w)
 void mos_internal_watch_notify_wake(mos_watch_state *w)
 {
     if (!w) return;
-    /* Pull the next poll forward to "right now" without inspecting
-       the clock here — the caller's pump call will compare against
-       ops->mono_ms() and probe immediately. Setting to 0 (zero
-       monotonic ms) guarantees `now >= next_poll_at_mono_ms` on the
-       next pump regardless of how the monotonic clock started. */
+    /* Pull the next poll to "now" without reading the clock here: setting
+       0 guarantees now >= next_poll_at_mono_ms on the next pump, whatever
+       the monotonic clock's origin. */
     w->next_poll_at_mono_ms = 0;
 }
 
-/* Whether the state is a "transition" state for backoff purposes.
-   Loading / busy / unknown are transitional; the others are stable. */
+/* Transition vs stable, for backoff selection. */
 static bool watch_state_is_transitional(mos_state s)
 {
     switch (s) {
-        /* In-progress or degraded observations — poll fast to converge. */
+        /* In-progress or degraded — poll fast to converge. */
         case MOS_STATE_LOADING:
         case MOS_STATE_BUSY:
         case MOS_STATE_FORMATTING:      /* long op, still progressing to ready/empty */
@@ -187,16 +166,14 @@ static bool watch_state_is_transitional(mos_state s)
         case MOS_STATE_DEVICE_FAULT:      /* drive fault; not self-resolving */
             return false;
     }
-    /* No default: a new mos_state value trips -Wswitch under -Werror, so
-       its poll class must be chosen deliberately rather than silently
-       inheriting "stable." This trailing return only handles an out-of-range
-       value (the enum is int32-wide). */
+    /* No default: a new mos_state value must trip -Wswitch so its poll
+       class is chosen deliberately. This trailing return only covers an
+       out-of-range value (the enum is int32-wide). */
     return false;
 }
 
-/* Build a base event: session identity, seq, ts, bsd_unit. The ts is read
-   fresh from ops->wall_ms each time, *not* derived from the
-   monotonic clock used for scheduling. The caller fills in
+/* Build a base event: session identity, seq, ts (read fresh from
+   ops->wall_ms, not the scheduling clock), bsd_unit. Caller fills the
    kind-specific fields. */
 static void fill_event_base(mos_watch_state *w, mos_watch_event *e)
 {
@@ -212,19 +189,18 @@ static void fill_event_base(mos_watch_state *w, mos_watch_event *e)
     e->error     = MOS_OK;
 }
 
-/* Copy probe-result fields (everything except prev_state) into an event.
-   Shared by the snapshot, state_changed, and media_changed branches, so a
-   field added to mos_watch_event has one assignment site, not three. */
+/* Copy probe-result fields (all but prev_state) into an event. Shared by
+   snapshot/state_changed/media_changed so a new field has one assignment
+   site, not three. */
 static void fill_event_state_fields(mos_watch_event *e,
                                     const mos_state_result *r,
                                     uint32_t latency_ms)
 {
     e->state           = r->state;
-    /* Event-time media identity: take the BSD unit from THIS probe rather
-       than the watch's open-time value, so a disc appearing in a drive
-       that was empty at open (or a unit that changed across eject/reinsert)
-       is reflected in the event. fill_event_base seeds w->bsd_unit as the
-       fallback for events with no fresh probe (error / device_removed). */
+    /* BSD unit from THIS probe, not the open-time value, so a disc in a
+       drive empty at open (or a unit changed across eject/reinsert) shows
+       in the event. fill_event_base seeds w->bsd_unit for events with no
+       fresh probe (error / device_removed). */
     e->bsd_unit        = r->bsd_unit;
     e->current_profile = r->current_profile;
     e->vendor          = r->vendor;
@@ -236,19 +212,16 @@ static void fill_event_state_fields(mos_watch_event *e,
     e->latency_ms      = latency_ms;
 }
 
-/* Saturating monotonic delta in milliseconds. Guards against a
-   non-monotonic clock source (end < start -> 0) and against a probe that
-   somehow spans more than ~49.7 days (delta > UINT32_MAX -> clamped),
-   either of which would otherwise underflow or truncate on the cast. */
+/* Saturating monotonic delta in ms: clamps end < start to 0 and a >49.7-day
+   span to UINT32_MAX, either of which would otherwise underflow/truncate. */
 static uint32_t mos_watch_latency_ms(uint64_t start, uint64_t end)
 {
     uint64_t delta = end >= start ? end - start : 0;
     return delta > UINT32_MAX ? UINT32_MAX : (uint32_t)delta;
 }
 
-/* Per-state poll interval: transitional states re-probe at the faster
-   transition_poll_ms, stable states at stable_poll_ms. One site so the
-   policy is audited in one place. */
+/* Per-state poll interval: transition_poll_ms for transitional states,
+   stable_poll_ms otherwise. One site for the policy. */
 static uint32_t poll_ms_for_state(const mos_watch_state *w,
                                   mos_state state)
 {
@@ -267,12 +240,10 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
         return d;
     }
 
-    /* Terminal: caller was told the device went away (either via
-       notify_removed or via a probe that returned NO_DEVICE). Emit a
-       final device_removed event then refuse further pumps. The
-       removed_event_emitted sentinel ensures we emit exactly once,
-       even when termination happens before any successful observation
-       (in which case prev_state is reported as unknown). */
+    /* Terminal (notify_removed or a probe → NO_DEVICE): emit one final
+       device_removed, then refuse further pumps. The removed_event_emitted
+       sentinel guarantees exactly once, even if termination precedes any
+       observation (prev_state then unknown). */
     if (w->terminated) {
         if (!w->removed_event_emitted) {
             fill_event_base(w, &d.event);
@@ -295,7 +266,7 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
 
     uint64_t now_mono = w->ops->mono_ms(w->ctx);
 
-    /* Not yet time to probe → tell the caller to sleep. */
+    /* Not yet time to probe → sleep. */
     if (now_mono < w->next_poll_at_mono_ms) {
         d.kind                 = MOS_WATCH_DECIDE_SLEEP_UNTIL;
         d.next_poll_at_mono_ms = w->next_poll_at_mono_ms;
@@ -308,13 +279,10 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
     mos_error perr             = w->ops->probe(w->ctx, &r);
     uint64_t  probe_end_mono   = w->ops->mono_ms(w->ctx);
 
-    /* MOS_ERR_NO_DEVICE from a probe means the device went away
-       underneath the watch. Treat as terminal removal: flip the
-       termination flag and let the next pump emit the device_removed
-       event through the terminated path above. This handles the case
-       where notifications didn't register (or aren't supported on
-       the OS): without it, poll-only mode would spin emitting error
-       events forever for an unplugged drive. */
+    /* NO_DEVICE means the drive went away under the watch: terminal
+       removal. Set the flag and let the terminated path above emit
+       device_removed. Without this, poll-only mode (no notifications) would
+       spin emitting error events forever for an unplugged drive. */
     if (perr == MOS_ERR_NO_DEVICE) {
         w->terminated = true;
         fill_event_base(w, &d.event);
@@ -329,8 +297,8 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
     }
 
     if (perr != MOS_OK) {
-        /* Other error: we couldn't observe state this round. Treat
-           as non-terminal, emit the error event, and reschedule. */
+        /* Other error: no observation this round. Non-terminal — emit error
+           and reschedule. */
         fill_event_base(w, &d.event);
         d.event.kind       = MOS_EVENT_ERROR;
         d.event.error      = perr;
@@ -338,16 +306,14 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
         d.event.prev_state = w->have_last_state ? w->last_state : MOS_STATE_UNKNOWN;
         d.event.latency_ms = mos_watch_latency_ms(probe_start_mono, probe_end_mono);
 
-        /* Don't update last_state on an error — we don't have an
-           observation, just an absence of one.
+        /* Don't update last_state — there's no observation, just its
+           absence.
 
-           Retry cadence: the first error (or a different error code)
-           reschedules at transition rate for a prompt retry; each further
-           consecutive identical error doubles the interval, capped at
-           stable_poll_ms. A persistent failure thus converges to the
-           stable cadence instead of flooding at the transition rate,
-           while a notify_wake still pulls the next poll forward
-           immediately on a real event. */
+           Retry cadence: a first (or changed) error retries at transition
+           rate; each further identical error doubles the interval, capped
+           at stable_poll_ms. A persistent failure converges to the stable
+           cadence instead of flooding; a notify_wake still pulls the next
+           poll forward on a real event. */
         if (perr == (mos_error)w->last_probe_err && w->consec_probe_errs > 0) {
             if (w->consec_probe_errs < UINT32_MAX) w->consec_probe_errs++;
         } else {
@@ -370,13 +336,10 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
     /* Successful observation: any error streak is over. */
     w->last_probe_err    = (int32_t)MOS_OK;
     w->consec_probe_errs = 0;
-    /* Adopt the probe's unit as the core's own. The media's BSD unit is
-       not stable (-1 when empty at open; changes across eject/reinsert);
-       events with a fresh probe carry r.bsd_unit directly, but the
-       error/device_removed fallback in fill_event_base reads w->bsd_unit
-       — which must therefore track the last OBSERVED unit, not the
-       open-time one. The CORE owns this update so pure-only behavior is
-       correct without every adapter rediscovering the obligation. */
+    /* Adopt the probe's unit. Fresh-probe events carry r.bsd_unit directly,
+       but the error/device_removed fallback reads w->bsd_unit, which must
+       track the last OBSERVED unit (not open-time). The core owns this so
+       pure-only behavior is correct without each adapter rediscovering it. */
     w->bsd_unit = r.bsd_unit;
 
 
@@ -413,21 +376,19 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
         return d;
     }
 
-    /* Same-state media swap → media_changed, while the drive stays READY
-       across two probes (a fast slot-load swap, or eject/reinsert that fell
-       entirely between polls). Two independent signals:
+    /* Same-state media swap → media_changed while the drive stays READY
+       across two probes (a fast slot-load swap, or eject/reinsert between
+       polls). Two independent signals:
 
-       1. Registry-identity change — the whole-disk IOMedia registry entry ID
-          re-mints on a physical swap even when the MMC profile is unchanged
-          (the same-profile DVD→DVD case a profile compare would miss). This is
-          the strong signal; both ids must be non-zero (0 = identity
-          unavailable, never inferred from).
+       1. Registry-identity change — the whole-disk IOMedia entry ID re-mints
+          on a physical swap even when the profile is unchanged (the
+          same-profile DVD→DVD case). Strong signal; both ids must be
+          non-zero (0 = unavailable, never inferred from).
 
        2. Profile change with NO usable identity — some USB-ATAPI bridges
-          never expose a media_id (both 0). ANY non-zero profile change
-          fires (cross-class 0x08→0x10 and same-class 0x10→0x11 alike): a
-          different profile with no identity means a different disc. A
-          same-PROFILE swap (DVD-R → DVD-R) is invisible here. */
+          never expose a media_id (both 0). Any non-zero profile change
+          fires: a different profile with no identity means a different disc.
+          A same-PROFILE swap (DVD-R → DVD-R) is invisible here. */
     bool id_changed =
         r.media_id != 0 && w->last_media_id != 0 &&
         r.media_id != w->last_media_id;
@@ -451,19 +412,16 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
         return d;
     }
 
-    /* No change → reschedule and sleep, no event. The poll-rate
-       choice still uses the (unchanged) current state.
+    /* No change → reschedule and sleep, no event.
 
-       Adopt any *informative* identity the probe carried before sleeping.
-       media_id / current_profile that were unavailable (0) at the last
-       event often arrive one probe later — the whole-disk IOMedia child
-       registers a beat after TUR goes GOOD, and profile enrichment can
-       fail transiently. Zero means "unavailable", never an observation:
-       a non-zero value is adopted, a zero never overwrites one, so the
-       fingerprint survives an unavailability gap and an identity change
-       observed across the gap is still detected as a swap. Without this,
-       a 0→non-zero arrival would pin the snapshot-era fingerprint for the
-       whole session and permanently disarm same-state swap detection. */
+       Adopt any *informative* identity first. media_id / current_profile
+       unavailable (0) at the last event often arrive a probe later (the
+       IOMedia child registers a beat after TUR goes GOOD; profile
+       enrichment can fail transiently). A non-zero value is adopted, a zero
+       never overwrites one, so the fingerprint survives the gap and a swap
+       across it is still detected. Without this, a 0→non-zero arrival would
+       pin the snapshot fingerprint and disarm swap detection for the
+       session. */
     if (r.media_id != 0)        w->last_media_id = r.media_id;
     if (r.current_profile != 0) w->last_profile  = r.current_profile;
     w->next_poll_at_mono_ms = probe_end_mono + poll_ms_for_state(w, r.state);
@@ -474,10 +432,9 @@ mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
 
 /* ---- Watch-all multiplexer ----------------------------------------- *
  *
- * See mos_pure.h for the contract. Iteration order is ascending
- * registry_id over active slots on EVERY entry, so same-tick event
- * interleave is deterministic and independent of slot assignment
- * history. */
+ * Contract in mos_pure.h. Slots are visited in ascending registry_id on
+ * every entry, so same-tick interleave is deterministic and independent of
+ * slot-assignment history. */
 
 void mos_internal_watch_all_init(mos_watch_all_state *a)
 {
@@ -515,11 +472,9 @@ int mos_internal_watch_all_add(mos_watch_all_state *a,
 {
     if (!a || registry_id == 0) return -1;
 
-    /* Dedupe by attachment identity: the DR Appeared notification can
-       announce a device the open-time snapshot already carried (or
-       fire twice across a bus rescan). Same id ⇒ same plug session ⇒
-       same slot; a REPLUG has a fresh id by xnu construction and lands
-       in a new slot. */
+    /* Dedupe by attachment identity: DR Appeared can re-announce a device
+       the snapshot already had (or fire twice on a bus rescan). Same id ⇒
+       same slot; a replug gets a fresh id and a new slot. */
     int existing = mos_internal_watch_all_find(a, registry_id);
     if (existing >= 0) return existing;
 
@@ -542,10 +497,10 @@ mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
     out.next_poll_at_mono_ms = UINT64_MAX;
     if (!a) return out;
 
-    /* Visit active slots in ascending registry_id (selection scan; CAP
-       is 16, an index sort would be ceremony). Returning on the first
-       EMIT keeps per-call work bounded; the next call re-enters at the
-       lowest id, so same-tick events drain in id order. */
+    /* Visit active slots in ascending registry_id (selection scan; CAP 16,
+       a sort would be ceremony). Returning on the first EMIT bounds per-call
+       work; the next call re-enters at the lowest id, draining same-tick
+       events in id order. */
     _Static_assert(MOS_WATCH_ALL_CAP <= 64, "visited bitmask is 64-wide");
     uint64_t visited = 0; /* bitmask of slots already pumped this call */
     for (;;) {
@@ -564,29 +519,26 @@ mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
 
         if (d.kind == MOS_WATCH_DECIDE_EMIT_EVENT) {
             d.event.seq = ++a->seq;            /* stream-global numbering */
-            /* Relabel the join's SNAPSHOT — and only the snapshot. A
-               mid-stream device whose first pumps yield ERROR events
-               (probe failing right after hot-plug) keeps its pending
-               join, so the eventual first successful probe still
-               announces it as device_appeared; clearing on any first
-               event would silently demote it to a mid-stream snapshot
-               (contract: every joining drive emits device_appeared). */
+            /* Relabel only the join's SNAPSHOT. A mid-stream device whose
+               first pumps yield ERROR keeps its pending join, so its first
+               successful probe still announces device_appeared; clearing on
+               any first event would demote it (contract: every joining
+               drive emits device_appeared). */
             if (a->join_pending[best] &&
                 d.event.kind == MOS_EVENT_SNAPSHOT) {
                 d.event.kind = MOS_EVENT_DEVICE_APPEARED;
                 a->join_pending[best] = false;
             }
             if (d.event.kind == MOS_EVENT_DEVICE_REMOVED) {
-                /* Per-slot, not stream-terminal: free the slot AFTER
-                   taking the event. A replug arrives as a new id. */
+                /* Per-slot, not stream-terminal: free after taking the
+                   event. A replug arrives as a new id. */
                 a->active[best] = false;
             }
             return d;
         }
         if (d.kind == MOS_WATCH_DECIDE_TERMINAL) {
-            /* The core's device_removed was emitted on an earlier call
-               and the slot somehow pumped again (external notify after
-               emission). Nothing to emit — just free the slot. */
+            /* device_removed already emitted on an earlier call; this slot
+               pumped again (external notify after emission). Just free it. */
             a->active[best] = false;
             continue;
         }

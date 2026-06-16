@@ -1,15 +1,14 @@
 /*
  * mos_state.c — Apple-side adapter for the pure decision-tree core.
  *
- * Fills mos_state_env_t from a mos_handle_t and calls the pure core; the
+ * Fills mos_state_env_t from a mos_handle_t and calls the pure core. The
  * split lets tests/test_state_core.c drive the tree with scripted MMC
- * responses instead of real hardware. Contract:
- * mos_internal_query_state_core in mos_pure.h.
+ * responses. Contract: mos_internal_query_state_core in mos_pure.h.
  */
 
 #include "mos_internal.h"
 
-/* vtable trampolines, static — only this file binds the Apple ops table. */
+/* vtable trampolines; static so only this file binds the Apple ops table. */
 
 static mos_error adapter_get_tray_state(void *ctx, bool *tray_open)
 {
@@ -39,11 +38,10 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
     if (out) *out = NULL;
     if (!h || !out) return MOS_ERR_INVALID_ARG;
 
-    /* Held-handle freshness: re-resolve the whole-disk identity from the
-       stable drive service before the query, so a handle opened on an
-       empty drive reports the inserted disc's bsd_unit (and media_id) once
-       a query returns READY, instead of the open-time -1. The drive
-       service is pinned; only its IOMedia child changes with the media. */
+    /* Re-resolve whole-disk identity off the pinned drive service before
+       querying, so a handle opened on an empty drive reports an inserted
+       disc's bsd_unit/media_id rather than the open-time -1. Only the
+       IOMedia child changes with the media. */
     mos_internal_refresh_media_identity(h);
 
     mos_state_env_t env = {
@@ -57,10 +55,9 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
         .revision            = h->revision_str[0] ? h->revision_str : NULL,
     };
 
-    /* Disc-completion data (blank vs finalized) is deliberately NOT an
-       enrichment branch here: no state decision needs it, so it ships as
-       the on-demand typed query instead (mos_query_disc_info, mos_scsi.c;
-       ARCHITECTURE.md §4.4). */
+    /* Disc-completion (blank vs finalized) is not enriched here — no state
+       decision needs it; it ships as an on-demand typed query
+       (mos_query_disc_info; ARCHITECTURE.md §4.4). */
 
     mos_error rc = mos_internal_query_state_core(&env, &h->result);
     if (rc == MOS_OK) *out = &h->result;
