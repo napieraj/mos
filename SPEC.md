@@ -81,9 +81,11 @@ code; this table is the citation, not the parse.
   is the (single-byte) PAGE LENGTH; the serial is the ASCII bytes 4..n.
   Byte 2 stays reserved for this page — it is NOT the high byte of a 2-byte
   length (that generalization is page 0x83's, not 0x80's).
-- **Cross-check:** sg3_utils `sg_inq.c` (`decode_unit_serial_num`) reads
-  `ucp[3]` as the length and the serial at `ucp + 4`; Linux
-  `drivers/scsi/scsi.c` VPD handling uses the same byte-3 length.
+- **Cross-check:** sg3_utils `sg_inq.c` (`fetch_unit_serial_num` →
+  `vpd_fetch_page` with maxlen −1) takes the single-byte `b[3]` length and
+  the serial at `b + 4`. Linux `drivers/scsi/scsi.c` reads
+  `get_unaligned_be16(&buf[2])`, which equals `buf[3]` here because byte 2 is
+  reserved (zero) on page 0x80 — same value, confirming the single-byte read.
 - **Not decoded:** every other VPD page (0x00 supported-pages list, 0x83
   Device Identification, …) and the standard-INQUIRY data itself
   (vendor/product/revision come from DiscRecording's directory, zero
