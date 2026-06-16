@@ -182,6 +182,23 @@ in `AGENTS.md`. The chain of files is the audit trail.
   (four CMake targets, `amalgamate.sh`, the strict-adapter CI leg) and a
   ready-to-paste handoff prompt for the executing session.
 
+- `2026-06-16-serial-vpd-0x80-feasibility.md` — Resolves the long-open
+  stage-1 falsifier (carried in the 06-10 media-info-design and 06-13
+  disc-tools-survey notes): does Apple's convenience `Inquiry`
+  (`MMCDeviceInterface`) surface VPD page 0x80 (Unit Serial Number)?
+  Answered NO from the header alone (no hardware) — the `Inquiry` pointer
+  takes only `SCSICmd_INQUIRY_StandardData*`, no EVPD/PAGE_CODE parameter,
+  and the file has no separate VPD/serial method; contrast `ModeSense10`
+  (PC/PAGE_CODE) and `GetConfiguration` (RT). Both cheap paths also ruled
+  out: `DRDeviceCopyInfo` has no serial key (dr-field-mapping), and the
+  standard-INQUIRY vendor tail (bytes 36+) is rejected as device-quirk
+  special-casing. So the serial is a raw INQUIRY VPD 0x80 under the AGENTS
+  layer-1 raw-verb rule: showing (a) satisfied by the header, showing (b)
+  the ObtainExclusiveAccess→BUSY-on-mounted analysis (benign — serial is a
+  static fact, null-on-busy is graceful). Includes the CDB, pure-parser +
+  fixture shape, and the build-when-a-consumer-exists recommendation. `mos`
+  behavior unchanged (Process rule 2 / hardware-role ADR).
+
 (An entry for a `2026-04-26-doctrine-review.md` note previously
 appeared in this index; that file was never committed and the entry
 was removed 2026-06-10.)
