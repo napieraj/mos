@@ -80,7 +80,7 @@ if(APPLE)
             "macOS minimum version. Do not lower below 12.0 without auditing kIOMainPortDefault usage.")
     elseif(CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "12.0")
         message(FATAL_ERROR
-            "mac-optical-state requires CMAKE_OSX_DEPLOYMENT_TARGET >= 12.0 "
+            "mos requires CMAKE_OSX_DEPLOYMENT_TARGET >= 12.0 "
             "(got ${CMAKE_OSX_DEPLOYMENT_TARGET}). macOS 12 Monterey is the "
             "floor because we use kIOMainPortDefault, which replaced the "
             "deprecated kIOMasterPortDefault in that release. Either unset "
