@@ -4123,8 +4123,11 @@ struct mos_watch {
         char     product[17];
         char     revision[5];
         /* Per-slot serial: same grab-once-per-session contract as the
-           single-target fields above. A replug re-mints registry_id into a
-           fresh slot, so a new serial is grabbed (no stale carry-over). */
+           single-target fields above. Slots are RECYCLED — a removed device
+           frees its slot and watch_all_add_device reclaims any inactive one —
+           so these are NOT fresh per device by themselves; that function
+           memsets the slot on claim, which is what resets serial_grabbed and
+           prevents the prior device's serial from carrying over. */
         char     serial[64];
         bool     serial_grabbed;
     }                    slots[MOS_WATCH_ALL_CAP];
