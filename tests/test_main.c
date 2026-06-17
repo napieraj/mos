@@ -44,7 +44,7 @@ void register_io_tests          (void);
 
 int main(void)
 {
-    printf("mac-optical-state test suite (%s)\n\n", mos_version_string());
+    printf("mos test suite (%s)\n\n", mos_version_string());
 
     printf("Sense parsing and state mapping:\n");
     register_sense_tests();
