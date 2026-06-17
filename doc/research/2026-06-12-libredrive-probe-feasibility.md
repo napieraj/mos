@@ -186,3 +186,54 @@ as the labelled identity heuristic above and decide it on its own merits.
 - scanlime, coastermelt; PoC‖GTFO 7:3 — https://mcfp.felk.cvut.cz/publicDatasets/pocorgtfo/contents/articles/07-03.pdf
 - LibDriveIO source-status / SDF.bin discussion — https://forum.makemkv.com/forum/viewtopic.php?t=24312
 - `mos` tree: `src/mos_dr.c`, `src/mos_internal.h`, `src/mos_pure.h`, `include/mos.h`, `src/mos_scsi.c`, `src/mos_state_core.c`, `cli/common.c`, `AGENTS.md`, `ROADMAP.md`
+
+---
+
+## Addendum (2026-06-17): bus-encryption vs LibreDrive — why the flag stays unchanged
+
+Revisited from a different angle than Parts 1–4 (which asked "detect LibreDrive
+capability"): does LibreDrive make mos's `protection.aacs.bus_encryption` flag
+*misleading*? Source: MakeMKV forum thread **t=19029** ("libredrive bypass bus
+encryption?"), answered by MakeMKV's author (mike admin):
+
+> "The moment you see 'Using LibreDrive mode', bus encryption is disabled **for
+> the current disc only**. … your drive would still report that drive supports
+> bus encryption as it is, **LibreDrive code does not meddle with AACS**, and
+> some applications might think that sectors might need to be decrypted, while
+> bus encryption was in fact not applied. The disc would be in this state until
+> you eject it."
+
+**Conclusion: no code change.** (HIGH — author's own words + the mos tree.)
+- mos reports the GET CONFIGURATION AACS-feature **BEC bit** — a drive-static
+  "supports bus encryption" *capability*. The author confirms LibreDrive does
+  NOT change it ("does not meddle with AACS"), so the bit mos emits stays
+  accurate and LibreDrive-invariant. This *vindicates* the protection ADR
+  (report capability; ignore the media-dependent Current bit; never REPORT KEY).
+- What LibreDrive changes is the **runtime-applied** state (encryption not
+  applied for the loaded disc) — an enabled/enforced fact mos deliberately does
+  not claim and structurally cannot observe (observing it = the LibreDrive
+  runtime detection Parts 1–4 found infeasible / out of scope).
+- Only real exposure is presentation: the human row `AACS (v68, bus encryption)`
+  could be misread as "encryption active." **Maintainer decision (2026-06-17):
+  leave it as-is** — anyone operating in LibreDrive territory owns that nuance;
+  a generic spec-reporter does not annotate which of its honest readings a
+  third-party tool might transiently invalidate, and cannot track that state.
+
+**Two adjacent ideas reconsidered and declined the same day:**
+- *Encryption-falsification probe* (issue an encryption-gated MMC command that
+  fails on stock but succeeds under LibreDrive). It necessarily reduces to a
+  content **sector read** or a **REPORT KEY / AACS-structure** read — both
+  explicitly out of scope (`ROADMAP.md` raw-descrambled-sector-reads; `AGENTS.md`
+  no-REPORT-KEY). And the clean fail-vs-succeed signal exists only for AACS2/UHD
+  (CSS/AACS1 return ciphertext on a successful read — no signal) and only with
+  such a disc loaded (media-dependent, not a drive flag).
+- *Reverse-engineering MakeMKV's opcodes to surface the flag.* The MT1959
+  opcodes are non-public (Part 4), so this means RE'ing MakeMKV's proprietary
+  `LibDriveIO`/`SDF.bin` (its copyright + EULA), and a libredrive-status flag
+  risks the DMCA §1201 "no commercially significant purpose other than to
+  circumvent" prong even without shipping any microcode — additive legal gray
+  area on top of the already-decided scope/safety "no." (Not legal advice;
+  jurisdiction-dependent — counsel before any such code.)
+
+## Sources (addendum)
+- MakeMKV, "libredrive bypass bus encryption?" — https://forum.makemkv.com/forum/viewtopic.php?t=19029
