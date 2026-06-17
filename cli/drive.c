@@ -53,7 +53,7 @@ static void emit_json(const drive_doc *d)
     fputs(",\n  \"product\": ", stdout);
     if (d->product)  mos_cli_json_str(stdout, d->product);
     else             fputs("null", stdout);
-    fputs(",\n  \"revision\": ", stdout);
+    fputs(",\n  \"firmware\": ", stdout);
     if (d->revision) mos_cli_json_str(stdout, d->revision);
     else             fputs("null", stdout);
 
@@ -190,7 +190,16 @@ static void emit_human(const drive_doc *d)
     (void)mos_safe_ascii(d->serial,   s_esc, sizeof s_esc);
     pairs[n++] = (mos_cli_human_pair){ "Vendor",  d->vendor   ? v_esc : NULL };
     pairs[n++] = (mos_cli_human_pair){ "Product", d->product  ? p_esc : NULL };
-    pairs[n++] = (mos_cli_human_pair){ "Revision",     d->revision ? r_esc : NULL };
+
+    /* Firmware = version (PRODUCT_REVISION_LEVEL) with the creation date in
+       parentheses when present ("1.00 (2019-01-07T13:20:43Z)"), just the
+       version when the date is absent, NULL when the drive reports no version. */
+    char fw_row[64];
+    const char *fwd = mos_drive_caps_firmware_date(d->caps);
+    if (d->revision && fwd) snprintf(fw_row, sizeof fw_row, "%s (%s)", r_esc, fwd);
+    else if (d->revision)   snprintf(fw_row, sizeof fw_row, "%s", r_esc);
+    pairs[n++] = (mos_cli_human_pair){ "Firmware", d->revision ? fw_row : NULL };
+
     pairs[n++] = (mos_cli_human_pair){ "Serial",  d->serial   ? s_esc : NULL };
 
     char aacs_buf[48];
@@ -245,9 +254,6 @@ static void emit_human(const drive_doc *d)
         }
     }
     pairs[n++] = (mos_cli_human_pair){ "Standards", d->inquiry ? std_buf : NULL };
-
-    const char *fw = mos_drive_caps_firmware_date(d->caps);
-    pairs[n++] = (mos_cli_human_pair){ "Firmware", fw };
 
     /* 64: worst case "read 4294967295 kB/s, write 4294967295 kB/s (max)"
        is 49 + NUL. */

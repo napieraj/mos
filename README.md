@@ -41,7 +41,7 @@ Registry ID:  4295032831
     Profile:  bd  bd_rom  (0x0040)
      Vendor:  HL-DT-ST
     Product:  BD-RE WH16NS60
-   Revision:  1.00
+   Firmware:  1.00
 ```
 
 Add `--json` for a machine-readable document:
@@ -59,7 +59,7 @@ $ mos state 1 --json
   "media_class": "bd",
   "vendor": "HL-DT-ST",
   "product": "BD-RE WH16NS60",
-  "revision": "1.00"
+  "firmware": "1.00"
 }
 ```
 
@@ -87,7 +87,7 @@ Bare `mos` with no arguments prints usage to stderr and exits 64.
 
 Human and JSON output share every enum string verbatim (`ready`,
 `bd_rom`), so a terminal report and a `jq` query never disagree.
-Identity (`vendor` / `product` / `revision`) reads the same on every
+Identity (`vendor` / `product` / `firmware`) reads the same on every
 surface too. The `bsd_node` field carries the full device node
 (`/dev/disk4`), pasteable as a drive argument; it is `null` on an empty
 drive.
@@ -110,7 +110,7 @@ Registry ID:  4295032831
       State:  open
      Vendor:  HL-DT-ST
     Product:  BD-RE WH16NS60
-   Revision:  1.00
+   Firmware:  1.00
 ```
 
 ### list
@@ -120,7 +120,7 @@ shows `error` in its row rather than killing the overview:
 
 ```
 $ mos list
- Index  State  Volume            BSD         Vendor    Product         Revision
+ Index  State  Volume            BSD         Vendor    Product         Firmware
      1  ready  /Volumes/ARCHIVE  /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00
      2  open   -                 -           PIONEER   BD-RW BDR-XS07  1.01
 ```
@@ -191,12 +191,11 @@ $ mos drive 1
 Registry ID:  4295032831
      Vendor:  HL-DT-ST
     Product:  BD-RE WH16NS60
-   Revision:  1.00
+   Firmware:  1.00 (2019-01-07T13:20:43Z)
      Serial:  KL2G7942618WL
        AACS:  version 68, bus encryption yes
    Profiles:  cd_rom, cd_r, cd_rw, dvd_rom, dvd_minus_r, ..., bd_rom, bd_r, bd_re
   Standards:  spc_4 — mmc_6, sbc_3, sam_5, spc_4
-   Firmware:  2019-01-07T13:20:43Z
      Speeds:  read 10560 kB/s, write 8310 kB/s (max)
        Mech:  tray, buffer 4096 KB
    ErrRecov:  retry 20, PER
@@ -208,7 +207,7 @@ speeds, and the two read-only MODE SENSE pages — `mechanical` (loading
 mechanism, eject/lock support, the live media-locked bit, buffer size)
 and `error_recovery` (the drive's read error-recovery configuration).
 `mos drive` is the one verb where you ask for the canonical truth, so
-`Vendor`/`Product`/`Revision` are read FRESH from the raw standard INQUIRY
+`Vendor`/`Product`/`Firmware` are read FRESH from the raw standard INQUIRY
 it already issues (for `Standards`), falling back to the kernel/DiscRecording
 cache that `mos list`/`mos state` use only when that raw read can't run
 (busy/mounted drive).
@@ -227,11 +226,13 @@ is omitted, so it reflects the drive, not the loaded medium. `version` and
 compliance level and the T10/ISO standards the drive claims (MMC-6, SPC-4,
 SBC-3…) — like `serial`, that raw read self-gates on exclusive access, so
 both are null/`-` when the drive is busy or has a disc mounted. `firmware`
-(JSON `firmware_date`) is the firmware's CREATION timestamp from the GET
-CONFIGURATION Firmware Information feature (010Ch), as an RFC 3339 UTC
-string (the same format `mos watch` events use) — the firmware's *date*,
-not a version (the 4-char `Revision` stays the version); null when the
-drive doesn't implement the feature. Read-only throughout: `mos` reports
+(JSON) is the firmware **version** — the 4-char SPC PRODUCT_REVISION_LEVEL,
+renamed from `revision` — and `firmware_date` is the firmware's **creation**
+timestamp from the GET CONFIGURATION Firmware Information feature (010Ch), an
+RFC 3339 UTC string (the same format `mos watch` events use), null when the
+drive doesn't implement the feature. The human `Firmware:` row shows them
+together — `1.00 (2019-01-07T13:20:43Z)`, or just `1.00` when the date is
+absent. Read-only throughout: `mos` reports
 these settings, it never changes them. Full fields:
 [`schemas/mos.drive.v1.json`](schemas/mos.drive.v1.json).
 

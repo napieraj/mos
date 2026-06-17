@@ -9,7 +9,7 @@
   "ts": "2025-01-01T00:00:01Z",
   "prev_state": "ready",
   "state": "unknown",
-  "revision": "1.00",
+  "firmware": "1.00",
   "error": {
     "code": "io",
     "message": "transient read error",

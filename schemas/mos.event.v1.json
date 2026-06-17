@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/napieraj/mos/schemas/mos.event.v1.json",
   "title": "mos.event.v1",
-  "description": "Watch-mode event line. Emitted as NDJSON (one JSON object per line) by `mos watch`. The first successful observation is emitted as a snapshot; a transient error during initial polling may appear before it, so the first line is not guaranteed to be the snapshot. Subsequent lines are state transitions, errors during polling, or the terminal device_removed event.\n\nThe field set varies by `event` kind, enforced as a oneOf union:\n  - snapshot, state_changed: state + prev_state + current_profile required; no error field permitted.\n  - media_changed: same field set as snapshot/state_changed, with state and prev_state both 'ready' \u2014 a same-state disc swap (the whole-disk media identity changed while the drive stayed ready).\n  - error: state + prev_state + error required; no media fields (current_profile, sense, vendor, product, revision) permitted.\n  - device_removed: only prev_state; no current-side fields, no error field. Terminal event; consumer should expect no more lines after this one.",
+  "description": "Watch-mode event line. Emitted as NDJSON (one JSON object per line) by `mos watch`. The first successful observation is emitted as a snapshot; a transient error during initial polling may appear before it, so the first line is not guaranteed to be the snapshot. Subsequent lines are state transitions, errors during polling, or the terminal device_removed event.\n\nThe field set varies by `event` kind, enforced as a oneOf union:\n  - snapshot, state_changed: state + prev_state + current_profile required; no error field permitted.\n  - media_changed: same field set as snapshot/state_changed, with state and prev_state both 'ready' \u2014 a same-state disc swap (the whole-disk media identity changed while the drive stayed ready).\n  - error: state + prev_state + error required; no media fields (current_profile, sense, vendor, product, firmware) permitted.\n  - device_removed: only prev_state; no current-side fields, no error field. Terminal event; consumer should expect no more lines after this one.",
   "type": "object",
   "required": [
     "schema",
@@ -107,7 +107,7 @@
     "product": {
       "type": "string"
     },
-    "revision": {
+    "firmware": {
       "type": "string"
     },
     "sense": {
@@ -367,7 +367,7 @@
           },
           {
             "required": [
-              "revision"
+              "firmware"
             ]
           }
         ]
@@ -424,7 +424,7 @@
           },
           {
             "required": [
-              "revision"
+              "firmware"
             ]
           }
         ]

@@ -24,7 +24,7 @@
           "registry_id",
           "vendor",
           "product",
-          "revision"
+          "firmware"
         ],
         "additionalProperties": false,
         "properties": {
@@ -86,7 +86,7 @@
               "null"
             ]
           },
-          "revision": {
+          "firmware": {
             "type": [
               "string",
               "null"

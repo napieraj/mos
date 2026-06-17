@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/napieraj/mos/schemas/mos.drive.v1.json",
   "title": "mos.drive.v1",
-  "description": "Static drive facts emitted by `mos drive --json`: what IS this drive, vs mos.metadata.v1's what disc is this (design: doc/research/2026-06-10-media-info-design.md and 2026-06-16-drive-identity-enrichment-survey.md). This is the verb where the user asks for the canonical truth, so identity (vendor/product/revision), version and version_descriptors are read FRESH from a raw standard INQUIRY, with the DiscRecording directory cache as fallback; capabilities/profiles/firmware_date are one GET CONFIGURATION RT=0 walk. The drive-disc JOIN is consumer-side: the pipeline that loaded a disc knows which drive it used. serial is the durable inventory key that survives replug and machine moves; registry_id is ATTACHMENT identity (replug mints a new one) and must not be used as a durable key.",
+  "description": "Static drive facts emitted by `mos drive --json`: what IS this drive, vs mos.metadata.v1's what disc is this (design: doc/research/2026-06-10-media-info-design.md and 2026-06-16-drive-identity-enrichment-survey.md). This is the verb where the user asks for the canonical truth, so identity (vendor/product/firmware), version and version_descriptors are read FRESH from a raw standard INQUIRY, with the DiscRecording directory cache as fallback; capabilities/profiles/firmware_date are one GET CONFIGURATION RT=0 walk. The drive-disc JOIN is consumer-side: the pipeline that loaded a disc knows which drive it used. serial is the durable inventory key that survives replug and machine moves; registry_id is ATTACHMENT identity (replug mints a new one) and must not be used as a durable key.",
   "type": "object",
   "required": [
     "schema",
@@ -10,7 +10,7 @@
     "registry_id",
     "vendor",
     "product",
-    "revision",
+    "firmware",
     "serial",
     "capabilities",
     "profiles",
@@ -45,7 +45,7 @@
       "type": ["string", "null"],
       "description": "Product identification, same terms/source as vendor."
     },
-    "revision": {
+    "firmware": {
       "type": ["string", "null"],
       "description": "Firmware revision (SPC-4 PRODUCT_REVISION_LEVEL) — the firmware VERSION (4 chars); the creation date is firmware_date. Same terms/source as vendor (fresh INQUIRY, DR fallback)."
     },
@@ -137,7 +137,7 @@
       "type": ["string", "null"],
       "format": "date-time",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
-      "description": "Firmware creation timestamp from the GET CONFIGURATION Firmware Information feature (010Ch; MMC-6 §5.3.43 Table 197 — Century/Year/Month/Day/Hour/Minute/Second decimal ASCII, GMT), on the same RT=0 walk that yields capabilities/profiles. SAME RFC 3339 UTC format as mos.event.v1's `ts` (integer seconds, trailing Z). null when the drive does not implement the feature (common). NOTE: this is the firmware's CREATION date, not a version string — the 4-char revision remains the firmware version identifier.",
+      "description": "Firmware creation timestamp from the GET CONFIGURATION Firmware Information feature (010Ch; MMC-6 §5.3.43 Table 197 — Century/Year/Month/Day/Hour/Minute/Second decimal ASCII, GMT), on the same RT=0 walk that yields capabilities/profiles. SAME RFC 3339 UTC format as mos.event.v1's `ts` (integer seconds, trailing Z). null when the drive does not implement the feature (common). NOTE: this is the firmware's CREATION date, not a version string — the `firmware` field (4-char PRODUCT_REVISION_LEVEL) is the version identifier.",
       "examples": ["2019-01-07T13:20:43Z"]
     },
     "speeds": {

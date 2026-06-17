@@ -72,7 +72,7 @@
       "type": "string",
       "description": "Product identity, same delivery boundary and byte-faithful emission rules as vendor. Field present only when non-empty."
     },
-    "revision": {
+    "firmware": {
       "type": "string",
       "description": "INQUIRY PRODUCT_REVISION_LEVEL (firmware revision, up to 4 chars per SPC-4 \u00a76.4.2). Same sanitization rules as vendor. Field present only when non-empty."
     },
