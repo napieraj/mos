@@ -185,7 +185,7 @@ static uint64_t stream_epoch_wall_ms(void)
    we're about to close, so its tests can't catch a violation): before any
    mos_close(h), every handle-borrowed pointer field of the escaping struct
    must be REPLACED with a watch-static buffer (w->vendor / w->product /
-   w->revision) or NULLed. The footgun is `*out = *qr;` — it copies every
+   w->revision / w->serial) or NULLed. The footgun is `*out = *qr;` — it copies every
    pointer, so "forgot one" is the default. A new borrowed pointer on
    mos_watch_event / mos_state_result needs watch-lifetime backing and a
    replacement below. (bsd_unit is a value, never replaced.) */
@@ -268,7 +268,7 @@ static const mos_watch_ops_t apple_watch_ops = {
 
 /* Per-slot probe for watch-all: same contract as watch_probe, but ctx is
    the slot (its own registry id + identity). Same pointer-lifetime
-   invariant — identity fields repointed at slot storage before close. */
+   invariant — identity AND serial repointed at slot storage before close. */
 static mos_error watch_slot_probe(void *ctx, mos_state_result *out)
 {
     struct mos_watch_slot *s = (struct mos_watch_slot *)ctx;

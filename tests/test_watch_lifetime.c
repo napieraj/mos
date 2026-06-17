@@ -51,11 +51,15 @@ static void touch_event_strings(const mos_watch_event *ev)
     const char *vendor    = mos_watch_event_vendor(ev);
     const char *product   = mos_watch_event_product(ev);
     const char *revision  = mos_watch_event_revision(ev);
+    /* serial is a borrowed string too (re-homed to watch/slot storage); the
+       lifetime test must touch it or it cannot trap a dangling serial. */
+    const char *serial    = mos_watch_event_serial(ev);
     uint64_t registry_id = mos_watch_event_registry_id(ev);
     snprintf(sink, sizeof(sink), "%lld", (long long)mos_watch_event_bsd_unit(ev));
     snprintf(sink, sizeof(sink), "%s", vendor    ? vendor    : "(null)");
     snprintf(sink, sizeof(sink), "%s", product   ? product   : "(null)");
     snprintf(sink, sizeof(sink), "%s", revision  ? revision  : "(null)");
+    snprintf(sink, sizeof(sink), "%s", serial    ? serial    : "(null)");
     snprintf(sink, sizeof(sink), "%llu", (unsigned long long)registry_id);
     (void)sink;
 }
