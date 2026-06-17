@@ -4332,6 +4332,17 @@ static void watch_all_add_device(mos_watch_t *w,
     if (i < 0) {
         return; /* full and genuinely new — documented drop until a slot frees */
     }
+    /* free_slot returns ANY inactive slot, so this one may be RECYCLED from a
+       device that was removed (the core freed it: mos_watch_core.c active[best]
+       = false on DEVICE_REMOVED). Reset every cached per-device field before
+       claiming it. The identity strings below are unconditionally overwritten,
+       but the grab-once serial cache (serial / serial_grabbed) is NOT — a
+       recycled slot with serial_grabbed still true would skip the re-query and
+       emit the PRIOR device's serial (durable-identity corruption). memset
+       clears all of it, and stays correct if another cached slot field is
+       added later. (Initial-snapshot slots are already zero from the calloc'd
+       handle, so this is a no-op there.) */
+    memset(&w->slots[i], 0, sizeof w->slots[i]);
     /* Source and destination share the SPC-4 identity widths, so these
        copies can't truncate. */
     _Static_assert(sizeof w->slots[i].vendor   == sizeof snap->vendor,
