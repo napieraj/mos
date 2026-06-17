@@ -229,6 +229,11 @@ typedef struct mos_drive_caps {
        (010Ch), "YYYY-MM-DDTHH:MM:SSZ" (GMT) or "" when absent. 24 holds the
        20-char ISO form + NUL. */
     char     firmware_date[24];
+    /* Current Profile from the RT=0 reply header (the loaded medium's profile;
+       0x0000 = no current profile / tray empty). MEDIA-DEPENDENT, unlike the
+       rest of this struct — surfaced only so a caller can name the loaded
+       disc's class (e.g. to scale speeds to a 1x multiple). */
+    uint16_t current_profile;
 } mos_drive_caps;
 
 #define MOS_DRIVE_PROFILE_CAP 64u

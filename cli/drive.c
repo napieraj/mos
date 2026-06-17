@@ -315,13 +315,18 @@ static void emit_human(const drive_doc *d)
     }
     pairs[n++] = (mos_cli_human_pair){ "Standards", d->inquiry ? std_buf : NULL };
 
-    /* Human-scaled rate (kB/s or MB/s); JSON keeps the raw kbps integers. */
-    char spd_buf[64];
+    /* Speeds scaled to the loaded medium's native 1x multiple (headline),
+       absolute rate in parens: "read ~16.0× BD (72.0 MB/s)". The class comes
+       from the loaded disc's current profile; with no/unknown class the helper
+       degrades to the absolute rate alone. JSON keeps the raw kbps integers. */
+    char spd_buf[96];
     if (d->have_speeds) {
-        char rd[24], wr[24];
+        const char *mcls = mos_profile_class(
+                               mos_drive_caps_current_profile(d->caps));
+        char rd[40], wr[40];
         snprintf(spd_buf, sizeof spd_buf, "read %s, write %s (max)",
-                 mos_cli_human_rate(d->max_read_kbps, rd, sizeof rd),
-                 mos_cli_human_rate(d->max_write_kbps, wr, sizeof wr));
+                 mos_cli_human_rate_x(d->max_read_kbps, mcls, rd, sizeof rd),
+                 mos_cli_human_rate_x(d->max_write_kbps, mcls, wr, sizeof wr));
     }
     pairs[n++] = (mos_cli_human_pair){ "Speeds", d->have_speeds ? spd_buf : NULL };
 

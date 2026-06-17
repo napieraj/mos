@@ -39,6 +39,38 @@ const char *mos_cli_human_rate(uint32_t kbps, char *buf, size_t cap)
     return buf;
 }
 
+/* Nominal 1x data rate (decimal kB/s) per optical media class, and the
+   display label. Bases: CD 1x = 75 sectors/s x 2048 B = 153.6 kB/s; DVD 1x =
+   11.08 Mbit/s = 1385 kB/s; BD 1x = 36 Mbit/s = 4500 kB/s; HD DVD 1x =
+   36.55 Mbit/s = 4568 kB/s (SPEC.md). Returns 0 base for a class with no
+   defined multiple (caller then shows the absolute rate alone). */
+static double rate_base_kbps(const char *media_class, const char **label)
+{
+    if (media_class) {
+        if (strcmp(media_class, "cd")     == 0) { *label = "CD";     return 153.6; }
+        if (strcmp(media_class, "dvd")    == 0) { *label = "DVD";    return 1385.0; }
+        if (strcmp(media_class, "bd")     == 0) { *label = "BD";     return 4500.0; }
+        if (strcmp(media_class, "hd_dvd") == 0) { *label = "HD DVD"; return 4568.0; }
+    }
+    *label = NULL;
+    return 0.0;
+}
+
+const char *mos_cli_human_rate_x(uint32_t kbps, const char *media_class,
+                                 char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return buf;
+    const char *label = NULL;
+    double base = rate_base_kbps(media_class, &label);
+    if (base <= 0.0 || kbps == 0u)            /* no base (or no rate): absolute only */
+        return mos_cli_human_rate(kbps, buf, cap);
+
+    char abs[24];
+    (void)mos_cli_human_rate(kbps, abs, sizeof abs);
+    snprintf(buf, cap, "~%.1f× %s (%s)", (double)kbps / base, label, abs);
+    return buf;
+}
+
 bool mos_cli_human_block(FILE *f, const mos_cli_human_pair *pairs, size_t n)
 {
     if (!f || !pairs || n == 0) return false;

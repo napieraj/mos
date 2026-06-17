@@ -374,6 +374,9 @@ TEST(adapter_drive_caps_roundtrip_and_absent)
     EXPECT(mos_drive_caps_aacs(c));
     EXPECT(mos_drive_caps_bus_encryption(c));
     EXPECT_EQ(68, mos_drive_caps_aacs_version(c));
+    /* Current Profile from the RT=0 header (0x0040 = BD) flows to the
+       accessor — the loaded-medium class used for speed 1x scaling. */
+    EXPECT_EQ(0x0040, mos_drive_caps_current_profile(c));
 
     /* Non-BD drive: feature list without 0x010D — aacs=false is data. */
     static const uint8_t cfg_plain[] = {
@@ -385,6 +388,7 @@ TEST(adapter_drive_caps_roundtrip_and_absent)
     EXPECT(!mos_drive_caps_aacs(c));
     EXPECT(!mos_drive_caps_bus_encryption(c));
     EXPECT_EQ(0, mos_drive_caps_aacs_version(c));
+    EXPECT_EQ(0x0010, mos_drive_caps_current_profile(c));   /* DVD */
 
     /* Transport injection maps the IOReturn. */
     mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_GETCONFIG, 0xE00002D6u);

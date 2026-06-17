@@ -282,6 +282,11 @@ const char *mos_drive_caps_firmware_date(const mos_drive_caps *c)
     return (c && c->firmware_date[0]) ? c->firmware_date : NULL;
 }
 
+uint16_t mos_drive_caps_current_profile(const mos_drive_caps *c)
+{
+    return c ? c->current_profile : 0;
+}
+
 /* ---- mos_drive_inquiry accessors (mos_query_drive_inquiry) ------- */
 
 const char *mos_drive_inquiry_vendor(const mos_drive_inquiry *s)

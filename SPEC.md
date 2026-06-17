@@ -52,6 +52,13 @@ code; this table is the citation, not the parse.
 - **Out of scope:** TYPE 03h write-speed descriptors. Apple's
   GetPerformance convenience method exposes TOLERANCE/WRITE/EXCEPT but not
   the TYPE field, so TYPE 03h is unreachable without a raw CDB.
+- **Human 1× multiple (cli/human.c `mos_cli_human_rate_x`):** the reported
+  kB/s is scaled to the loaded medium's nominal 1× data rate for the human
+  view only (JSON keeps raw kbps). Bases, by media class
+  (`mos_profile_class`): CD 1× = 75 sectors/s × 2048 B = 153.6 kB/s; DVD 1×
+  = 11.08 Mbit/s = 1385 kB/s; BD 1× = 36 Mbit/s = 4500 kB/s; HD DVD 1× =
+  36.55 Mbit/s = 4568 kB/s. Nominal (hence the "~"); a class with no defined
+  base falls back to the absolute rate.
 
 ### `src/mos_cdtext.c` — READ TOC/PMA/ATIP format 0101b (CD-TEXT)
 - **Spec:** MMC-3 §6.27 / Red Book CD-TEXT; 18-byte packs.

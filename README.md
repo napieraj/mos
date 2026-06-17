@@ -200,7 +200,7 @@ $ mos drive 1
     Protection:  AACS (v68, bus encryption), CSS (v1)
       Profiles:  cd_rom, cd_r, cd_rw, dvd_rom, dvd_minus_r, ..., bd_rom, bd_r, bd_re
      Standards:  spc_4 — mmc_6, sbc_3, sam_5, spc_4
-        Speeds:  read 10.6 MB/s, write 8.3 MB/s (max)
+        Speeds:  read ~16.0× BD (72.0 MB/s), write ~12.0× BD (54.0 MB/s) (max)
     Mechanical:  tray, buffer 4.1 MB
 Error Recovery:  retry 20, PER
 ```
@@ -210,6 +210,10 @@ protection capability (from one GET CONFIGURATION feature walk), max read/write
 speeds, and the two read-only MODE SENSE pages — `mechanical` (loading
 mechanism, eject/lock support, the live media-locked bit, buffer size)
 and `error_recovery` (the drive's read error-recovery configuration).
+`Speeds` are media-dependent (GET PERFORMANCE reflects the loaded disc, so
+they are null with an empty tray); the human view leads with the disc's
+native multiple — `~16.0× BD` — and puts the absolute rate in parentheses,
+while `--json` keeps the raw `max_read_kbps`/`max_write_kbps` integers.
 `mos drive` is the one verb where you ask for the canonical truth, so
 `Vendor`/`Product`/`Firmware` are read FRESH from the raw standard INQUIRY
 it already issues (for `Standards`), falling back to the kernel/DiscRecording
