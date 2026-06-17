@@ -75,18 +75,19 @@ static void emit_human(const capacity_doc *d)
     bool have_bsd = mos_bsd_dev_node(d->bsd_unit, bsd_buf, sizeof bsd_buf);
     pairs[n++] = (mos_cli_human_pair){ "BSD", have_bsd ? bsd_buf : NULL };
 
-    /* "25025314816 bytes (12219392 blocks x 2048 B)" worst case is well
-       under 64. */
+    /* Human-scaled size (e.g. "25.0 GB (12219392 blocks x 2048 B)"); the
+       JSON keeps the raw media_bytes/block_bytes integers. Block size stays
+       in bytes — it is canonically a byte count (512/2048). */
     char media_buf[64];
     if (d->have_media) {
+        char hb[24];
+        (void)mos_cli_human_bytes(d->media_bytes, hb, sizeof hb);
         if (d->block_bytes)
             snprintf(media_buf, sizeof media_buf,
-                     "%llu bytes (%llu blocks x %u B)",
-                     (unsigned long long)d->media_bytes,
+                     "%s (%llu blocks x %u B)", hb,
                      (unsigned long long)d->media_blocks, d->block_bytes);
         else
-            snprintf(media_buf, sizeof media_buf, "%llu bytes",
-                     (unsigned long long)d->media_bytes);
+            snprintf(media_buf, sizeof media_buf, "%s", hb);
     }
     pairs[n++] = (mos_cli_human_pair){ "Media", d->have_media ? media_buf : NULL };
 

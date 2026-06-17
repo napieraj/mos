@@ -194,6 +194,38 @@ TEST(human_bsd_dev_node_contract)
     return 0;
 }
 
+TEST(human_bytes_scaling)
+{
+    char b[24];
+    /* B tier (< 1000) keeps integer bytes. */
+    EXPECT_STREQ("0 B",   mos_cli_human_bytes(0, b, sizeof b));
+    EXPECT_STREQ("512 B", mos_cli_human_bytes(512, b, sizeof b));
+    EXPECT_STREQ("999 B", mos_cli_human_bytes(999, b, sizeof b));
+    /* Decimal (1000-based) tier boundaries, one decimal place. */
+    EXPECT_STREQ("1.0 kB", mos_cli_human_bytes(1000, b, sizeof b));
+    EXPECT_STREQ("2.0 kB", mos_cli_human_bytes(2048, b, sizeof b));
+    EXPECT_STREQ("4.1 MB", mos_cli_human_bytes(4096000ULL, b, sizeof b));  /* 4096 kB buffer */
+    /* A 4.7 GB DVD and a 25 GB BD render as marketed. */
+    EXPECT_STREQ("4.7 GB",  mos_cli_human_bytes(4700372992ULL, b, sizeof b));
+    EXPECT_STREQ("25.0 GB", mos_cli_human_bytes(25025314816ULL, b, sizeof b));
+    /* NULL/zero-cap tolerated (returns buf unchanged). */
+    EXPECT(mos_cli_human_bytes(1, NULL, 0) == NULL);
+    return 0;
+}
+
+TEST(human_rate_scaling)
+{
+    char b[24];
+    /* Below 1000 kB/s stays kB/s (integer); no B/s tier exists. */
+    EXPECT_STREQ("150 kB/s", mos_cli_human_rate(150, b, sizeof b));
+    EXPECT_STREQ("999 kB/s", mos_cli_human_rate(999, b, sizeof b));
+    /* At/above 1000 → MB/s, one decimal. */
+    EXPECT_STREQ("1.0 MB/s",  mos_cli_human_rate(1000, b, sizeof b));
+    EXPECT_STREQ("10.6 MB/s", mos_cli_human_rate(10560, b, sizeof b));
+    EXPECT_STREQ("8.3 MB/s",  mos_cli_human_rate(8310, b, sizeof b));
+    return 0;
+}
+
 void register_human_tests(void)
 {
     RUN(human_block_ready_mounted_golden);
@@ -203,4 +235,6 @@ void register_human_tests(void)
     RUN(list_volume_cell_shows_path_only);
     RUN(human_table_no_trailing_whitespace_any_line);
     RUN(human_bsd_dev_node_contract);
+    RUN(human_bytes_scaling);
+    RUN(human_rate_scaling);
 }

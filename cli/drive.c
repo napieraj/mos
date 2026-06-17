@@ -315,20 +315,27 @@ static void emit_human(const drive_doc *d)
     }
     pairs[n++] = (mos_cli_human_pair){ "Standards", d->inquiry ? std_buf : NULL };
 
-    /* 64: worst case "read 4294967295 kB/s, write 4294967295 kB/s (max)"
-       is 49 + NUL. */
+    /* Human-scaled rate (kB/s or MB/s); JSON keeps the raw kbps integers. */
     char spd_buf[64];
-    if (d->have_speeds)
-        snprintf(spd_buf, sizeof spd_buf, "read %u kB/s, write %u kB/s (max)",
-                 d->max_read_kbps, d->max_write_kbps);
+    if (d->have_speeds) {
+        char rd[24], wr[24];
+        snprintf(spd_buf, sizeof spd_buf, "read %s, write %s (max)",
+                 mos_cli_human_rate(d->max_read_kbps, rd, sizeof rd),
+                 mos_cli_human_rate(d->max_write_kbps, wr, sizeof wr));
+    }
     pairs[n++] = (mos_cli_human_pair){ "Speeds", d->have_speeds ? spd_buf : NULL };
 
     char mech_buf[64];
     if (d->caps_2a) {
         const char *lm = mos_loading_mechanism_name(
                              mos_mode_caps_loading_mechanism(d->caps_2a));
-        snprintf(mech_buf, sizeof mech_buf, "%s, buffer %u KB%s",
-                 lm ? lm : "unknown", mos_mode_caps_buffer_kb(d->caps_2a),
+        /* buffer_kb is the page-2A figure in kB; human-scale it (JSON keeps
+           raw buffer_kb). Fed as a decimal-kB byte count for one convention. */
+        char bufsz[24];
+        snprintf(mech_buf, sizeof mech_buf, "%s, buffer %s%s",
+                 lm ? lm : "unknown",
+                 mos_cli_human_bytes((uint64_t)mos_mode_caps_buffer_kb(d->caps_2a)
+                                         * 1000ULL, bufsz, sizeof bufsz),
                  mos_mode_caps_locked(d->caps_2a) ? ", locked" : "");
     }
     pairs[n++] = (mos_cli_human_pair){ "Mechanical", d->caps_2a ? mech_buf : NULL };

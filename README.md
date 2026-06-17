@@ -200,8 +200,8 @@ $ mos drive 1
     Protection:  AACS (v68, bus encryption), CSS (v1)
       Profiles:  cd_rom, cd_r, cd_rw, dvd_rom, dvd_minus_r, ..., bd_rom, bd_r, bd_re
      Standards:  spc_4 — mmc_6, sbc_3, sam_5, spc_4
-        Speeds:  read 10560 kB/s, write 8310 kB/s (max)
-    Mechanical:  tray, buffer 4096 KB
+        Speeds:  read 10.6 MB/s, write 8.3 MB/s (max)
+    Mechanical:  tray, buffer 4.1 MB
 Error Recovery:  retry 20, PER
 ```
 
