@@ -1,0 +1,5 @@
+     BSD:  /dev/disk4
+  Action:  eject
+Modifier:  -
+ Outcome:  done
+   Sense:  -

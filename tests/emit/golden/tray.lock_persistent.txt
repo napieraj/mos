@@ -1,0 +1,5 @@
+     BSD:  /dev/disk4
+  Action:  lock
+Modifier:  persistent
+ Outcome:  done
+   Sense:  -

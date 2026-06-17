@@ -1,0 +1,12 @@
+           BSD:  /dev/disk4
+   Registry ID:  4294967587
+        Vendor:  HL-DT-ST
+       Product:  BD-RE WH16NS40
+      Firmware:  1.05
+        Serial:  -
+    Protection:  AACS (v68, bus encryption)
+      Profiles:  -
+     Standards:  -
+        Speeds:  -
+    Mechanical:  -
+Error Recovery:  -

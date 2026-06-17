@@ -643,6 +643,12 @@ jobs:
           pip install --require-hashes -r schemas/requirements-ci.txt
           python3 tests/emit/validate_emitted.py \
             ./build-adapter/bin/mos_emit_fixtures schemas
+          # Human-output golden check: same binary, `human` mode, compared
+          # byte-for-byte to tests/emit/golden/*.txt. Catches emit_human
+          # (cli/*.c) layout/vocabulary drift the JSON check above can't see.
+          # Stdlib-only, no schema dependency.
+          python3 tests/emit/validate_emitted_human.py \
+            ./build-adapter/bin/mos_emit_fixtures
 
   coverage:
     # Pure-layer coverage (src/) from the host-independent unit suite.
