@@ -2,7 +2,7 @@
  * watch-event string-lifetime contract under AddressSanitizer.
  *
  * Contract: a mos_watch_event's string pointers (vendor / product /
- * revision) stay valid until the next mos_watch_next_event() or
+ * revision / serial) stay valid until the next mos_watch_next_event() or
  * mos_watch_close(). The watch upholds it by homing drive-controlled
  * strings into watch-owned buffers before the per-probe handle closes.
  *
