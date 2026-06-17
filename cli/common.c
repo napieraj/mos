@@ -156,6 +156,7 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
     const char *vendor   = mos_watch_event_vendor(e);
     const char *product  = mos_watch_event_product(e);
     const char *revision = mos_watch_event_revision(e);
+    const char *serial   = mos_watch_event_serial(e);
     mos_error   err      = mos_watch_event_error(e);
     uint32_t    latency  = mos_watch_event_latency_ms(e);
     uint8_t     sk, asc, ascq;
@@ -212,6 +213,11 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
         }
         if (revision && *revision) {
             fputs(",\"firmware\":", stdout); mos_cli_json_str(stdout, revision);
+        }
+        /* serial: null until a free poll grabs it (mos_watch.c), then stable
+           for the session — emitted only when present, like vendor/product. */
+        if (serial && *serial) {
+            fputs(",\"serial\":", stdout); mos_cli_json_str(stdout, serial);
         }
         if (sk != 0 || asc != 0 || ascq != 0) {
             fprintf(stdout,

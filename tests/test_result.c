@@ -70,6 +70,7 @@ TEST(watch_event_accessors_return_fields)
         .vendor          = "HL-DT-ST",
         .product         = "BD-RE BH16NS55",
         .revision        = "1.00",
+        .serial          = "KL2G7942618WL",
         .state           = MOS_STATE_READY,
         .prev_state      = MOS_STATE_LOADING,
         .current_profile = 0x0040,
@@ -89,6 +90,7 @@ TEST(watch_event_accessors_return_fields)
     EXPECT_STREQ(mos_watch_event_vendor(&e), "HL-DT-ST");
     EXPECT_STREQ(mos_watch_event_product(&e), "BD-RE BH16NS55");
     EXPECT_STREQ(mos_watch_event_revision(&e), "1.00");
+    EXPECT_STREQ(mos_watch_event_serial(&e), "KL2G7942618WL");
     EXPECT_EQ(mos_watch_event_state(&e), MOS_STATE_READY);
     EXPECT_EQ(mos_watch_event_prev_state(&e), MOS_STATE_LOADING);
     EXPECT_EQ(mos_watch_event_current_profile(&e), 0x0040);
@@ -110,6 +112,7 @@ TEST(watch_event_accessors_tolerate_null)
     EXPECT(mos_watch_event_vendor(NULL) == NULL);
     EXPECT(mos_watch_event_product(NULL) == NULL);
     EXPECT(mos_watch_event_revision(NULL) == NULL);
+    EXPECT(mos_watch_event_serial(NULL) == NULL);
     EXPECT_EQ(mos_watch_event_current_profile(NULL), 0);
     EXPECT_EQ(mos_watch_event_error(NULL), MOS_OK);
     EXPECT_EQ(mos_watch_event_latency_ms(NULL), 0);

@@ -206,6 +206,7 @@ static void fill_event_state_fields(mos_watch_event *e,
     e->vendor          = r->vendor;
     e->product         = r->product;
     e->revision        = r->revision;
+    e->serial          = r->serial;   /* NULL until a free poll grabs it (mos_watch.c) */
     e->sense_key       = r->sense_key;
     e->asc             = r->asc;
     e->ascq            = r->ascq;
