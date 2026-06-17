@@ -16,6 +16,15 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 FAIL=0
 
+# Guard: an unmatched glob (no tests/test_*.c) leaves the loop below iterating
+# the literal pattern once, grep errors, FAIL stays 0, and the gate prints its
+# "OK" — a vacuous pass on a tripwire. Assert the glob actually matched first.
+set -- "$ROOT"/tests/test_*.c
+if [ ! -e "$1" ]; then
+    echo "check-test-registration: no tests/test_*.c under $ROOT/tests — refusing a vacuous pass." >&2
+    exit 2
+fi
+
 for f in "$ROOT"/tests/test_*.c; do
     [ "$(basename "$f")" = "test_main.c" ] && continue
     DEFINED=$(grep -E '^TEST\(' "$f" | sed -E 's/^TEST\(([^)]+)\).*/\1/') || true

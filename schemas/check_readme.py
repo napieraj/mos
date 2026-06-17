@@ -382,8 +382,12 @@ def main() -> int:
         if cols:
             variants = c_list_headers()
             if not variants:
-                print(f"  SKIP {loc}: list headers not found in cli/common.c")
-                skipped += 1
+                # A missing C anchor means the README<->C contract can no
+                # longer be verified (the header arrays were renamed/moved) —
+                # fail-closed, don't SKIP-mask the drift this gate exists for.
+                print(f"  FAIL {loc}: list headers not found in cli/common.c "
+                      f"(C anchor renamed? contract unverifiable)")
+                failures += 1
             else:
                 report("list table header",
                        [] if cols in variants else
@@ -395,8 +399,12 @@ def main() -> int:
             verb, shown = hb
             c_labels = c_human_labels(verb)
             if c_labels is None:
-                print(f"  SKIP {loc}: cli/{verb}.c emit_human not found")
-                skipped += 1
+                # Same fail-closed reasoning as the list-header anchor above:
+                # a human pair block in the README means the verb HAS an
+                # emit_human, so a missing anchor is a rename, not a no-op.
+                print(f"  FAIL {loc}: cli/{verb}.c emit_human not found "
+                      f"(C anchor renamed/moved? contract unverifiable)")
+                failures += 1
             else:
                 report(f"human {verb} rows",
                        subsequence_problems(shown, c_labels, verb))

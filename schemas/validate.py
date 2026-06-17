@@ -269,8 +269,13 @@ def main() -> int:
 
     # Positive: every fixture under schemas/examples must validate.
     examples_dir = here / "examples"
+    example_fixtures = sorted(examples_dir.glob("*.json"))
+    if not example_fixtures:
+        print(f"error: no example fixtures under {examples_dir} — refusing a "
+              f"vacuous pass", file=sys.stderr)
+        return 2
     print(f"\nPositive (must validate, from {examples_dir.relative_to(here.parent)}):")
-    for fixture in sorted(examples_dir.glob("*.json")):
+    for fixture in example_fixtures:
         sname = schema_name_from_filename(fixture.name)
         if sname not in schemas:
             print(f"  FAIL {fixture.name}: unknown schema family '{sname}'")
@@ -287,23 +292,33 @@ def main() -> int:
         else:
             print(f"  ok   {fixture.name}")
 
-    # Negative: every fixture under schemas/negative must be rejected.
+    # Negative: every fixture under schemas/negative must be rejected. A
+    # missing dir or an empty set is a setup error (return 2), never a silent
+    # skip — the negative suite is load-bearing (it proves the schemas reject).
     negative_dir = here / "negative"
-    if negative_dir.is_dir():
-        print(f"\nNegative (must be rejected, from {negative_dir.relative_to(here.parent)}):")
-        for fixture in sorted(negative_dir.glob("*.json")):
-            sname = schema_name_from_filename(fixture.name)
-            if sname not in schemas:
-                print(f"  FAIL {fixture.name}: unknown schema family '{sname}'")
-                failures += 1
-                continue
-            payload = json.loads(fixture.read_text())
-            errors = list(schemas[sname].iter_errors(payload))
-            if errors:
-                print(f"  ok   {fixture.name} (correctly rejected)")
-            else:
-                print(f"  FAIL {fixture.name}: should have been rejected by {sname}")
-                failures += 1
+    if not negative_dir.is_dir():
+        print(f"error: {negative_dir} missing — refusing to skip the negative "
+              f"suite", file=sys.stderr)
+        return 2
+    negative_fixtures = sorted(negative_dir.glob("*.json"))
+    if not negative_fixtures:
+        print(f"error: no negative fixtures under {negative_dir} — refusing a "
+              f"vacuous pass", file=sys.stderr)
+        return 2
+    print(f"\nNegative (must be rejected, from {negative_dir.relative_to(here.parent)}):")
+    for fixture in negative_fixtures:
+        sname = schema_name_from_filename(fixture.name)
+        if sname not in schemas:
+            print(f"  FAIL {fixture.name}: unknown schema family '{sname}'")
+            failures += 1
+            continue
+        payload = json.loads(fixture.read_text())
+        errors = list(schemas[sname].iter_errors(payload))
+        if errors:
+            print(f"  ok   {fixture.name} (correctly rejected)")
+        else:
+            print(f"  FAIL {fixture.name}: should have been rejected by {sname}")
+            failures += 1
 
     print()
     failures += check_state_enum_drift(here)

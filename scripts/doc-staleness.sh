@@ -43,6 +43,16 @@ if [ -z "$md_files" ]; then
     exit 2
 fi
 
+# Whitespace hardening (Option B): split every file list on NEWLINE only, not
+# the default space/tab/newline. `git ls-files` emits one path per line, so a
+# tracked doc whose name contains a space is not torn apart by word-splitting
+# in the loop or the deny() greps below; all file lists in this script are
+# newline-joined to match. (A literal newline in a name git quotes via
+# core.quotePath, so it can't silently slip through.)
+nl='
+'
+IFS=$nl
+
 # Live documentation set, by EXCLUSION: every tracked *.md is checked by
 # default, so a new doc is covered the moment it lands — the fail-safe
 # direction for a staleness tripwire (an inclusion list silently misses a
@@ -61,9 +71,18 @@ for f in $md_files; do
     case "$f" in
         AGENTS.md|CLAUDE.md)          continue ;;
         doc/research/*|doc/history/*) continue ;;
-        *) LIVE_DOCS="$LIVE_DOCS $f" ;;
+        *) LIVE_DOCS="${LIVE_DOCS}${f}${nl}" ;;
     esac
 done
+# If every tracked *.md is exemption-filtered, LIVE_DOCS is empty and the
+# default-target deny()s would grep nothing — the same vacuous-pass class as an
+# empty md_files, one layer deeper. Refuse it. (Unreachable today: live docs
+# exist; this closes the residual edge.)
+if [ -z "$LIVE_DOCS" ]; then
+    echo "doc-staleness: every tracked *.md is exemption-filtered — no live docs to check." >&2
+    echo "  Refusing to report a vacuous pass." >&2
+    exit 2
+fi
 
 deny() {
     pattern="$1"; reason="$2"; files="${3:-$LIVE_DOCS}"
@@ -122,8 +141,12 @@ deny 'v0\.3 typed API|v0\.3 introduces' \
 # to rebut them (same append-with-argument rule as AGENTS).
 deny 'mos_notification_probe|tools/mos_probe|MOS_BUILD_(NOTIFICATION_)?PROBE|\-\-dr-dump' \
      "probes consolidated into 'mos probe' (cli/probe.c, MOS_CLI_PROBE), 2026-06-11" \
-     "README.md ARCHITECTURE.md CONTRIBUTING.md INTEGRATION_HARNESS.md \
-schemas/README.md tests/fixtures/README.md \
+     "README.md
+ARCHITECTURE.md
+CONTRIBUTING.md
+INTEGRATION_HARNESS.md
+schemas/README.md
+tests/fixtures/README.md
 doc/dr-field-mapping.md"
 
 if [ "$FAIL" -eq 1 ]; then
