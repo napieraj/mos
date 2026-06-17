@@ -122,6 +122,8 @@ code; this table is the citation, not the parse.
   `get_unaligned_be16(&buf[2])`, which equals `buf[3]` here because byte 2 is
   reserved (zero) on page 0x80 — same value, confirming the single-byte read.
 - **Not decoded:** every other VPD page (0x00 supported-pages list, 0x83
-  Device Identification, …) and the standard-INQUIRY data itself
-  (vendor/product/revision come from DiscRecording's directory, zero
-  commands) — this parser decodes only the serial page.
+  Device Identification, …) and the standard-INQUIRY data itself — this parser
+  decodes only the serial page. (vendor/product/revision come zero-command
+  from DiscRecording's directory on every path EXCEPT `mos drive`, which
+  prefers a fresh raw standard INQUIRY via mos_inqdata.c and falls back to the
+  DR cache only on BUSY.)
