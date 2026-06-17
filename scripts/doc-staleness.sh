@@ -25,6 +25,24 @@
 set -u
 FAIL=0
 
+# Guard: this gate enumerates docs with `git ls-files`, which returns NOTHING
+# outside a git work tree (a tarball/export, or run from the wrong directory).
+# An empty file list makes every deny() below grep nothing and the script fall
+# through to its unconditional "OK" — a false pass on a tripwire. So require a
+# real work tree with tracked docs first; "cannot enumerate" is a hard error
+# (exit 2), never a silent pass.
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "doc-staleness: not inside a git work tree — cannot enumerate docs via git ls-files." >&2
+    echo "  Run from a git checkout; refusing to report a vacuous pass." >&2
+    exit 2
+fi
+md_files=$(git ls-files '*.md')
+if [ -z "$md_files" ]; then
+    echo "doc-staleness: 'git ls-files *.md' returned no tracked docs — broken/empty checkout." >&2
+    echo "  Refusing to report a vacuous pass." >&2
+    exit 2
+fi
+
 # Live documentation set, by EXCLUSION: every tracked *.md is checked by
 # default, so a new doc is covered the moment it lands — the fail-safe
 # direction for a staleness tripwire (an inclusion list silently misses a
@@ -39,7 +57,7 @@ FAIL=0
 # To exempt a new doc, justify it here as one of these record types;
 # everything else is held to current-state truth.
 LIVE_DOCS=""
-for f in $(git ls-files '*.md'); do
+for f in $md_files; do
     case "$f" in
         AGENTS.md|CLAUDE.md)          continue ;;
         doc/research/*|doc/history/*) continue ;;
@@ -49,8 +67,10 @@ done
 
 deny() {
     pattern="$1"; reason="$2"; files="${3:-$LIVE_DOCS}"
+    # </dev/null: if $files is ever empty, grep must not fall back to reading
+    # stdin (which would hang on a tty or match nothing silently).
     # shellcheck disable=SC2086
-    hits=$(grep -nE -e "$pattern" $files 2>/dev/null)
+    hits=$(grep -nE -e "$pattern" $files 2>/dev/null </dev/null)
     if [ -n "$hits" ]; then
         echo "STALE DOC MARKER: /$pattern/ — $reason"
         echo "$hits" | sed 's/^/    /'
