@@ -6,10 +6,12 @@
   "product": "BD-RE WH16NS40",
   "firmware": "1.05",
   "serial": null,
-  "capabilities": {
-    "aacs": true,
-    "aacs_version": 78,
-    "bus_encryption": true
+  "protection": {
+    "aacs": {"version": 78, "bus_encryption": true, "write_bus_encryption": true},
+    "css": {"version": 1},
+    "cprm": {"version": 1},
+    "securdisc": false,
+    "vcps": false
   },
   "profiles": [
     {"code": "0x0008", "name": "cd_rom"},

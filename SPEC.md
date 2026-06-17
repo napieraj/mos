@@ -77,7 +77,15 @@ code; this table is the citation, not the parse.
   the inline safety contract. Typed payload decodes off the same walk:
   - **Profile List (0x0000):** MMC-6 §5.3.1 — 4-byte Profile Descriptors
     (Profile Number BE16, byte 2 bit0 CurrentP); the drive-static code set.
-  - **AACS (0x010D):** the bus-encryption + version bytes (see ARCHITECTURE).
+  - **Content protection:** drive-static capability bits (feature PRESENCE =
+    the drive can authenticate the scheme; the per-feature Current bit is
+    media state, ignored). Version-carrying schemes put their version at
+    payload byte 3 (Additional Length 4): **CSS 0106h** (§5.3.38, CSS
+    Version), **CPRM 010Bh** (§5.3.42, CPRM version), **AACS 010Dh** (§5.3.44
+    Table 198 — byte 0 BEC bit 1 / WBE bit 2, AACS Version byte 3).
+    Presence-only (Additional Length 0): **SecurDisc 0113h** (§5.3.46),
+    **VCPS 0110h** (legacy, MMC-5 — designated Legacy in MMC-6 Annex E.6).
+    Enforcement/region/key state behind REPORT KEY is out of scope.
   - **Firmware Information (010Ch):** MMC-6 r02g §5.3.43, Table 197 — payload
     Century[2] Year[2] Month[2] Day[2] Hour[2] Minute[2] Second[2]
     Reserved[2], decimal ASCII, GMT; Additional Length 0x10. Emitted as an

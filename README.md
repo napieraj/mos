@@ -1,5 +1,9 @@
 # mac-optical-state
 
+[![GitHub release](https://img.shields.io/github/v/release/napieraj/mos?label=release)](https://github.com/napieraj/mos/releases)
+[![CI](https://github.com/napieraj/mos/actions/workflows/ci.yml/badge.svg)](https://github.com/napieraj/mos/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/napieraj/mos)](https://github.com/napieraj/mos/blob/main/LICENSE)
+
 > Report what a macOS optical drive is actually doing — tray open,
 > tray closed empty, loading, unit ready, busy — by querying the
 > drive directly.
@@ -187,22 +191,22 @@ mount on macOS. Full field reference:
 
 ```
 $ mos drive 1
-        BSD:  /dev/disk4
-Registry ID:  4295032831
-     Vendor:  HL-DT-ST
-    Product:  BD-RE WH16NS60
-   Firmware:  1.00 (2019-01-07T13:20:43Z)
-     Serial:  KL2G7942618WL
-       AACS:  version 68, bus encryption yes
-   Profiles:  cd_rom, cd_r, cd_rw, dvd_rom, dvd_minus_r, ..., bd_rom, bd_r, bd_re
-  Standards:  spc_4 — mmc_6, sbc_3, sam_5, spc_4
-     Speeds:  read 10560 kB/s, write 8310 kB/s (max)
-       Mech:  tray, buffer 4096 KB
-   ErrRecov:  retry 20, PER
+           BSD:  /dev/disk4
+   Registry ID:  4295032831
+        Vendor:  HL-DT-ST
+       Product:  BD-RE WH16NS60
+      Firmware:  1.00 (2019-01-07T13:20:43Z)
+        Serial:  KL2G7942618WL
+    Protection:  AACS (v68, bus encryption), CSS (v1)
+      Profiles:  cd_rom, cd_r, cd_rw, dvd_rom, dvd_minus_r, ..., bd_rom, bd_r, bd_re
+     Standards:  spc_4 — mmc_6, sbc_3, sam_5, spc_4
+        Speeds:  read 10.6 MB/s, write 8.3 MB/s (max)
+    Mechanical:  tray, buffer 4.1 MB
+Error Recovery:  retry 20, PER
 ```
 
-Static facts that don't depend on the loaded disc: identity, AACS
-capability (from one GET CONFIGURATION feature walk), max read/write
+Static facts that don't depend on the loaded disc: identity, content-
+protection capability (from one GET CONFIGURATION feature walk), max read/write
 speeds, and the two read-only MODE SENSE pages — `mechanical` (loading
 mechanism, eject/lock support, the live media-locked bit, buffer size)
 and `error_recovery` (the drive's read error-recovery configuration).
@@ -221,7 +225,16 @@ supported-profile set from the GET CONFIGURATION Profile List feature (the
 same walk that yields AACS) — the drive-static disc types this drive can
 handle (CD/DVD/BD…), the modern BD-aware "what can this drive read/write"
 that supersedes the legacy page-0x2A media bits; the per-disc Current bit
-is omitted, so it reflects the drive, not the loaded medium. `version` and
+is omitted, so it reflects the drive, not the loaded medium. `protection`
+is the set of copy/content-protection schemes the drive can *authenticate*
+(AACS, CSS, CPRM, SecurDisc, VCPS) — a drive capability, **not** per-disc
+state and not enforcement: a feature's presence means the drive speaks the
+scheme, the per-feature Current bit (protected media loaded now) is omitted,
+and region/key state behind `REPORT KEY` is out of scope. A modern BD drive
+shows AACS+CSS at minimum, so the list reads as capabilities. For AACS,
+`bus_encryption` (BEC) and `write_bus_encryption` (WBE) are the drive-reported
+bus-encryption support bits (the human row shows the version and the read-side
+`bus encryption`; WBE is `--json`-only). `version` and
 `version_descriptors` come from a raw standard INQUIRY (EVPD=0): the SPC
 compliance level and the T10/ISO standards the drive claims (MMC-6, SPC-4,
 SBC-3…) — like `serial`, that raw read self-gates on exclusive access, so

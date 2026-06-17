@@ -134,10 +134,10 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
                    : MOS_ERR_IO;
     }
 
-    mos_internal_aacs_caps_from_config(buf, sizeof(buf), &h->caps);
+    mos_internal_protection_from_config(buf, sizeof(buf), &h->caps);
     /* Same RT=0 reply carries the Profile List feature (0x0000); decode the
-       drive-static supported-profile set from it (aacs_caps zeroed the struct
-       first, so profile_count stays 0 if the feature is absent). */
+       drive-static supported-profile set from it (protection_from_config zeroed
+       the struct first, so profile_count stays 0 if the feature is absent). */
     mos_internal_profile_list_from_config(buf, sizeof(buf), h->caps.profiles,
                                           MOS_DRIVE_PROFILE_CAP,
                                           &h->caps.profile_count);

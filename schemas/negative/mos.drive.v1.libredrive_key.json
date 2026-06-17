@@ -6,10 +6,12 @@
   "product": "BD-RW BDR-XS07",
   "firmware": "1.01",
   "serial": null,
-  "capabilities": {
-    "aacs": true,
-    "aacs_version": 68,
-    "bus_encryption": false,
+  "protection": {
+    "aacs": {"version": 68, "bus_encryption": false, "write_bus_encryption": false},
+    "css": null,
+    "cprm": null,
+    "securdisc": false,
+    "vcps": false,
     "libredrive": true
   },
   "profiles": [{"code": "0x0008", "name": "cd_rom"}],

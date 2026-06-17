@@ -119,20 +119,48 @@ bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
     return true;
 }
 
-/* Contract in mos_pure.h. */
-void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
-                                        mos_drive_caps *out)
+/* Contract in mos_pure.h. The content-protection features all live in the same
+   RT=0 walk. Version-carrying schemes (CSS/CPRM/AACS) put their version at
+   payload byte 3 (Additional Length 4); a present-but-truncated payload reads
+   as absent (fail closed, like the walker). SecurDisc/VCPS are presence-only
+   (Additional Length 0 ⇒ no payload), so the find alone is the signal. AACS
+   byte 0 carries BEC (bit 1, bus encryption) and WBE (bit 2, write bus
+   encryption) — MMC-6 §5.3.44 Table 198. */
+void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
+                                         mos_drive_caps *out)
 {
     if (!out) return;
     *out = (mos_drive_caps){0};
 
+    mos_drive_protection *p = &out->protection;
     mos_config_feature f;
-    if (!mos_internal_config_find_feature(buf, len, 0x010D, &f)) return;
-    if (f.data_len < 4 || !f.data) return;    /* malformed: reads as absent */
 
-    out->aacs           = true;
-    out->bus_encryption = (f.data[0] & 0x02u) != 0;
-    out->aacs_version   = f.data[3];
+    /* DVD CSS (0106h): CSS Version at payload byte 3. */
+    if (mos_internal_config_find_feature(buf, len, 0x0106, &f) &&
+        f.data && f.data_len >= 4) {
+        p->css         = true;
+        p->css_version = f.data[3];
+    }
+    /* DVD CPRM (010Bh): CPRM version at payload byte 3. */
+    if (mos_internal_config_find_feature(buf, len, 0x010B, &f) &&
+        f.data && f.data_len >= 4) {
+        p->cprm         = true;
+        p->cprm_version = f.data[3];
+    }
+    /* AACS (010Dh): BEC/WBE in byte 0, AACS Version in byte 3. */
+    if (mos_internal_config_find_feature(buf, len, 0x010D, &f) &&
+        f.data && f.data_len >= 4) {
+        p->aacs                 = true;
+        p->bus_encryption       = (f.data[0] & 0x02u) != 0;
+        p->write_bus_encryption = (f.data[0] & 0x04u) != 0;
+        p->aacs_version         = f.data[3];
+    }
+    /* SecurDisc (0113h): presence only (Additional Length 0). */
+    if (mos_internal_config_find_feature(buf, len, 0x0113, &f))
+        p->securdisc = true;
+    /* VCPS (0110h): legacy (MMC-5), presence only. */
+    if (mos_internal_config_find_feature(buf, len, 0x0110, &f))
+        p->vcps = true;
 }
 
 /* Contract in mos_pure.h. The Profile List feature (0x0000) payload is a

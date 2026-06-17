@@ -15,6 +15,30 @@ static const char *cell_or_dash(const char *s)
     return s ? s : MOS_CLI_HUMAN_DASH;
 }
 
+const char *mos_cli_human_bytes(uint64_t bytes, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return buf;
+    if (bytes < 1000ULL)
+        snprintf(buf, cap, "%llu B", (unsigned long long)bytes);
+    else if (bytes < 1000ULL * 1000ULL)
+        snprintf(buf, cap, "%.1f kB", (double)bytes / 1e3);
+    else if (bytes < 1000ULL * 1000ULL * 1000ULL)
+        snprintf(buf, cap, "%.1f MB", (double)bytes / 1e6);
+    else
+        snprintf(buf, cap, "%.1f GB", (double)bytes / 1e9);
+    return buf;
+}
+
+const char *mos_cli_human_rate(uint32_t kbps, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return buf;
+    if (kbps < 1000u)
+        snprintf(buf, cap, "%u kB/s", kbps);
+    else
+        snprintf(buf, cap, "%.1f MB/s", (double)kbps / 1e3);
+    return buf;
+}
+
 bool mos_cli_human_block(FILE *f, const mos_cli_human_pair *pairs, size_t n)
 {
     if (!f || !pairs || n == 0) return false;

@@ -217,19 +217,54 @@ uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i)
 
 /* ---- mos_drive_caps accessors (mos_query_drive_caps) ----------------- */
 
+bool mos_drive_caps_css(const mos_drive_caps *c)
+{
+    return c ? c->protection.css : false;
+}
+
+uint8_t mos_drive_caps_css_version(const mos_drive_caps *c)
+{
+    return c ? c->protection.css_version : 0;
+}
+
+bool mos_drive_caps_cprm(const mos_drive_caps *c)
+{
+    return c ? c->protection.cprm : false;
+}
+
+uint8_t mos_drive_caps_cprm_version(const mos_drive_caps *c)
+{
+    return c ? c->protection.cprm_version : 0;
+}
+
 bool mos_drive_caps_aacs(const mos_drive_caps *c)
 {
-    return c ? c->aacs : false;
+    return c ? c->protection.aacs : false;
 }
 
 uint8_t mos_drive_caps_aacs_version(const mos_drive_caps *c)
 {
-    return c ? c->aacs_version : 0;
+    return c ? c->protection.aacs_version : 0;
 }
 
 bool mos_drive_caps_bus_encryption(const mos_drive_caps *c)
 {
-    return c ? c->bus_encryption : false;
+    return c ? c->protection.bus_encryption : false;
+}
+
+bool mos_drive_caps_write_bus_encryption(const mos_drive_caps *c)
+{
+    return c ? c->protection.write_bus_encryption : false;
+}
+
+bool mos_drive_caps_securdisc(const mos_drive_caps *c)
+{
+    return c ? c->protection.securdisc : false;
+}
+
+bool mos_drive_caps_vcps(const mos_drive_caps *c)
+{
+    return c ? c->protection.vcps : false;
 }
 
 uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)

@@ -14,6 +14,22 @@
 #include <stdio.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
+
+/* Human-readable unit scaling for the CLI's text views ONLY — the JSON
+   emitters keep the raw integers (kbps, byte counts) for machine parsing.
+   Decimal (1000-based) throughout: GET PERFORMANCE reports decimal kB/s and
+   disc capacities are marketed decimal (a "4.7 GB" DVD). One decimal place.
+   Both write into `buf` (cap bytes) and return it for inline use. */
+
+/* Byte count → "N B" / "N.N kB" / "N.N MB" / "N.N GB". The B tier keeps
+   integer bytes (block sizes like 2048 B); larger tiers scale with one
+   decimal. */
+const char *mos_cli_human_bytes(uint64_t bytes, char *buf, size_t cap);
+
+/* Transfer rate in kB/s → "N kB/s" (below 1000) or "N.N MB/s". Optical
+   rates never fall below CD 1x (~150 kB/s), so there is no B/s tier. */
+const char *mos_cli_human_rate(uint32_t kbps, char *buf, size_t cap);
 
 typedef struct mos_cli_human_pair {
     const char *key;   /* never NULL */

@@ -1,7 +1,7 @@
 /* cli/drive.c — the drive command: `mos drive [selector] [--json]`.
  *
  * One mos.drive.v1 document: what this drive IS (static facts), vs
- * metadata's "what disc is this". capabilities/profiles/firmware_date are one
+ * metadata's "what disc is this". protection/profiles/firmware_date are one
  * GET CONFIGURATION RT=0 walk. This is the one path where the user asks for
  * the canonical truth, so identity (vendor/product/revision) + version +
  * version descriptors come FRESH from a raw standard INQUIRY
@@ -25,10 +25,7 @@ typedef struct {
     const char *product;
     const char *revision;
     const char *serial;       /* borrowed; NULL = unavailable (see header) */
-    bool        aacs;
-    uint8_t     aacs_version;
-    bool        bus_encryption;
-    const mos_drive_caps *caps;  /* borrowed; for the supported-profile list */
+    const mos_drive_caps *caps;  /* borrowed; protection + supported-profile list */
     const mos_drive_inquiry *inquiry;  /* borrowed; NULL = unreadable (BUSY) */
     bool        have_speeds;   /* GET PERFORMANCE returned >= 1 descriptor */
     uint16_t    speed_count;
@@ -61,15 +58,39 @@ static void emit_json(const drive_doc *d)
     if (d->serial)   mos_cli_json_str(stdout, d->serial);
     else             fputs("null", stdout);
 
-    fprintf(stdout,
-            ",\n  \"capabilities\": {\"aacs\": %s, \"aacs_version\": ",
-            d->aacs ? "true" : "false");
-    if (d->aacs) fprintf(stdout, "%u", d->aacs_version);
-    else         fputs("null", stdout);
-    fputs(", \"bus_encryption\": ", stdout);
-    if (d->aacs) fputs(d->bus_encryption ? "true" : "false", stdout);
-    else         fputs("null", stdout);
-    fputs("}", stdout);
+    /* protection: copy/content-protection schemes the drive CAN authenticate
+       (capability, not per-disc state — see the mos.drive.v1 schema). Version-
+       carrying schemes (aacs/css/cprm) are an object when present, null when
+       absent; presence-only schemes (securdisc/vcps) are a bool. */
+    {
+        const mos_drive_caps *c = d->caps;
+        fputs(",\n  \"protection\": {\"aacs\": ", stdout);
+        if (mos_drive_caps_aacs(c))
+            fprintf(stdout,
+                    "{\"version\": %u, \"bus_encryption\": %s, "
+                    "\"write_bus_encryption\": %s}",
+                    mos_drive_caps_aacs_version(c),
+                    mos_drive_caps_bus_encryption(c) ? "true" : "false",
+                    mos_drive_caps_write_bus_encryption(c) ? "true" : "false");
+        else
+            fputs("null", stdout);
+
+        fputs(", \"css\": ", stdout);
+        if (mos_drive_caps_css(c))
+            fprintf(stdout, "{\"version\": %u}", mos_drive_caps_css_version(c));
+        else
+            fputs("null", stdout);
+
+        fputs(", \"cprm\": ", stdout);
+        if (mos_drive_caps_cprm(c))
+            fprintf(stdout, "{\"version\": %u}", mos_drive_caps_cprm_version(c));
+        else
+            fputs("null", stdout);
+
+        fprintf(stdout, ", \"securdisc\": %s, \"vcps\": %s}",
+                mos_drive_caps_securdisc(c) ? "true" : "false",
+                mos_drive_caps_vcps(c) ? "true" : "false");
+    }
 
     /* Supported-profile list: array of {code, name}. Empty array when the
        Profile List feature was absent — a present-but-empty set, not null. */
@@ -202,13 +223,52 @@ static void emit_human(const drive_doc *d)
 
     pairs[n++] = (mos_cli_human_pair){ "Serial",  d->serial   ? s_esc : NULL };
 
-    char aacs_buf[48];
-    if (d->aacs)
-        snprintf(aacs_buf, sizeof aacs_buf, "version %u, bus encryption %s",
-                 d->aacs_version, d->bus_encryption ? "yes" : "no");
-    else
-        snprintf(aacs_buf, sizeof aacs_buf, "no");
-    pairs[n++] = (mos_cli_human_pair){ "AACS", aacs_buf };
+    /* Protection: the schemes the drive can authenticate, comma-joined; the
+       version (and AACS bus-encryption notes) ride in parentheses. A modern BD
+       drive shows AACS+CSS at minimum, so the multi-scheme list reads as
+       capabilities, not per-disc state. "none" when the drive advertises no
+       protection feature (every non-DVD/BD unit). */
+    char prot_buf[128];
+    {
+        const mos_drive_caps *c = d->caps;
+        size_t off = 0;
+        #define PROT_SEP() (off ? ", " : "")
+        if (mos_drive_caps_aacs(c)) {
+            /* WBE (write bus encryption) is JSON-only; the human row carries
+               just the version and the bus-encryption (read) capability. */
+            int w = snprintf(prot_buf + off, sizeof prot_buf - off,
+                             "%sAACS (v%u%s)", PROT_SEP(),
+                             mos_drive_caps_aacs_version(c),
+                             mos_drive_caps_bus_encryption(c)
+                                 ? ", bus encryption" : "");
+            if (w > 0 && (size_t)w < sizeof prot_buf - off) off += (size_t)w;
+        }
+        if (mos_drive_caps_css(c)) {
+            int w = snprintf(prot_buf + off, sizeof prot_buf - off,
+                             "%sCSS (v%u)", PROT_SEP(),
+                             mos_drive_caps_css_version(c));
+            if (w > 0 && (size_t)w < sizeof prot_buf - off) off += (size_t)w;
+        }
+        if (mos_drive_caps_cprm(c)) {
+            int w = snprintf(prot_buf + off, sizeof prot_buf - off,
+                             "%sCPRM (v%u)", PROT_SEP(),
+                             mos_drive_caps_cprm_version(c));
+            if (w > 0 && (size_t)w < sizeof prot_buf - off) off += (size_t)w;
+        }
+        if (mos_drive_caps_securdisc(c)) {
+            int w = snprintf(prot_buf + off, sizeof prot_buf - off,
+                             "%sSecurDisc", PROT_SEP());
+            if (w > 0 && (size_t)w < sizeof prot_buf - off) off += (size_t)w;
+        }
+        if (mos_drive_caps_vcps(c)) {
+            int w = snprintf(prot_buf + off, sizeof prot_buf - off,
+                             "%sVCPS", PROT_SEP());
+            if (w > 0 && (size_t)w < sizeof prot_buf - off) off += (size_t)w;
+        }
+        #undef PROT_SEP
+        if (off == 0) snprintf(prot_buf, sizeof prot_buf, "none");
+    }
+    pairs[n++] = (mos_cli_human_pair){ "Protection", prot_buf };
 
     /* Supported profiles, comma-joined names (unknown code → hex). 768 holds
        the realistic set several times over; a pathological overflow stops at
@@ -255,23 +315,30 @@ static void emit_human(const drive_doc *d)
     }
     pairs[n++] = (mos_cli_human_pair){ "Standards", d->inquiry ? std_buf : NULL };
 
-    /* 64: worst case "read 4294967295 kB/s, write 4294967295 kB/s (max)"
-       is 49 + NUL. */
+    /* Human-scaled rate (kB/s or MB/s); JSON keeps the raw kbps integers. */
     char spd_buf[64];
-    if (d->have_speeds)
-        snprintf(spd_buf, sizeof spd_buf, "read %u kB/s, write %u kB/s (max)",
-                 d->max_read_kbps, d->max_write_kbps);
+    if (d->have_speeds) {
+        char rd[24], wr[24];
+        snprintf(spd_buf, sizeof spd_buf, "read %s, write %s (max)",
+                 mos_cli_human_rate(d->max_read_kbps, rd, sizeof rd),
+                 mos_cli_human_rate(d->max_write_kbps, wr, sizeof wr));
+    }
     pairs[n++] = (mos_cli_human_pair){ "Speeds", d->have_speeds ? spd_buf : NULL };
 
     char mech_buf[64];
     if (d->caps_2a) {
         const char *lm = mos_loading_mechanism_name(
                              mos_mode_caps_loading_mechanism(d->caps_2a));
-        snprintf(mech_buf, sizeof mech_buf, "%s, buffer %u KB%s",
-                 lm ? lm : "unknown", mos_mode_caps_buffer_kb(d->caps_2a),
+        /* buffer_kb is the page-2A figure in kB; human-scale it (JSON keeps
+           raw buffer_kb). Fed as a decimal-kB byte count for one convention. */
+        char bufsz[24];
+        snprintf(mech_buf, sizeof mech_buf, "%s, buffer %s%s",
+                 lm ? lm : "unknown",
+                 mos_cli_human_bytes((uint64_t)mos_mode_caps_buffer_kb(d->caps_2a)
+                                         * 1000ULL, bufsz, sizeof bufsz),
                  mos_mode_caps_locked(d->caps_2a) ? ", locked" : "");
     }
-    pairs[n++] = (mos_cli_human_pair){ "Mech", d->caps_2a ? mech_buf : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Mechanical", d->caps_2a ? mech_buf : NULL };
 
     char erec_buf[64];
     if (d->erec)
@@ -279,7 +346,7 @@ static void emit_human(const drive_doc *d)
                  mos_error_recovery_read_retry_count(d->erec),
                  mos_error_recovery_per(d->erec) ? ", PER" : "",
                  mos_error_recovery_dcr(d->erec) ? ", DCR" : "");
-    pairs[n++] = (mos_cli_human_pair){ "ErrRecov", d->erec ? erec_buf : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Error Recovery", d->erec ? erec_buf : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }
@@ -324,9 +391,6 @@ int mos_cli_run_drive(void)
     d.bsd_unit       = mos_handle_bsd_unit(h);
     d.registry_id    = mos_handle_registry_id(h);
     d.caps           = c;
-    d.aacs           = mos_drive_caps_aacs(c);
-    d.aacs_version   = mos_drive_caps_aacs_version(c);
-    d.bus_encryption = mos_drive_caps_bus_encryption(c);
 
     /* The drive's self-report, fresh from a raw standard INQUIRY — version +
        version descriptors AND vendor/product/revision. `mos drive` is the one

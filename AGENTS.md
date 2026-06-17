@@ -724,3 +724,49 @@ walk (no new command, no raw verb), null when the optional feature is absent.
 This is the firmware's *creation date*, not a version string — the 4-char
 `revision` remains the firmware version identifier (the fuller ATA version
 string stays unreachable on macOS per the serial-doc finding).
+
+## ADR: content protection surfaced as drive CAPABILITY, not per-disc state
+## (2026-06-17, enriches `mos drive`; no new command surface)
+
+The `mos drive` doc gained a `protection` block covering the five MMC
+content-protection features — **CSS 0106h, CPRM 010Bh, AACS 010Dh, SecurDisc
+0113h, VCPS 0110h** — replacing the AACS-only `capabilities` block (pre-tag,
+mutable-in-place per the JSON-schema ADR; `mos.drive.v1` updated with examples,
+negatives, emitter, README, SPEC in one commit). This entry records the
+semantics decision and why it touches no doctrine line.
+
+**Capability, not enabled, not enforced.** A protection feature's PRESENCE in
+the RT=0 GET CONFIGURATION walk means the drive CAN authenticate that scheme —
+a drive-static capability. It does NOT mean protected media is loaded (the
+per-feature **Current** bit, media-dependent, is deliberately ignored) nor that
+protection is enforced (region/key state lives behind **REPORT KEY**, which mos
+does not issue). This resolves the prior `AACS: bus encryption yes` ambiguity:
+the bit was always BEC, a drive support bit, never an active/enforced state.
+Since a modern BD drive advertises AACS+CSS at minimum and a disc uses one
+encryption regime, the multi-scheme list reads as capabilities on its face —
+so the human row carries no "(capable)" label; the parentheses hold the
+version (`AACS (v68, bus encryption), CSS (v1)`).
+
+**No command-surface change (scope doctrine layer 1 untouched).** This rides
+the *existing* GET CONFIGURATION RT=0 walk `mos_query_drive_caps` already
+issues — convenience method, zero new commands, no raw CDB. The one-raw-CDB
+count stays one-of-four (GESN + two tray opcodes + INQUIRY). Layer 2 is
+unchanged: the verification oracle is MMC-6 (§5.3.38/42/44/46, Annex E.6),
+decoded by the same bounds-checked feature walk; no REPORT KEY, no SEND KEY,
+no mode/log pages. Privilege footprint (layer 3) unchanged.
+
+**WBE included, JSON-only in the human view.** AACS byte 0 carries BEC (bit 1,
+read bus encryption) and WBE (bit 2, write bus encryption). WBE is admitted —
+the repo's own `getconfig_aacs_wh16ns40.bin` capture (a common consumer BD-RE
+burner) reports byte 0 = 0x17 with WBE set, so it is a real consumer signal,
+and mos consumers burn (M-DISC archival). It rides as `write_bus_encryption` in
+`protection.aacs`; the human `Protection` row omits it (version + read-side
+`bus encryption` only) by maintainer call — the write-encryption bit is a
+programmatic detail, not dashboard text.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+crossflashed/bridged drive emitting a truncated or out-of-spec protection
+descriptor is handled generically — a version-carrying feature with a payload
+< 4 bytes reads as absent (fail closed, like the walker); presence-only schemes
+key only on the descriptor existing. Any surprise lands as a fixture + dated
+note with a generic gate, never a per-device special-case.
