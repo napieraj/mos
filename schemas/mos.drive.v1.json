@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/napieraj/mos/schemas/mos.drive.v1.json",
   "title": "mos.drive.v1",
-  "description": "Static drive facts emitted by `mos drive --json`: what IS this drive, vs mos.metadata.v1's what disc is this (design: doc/research/2026-06-10-media-info-design.md and 2026-06-16-drive-identity-enrichment-survey.md). This is the verb where the user asks for the canonical truth, so identity (vendor/product/firmware), version and version_descriptors are read FRESH from a raw standard INQUIRY, with the DiscRecording directory cache as fallback; capabilities/profiles/firmware_date are one GET CONFIGURATION RT=0 walk. The drive-disc JOIN is consumer-side: the pipeline that loaded a disc knows which drive it used. serial is the durable inventory key that survives replug and machine moves; registry_id is ATTACHMENT identity (replug mints a new one) and must not be used as a durable key.",
+  "description": "Static drive facts emitted by `mos drive --json`: what IS this drive, vs mos.metadata.v1's what disc is this (design: doc/research/2026-06-10-media-info-design.md and 2026-06-16-drive-identity-enrichment-survey.md). This is the verb where the user asks for the canonical truth, so identity (vendor/product/firmware), version and version_descriptors are read FRESH from a raw standard INQUIRY, with the DiscRecording directory cache as fallback; protection/profiles/firmware_date are one GET CONFIGURATION RT=0 walk. The drive-disc JOIN is consumer-side: the pipeline that loaded a disc knows which drive it used. serial is the durable inventory key that survives replug and machine moves; registry_id is ATTACHMENT identity (replug mints a new one) and must not be used as a durable key.",
   "type": "object",
   "required": [
     "schema",
@@ -12,7 +12,7 @@
     "product",
     "firmware",
     "serial",
-    "capabilities",
+    "protection",
     "profiles",
     "version",
     "version_descriptors",
@@ -53,25 +53,69 @@
       "type": ["string", "null"],
       "description": "INQUIRY unit serial (VPD page 0x80) — the durable drive-inventory key that survives replug and machine moves (registry_id is attachment identity, replug mints a new one). Read via a raw INQUIRY (EVPD=1, PAGE CODE=0x80): the convenience Inquiry issues only a standard INQUIRY, so the page is unreachable through it, satisfying the AGENTS layer-1 raw-verb showing (design: doc/research/2026-06-16-serial-vpd-0x80-feasibility.md). null when the drive is busy/mounted (the raw read backs off on exclusive access rather than contend), the drive does not implement the page, or no serial is programmed."
     },
-    "capabilities": {
+    "protection": {
       "type": "object",
-      "description": "Spec-grounded GET CONFIGURATION facts only — the same bits a MakeMKV drive dump shows as 'Highest AACS version' / bus-encryption flags, WITHOUT the LibreDrive status synthesis (a MakeMKV database property, not a drive property; mos emits no libredrive field by design).",
-      "required": ["aacs", "aacs_version", "bus_encryption"],
+      "description": "Copy/content-protection schemes the drive CAN authenticate, from the GET CONFIGURATION feature list — a drive CAPABILITY, not per-disc state (the per-feature Current bit, media-dependent, is ignored) and not enforcement (region/key state lives behind REPORT KEY, which mos does not issue — scope doctrine). A modern BD drive advertises AACS+CSS at minimum, so the set reads as the schemes this drive speaks. Spec-grounded bits only — the same a MakeMKV drive dump shows as 'Highest AACS version' / bus-encryption flags, WITHOUT the LibreDrive status synthesis (a MakeMKV database property, not a drive property; mos emits no libredrive field by design). Version-carrying schemes (aacs/css/cprm) are an object when present and null when absent; presence-only schemes (securdisc/vcps) are a boolean.",
+      "required": ["aacs", "css", "cprm", "securdisc", "vcps"],
       "additionalProperties": false,
       "properties": {
         "aacs": {
+          "type": ["object", "null"],
+          "description": "AACS feature (010Dh): object when the drive advertises AACS (BD units), null otherwise (every non-BD drive — data, not an error).",
+          "required": ["version", "bus_encryption", "write_bus_encryption"],
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255,
+              "description": "AACS Version (feature payload byte 3)."
+            },
+            "bus_encryption": {
+              "type": "boolean",
+              "description": "DRIVE-REPORTED bus-encryption (read) support — AACS BEC bit (feature payload byte 0 bit 1, per libaacs/UDFclient agreement). A firmware assertion: the cryptographically signed BEC bit lives in the AACS drive certificate behind REPORT KEY, which mos does not issue (scope doctrine)."
+            },
+            "write_bus_encryption": {
+              "type": "boolean",
+              "description": "DRIVE-REPORTED write-bus-encryption support — AACS WBE bit (feature payload byte 0 bit 2): the drive can write sectors subject to bus encryption (WBE=0 = bus encryption only drive→host). JSON-only; the human Protection row omits it."
+            }
+          }
+        },
+        "css": {
+          "type": ["object", "null"],
+          "description": "DVD CSS/CPPM feature (0106h): object when present, null otherwise.",
+          "required": ["version"],
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255,
+              "description": "CSS Version (feature payload byte 3)."
+            }
+          }
+        },
+        "cprm": {
+          "type": ["object", "null"],
+          "description": "DVD CPRM feature (010Bh): object when present, null otherwise.",
+          "required": ["version"],
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255,
+              "description": "CPRM version (feature payload byte 3)."
+            }
+          }
+        },
+        "securdisc": {
           "type": "boolean",
-          "description": "AACS feature (0x010D) present in the feature list. false on every non-BD drive — data, not an error."
+          "description": "SecurDisc feature (0113h) present — presence-only (Additional Length 0, no version)."
         },
-        "aacs_version": {
-          "type": ["integer", "null"],
-          "minimum": 0,
-          "maximum": 255,
-          "description": "AACS Version (feature payload byte 3), null when aacs is false."
-        },
-        "bus_encryption": {
-          "type": ["boolean", "null"],
-          "description": "DRIVE-REPORTED bus-encryption support (feature payload byte 0 bit 1, per libaacs/UDFclient agreement), null when aacs is false. A firmware assertion: the cryptographically signed BEC bit lives in the AACS drive certificate behind REPORT KEY, which mos does not issue (scope doctrine)."
+        "vcps": {
+          "type": "boolean",
+          "description": "VCPS feature (0110h) present — legacy (MMC-5), presence-only (no version)."
         }
       }
     },
@@ -137,7 +181,7 @@
       "type": ["string", "null"],
       "format": "date-time",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
-      "description": "Firmware creation timestamp from the GET CONFIGURATION Firmware Information feature (010Ch; MMC-6 §5.3.43 Table 197 — Century/Year/Month/Day/Hour/Minute/Second decimal ASCII, GMT), on the same RT=0 walk that yields capabilities/profiles. SAME RFC 3339 UTC format as mos.event.v1's `ts` (integer seconds, trailing Z). null when the drive does not implement the feature (common). NOTE: this is the firmware's CREATION date, not a version string — the `firmware` field (4-char PRODUCT_REVISION_LEVEL) is the version identifier.",
+      "description": "Firmware creation timestamp from the GET CONFIGURATION Firmware Information feature (010Ch; MMC-6 §5.3.43 Table 197 — Century/Year/Month/Day/Hour/Minute/Second decimal ASCII, GMT), on the same RT=0 walk that yields protection/profiles. SAME RFC 3339 UTC format as mos.event.v1's `ts` (integer seconds, trailing Z). null when the drive does not implement the feature (common). NOTE: this is the firmware's CREATION date, not a version string — the `firmware` field (4-char PRODUCT_REVISION_LEVEL) is the version identifier.",
       "examples": ["2019-01-07T13:20:43Z"]
     },
     "speeds": {
@@ -210,30 +254,5 @@
         }
       }
     }
-  },
-  "allOf": [
-    {
-      "title": "aacs false forces null version and bus_encryption",
-      "description": "Both fields decode from the AACS feature payload; without the feature there is nothing to report and false/0 would fabricate a reading.",
-      "if": {
-        "properties": {
-          "capabilities": {
-            "properties": { "aacs": { "const": false } },
-            "required": ["aacs"]
-          }
-        },
-        "required": ["capabilities"]
-      },
-      "then": {
-        "properties": {
-          "capabilities": {
-            "properties": {
-              "aacs_version": { "const": null },
-              "bus_encryption": { "const": null }
-            }
-          }
-        }
-      }
-    }
-  ]
+  }
 }

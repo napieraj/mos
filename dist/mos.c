@@ -257,16 +257,34 @@ bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
                                       uint16_t feature_code,
                                       mos_config_feature *out);
 
-/* AACS capability facts from a full (RT=0) GET CONFIGURATION response.
-   bus_encryption is the DRIVE-REPORTED support bit (feature 0x010D payload
-   byte 0 bit 1; the authoritative signed BEC bit lives in the AACS drive
-   certificate behind REPORT KEY, out of scope). A feature present but
-   payload-truncated (< 4 bytes) reads as absent — fail closed, like the
-   walker. */
+/* Copy/content-protection capabilities the drive advertises in its (RT=0)
+   GET CONFIGURATION feature list. PRESENCE of a protection feature means the
+   drive CAN authenticate that scheme — a drive-static capability; it does NOT
+   mean protected media is loaded (the per-feature Current bit, media-dependent,
+   is deliberately ignored) nor that protection is enforced (region/key state
+   lives behind REPORT KEY, which mos does not issue — scope doctrine). A modern
+   BD drive advertises AACS+CSS at minimum, so the set reads as "schemes this
+   drive speaks", not per-disc state. Version bytes are the drive's self-reported
+   scheme version (0 when the scheme is absent or carries no version field).
+   A version-carrying feature present but payload-truncated (< 4 bytes) reads as
+   absent — fail closed, like the walker. SecurDisc/VCPS are presence-only (no
+   version field, Additional Length 0). */
+typedef struct mos_drive_protection {
+    bool    css;                  /* feature 0106h present (DVD CSS/CPPM)      */
+    uint8_t css_version;          /* CSS Version, payload byte 3              */
+    bool    cprm;                 /* feature 010Bh present (DVD CPRM)         */
+    uint8_t cprm_version;         /* CPRM version, payload byte 3             */
+    bool    aacs;                 /* feature 010Dh present                    */
+    uint8_t aacs_version;         /* AACS Version, payload byte 3            */
+    bool    bus_encryption;       /* AACS BEC bit, payload byte 0 bit 1      */
+    bool    write_bus_encryption; /* AACS WBE bit, payload byte 0 bit 2      */
+    bool    securdisc;            /* feature 0113h present (presence only)   */
+    bool    vcps;                 /* feature 0110h present (legacy, MMC-5)   */
+} mos_drive_protection;
+
+/* Drive-static facts from a full (RT=0) GET CONFIGURATION response. */
 typedef struct mos_drive_caps {
-    bool    aacs;            /* feature 0x010D present in the walk      */
-    uint8_t aacs_version;    /* payload byte 3; 0 when aacs is false    */
-    bool    bus_encryption;  /* payload byte 0 bit 1; false when absent */
+    mos_drive_protection protection;
     /* Supported-profile set from the Profile List feature (0x0000), drive-
        static (the per-descriptor CurrentP bit is media-dependent, ignored).
        64 covers a conformant max (one-byte Additional Length ⇒ ≤63 codes). */
@@ -280,8 +298,13 @@ typedef struct mos_drive_caps {
 
 #define MOS_DRIVE_PROFILE_CAP 64u
 
-void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
-                                        mos_drive_caps *out);
+/* Decode the content-protection features (CSS 0106h, CPRM 010Bh, AACS 010Dh,
+   SecurDisc 0113h, VCPS 0110h) from a full (RT=0) GET CONFIGURATION reply into
+   out->protection. This zero-inits the WHOLE mos_drive_caps first (it is the
+   struct's initializer; the profile/firmware-date decoders fill the rest), so
+   an absent feature leaves its fields false/0. Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
+                                         mos_drive_caps *out);
 
 /* Decode the Profile List feature (0x0000) into out_codes[0..cap), setting
    *out_count. Each descriptor is 4 bytes: [0..1] Profile Number (BE),
@@ -1568,20 +1591,48 @@ bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
     return true;
 }
 
-/* Contract in mos_pure.h. */
-void mos_internal_aacs_caps_from_config(const uint8_t *buf, size_t len,
-                                        mos_drive_caps *out)
+/* Contract in mos_pure.h. The content-protection features all live in the same
+   RT=0 walk. Version-carrying schemes (CSS/CPRM/AACS) put their version at
+   payload byte 3 (Additional Length 4); a present-but-truncated payload reads
+   as absent (fail closed, like the walker). SecurDisc/VCPS are presence-only
+   (Additional Length 0 ⇒ no payload), so the find alone is the signal. AACS
+   byte 0 carries BEC (bit 1, bus encryption) and WBE (bit 2, write bus
+   encryption) — MMC-6 §5.3.44 Table 198. */
+void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
+                                         mos_drive_caps *out)
 {
     if (!out) return;
     *out = (mos_drive_caps){0};
 
+    mos_drive_protection *p = &out->protection;
     mos_config_feature f;
-    if (!mos_internal_config_find_feature(buf, len, 0x010D, &f)) return;
-    if (f.data_len < 4 || !f.data) return;    /* malformed: reads as absent */
 
-    out->aacs           = true;
-    out->bus_encryption = (f.data[0] & 0x02u) != 0;
-    out->aacs_version   = f.data[3];
+    /* DVD CSS (0106h): CSS Version at payload byte 3. */
+    if (mos_internal_config_find_feature(buf, len, 0x0106, &f) &&
+        f.data && f.data_len >= 4) {
+        p->css         = true;
+        p->css_version = f.data[3];
+    }
+    /* DVD CPRM (010Bh): CPRM version at payload byte 3. */
+    if (mos_internal_config_find_feature(buf, len, 0x010B, &f) &&
+        f.data && f.data_len >= 4) {
+        p->cprm         = true;
+        p->cprm_version = f.data[3];
+    }
+    /* AACS (010Dh): BEC/WBE in byte 0, AACS Version in byte 3. */
+    if (mos_internal_config_find_feature(buf, len, 0x010D, &f) &&
+        f.data && f.data_len >= 4) {
+        p->aacs                 = true;
+        p->bus_encryption       = (f.data[0] & 0x02u) != 0;
+        p->write_bus_encryption = (f.data[0] & 0x04u) != 0;
+        p->aacs_version         = f.data[3];
+    }
+    /* SecurDisc (0113h): presence only (Additional Length 0). */
+    if (mos_internal_config_find_feature(buf, len, 0x0113, &f))
+        p->securdisc = true;
+    /* VCPS (0110h): legacy (MMC-5), presence only. */
+    if (mos_internal_config_find_feature(buf, len, 0x0110, &f))
+        p->vcps = true;
 }
 
 /* Contract in mos_pure.h. The Profile List feature (0x0000) payload is a
@@ -2676,19 +2727,54 @@ uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i)
 
 /* ---- mos_drive_caps accessors (mos_query_drive_caps) ----------------- */
 
+bool mos_drive_caps_css(const mos_drive_caps *c)
+{
+    return c ? c->protection.css : false;
+}
+
+uint8_t mos_drive_caps_css_version(const mos_drive_caps *c)
+{
+    return c ? c->protection.css_version : 0;
+}
+
+bool mos_drive_caps_cprm(const mos_drive_caps *c)
+{
+    return c ? c->protection.cprm : false;
+}
+
+uint8_t mos_drive_caps_cprm_version(const mos_drive_caps *c)
+{
+    return c ? c->protection.cprm_version : 0;
+}
+
 bool mos_drive_caps_aacs(const mos_drive_caps *c)
 {
-    return c ? c->aacs : false;
+    return c ? c->protection.aacs : false;
 }
 
 uint8_t mos_drive_caps_aacs_version(const mos_drive_caps *c)
 {
-    return c ? c->aacs_version : 0;
+    return c ? c->protection.aacs_version : 0;
 }
 
 bool mos_drive_caps_bus_encryption(const mos_drive_caps *c)
 {
-    return c ? c->bus_encryption : false;
+    return c ? c->protection.bus_encryption : false;
+}
+
+bool mos_drive_caps_write_bus_encryption(const mos_drive_caps *c)
+{
+    return c ? c->protection.write_bus_encryption : false;
+}
+
+bool mos_drive_caps_securdisc(const mos_drive_caps *c)
+{
+    return c ? c->protection.securdisc : false;
+}
+
+bool mos_drive_caps_vcps(const mos_drive_caps *c)
+{
+    return c ? c->protection.vcps : false;
 }
 
 uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)
@@ -6473,10 +6559,10 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
                    : MOS_ERR_IO;
     }
 
-    mos_internal_aacs_caps_from_config(buf, sizeof(buf), &h->caps);
+    mos_internal_protection_from_config(buf, sizeof(buf), &h->caps);
     /* Same RT=0 reply carries the Profile List feature (0x0000); decode the
-       drive-static supported-profile set from it (aacs_caps zeroed the struct
-       first, so profile_count stays 0 if the feature is absent). */
+       drive-static supported-profile set from it (protection_from_config zeroed
+       the struct first, so profile_count stays 0 if the feature is absent). */
     mos_internal_profile_list_from_config(buf, sizeof(buf), h->caps.profiles,
                                           MOS_DRIVE_PROFILE_CAP,
                                           &h->caps.profile_count);

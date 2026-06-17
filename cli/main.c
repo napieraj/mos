@@ -26,7 +26,7 @@ void mos_cli_print_usage(FILE *f)
         "                    joins; removal is per-drive, stream continues).\n"
         "  metadata [drive]  Disc identity record (profile, TOC, disc\n"
         "                    info, mounted volume) — mos.metadata.v1.\n"
-        "  drive [drive]     Drive facts (identity, AACS capabilities)\n"
+        "  drive [drive]     Drive facts (identity, content protection)\n"
         "                    — mos.drive.v1.\n"
         "  features [drive]  MMC feature list with current bits (the\n"
         "                    medium-writability surface) — mos.features.v1.\n"

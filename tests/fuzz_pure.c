@@ -267,7 +267,7 @@ static void fuzz_config(uint64_t iters)
            self-reported Additional Length, so each must stay inside [buf,
            buf+len) over every hostile shape (exact-size buf => ASan on OOB). */
         mos_drive_caps caps;
-        mos_internal_aacs_caps_from_config(buf, len, &caps);
+        mos_internal_protection_from_config(buf, len, &caps);
         uint16_t pcodes[MOS_DRIVE_PROFILE_CAP];
         uint8_t  pcount = 0;
         mos_internal_profile_list_from_config(buf, len, pcodes,

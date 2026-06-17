@@ -229,10 +229,11 @@ TEST(aacs_caps_from_real_wh16ns40_capture)
         0x01,0x0D, 0x00, 0x04,  0x17, 0x00, 0x00, 78,
     };
     mos_drive_caps c;
-    mos_internal_aacs_caps_from_config(cfg, sizeof cfg, &c);
-    EXPECT(c.aacs);                    /* feature 0x010D present       */
-    EXPECT(c.bus_encryption);          /* 0x17 & 0x02 — attested       */
-    EXPECT_EQ(c.aacs_version, 78);     /* scaffold byte; extraction only */
+    mos_internal_protection_from_config(cfg, sizeof cfg, &c);
+    EXPECT(c.protection.aacs);                    /* feature 0x010D present  */
+    EXPECT(c.protection.bus_encryption);          /* 0x17 & 0x02 BEC — attested   */
+    EXPECT(c.protection.write_bus_encryption);    /* 0x17 & 0x04 WBE — attested   */
+    EXPECT_EQ(c.protection.aacs_version, 78);     /* scaffold byte; extraction only */
     return 0;
 }
 
@@ -605,35 +606,76 @@ TEST(config_payload_ending_exactly_at_span_is_accepted)
 
 TEST(aacs_caps_decode_and_fail_closed)
 {
-    /* AACS feature, version 2, BEC set, AACS version 68. */
+    /* AACS feature, version 2, BEC set (not WBE), AACS version 68. */
     uint8_t buf[] = {
         0,0,0,16,  0,0, 0x00,0x40,
         0x00,0x00, 0x03, 0x00,
         0x01,0x0D, 0x09, 0x04,  0x03, 0x00, 0x01, 68,
     };
     mos_drive_caps c;
-    mos_internal_aacs_caps_from_config(buf, sizeof buf, &c);
-    EXPECT(c.aacs && c.bus_encryption && c.aacs_version == 68);
+    mos_internal_protection_from_config(buf, sizeof buf, &c);
+    EXPECT(c.protection.aacs && c.protection.bus_encryption &&
+           !c.protection.write_bus_encryption && c.protection.aacs_version == 68);
+
+    /* WBE set too (byte 0 bit 2). */
+    buf[16] = 0x07;
+    mos_internal_protection_from_config(buf, sizeof buf, &c);
+    EXPECT(c.protection.aacs && c.protection.bus_encryption &&
+           c.protection.write_bus_encryption);
 
     /* BEC clear. */
     buf[16] = 0x01;
-    mos_internal_aacs_caps_from_config(buf, sizeof buf, &c);
-    EXPECT(c.aacs && !c.bus_encryption && c.aacs_version == 68);
+    mos_internal_protection_from_config(buf, sizeof buf, &c);
+    EXPECT(c.protection.aacs && !c.protection.bus_encryption &&
+           c.protection.aacs_version == 68);
 
     /* Feature absent. */
     uint8_t plain[] = { 0,0,0,8,  0,0, 0x00,0x10,  0x00,0x00, 0x03, 0x00 };
-    mos_internal_aacs_caps_from_config(plain, sizeof plain, &c);
-    EXPECT(!c.aacs && !c.bus_encryption && c.aacs_version == 0);
+    mos_internal_protection_from_config(plain, sizeof plain, &c);
+    EXPECT(!c.protection.aacs && !c.protection.bus_encryption &&
+           c.protection.aacs_version == 0);
 
     /* Feature present but payload truncated to 0 bytes: malformed, reads as
        absent (fail closed). */
     uint8_t trunc[] = { 0,0,0,8,  0,0, 0x00,0x40,  0x01,0x0D, 0x09, 0x00 };
-    mos_internal_aacs_caps_from_config(trunc, sizeof trunc, &c);
-    EXPECT(!c.aacs);
+    mos_internal_protection_from_config(trunc, sizeof trunc, &c);
+    EXPECT(!c.protection.aacs);
 
-    mos_internal_aacs_caps_from_config(NULL, 0, &c);
-    EXPECT(!c.aacs);
-    mos_internal_aacs_caps_from_config(buf, sizeof buf, NULL); /* no crash */
+    mos_internal_protection_from_config(NULL, 0, &c);
+    EXPECT(!c.protection.aacs);
+    mos_internal_protection_from_config(buf, sizeof buf, NULL); /* no crash */
+    return 0;
+}
+
+TEST(protection_all_schemes_decode)
+{
+    /* RT=0 reply carrying CSS (0106h v1), CPRM (010Bh v3), AACS (010Dh
+       BEC+WBE, v68), SecurDisc (0113h, AddLen 0), VCPS (0110h, AddLen 0).
+       Each version-scheme has Additional Length 4; the presence-only schemes
+       have Additional Length 0. */
+    uint8_t buf[] = {
+        0,0,0,40,  0,0, 0x00,0x40,
+        0x01,0x06, 0x01, 0x04,  0x00, 0x00, 0x00, 0x01,   /* CSS  v1   */
+        0x01,0x0B, 0x01, 0x04,  0x00, 0x00, 0x00, 0x03,   /* CPRM v3   */
+        0x01,0x0D, 0x09, 0x04,  0x06, 0x00, 0x01, 68,     /* AACS BEC+WBE v68 */
+        0x01,0x13, 0x01, 0x00,                            /* SecurDisc */
+        0x01,0x10, 0x01, 0x00,                            /* VCPS      */
+    };
+    mos_drive_caps c;
+    mos_internal_protection_from_config(buf, sizeof buf, &c);
+    EXPECT(c.protection.css  && c.protection.css_version  == 1);
+    EXPECT(c.protection.cprm && c.protection.cprm_version == 3);
+    EXPECT(c.protection.aacs && c.protection.aacs_version == 68);
+    EXPECT(c.protection.bus_encryption && c.protection.write_bus_encryption);
+    EXPECT(c.protection.securdisc);
+    EXPECT(c.protection.vcps);
+
+    /* None present: every scheme reads false/0. */
+    uint8_t plain[] = { 0,0,0,8,  0,0, 0x00,0x10,  0x00,0x00, 0x03, 0x00 };
+    mos_internal_protection_from_config(plain, sizeof plain, &c);
+    EXPECT(!c.protection.css && !c.protection.cprm && !c.protection.aacs &&
+           !c.protection.securdisc && !c.protection.vcps);
+    EXPECT(c.protection.css_version == 0 && c.protection.cprm_version == 0);
     return 0;
 }
 
@@ -811,6 +853,7 @@ void register_config_tests(void)
     RUN(toc_parses_real_pony_cd_single);
     RUN(aacs_caps_from_real_wh16ns40_capture);
     RUN(aacs_caps_decode_and_fail_closed);
+    RUN(protection_all_schemes_decode);
     RUN(config_find_feature_returns_match_with_payload);
     RUN(config_find_feature_absent_or_hostile_is_false);
     RUN(config_payload_ending_exactly_at_span_is_accepted);

@@ -434,27 +434,41 @@ mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
 typedef struct mos_drive_caps mos_drive_caps;
 
 /*
- * Query the drive's AACS capability facts: one full GET CONFIGURATION
- * (RT=0) through the non-exclusive convenience method, decoded by the
- * bounds-checked feature walk. These are the spec-grounded fields a
- * MakeMKV drive dump shows ("Highest AACS version", bus-encryption
- * support) WITHOUT the LibreDrive status synthesis, which is a MakeMKV
- * database property, not a drive property. bus_encryption is the
- * DRIVE-REPORTED support bit from the AACS
- * feature payload (0x010D byte 0 bit 1) — a firmware assertion; the
- * cryptographically signed BEC bit lives in the AACS drive
- * certificate behind a raw REPORT KEY, which mos does not issue
- * (scope doctrine: no raw verb without GESN-grade justification).
- * Drives without the AACS feature (every non-BD unit) report
- * aacs=false — that is data, not an error.
+ * Query the drive's content-protection and profile facts: one full GET
+ * CONFIGURATION (RT=0) through the non-exclusive convenience method, decoded
+ * by the bounds-checked feature walk. The protection fields are the
+ * spec-grounded bits a MakeMKV drive dump shows ("Highest AACS version",
+ * bus-encryption flags) WITHOUT the LibreDrive status synthesis, which is a
+ * MakeMKV database property, not a drive property.
+ *
+ * SEMANTICS: a protection scheme reported here is a drive CAPABILITY — the
+ * drive can authenticate that scheme. It does NOT mean protected media is
+ * loaded (the per-feature Current bit, media-dependent, is ignored) nor that
+ * protection is enforced (region/key state lives behind REPORT KEY, which mos
+ * does not issue — scope doctrine: no raw verb without GESN-grade
+ * justification). bus_encryption / write_bus_encryption are the DRIVE-REPORTED
+ * AACS BEC/WBE support bits (firmware assertions); the cryptographically
+ * signed BEC bit lives in the AACS drive certificate, out of scope.
+ *
+ * Drives without a given feature (every non-BD unit for AACS) report it
+ * false — that is data, not an error.
  */
 mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out);
 
-/* Accessors. NULL-tolerant (NULL reads as 0/false). aacs_version and
-   bus_encryption are meaningful only when aacs is true. */
+/* Content-protection accessors. NULL-tolerant (NULL reads as 0/false). A
+   *_version is meaningful only when its scheme bool is true; SecurDisc and
+   VCPS are presence-only (no version). bus_encryption / write_bus_encryption
+   are meaningful only when aacs is true. */
+bool    mos_drive_caps_css(const mos_drive_caps *c);
+uint8_t mos_drive_caps_css_version(const mos_drive_caps *c);
+bool    mos_drive_caps_cprm(const mos_drive_caps *c);
+uint8_t mos_drive_caps_cprm_version(const mos_drive_caps *c);
 bool    mos_drive_caps_aacs(const mos_drive_caps *c);
 uint8_t mos_drive_caps_aacs_version(const mos_drive_caps *c);
 bool    mos_drive_caps_bus_encryption(const mos_drive_caps *c);
+bool    mos_drive_caps_write_bus_encryption(const mos_drive_caps *c);
+bool    mos_drive_caps_securdisc(const mos_drive_caps *c);
+bool    mos_drive_caps_vcps(const mos_drive_caps *c);
 
 /* Supported-profile set from the Profile List feature (0x0000) — the
    drive-static disc types this drive handles (the modern, BD-aware "what can
