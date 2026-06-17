@@ -6,10 +6,12 @@
 
 /*
  * test_human.c — golden-string tests for the human-output layout engine
- * (cli/human.c), exercised with faithful samples of real CLI output. Each
- * golden mirrors a current verb's vocabulary, row order, and field formats;
- * a disagreement means the golden drifted from the renderer and should be
- * re-synced to it.
+ * (cli/human.c). Goldens are representative, real-shaped samples: most mirror
+ * a current verb's output (vocabulary, row order, field formats), so a
+ * renderer change trips them; a couple exercise the engine directly on a
+ * shape no single verb emits (the error cluster — the error channel is a
+ * one-line stderr diagnostic, not a block). A disagreement means either the
+ * layout engine or a mirrored verb drifted.
  *
  * Uses open_memstream to capture FILE* output without touching the
  * filesystem.
@@ -79,31 +81,41 @@ TEST(human_block_ready_mounted_golden)
 
 TEST(human_block_empty_or_open_sense_and_dashes)
 {
-    /* Evidence (Sense) directly under the answer; structural rows
-       (BSD) render "-" via NULL rather than vanishing. */
+    /* A faithful `mos state` for an empty/open drive selected by BSD (so both
+       Index and Registry ID show). Real emit order (state.c): Index, Registry
+       ID, BSD, State, Sense, then separate Vendor/Product/Firmware rows — no
+       media so no Profile/Volume. Pins the Sense evidence row and the NULL→"-"
+       dash on a structural row (BSD). */
     const mos_cli_human_pair pairs[] = {
-        { "State",    "empty_or_open" },
-        { "Sense",    "02/3a/01" },
-        { "Index",    "1" },
-        { "BSD",      NULL },
+        { "Index",       "1" },
         { "Registry ID", "4295032831" },
-        { "Drive",    "HL-DT-ST BD-RE WH16NS60 1.00" },
+        { "BSD",         NULL },
+        { "State",       "empty_or_open" },
+        { "Sense",       "02/3a/01" },
+        { "Vendor",      "HL-DT-ST" },
+        { "Product",     "BD-RE WH16NS60" },
+        { "Firmware",    "1.00" },
     };
-    bool ok; char *out = capture_block(pairs, 6, &ok);
+    bool ok; char *out = capture_block(pairs, 8, &ok);
     EXPECT_EQ(true, ok);
     EXPECT_STREQ(
+        "      Index:  1\n"
+        "Registry ID:  4295032831\n"
+        "        BSD:  -\n"
         "      State:  empty_or_open\n"
         "      Sense:  02/3a/01\n"
-        "      Index:  1\n"
-        "        BSD:  -\n"
-        "Registry ID:  4295032831\n"
-        "      Drive:  HL-DT-ST BD-RE WH16NS60 1.00\n", out);
+        "     Vendor:  HL-DT-ST\n"
+        "    Product:  BD-RE WH16NS60\n"
+        "   Firmware:  1.00\n", out);
     free(out);
     return 0;
 }
 
 TEST(human_block_error_evidence_cluster)
 {
+    /* Pure layout-engine case: no verb emits a human error block (the error
+       channel is a one-line stderr diagnostic via mos_cli_emit_unknown_and_fail).
+       This exercises the engine on a short-key cluster with a NULL tail row. */
     const mos_cli_human_pair pairs[] = {
         { "State", "error" },
         { "Stage", "probe" },
@@ -129,18 +141,18 @@ TEST(human_table_list_golden)
     static const char *const headers[] =
         { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Firmware" };
     static const char *const cells[] = {
-        "1", "ready",         "ARRIVAL_4K", "/dev/disk4", "HL-DT-ST", "BD-RE WH16NS60", "1.00",
-        "2", "empty_or_open", NULL,         NULL,         "PIONEER",  "BD-RW BDR-XS07", "1.01",
-        "3", "error",         NULL,         "/dev/disk6", "ASUS",     "BW-16D1HT",      "3.10",
+        "1", "ready",         "/Volumes/ARRIVAL_4K", "/dev/disk4", "HL-DT-ST", "BD-RE WH16NS60", "1.00",
+        "2", "empty_or_open", NULL,                  NULL,         "PIONEER",  "BD-RW BDR-XS07", "1.01",
+        "3", "error",         NULL,                  "/dev/disk6", "ASUS",     "BW-16D1HT",      "3.10",
     };
     static const bool ra[] = { true, false, false, false, false, false, false };
     bool ok; char *out = capture_table(headers, cells, 3, 7, ra, &ok);
     EXPECT_EQ(true, ok);
     EXPECT_STREQ(
-        " Index  State          Volume      BSD         Vendor    Product         Firmware\n"
-        "     1  ready          ARRIVAL_4K  /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00\n"
-        "     2  empty_or_open  -           -           PIONEER   BD-RW BDR-XS07  1.01\n"
-        "     3  error          -           /dev/disk6  ASUS      BW-16D1HT       3.10\n", out);
+        " Index  State          Volume               BSD         Vendor    Product         Firmware\n"
+        "     1  ready          /Volumes/ARRIVAL_4K  /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00\n"
+        "     2  empty_or_open  -                    -           PIONEER   BD-RW BDR-XS07  1.01\n"
+        "     3  error          -                    /dev/disk6  ASUS      BW-16D1HT       3.10\n", out);
     free(out);
     return 0;
 }

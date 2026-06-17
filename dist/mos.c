@@ -5393,8 +5393,9 @@ bool mos_bsd_dev_node(int64_t unit, char *out, size_t out_cap)
  * it never decides drive STATE — the TUR⊕GESN core in mos_state_core.c is the
  * sole authority (the §5.5 nub gate runs on TUR sense bytes DR does not
  * expose). DR is not a SCSI command author (AGENTS.md scope doctrine): it is
- * a substrate above the same kext the MMC path uses, and mos still authors
- * exactly one raw CDB (GESN, mos_scsi.c).
+ * a substrate above the same kext the MMC path uses, and DR authors no raw
+ * CDB itself — every raw verb (GESN, the tray opcodes, INQUIRY) lives in the
+ * MMC path via mos_raw_cdb (AGENTS.md tracks the running count).
  *
  * Identity resolution: DR exposes a device's IORegistry *path*
  * (kDRDeviceIORegistryEntryPathKey), not its entry ID. mos's identity
@@ -6425,6 +6426,13 @@ mos_error mos_raw_cdb(mos_handle_t *h,
         h->std = (*h->mmc)->GetSCSITaskDeviceInterface(h->mmc);
         if (!h->std) return MOS_ERR_DRIVER_REJECTED;
     }
+
+    /* Invariant pin (debug): every raw_cdb call releases exclusive access on
+       every exit path, so the lock is never held across calls — it must be
+       free on entry. A future early return that forgot to clear
+       have_exclusive would otherwise skip the acquire below and run the CDB
+       believing it holds a lock it doesn't; assert catches that in debug. */
+    assert(!h->have_exclusive);
 
     /* Raw CDB requires exclusive access. */
     if (!h->have_exclusive) {

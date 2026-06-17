@@ -676,6 +676,13 @@ mos_error mos_raw_cdb(mos_handle_t *h,
         if (!h->std) return MOS_ERR_DRIVER_REJECTED;
     }
 
+    /* Invariant pin (debug): every raw_cdb call releases exclusive access on
+       every exit path, so the lock is never held across calls — it must be
+       free on entry. A future early return that forgot to clear
+       have_exclusive would otherwise skip the acquire below and run the CDB
+       believing it holds a lock it doesn't; assert catches that in debug. */
+    assert(!h->have_exclusive);
+
     /* Raw CDB requires exclusive access. */
     if (!h->have_exclusive) {
         IOReturn rx = (*h->std)->ObtainExclusiveAccess(h->std);
