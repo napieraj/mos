@@ -291,9 +291,11 @@ static void emit_human(const metadata_doc *d)
     if (mos_cli_profile_present(d->profile)) {
         const char *pn = mos_profile_name(d->profile);
         const char *pc = mos_profile_class(d->profile);
+        /* Coarse — precise, matching the state verb's Profile row and the
+           drive verb's Standards row. Machine-key hex is in --json; here it is
+           only the fallback when the code is unnamed. */
         if (pn && pc)
-            snprintf(prof_buf, sizeof prof_buf, "%s  %s  (0x%04x)",
-                     pc, pn, d->profile);
+            snprintf(prof_buf, sizeof prof_buf, "%s — %s", pc, pn);
         else
             snprintf(prof_buf, sizeof prof_buf, "0x%04x", d->profile);
         pairs[n++] = (mos_cli_human_pair){ "Profile", prof_buf };

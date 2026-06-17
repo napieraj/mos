@@ -42,7 +42,7 @@ $ mos state 1
 Registry ID:  4295032831
         BSD:  /dev/disk4
       State:  ready
-    Profile:  bd  bd_rom  (0x0040)
+    Profile:  bd — bd_rom
      Vendor:  HL-DT-ST
     Product:  BD-RE WH16NS60
    Firmware:  1.00
@@ -160,7 +160,7 @@ $ mos metadata 1
      BSD:  /dev/disk4
   Volume:  FAMILY_ARCHIVE_2026
     Path:  /Volumes/FAMILY_ARCHIVE_2026
- Profile:  bd  bd_r  (0x0041)
+ Profile:  bd — bd_r
     Disc:  complete, 1 session, 1 track
    Media:  BDR  MILLEN/MR1 rev 0
      TOC:  tracks 1-1, lead-out LBA 11826176
