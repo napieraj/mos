@@ -45,6 +45,10 @@ typedef struct {
     mos_error      probe_err[8];
     uint64_t       probe_media_id[8];   /* whole-disk registry id per probe; 0 default */
     uint16_t       probe_profile[8];    /* current_profile per probe; 0 → fixture default */
+    /* Drive serial per probe (NULL = not grabbed yet, the null-until-free
+       case the adapter produces before its first free poll). Borrowed string
+       literal; the core forwards the pointer verbatim into the event. */
+    const char    *probe_serial[8];
     int            probe_count;
     int            probe_calls;
 
@@ -105,6 +109,10 @@ static mos_error fake_probe(void *vctx, mos_state_result *out)
     out->current_profile = c->probe_profile[idx] == 0xFFFF ? 0
                          : c->probe_profile[idx] ? c->probe_profile[idx]
                          : 0x0040;
+    /* Serial: NULL by the memset above unless the fixture scripts one. The
+       core copies r->serial verbatim into the event (fill_event_state_fields),
+       mirroring vendor/product/revision. */
+    out->serial          = c->probe_serial[idx];
     return MOS_OK;
 }
 
@@ -148,6 +156,47 @@ TEST(test_snapshot_emitted_on_first_pump)
     EXPECT_EQ(4242, (int)d.event.registry_id);
     EXPECT_EQ(1000, (int)d.event.stream_open_wall_ms);
     EXPECT_EQ(4,               d.event.bsd_unit);
+    return 0;
+}
+
+TEST(test_event_carries_serial_through_fill_state_fields)
+{
+    /* The serial rides the probe result into the event exactly as
+       vendor/product/revision do (fill_event_state_fields). A probe with no
+       serial yet (the null-until-free-poll case the adapter starts in) leaves
+       the event's serial NULL; a probe that has grabbed it carries the
+       string. Two pumps over two probes pin both. */
+    fake_watch_ctx c;
+    init_default(&c, 1000);
+    c.probe_state[0]  = MOS_STATE_READY;
+    c.probe_err[0]    = MOS_OK;
+    c.probe_serial[0] = NULL;              /* not grabbed yet */
+    c.probe_state[1]  = MOS_STATE_EMPTY;   /* state delta forces a 2nd event */
+    c.probe_err[1]    = MOS_OK;
+    c.probe_serial[1] = "KL2G7942618WL";   /* grabbed on a free poll */
+    c.probe_count     = 2;
+
+    mos_watch_state w;
+    mos_internal_watch_init(&w, &fake_ops, &c, 4, 4242,
+                            /*start_mono_ms=*/1000,
+                            /*start_wall_ms=*/1000,
+                            /*stable=*/2000, /*transition=*/200);
+
+    /* First probe: snapshot, serial still NULL. */
+    mos_watch_decision d = mos_internal_watch_pump(&w);
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT, d.kind);
+    EXPECT_EQ(MOS_EVENT_SNAPSHOT,          d.event.kind);
+    EXPECT(d.event.serial == NULL);
+
+    /* Advance to the next poll and probe again: state_changed carries the
+       now-grabbed serial. */
+    c.mono_clock_ms = w.next_poll_at_mono_ms;
+    c.wall_clock_ms = c.mono_clock_ms;
+    d = mos_internal_watch_pump(&w);
+    EXPECT_EQ(MOS_WATCH_DECIDE_EMIT_EVENT, d.kind);
+    EXPECT_EQ(MOS_EVENT_STATE_CHANGED,     d.event.kind);
+    EXPECT(d.event.serial != NULL);
+    EXPECT_STREQ(d.event.serial, "KL2G7942618WL");
     return 0;
 }
 
@@ -1379,6 +1428,7 @@ void register_watch_core_tests(void)
     RUN(all_last_device_removed_stream_stays_open);
     RUN(all_sleep_folds_earliest_deadline_across_rates);
     RUN(test_snapshot_emitted_on_first_pump);
+    RUN(test_event_carries_serial_through_fill_state_fields);
     RUN(test_zero_registry_id_passes_through);
     RUN(test_empty_drive_yields_unit_minus_one_and_session_identity);
     RUN(test_media_appears_after_empty_open_uses_probe_unit);

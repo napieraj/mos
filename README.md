@@ -147,8 +147,17 @@ removal). An insert looks like:
 $ mos watch
 {"schema":"mos.event.v1","event":"snapshot",...,"state":"empty","prev_state":"unknown",...}
 {"schema":"mos.event.v1","event":"state_changed",...,"state":"loading","prev_state":"empty",...}
-{"schema":"mos.event.v1","event":"state_changed",...,"bsd_node":"/dev/disk4","state":"ready",...}
+{"schema":"mos.event.v1","event":"state_changed",...,"bsd_node":"/dev/disk4","state":"ready","serial":"KL2G7942618WL",...}
 ```
+
+Identity-carrying events (`snapshot`, `state_changed`, `media_changed`,
+`device_appeared`) include the drive `serial` — its Unit Serial Number, the
+durable inventory key that survives replug where `registry_id` does not. It is
+grabbed once per session on a probe handle (raw INQUIRY of VPD page 0x80), so
+it is `null` in early event lines until a free poll lands it: the read
+self-gates on exclusive access, so it backs off while a disc is mounted and
+populates on the first empty/not-ready window, then stays present for the rest
+of the session. `error` and `device_removed` events never carry it.
 
 ### metadata — disc identity
 

@@ -98,6 +98,11 @@ const char *mos_watch_event_revision(const mos_watch_event *e)
     return e ? e->revision : NULL;
 }
 
+const char *mos_watch_event_serial(const mos_watch_event *e)
+{
+    return e ? e->serial : NULL;
+}
+
 mos_state mos_watch_event_state(const mos_watch_event *e)
 {
     return e ? e->state : MOS_STATE_UNKNOWN;

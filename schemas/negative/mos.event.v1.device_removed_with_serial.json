@@ -1,0 +1,12 @@
+{
+  "_comment": "device_removed is terminal and carries prev_state only; no current-side/identity fields are permitted. serial is one of the disallowed fields per the oneOf 'device_removed' branch (symmetric with device_removed_with_firmware).",
+  "schema": "mos.event.v1",
+  "event": "device_removed",
+  "registry_id": 4295032831,
+  "stream_open_ms": 1746526503000,
+  "seq": 7,
+  "ts": "2025-05-06T10:16:01Z",
+  "bsd_node": "/dev/disk4",
+  "prev_state": "ready",
+  "serial": "KL2G7942618WL"
+}

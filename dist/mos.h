@@ -1072,6 +1072,13 @@ const char    *mos_watch_event_vendor(const mos_watch_event *e);
 const char    *mos_watch_event_product(const mos_watch_event *e);
 const char    *mos_watch_event_revision(const mos_watch_event *e);
 
+/* Drive Unit Serial Number (raw INQUIRY VPD page 0x80), the durable inventory
+   key that survives replug where registry_id does not. NULL until a free
+   (empty / not-ready) poll grabs it — the read self-gates on exclusive access,
+   so it backs off while a disc is mounted — then stable for the session.
+   NULL-tolerant. (mos state never carries serial; it is a watch/drive datum.) */
+const char    *mos_watch_event_serial(const mos_watch_event *e);
+
 /* Current and previous state (prev is MOS_STATE_UNKNOWN on snapshot), and
    the current profile — meaningful for snapshot and state_changed events. */
 mos_state mos_watch_event_state(const mos_watch_event *e);

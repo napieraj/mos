@@ -34,6 +34,13 @@ struct mos_state_result {
     uint8_t        sense_key;
     uint8_t        asc;
     uint8_t        ascq;
+    /* Drive Unit Serial Number (INQUIRY VPD 0x80), NULL if absent. The state
+       path (mos_query_state) NEVER sets this — it stays NULL there so serial
+       never leaks into mos.state.v1, which keeps a no-lock-on-READY shape (a
+       raw INQUIRY would need a lock). Only the watch adapter fills it, grabbed
+       once per session on the probe handle (mos_watch.c). Appended at the end:
+       ABI-safe. */
+    const char    *serial;
 };
 
 struct mos_watch_event {
@@ -50,6 +57,13 @@ struct mos_watch_event {
     const char    *vendor;
     const char    *product;
     const char    *revision;
+    /* Drive Unit Serial Number (INQUIRY VPD 0x80), NULL if absent. Adapter-
+       owned, same pointer-lifetime invariant as vendor/product/revision
+       (mos_watch.c re-homes it to watch-static storage before mos_close).
+       NULL in early event lines until a free (empty/not-ready) poll grabs it,
+       then stable for the session. Grouped with the other identity strings;
+       the object is opaque (accessor-only), so field order is not ABI. */
+    const char    *serial;
     mos_state state;
     mos_state prev_state;
     uint16_t       current_profile;

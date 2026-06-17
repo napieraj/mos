@@ -99,6 +99,13 @@ struct mos_state_result {
     uint8_t        sense_key;
     uint8_t        asc;
     uint8_t        ascq;
+    /* Drive Unit Serial Number (INQUIRY VPD 0x80), NULL if absent. The state
+       path (mos_query_state) NEVER sets this — it stays NULL there so serial
+       never leaks into mos.state.v1, which keeps a no-lock-on-READY shape (a
+       raw INQUIRY would need a lock). Only the watch adapter fills it, grabbed
+       once per session on the probe handle (mos_watch.c). Appended at the end:
+       ABI-safe. */
+    const char    *serial;
 };
 
 struct mos_watch_event {
@@ -115,6 +122,13 @@ struct mos_watch_event {
     const char    *vendor;
     const char    *product;
     const char    *revision;
+    /* Drive Unit Serial Number (INQUIRY VPD 0x80), NULL if absent. Adapter-
+       owned, same pointer-lifetime invariant as vendor/product/revision
+       (mos_watch.c re-homes it to watch-static storage before mos_close).
+       NULL in early event lines until a free (empty/not-ready) poll grabs it,
+       then stable for the session. Grouped with the other identity strings;
+       the object is opaque (accessor-only), so field order is not ABI. */
+    const char    *serial;
     mos_state state;
     mos_state prev_state;
     uint16_t       current_profile;
@@ -2613,6 +2627,11 @@ const char *mos_watch_event_revision(const mos_watch_event *e)
     return e ? e->revision : NULL;
 }
 
+const char *mos_watch_event_serial(const mos_watch_event *e)
+{
+    return e ? e->serial : NULL;
+}
+
 mos_state mos_watch_event_state(const mos_watch_event *e)
 {
     return e ? e->state : MOS_STATE_UNKNOWN;
@@ -3575,6 +3594,7 @@ static void fill_event_state_fields(mos_watch_event *e,
     e->vendor          = r->vendor;
     e->product         = r->product;
     e->revision        = r->revision;
+    e->serial          = r->serial;   /* NULL until a free poll grabs it (mos_watch.c) */
     e->sense_key       = r->sense_key;
     e->asc             = r->asc;
     e->ascq            = r->ascq;
@@ -3993,10 +4013,10 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
  * mos_watch_next_event, so no locking.
  */
 
-/* Before any system header so BSD extensions stay visible. Kept despite no
-   strlcpy here: the amalgamation merges adapter TUs into one feature-macro
-   environment, so dropping it would diverge standalone vs amalgamated
-   builds. */
+/* Before any system header so BSD extensions stay visible: strlcpy (the
+   identity/serial re-home below) needs _DARWIN_C_SOURCE, and the amalgamation
+   merges adapter TUs into one feature-macro environment, so this also keeps
+   standalone and amalgamated builds from diverging. */
 #ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE 1
 #endif
@@ -4079,6 +4099,16 @@ struct mos_watch {
     char product[17];
     char revision[5];
 
+    /* Drive Unit Serial Number (INQUIRY VPD 0x80), grabbed ONCE per session
+       on a probe handle and cached for the watch's life. serial_grabbed flips
+       true on the first successful read so later probes stop trying. serial[64]
+       matches mos_handle's serial_str width (SPC max is 255; 64 truncates
+       safely — the chosen buffer everywhere). Empty (serial[0]==0) until the
+       first free/not-ready poll lands the read; events carry NULL until then,
+       the cached string after. */
+    char serial[64];
+    bool serial_grabbed;
+
     /* ---- Watch-all mode -------------------------------------------- *
      * all_mode selects the multiplexer: `all` is the pure fan-in over
      * per-slot cores, `slots` is the per-device probe context (registry id
@@ -4092,6 +4122,11 @@ struct mos_watch {
         char     vendor[9];
         char     product[17];
         char     revision[5];
+        /* Per-slot serial: same grab-once-per-session contract as the
+           single-target fields above. A replug re-mints registry_id into a
+           fresh slot, so a new serial is grabbed (no stale carry-over). */
+        char     serial[64];
+        bool     serial_grabbed;
     }                    slots[MOS_WATCH_ALL_CAP];
     uint32_t             stable_poll_ms;
     uint32_t             transition_poll_ms;
@@ -4194,6 +4229,22 @@ static mos_error watch_probe(void *ctx, mos_state_result *out)
     out->product  = w->product[0]  ? w->product  : NULL;
     out->revision = w->revision[0] ? w->revision : NULL;
 
+    /* Grab the serial ONCE per session, piggybacked on this same handle (no
+       extra open). mos_query_serial self-gates on exclusive access, so a
+       mounted/ready disc makes it BUSY and the CDB never issues — leave it
+       ungrabbed and retry next poll; the first empty/not-ready poll lands it
+       (the walk's lock is already free then and the serial needs no disc).
+       Re-home into watch-static storage like the identity strings (the
+       returned pointer borrows the handle we're about to close). */
+    if (!w->serial_grabbed) {
+        const char *sn = NULL;
+        if (mos_query_serial(h, &sn) == MOS_OK && sn && sn[0]) {
+            strlcpy(w->serial, sn, sizeof w->serial);
+            w->serial_grabbed = true;
+        }
+    }
+    out->serial = w->serial[0] ? w->serial : NULL;
+
     mos_close(h);
     return MOS_OK;
 }
@@ -4242,6 +4293,18 @@ static mos_error watch_slot_probe(void *ctx, mos_state_result *out)
     out->vendor   = s->vendor[0]   ? s->vendor   : NULL;
     out->product  = s->product[0]  ? s->product  : NULL;
     out->revision = s->revision[0] ? s->revision : NULL;
+
+    /* Grab the serial once per slot (per session), same contract as
+       watch_probe above — piggyback the open handle, BUSY-back-off, re-home
+       into slot storage before close. */
+    if (!s->serial_grabbed) {
+        const char *sn = NULL;
+        if (mos_query_serial(h, &sn) == MOS_OK && sn && sn[0]) {
+            strlcpy(s->serial, sn, sizeof s->serial);
+            s->serial_grabbed = true;
+        }
+    }
+    out->serial = s->serial[0] ? s->serial : NULL;
 
     mos_close(h);
     return MOS_OK;
