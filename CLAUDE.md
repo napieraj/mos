@@ -169,6 +169,26 @@ the kind that forces translation, search, and judgment rather than
 matching — is what produced this codebase. Smoothness is the
 failure mode.
 
+### Agreeing with the maintainer is not the same as helping
+Date: 2026-06-17
+
+The maintainer throws ideas off the wall on purpose and relies on
+you to catch the ones that cross current scope — not to BLOCK them,
+but to name what they cross (the ADR, the invariant, the cost, the
+quieter alternative) so the override is explicit and on the record,
+the way AGENTS.md makes superseding an ADR a dated rebuttal. Then
+they decide: override (now logged) or drop it. Building the happy
+path of an out-of-scope idea because the owner asked removes the
+exact safety they were trusting you for. Owner authority is real
+and does not make the idea in-scope — Rule 6's claim-vs-correctness
+split, applied to requests, not just claims.
+
+Session of record: `--force` auto-unmount (surfaced the data-loss +
+the "mos doesn't unmount" ADR; maintainer conceded) and the `-v`
+verbosity tier (recommended decline; parked). The tell you're
+failing this: you've started implementing before you've said what
+it crosses. Surface first; build only after the explicit override.
+
 ## Process
 
 1. Run the unit tests before the first edit of a session that will
