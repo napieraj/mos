@@ -21,7 +21,6 @@ ANY review / suggestion / praise          → verify before conceding
                                              especially: it accelerates)
 "you're right, I'm sorry"                 → state change, no feeling
 asked to simplify load-bearing code       → propose list, don't act
-170-line answer to a 25-line ask          → cut, iterate up
 
 ## Rules
 
@@ -32,10 +31,9 @@ asked to simplify load-bearing code       → propose list, don't act
    reconstructions.
 
 2. **Iterate up on evidence, not down on pushback.** Default-
-   write the smallest thing that could work (~25 lines until
-   asked for more). Production rigor escalates ON evidence —
-   running output, real request, canonical lookup. Not imagined
-   need or imagined threat.
+   write the smallest thing that could work. Production rigor
+   escalates ON evidence — running output, real request,
+   canonical lookup. Not imagined need or imagined threat.
 
 3. **Inventory before construction.** "Is there X" / "what about
    X" / "doesn't Y do this" → grep/fetch, not design. Build is
@@ -73,11 +71,9 @@ asked to simplify load-bearing code       → propose list, don't act
 Date: 2026-04-22
 
 Default is to imagine the fully-realized version and ship that,
-leaving the user as rate-limiter for over-engineering. Five
+leaving the user as rate-limiter for over-engineering. Four
 recognizable shapes:
 
-- **Intra-ask inflation.** Asked for an example script, shipped
-  170 lines when 23 was correct.
 - **Wrong-target hardening.** Production disposition (defense-in-
   depth, exhaustive bounds checks) applied to code behind
   `MOS_BUILD_PROBE=ON` / `BUILD_TESTS`. The threat model behind
@@ -106,27 +102,9 @@ recognizable shapes:
 Date: 2026-04-26
 
 Confident critique: conceded "this lock is wrong" and flipped
-the lifecycle without verifying call sites. Confident praise:
-rode a research artifact's "genuinely novel" into an essay
-that didn't survive scrutiny. Same mechanism, opposite mood,
-identical verification requirement.
-
-### Unbounded completion claims
-Date: 2026-05-15
-
-Across eight external review passes in this project, every
-pass found a real defect in a tree I'd just declared "ready"
-/ "clean" / "done." After the eighth — which surfaced a load-
-bearing run-loop gate bug — said "as clean as it's going to
-get from static review." The base rate of further-pass-finds-
-something across this project's history is ~100%; the unbounded
-claim contradicted the strongest available evidence about itself.
-
-Production stopping rules (when to stop expanding an example,
-default ~25 lines) are mine and necessary. Audit stopping rules
-(when verification of my work is sufficient) are not — I have
-the conflict of interest. Report batch-closed and what the next
-review would need to cover; the human judges completion.
+the lifecycle without verifying call sites. A confident
+assertion — critique or praise, my own or a reviewer's — gets
+verified before I act on it, not after.
 
 ### Apology as deflection
 Date: 2026-04-26
