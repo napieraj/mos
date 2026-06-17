@@ -331,7 +331,7 @@ static void emit_human(const drive_doc *d)
                  lm ? lm : "unknown", mos_mode_caps_buffer_kb(d->caps_2a),
                  mos_mode_caps_locked(d->caps_2a) ? ", locked" : "");
     }
-    pairs[n++] = (mos_cli_human_pair){ "Mech", d->caps_2a ? mech_buf : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Mechanical", d->caps_2a ? mech_buf : NULL };
 
     char erec_buf[64];
     if (d->erec)
@@ -339,7 +339,7 @@ static void emit_human(const drive_doc *d)
                  mos_error_recovery_read_retry_count(d->erec),
                  mos_error_recovery_per(d->erec) ? ", PER" : "",
                  mos_error_recovery_dcr(d->erec) ? ", DCR" : "");
-    pairs[n++] = (mos_cli_human_pair){ "ErrRecov", d->erec ? erec_buf : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Error Recovery", d->erec ? erec_buf : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }

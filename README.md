@@ -191,18 +191,18 @@ mount on macOS. Full field reference:
 
 ```
 $ mos drive 1
-        BSD:  /dev/disk4
-Registry ID:  4295032831
-     Vendor:  HL-DT-ST
-    Product:  BD-RE WH16NS60
-   Firmware:  1.00 (2019-01-07T13:20:43Z)
-     Serial:  KL2G7942618WL
- Protection:  AACS (v68, bus encryption), CSS (v1)
-   Profiles:  cd_rom, cd_r, cd_rw, dvd_rom, dvd_minus_r, ..., bd_rom, bd_r, bd_re
-  Standards:  spc_4 — mmc_6, sbc_3, sam_5, spc_4
-     Speeds:  read 10560 kB/s, write 8310 kB/s (max)
-       Mech:  tray, buffer 4096 KB
-   ErrRecov:  retry 20, PER
+           BSD:  /dev/disk4
+   Registry ID:  4295032831
+        Vendor:  HL-DT-ST
+       Product:  BD-RE WH16NS60
+      Firmware:  1.00 (2019-01-07T13:20:43Z)
+        Serial:  KL2G7942618WL
+    Protection:  AACS (v68, bus encryption), CSS (v1)
+      Profiles:  cd_rom, cd_r, cd_rw, dvd_rom, dvd_minus_r, ..., bd_rom, bd_r, bd_re
+     Standards:  spc_4 — mmc_6, sbc_3, sam_5, spc_4
+        Speeds:  read 10560 kB/s, write 8310 kB/s (max)
+    Mechanical:  tray, buffer 4096 KB
+Error Recovery:  retry 20, PER
 ```
 
 Static facts that don't depend on the loaded disc: identity, content-
