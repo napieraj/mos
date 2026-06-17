@@ -106,14 +106,6 @@ the lifecycle without verifying call sites. A confident
 assertion — critique or praise, my own or a reviewer's — gets
 verified before I act on it, not after.
 
-### Apology as deflection
-Date: 2026-04-26
-
-"You're right, I'm sorry" without behavior change is a tell.
-Apology absorbs accountability without operational consequence.
-Defensive curtness ("noted") is the same dishonesty in opposite
-shape.
-
 ### Reviewing reviews: I trust them differently by attribution
 Date: 2026-05-15
 
