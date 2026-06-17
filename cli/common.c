@@ -211,7 +211,7 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
             fputs(",\"product\":", stdout); mos_cli_json_str(stdout, product);
         }
         if (revision && *revision) {
-            fputs(",\"revision\":", stdout); mos_cli_json_str(stdout, revision);
+            fputs(",\"firmware\":", stdout); mos_cli_json_str(stdout, revision);
         }
         if (sk != 0 || asc != 0 || ascq != 0) {
             fprintf(stdout,
@@ -314,9 +314,9 @@ void mos_cli_emit_list_table(FILE *f, const mos_cli_list_row *rows, int n,
 {
     enum { MAXC = 7 };
     const char *headers_v[MAXC] =
-        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Revision" };
+        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Firmware" };
     const char *headers_nv[MAXC - 1] =
-        { "Index", "State", "BSD", "Vendor", "Product", "Revision" };
+        { "Index", "State", "BSD", "Vendor", "Product", "Firmware" };
     static const bool ra_v[MAXC]      = { true, false, false, false, false, false, false };
     static const bool ra_nv[MAXC - 1] = { true, false, false, false, false, false };
 
@@ -381,7 +381,7 @@ void mos_cli_emit_list_json(const mos_cli_list_row *rows, int n)
         fputs(", \"product\": ", stdout);
         if (rows[r].product[0]) mos_cli_json_str(stdout, rows[r].product);
         else                    fputs("null", stdout);
-        fputs(", \"revision\": ", stdout);
+        fputs(", \"firmware\": ", stdout);
         if (rows[r].revision[0]) mos_cli_json_str(stdout, rows[r].revision);
         else                     fputs("null", stdout);
         fputs("}", stdout);
