@@ -6,8 +6,10 @@
 
 /*
  * test_human.c — golden-string tests for the human-output layout engine
- * (cli/human.c). Each golden is a verbatim mock from the CLI design doc;
- * a disagreement means one is wrong, and the design doc decides which.
+ * (cli/human.c), exercised with faithful samples of real CLI output. Each
+ * golden mirrors a current verb's vocabulary, row order, and field formats;
+ * a disagreement means the golden drifted from the renderer and should be
+ * re-synced to it.
  *
  * Uses open_memstream to capture FILE* output without touching the
  * filesystem.
@@ -44,26 +46,33 @@ static char *capture_table(const char *const *headers,
 
 TEST(human_block_ready_mounted_golden)
 {
-    /* The canonical ready-mounted status block, five-tier order. */
+    /* A faithful `mos state` for a mounted, readable disc — an M-DISC data
+       BD archive, which mounts on macOS as an ordinary volume (a UHD/BD video
+       disc would NOT mount, so it would have no Volume row). Real emit order
+       and vocabulary: separate Vendor/Product/Firmware rows (never one joined
+       line), Volume is the name only, Profile is "class — name". Pins the
+       layout: keys right-aligned to the longest ("Registry ID"), ":  " gutter. */
     const mos_cli_human_pair pairs[] = {
-        { "State",    "ready" },
-        { "Profile",  "0x0040  bd_rom  (bd)" },
-        { "Volume",   "ARRIVAL_4K  (/Volumes/ARRIVAL_4K)" },
-        { "Index",    "1" },
-        { "BSD",      "/dev/disk4" },
         { "Registry ID", "4295032831" },
-        { "Drive",    "HL-DT-ST BD-RE WH16NS60 1.00" },
+        { "BSD",         "/dev/disk4" },
+        { "State",       "ready" },
+        { "Profile",     "bd — bd_r" },
+        { "Volume",      "ARCHIVE" },
+        { "Vendor",      "HL-DT-ST" },
+        { "Product",     "BD-RE WH16NS60" },
+        { "Firmware",    "1.00" },
     };
-    bool ok; char *out = capture_block(pairs, 7, &ok);
+    bool ok; char *out = capture_block(pairs, 8, &ok);
     EXPECT_EQ(true, ok);
     EXPECT_STREQ(
-        "      State:  ready\n"
-        "    Profile:  0x0040  bd_rom  (bd)\n"
-        "     Volume:  ARRIVAL_4K  (/Volumes/ARRIVAL_4K)\n"
-        "      Index:  1\n"
-        "        BSD:  /dev/disk4\n"
         "Registry ID:  4295032831\n"
-        "      Drive:  HL-DT-ST BD-RE WH16NS60 1.00\n", out);
+        "        BSD:  /dev/disk4\n"
+        "      State:  ready\n"
+        "    Profile:  bd — bd_r\n"
+        "     Volume:  ARCHIVE\n"
+        "     Vendor:  HL-DT-ST\n"
+        "    Product:  BD-RE WH16NS60\n"
+        "   Firmware:  1.00\n", out);
     free(out);
     return 0;
 }
@@ -118,7 +127,7 @@ TEST(human_table_list_golden)
        cells as "-", per-column widths from data, no trailing
        whitespace. */
     static const char *const headers[] =
-        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Revision" };
+        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Firmware" };
     static const char *const cells[] = {
         "1", "ready",         "ARRIVAL_4K", "/dev/disk4", "HL-DT-ST", "BD-RE WH16NS60", "1.00",
         "2", "empty_or_open", NULL,         NULL,         "PIONEER",  "BD-RW BDR-XS07", "1.01",
@@ -128,7 +137,7 @@ TEST(human_table_list_golden)
     bool ok; char *out = capture_table(headers, cells, 3, 7, ra, &ok);
     EXPECT_EQ(true, ok);
     EXPECT_STREQ(
-        " Index  State          Volume      BSD         Vendor    Product         Revision\n"
+        " Index  State          Volume      BSD         Vendor    Product         Firmware\n"
         "     1  ready          ARRIVAL_4K  /dev/disk4  HL-DT-ST  BD-RE WH16NS60  1.00\n"
         "     2  empty_or_open  -           -           PIONEER   BD-RW BDR-XS07  1.01\n"
         "     3  error          -           /dev/disk6  ASUS      BW-16D1HT       3.10\n", out);

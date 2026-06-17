@@ -64,13 +64,16 @@ static void emit_human(const mos_state_result *r, int index1,
     if (mos_cli_profile_present(profile)) {
         const char *pn = mos_profile_name(profile);
         const char *pc = mos_profile_class(profile);
-        /* Coarse -> precise; joining is safe because every token is
-           space-free (identity fields are not — see below). */
+        /* Coarse — precise, the same em-dash the drive verb's Standards row
+           uses for the same relationship. Both tokens are mos vocabulary
+           (lookups of the profile code), so the separator can't collide with
+           content. The machine-key hex lives in --json's current_profile, not
+           this human row; hex appears here only as the fallback when the code
+           has no name (then it is the only identifier). */
         if (pn && pc)
-            snprintf(prof_buf, sizeof prof_buf, "%s  %s  (0x%04x)",
-                     pc, pn, profile);
+            snprintf(prof_buf, sizeof prof_buf, "%s — %s", pc, pn);
         else if (pn)
-            snprintf(prof_buf, sizeof prof_buf, "%s  (0x%04x)", pn, profile);
+            snprintf(prof_buf, sizeof prof_buf, "%s", pn);
         else
             snprintf(prof_buf, sizeof prof_buf, "0x%04x", profile);
         pairs[n++] = (mos_cli_human_pair){ "Profile", prof_buf };
