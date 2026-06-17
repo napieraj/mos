@@ -1,0 +1,2 @@
+ Index  State  Volume            BSD         Vendor    Product         Firmware
+     1  ready  /Volumes/ARRIVAL  /dev/disk4  HL-DT-ST  BD-RE WH16NS40  1.05

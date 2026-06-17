@@ -11,7 +11,13 @@
  * stdout), and validate_emitted.py pipes stdout through the validator.
  * macOS-only, same seam as the adapter-fake tests.
  *
- * One document per process: `emit_fixtures <verb> <scenario>`.
+ * One document per process: `emit_fixtures <verb> <scenario> [mode]`.
+ * mode is `json` (default — unchanged historical behavior) or `human`
+ * (flag_json=false, exercising the cli/*.c emit_human renderers so a
+ * golden check — tests/emit/validate_emitted_human.py — can catch human
+ * output drift the same way validate_emitted.py catches JSON drift).
+ * `error` and `watch` have no single human stdout block and are not run
+ * in human mode (the human comparison skips them).
  */
 #include "common.h"
 #include "mos_fake_apple.h"
@@ -116,14 +122,25 @@ static void build_tib(uint8_t b[36], bool blank, bool nwa_valid,
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <verb> <scenario>\n", argv[0]);
+        fprintf(stderr, "usage: %s <verb> <scenario> [json|human]\n", argv[0]);
         return 2;
     }
     const char *verb = argv[1];
     const char *scn  = argv[2];
+    /* Optional 3rd argv selects the rendering. Default (missing or "json")
+       keeps the historical JSON behavior byte-for-byte; "human" drives the
+       cli/*.c emit_human paths instead. Anything else is a usage error. */
+    const char *mode = (argc >= 4) ? argv[3] : "json";
+    bool human;
+    if (strcmp(mode, "json") == 0)        human = false;
+    else if (strcmp(mode, "human") == 0)  human = true;
+    else {
+        fprintf(stderr, "%s: unknown mode %s (json|human)\n", argv[0], mode);
+        return 2;
+    }
 
     progname  = "emit-fixtures";
-    flag_json = true;
+    flag_json = !human;
     opt_index = 1;
 
     uint8_t cfg[64];
@@ -274,7 +291,7 @@ int main(int argc, char **argv)
         mos_fake_reset();
         mos_fake_set_no_drive();
         opt_index = 0;               /* no selector: the bare `mos --json` path */
-        (void)mos_cli_run_state();   /* flag_json already true (set above) */
+        (void)mos_cli_run_state();   /* flag_json per mode (json for this scenario) */
         return 0;
     }
 

@@ -1,0 +1,12 @@
+           BSD:  /dev/disk4
+   Registry ID:  4294967587
+        Vendor:  PIONEER
+       Product:  BD-RW BDR-XS07
+      Firmware:  1.01
+        Serial:  -
+    Protection:  none
+      Profiles:  -
+     Standards:  -
+        Speeds:  -
+    Mechanical:  -
+Error Recovery:  -

@@ -1,0 +1,3 @@
+       BSD:  /dev/disk4
+     Media:  25.0 GB (12219392 blocks x 2048 B)
+Recordable:  free 0 blocks, track 12219392
