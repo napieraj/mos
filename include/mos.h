@@ -488,6 +488,13 @@ uint16_t mos_drive_caps_profile_code(const mos_drive_caps *c, uint8_t i);
    GET CONFIGURATION walk the caps query already performs. */
 const char *mos_drive_caps_firmware_date(const mos_drive_caps *c);
 
+/* Current Profile (loaded medium) from the same RT=0 GET CONFIGURATION reply,
+   or 0 when the tray is empty / the field was absent. MEDIA-DEPENDENT (unlike
+   the rest of mos_drive_caps): surfaced so a caller can name the loaded disc's
+   class via mos_profile_class() — e.g. to scale a media-dependent read/write
+   speed to a 1x multiple. Zero commands beyond the caps walk. */
+uint16_t mos_drive_caps_current_profile(const mos_drive_caps *c);
+
 /* Drive identity for a held handle — the open-time directory data
    (DiscRecording pre-parsed INQUIRY strings) and the drive service's
    registry entry ID. Zero commands. Strings are borrowed from the

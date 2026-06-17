@@ -145,6 +145,12 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
     mos_internal_firmware_date_from_config(buf, sizeof(buf),
                                            h->caps.firmware_date,
                                            sizeof h->caps.firmware_date);
+    /* Current Profile (loaded medium) from the same RT=0 header — 0 when the
+       field is absent/truncated or the tray is empty. Media-dependent; used
+       only to name the loaded disc's class (e.g. speed 1x scaling). */
+    if (!mos_internal_config_current_profile(buf, sizeof(buf),
+                                             &h->caps.current_profile))
+        h->caps.current_profile = 0;
     *out = &h->caps;
     return MOS_OK;
 }

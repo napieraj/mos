@@ -226,6 +226,27 @@ TEST(human_rate_scaling)
     return 0;
 }
 
+TEST(human_rate_x_multiples)
+{
+    char b[40];
+    /* Headline is the medium-native multiple; absolute rate in parens.
+       BD 1x = 4500 kB/s, DVD 1x = 1385, CD 1x = 153.6, HD DVD 1x = 4568. */
+    EXPECT_STREQ("~16.0× BD (72.0 MB/s)",
+                 mos_cli_human_rate_x(72000, "bd", b, sizeof b));
+    EXPECT_STREQ("~16.0× DVD (22.2 MB/s)",
+                 mos_cli_human_rate_x(22160, "dvd", b, sizeof b));
+    EXPECT_STREQ("~48.0× CD (7.4 MB/s)",
+                 mos_cli_human_rate_x(7373, "cd", b, sizeof b));
+    EXPECT_STREQ("~1.0× HD DVD (4.6 MB/s)",
+                 mos_cli_human_rate_x(4568, "hd_dvd", b, sizeof b));
+    /* No/unknown class → absolute rate alone (no fabricated multiple). */
+    EXPECT_STREQ("72.0 MB/s", mos_cli_human_rate_x(72000, NULL, b, sizeof b));
+    EXPECT_STREQ("72.0 MB/s", mos_cli_human_rate_x(72000, "mo", b, sizeof b));
+    /* Zero rate degrades too. */
+    EXPECT_STREQ("0 kB/s", mos_cli_human_rate_x(0, "bd", b, sizeof b));
+    return 0;
+}
+
 void register_human_tests(void)
 {
     RUN(human_block_ready_mounted_golden);
@@ -237,4 +258,5 @@ void register_human_tests(void)
     RUN(human_bsd_dev_node_contract);
     RUN(human_bytes_scaling);
     RUN(human_rate_scaling);
+    RUN(human_rate_x_multiples);
 }

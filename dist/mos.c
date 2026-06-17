@@ -294,6 +294,11 @@ typedef struct mos_drive_caps {
        (010Ch), "YYYY-MM-DDTHH:MM:SSZ" (GMT) or "" when absent. 24 holds the
        20-char ISO form + NUL. */
     char     firmware_date[24];
+    /* Current Profile from the RT=0 reply header (the loaded medium's profile;
+       0x0000 = no current profile / tray empty). MEDIA-DEPENDENT, unlike the
+       rest of this struct — surfaced only so a caller can name the loaded
+       disc's class (e.g. to scale speeds to a 1x multiple). */
+    uint16_t current_profile;
 } mos_drive_caps;
 
 #define MOS_DRIVE_PROFILE_CAP 64u
@@ -2790,6 +2795,11 @@ uint16_t mos_drive_caps_profile_code(const mos_drive_caps *c, uint8_t i)
 const char *mos_drive_caps_firmware_date(const mos_drive_caps *c)
 {
     return (c && c->firmware_date[0]) ? c->firmware_date : NULL;
+}
+
+uint16_t mos_drive_caps_current_profile(const mos_drive_caps *c)
+{
+    return c ? c->current_profile : 0;
 }
 
 /* ---- mos_drive_inquiry accessors (mos_query_drive_inquiry) ------- */
@@ -6570,6 +6580,12 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
     mos_internal_firmware_date_from_config(buf, sizeof(buf),
                                            h->caps.firmware_date,
                                            sizeof h->caps.firmware_date);
+    /* Current Profile (loaded medium) from the same RT=0 header — 0 when the
+       field is absent/truncated or the tray is empty. Media-dependent; used
+       only to name the loaded disc's class (e.g. speed 1x scaling). */
+    if (!mos_internal_config_current_profile(buf, sizeof(buf),
+                                             &h->caps.current_profile))
+        h->caps.current_profile = 0;
     *out = &h->caps;
     return MOS_OK;
 }
