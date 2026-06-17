@@ -54,10 +54,10 @@ if(NOT APPLE)
         target_include_directories(mos_core INTERFACE
             "${CMAKE_CURRENT_SOURCE_DIR}/include")
         target_link_libraries(mos_core INTERFACE mos_pure)
-        message(STATUS "mac-optical-state: non-Apple stub enabled (MOS_NON_APPLE_STUB)")
+        message(STATUS "mos: non-Apple stub enabled (MOS_NON_APPLE_STUB)")
         return()
     endif()
-    message(STATUS "mac-optical-state: non-Apple platform; building pure layer + tests only "
+    message(STATUS "mos: non-Apple platform; building pure layer + tests only "
                    "(mos_core and mos require IOKit and are skipped). "
                    "Pass -DMOS_NON_APPLE_STUB=ON for INTERFACE-library stubs instead.")
 endif()
