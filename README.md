@@ -301,6 +301,24 @@ the drive's, cleared only by an explicit unlock, a bus reset, or
 power-off — so a ripping robot can lock an idle drive and any later `mos
 tray unlock` recovers it.
 
+**Locking several drives** (e.g. a robot freezing every tray before an arm
+moves) is a per-drive loop over `mos list`, not a bulk flag — `mos` exposes
+the primitive and the orchestrator owns the fan-out:
+
+```sh
+for id in $(mos list --json | jq '.drives[].registry_id'); do
+    mos tray lock --persistent "$id"
+done
+```
+
+The loop is deliberate, not a missing convenience. Each drive is a separate
+exclusive-access session, so `mos` could not lock them atomically even with a
+`--all` flag; the loop instead gives one `outcome` and one exit code **per
+drive**, which is exactly what a mounted member needs — locking takes
+exclusive access, so a drive holding a mounted volume returns busy while its
+idle siblings lock. The drive most likely to hold a disc is the one most
+likely to refuse, so per-drive reckoning is the point, not an inconvenience.
+
 ### capacity
 
 `mos capacity --json` (`mos.capacity.v1`) reports the loaded disc's size; the
