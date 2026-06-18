@@ -475,8 +475,11 @@ static void emit_human(const metadata_doc *d)
         }
         if (off > 0 && (size_t)off < sizeof sess_buf)
             snprintf(sess_buf + off, sizeof sess_buf - (size_t)off, ")");
+        /* Suppress the row entirely when single-session (not a "-" row): the
+           common case is one session, already covered by the TOC row, and a
+           near-always-"-" Sessions row would be pure clutter. */
+        pairs[n++] = (mos_cli_human_pair){ "Sessions", sess_buf };
     }
-    pairs[n++] = (mos_cli_human_pair){ "Sessions", show_sessions ? sess_buf : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }
