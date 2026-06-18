@@ -96,6 +96,20 @@ cat > "$H" <<'HEADER'
 #define _POSIX_C_SOURCE 200809L
 #endif
 
+/* mos is implemented in C11: it uses _Static_assert and _Atomic. The CMake
+ * build pins -std=c11 with C_STANDARD_REQUIRED, but this amalgamation is the
+ * drop-in, no-CMake path (compile mos.c by hand), where an older dialect would
+ * accept _Atomic/_Static_assert as compiler extensions and silently build a
+ * subtly different library. Fail loudly instead. This is in mos.c only, never
+ * mos.h, so a C99 (or older) application that includes the public header and
+ * links is unaffected — the C ABI is dialect-agnostic. The __cplusplus arm is
+ * skipped: compiling mos.c as C++ is a separate unsupported path. */
+#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L
+#  if !defined(__cplusplus)
+#    error "mos requires a C11 (or later) compiler: mos.c uses _Static_assert and _Atomic. Compile with -std=c11 or newer."
+#  endif
+#endif
+
 #include "mos.h"
 
 HEADER
