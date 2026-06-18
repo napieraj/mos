@@ -412,6 +412,38 @@ single document. Everything else composes from tools that already exist:
 mount control is `diskutil mount` / `unmount`, CD audio is `cdparanoia`,
 DVD/BD rip is `makemkvcon`, transcode is `HandBrakeCLI`.
 
+That "derive client-side" line under `metadata` is not hand-waving — the
+fingerprint subtree carries everything a third-party disc ID needs. A
+**MusicBrainz Disc ID**, for instance, is a pure function of the audio
+TOC `mos` already emits, so no second tool has to touch the drive: `jq`
+builds libdiscid's hash input (first/last track, then 100 frame offsets —
+each track and the lead-out as its LBA + 150), and the system `sha1` and
+URL-safe base64 finish it.
+
+```sh
+mos_discid() {                              # mos_discid <cd-drive>
+    mos metadata "$1" --json | jq -r '
+        .disc.toc as $t
+        | [ $t.first_track, $t.last_track, $t.leadout_lba + 150 ]
+          + [ range(1;100) as $n
+              | (first(($t.tracks[]|select(.track==$n).start_lba)) // -150) + 150 ]
+        | .[]' |
+    { read f; read l; s=$(printf '%02X%02X' "$f" "$l")
+      while read o; do s="$s$(printf '%08X' "$o")"; done
+      printf '%s' "$s" | openssl dgst -sha1 -binary | base64 | tr '+/=' '._-'; }
+}
+```
+
+It matches libdiscid's own `discid` byte-for-byte: the standard reference
+disc (track offsets 150, 15363, 32314, 46592, 63414, 80489; lead-out
+95462) yields `49HHV7Eb8UKF3aQiNmu1GR8vKTY-`. Drop it into the `cd)`
+branch above and an inserted audio CD is a database key the moment it
+turns readable — `curl -s "https://musicbrainz.org/ws/2/discid/$(mos_discid "$dev")?fmt=json"`
+for the release, or the `submission_url` to add an unknown disc. The same
+shape — `jq` over `disc.toc` plus a hasher — yields the freedb/CDDB id or
+an AccurateRip key; `mos` ships the primitive, the four lines of recipe
+stay yours.
+
 ## JSON output
 
 Every `--json` document carries a `schema` field naming its type and
