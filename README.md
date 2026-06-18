@@ -121,6 +121,13 @@ Registry ID:  4295032831
    Firmware:  1.00
 ```
 
+No media means no `Media:` / `Writable:` rows — those come from the kernel
+media node, which an empty tray has none of. A loaded disc adds them (the
+`bd_rom` example at the top): `media_type` (`Media:`) and `writable`
+(`Writable:`), read with **zero SCSI commands** off the media node and present
+even before the disc is READY — the same two fields the `watch` events carry,
+so a one-shot `mos state` and the stream agree.
+
 ### list
 
 Every attached drive with its state — one probe per row; a failing drive
