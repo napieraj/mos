@@ -164,3 +164,52 @@ recorded so it isn't rediscovered as a "gap" next time.
 
 Tier-2 #3 (volume-settled event) and all of Tier 3 remain as recorded —
 declined/out-of-scope, working as designed.
+
+## Addendum (2026-06-18): Tier-3 `media_bytes` Known-Unknown documented
+
+The Tier-3 `media_bytes` vs filesystem-size item ("Worth a Known-Unknown line")
+is now addressed as the doc-only fix it called for: `mos.capacity.v1`'s
+`media_bytes` description carries the caveat that it is the drive-reported
+whole-disk ADDRESSABLE capacity, not the filesystem's recorded-data extent — it
+can exceed the ISO9660 Volume Space Size (lead-out runout / padding), and on
+overwritable media some firmwares report formatted rather than written capacity
+(mirroring the caveat `mos.metadata.v1`'s `leadout_lba` already carried). The
+exact recorded-data length is a PVD read mos refuses (scope layer 3). No code
+change — a description-only generalization, pre-tag mutable-in-place.
+
+## Addendum (2026-06-18): DiscRecording device-cache surveyed — nothing to take
+
+A follow-up swept DiscRecording's cached device surface (`DRDeviceCopyInfo` +
+`DRDeviceCopyStatus`, verified against the Tahoe 26.4 `DRCoreDevice.h`) for any
+zero-command property mos doesn't already expose. **Result: nothing actionable.**
+This is recorded here so a future session doesn't re-open "what about DR's
+cache?".
+
+- The live media-status cluster (`kDRDeviceMediaIsBlank` / `IsAppendable` /
+  `IsErasable` / `IsOverwritable` / `BlocksFree`,`Used`,`Overwritable` /
+  `SessionCount` / `TrackCount`, in the `kDRDeviceMediaInfoKey` sub-dict)
+  DUPLICATES what `mos metadata`'s `disc_info` already parses from mos's own READ
+  DISC INFORMATION (0x51). Consuming DR's pre-digested booleans instead would
+  invert mos's parse-its-own-bytes source-of-truth model and expand DR past the
+  directory/doorbell role the DR-pivot record (doc/history/2026-06-10) scoped —
+  which deliberately takes exactly ONE key from that dict, `kDRDeviceMediaBSDNameKey`.
+  (Same reason `writable` shipped as the raw kernel bit, not DR's `IsBlank`.)
+- `MediaType` / `MediaClass`, the `CanWrite*` capability matrix, `BurnSpeeds` /
+  `Max` / `Current`, `LoadingMechanismCan*`, `WriteBufferSize` all duplicate
+  existing fields mos derives from its own MMC (`media_type` / `media_class`,
+  `mos.drive.v1` write-caps + speeds + loading mechanism + buffer from GET
+  CONFIGURATION / MODE SENSE 2A).
+- `IsTrayOpen` / `IsBusy` are coarser than what `mos state` classifies from
+  TUR ⊕ GESN; `SupportLevel` is DR-engine meta, not a drive fact.
+- `PhysicalInterconnect` (+ `Location`) is the only fact no mos command exposes,
+  but it fails the does-it-vary test (the same test that retired `Ejectable`):
+  on the supported population it is constant `usb`. Every optical drive sold is
+  external USB; a SATA mechanism terminates at a USB bridge chip, and Thunderbolt
+  optical enclosures bridge to USB behind the connector. The only non-USB values
+  (`ATAPI` / `SCSI` / internal `FireWire`) are internal-bay / tower / FireWire
+  rigs — all Intel, all leaving the support window as Intel support is dropped.
+  A constant field is noise, so it is declined.
+
+Net: DR stays the directory/doorbell the pivot scoped it as; mos takes only the
+BSD name from its media-info dict, and the cache holds nothing else mos should
+consume.

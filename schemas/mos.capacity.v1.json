@@ -27,7 +27,7 @@
     "media_bytes": {
       "type": ["integer", "null"],
       "minimum": 1,
-      "description": "Whole-disk capacity in bytes (kIOMediaSizeKey) — the kernel's cached READ CAPACITY result. null when there is no whole-disk node: a blank/unrecorded recordable disc or an empty drive. This is the READABLE capacity of recorded media; the FORMATTABLE capacity of a blank rewritable disc is reported separately under `formattable` (READ FORMAT CAPACITIES)."
+      "description": "Whole-disk capacity in bytes (kIOMediaSizeKey) — the kernel's cached READ CAPACITY result. null when there is no whole-disk node: a blank/unrecorded recordable disc or an empty drive. This is the READABLE capacity of recorded media; the FORMATTABLE capacity of a blank rewritable disc is reported separately under `formattable` (READ FORMAT CAPACITIES). KNOWN-UNKNOWN: this is the drive-reported whole-disk ADDRESSABLE capacity, NOT the filesystem's recorded-data extent — on a burned data disc it can exceed the ISO9660 Volume Space Size (lead-out runout / padding), and on overwritable media (DVD+RW/BD-RE) some firmwares report formatted rather than written capacity (the same caveat mos.metadata.v1's leadout_lba carries). The exact recorded-data length lives in the filesystem PVD (Volume Space Size × block size), a sector read mos does not perform (scope doctrine); do not treat media_bytes as a precise byte-exact image size."
     },
     "block_bytes": {
       "type": ["integer", "null"],
