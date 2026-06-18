@@ -423,59 +423,63 @@ CoreFoundation, DiscRecording, and DiskArbitration with
 ## Shell integration
 
 The core pattern — act on every disc that turns readable, on any drive,
-hot-plug included — is one pipeline. No polling, no `sleep`:
+hot-plug included — is one pipeline. No polling, no `sleep`. `mos` says
+what the disc *is*; existing tools do the work. The `cd` branch shows what
+"derive client-side" under `metadata` means: a **MusicBrainz Disc ID** is
+a pure function of the audio TOC `mos` already emits, so no second tool
+touches the drive — `jq` builds libdiscid's hash input (first/last track,
+then 100 frame offsets, each track and the lead-out as its LBA + 150) and
+`sha1` plus URL-safe base64 finish it.
 
 ```sh
+# Act on every disc the moment it turns ready, on any drive, hot-plug
+# included. One event per transition — an insert fires once, a swap fires
+# media_changed, a hot-plugged drive joins live, an eject doesn't end it.
 mos watch | jq --unbuffered -r '
     select(.event != "error" and .state == "ready")
     | "\(.bsd_node) \(.media_class // "unknown")"' |
 while read -r dev class; do
+    # `ready` only means the drive can read the disc — a blank recordable is
+    # ready too. Gate on disc content so an empty/appendable disc (still
+    # writable) isn't piped into a rip; disc_info carries what the event can't.
+    case "$(mos metadata "$dev" --json | jq -r '.disc.disc_info.status')" in
+        blank|appendable) continue ;;
+    esac
     case "$class" in
-        cd)     cdparanoia -B -d "$dev" ;;
-        dvd|bd) makemkvcon ... ;;
+    # Audio CD: a MusicBrainz Disc ID, computed entirely from the TOC mos emits.
+    cd) mos metadata "$dev" --json | jq -r '
+            .disc.toc as $t
+            | [ $t.first_track, $t.last_track, $t.leadout_lba + 150 ]
+              + [ range(1;100) as $n
+                  | (first(($t.tracks[]|select(.track==$n).start_lba)) // -150) + 150 ]
+            | .[]' |
+        { read f; read l; s=$(printf '%02X%02X' "$f" "$l")
+          while read o; do s="$s$(printf '%08X' "$o")"; done
+          printf '%s' "$s" | openssl dgst -sha1 -binary | base64 | tr '+/=' '._-'; } ;;
+    dvd|bd) makemkvcon mkv "dev:${dev/disk/rdisk}" all "$HOME/Rips" ;;
     esac
 done
 ```
 
-One event per transition drives the loop: inserting a disc fires it
-once, swapping discs fires `media_changed`, a drive plugged in mid-run
-joins the stream live, and an ejected drive doesn't end it. For a
-one-shot answer, `mos state <drive> --json` is the same contract in a
-single document. Everything else composes from tools that already exist:
-mount control is `diskutil mount` / `unmount`, CD audio is `cdparanoia`,
-DVD/BD rip is `makemkvcon`, transcode is `HandBrakeCLI`.
+That inline `cd` pipeline matches libdiscid's own `discid` byte-for-byte:
+the standard reference disc (track offsets 150, 15363, 32314, 46592,
+63414, 80489; lead-out 95462) yields `49HHV7Eb8UKF3aQiNmu1GR8vKTY-`. Feed it to
+`https://musicbrainz.org/ws/2/discid/<id>?fmt=json` for the release. The
+same shape — `jq` over `disc.toc` plus a hasher — yields the freedb/CDDB
+id or an AccurateRip key; `mos` ships the primitive, the recipe stays
+yours. For a one-shot answer (cron, a `tray` hook), `mos state <drive>
+--json` is the same contract in a single document.
 
-That "derive client-side" line under `metadata` is not hand-waving — the
-fingerprint subtree carries everything a third-party disc ID needs. A
-**MusicBrainz Disc ID**, for instance, is a pure function of the audio
-TOC `mos` already emits, so no second tool has to touch the drive: `jq`
-builds libdiscid's hash input (first/last track, then 100 frame offsets —
-each track and the lead-out as its LBA + 150), and the system `sha1` and
-URL-safe base64 finish it.
-
-```sh
-mos_discid() {                              # mos_discid <cd-drive>
-    mos metadata "$1" --json | jq -r '
-        .disc.toc as $t
-        | [ $t.first_track, $t.last_track, $t.leadout_lba + 150 ]
-          + [ range(1;100) as $n
-              | (first(($t.tracks[]|select(.track==$n).start_lba)) // -150) + 150 ]
-        | .[]' |
-    { read f; read l; s=$(printf '%02X%02X' "$f" "$l")
-      while read o; do s="$s$(printf '%08X' "$o")"; done
-      printf '%s' "$s" | openssl dgst -sha1 -binary | base64 | tr '+/=' '._-'; }
-}
-```
-
-It matches libdiscid's own `discid` byte-for-byte: the standard reference
-disc (track offsets 150, 15363, 32314, 46592, 63414, 80489; lead-out
-95462) yields `49HHV7Eb8UKF3aQiNmu1GR8vKTY-`. Drop it into the `cd)`
-branch above and an inserted audio CD is a database key the moment it
-turns readable — `curl -s "https://musicbrainz.org/ws/2/discid/$(mos_discid "$dev")?fmt=json"`
-for the release, or the `submission_url` to add an unknown disc. The same
-shape — `jq` over `disc.toc` plus a hasher — yields the freedb/CDDB id or
-an AccurateRip key; `mos` ships the primitive, the four lines of recipe
-stay yours.
+The full version of this dispatcher —
+[`examples/disc-ingest.sh`](examples/disc-ingest.sh) — grows the two-line
+stub into a disc-pile router driven by one `mos metadata` read per disc:
+MusicBrainz lookup and byte-perfect `redumper` dumps for audio CDs,
+error-tolerant `ddrescue` imaging for M-DISC and data archives (sized
+against `mos capacity`), `makemkvcon -r` robot mode to confirm a video
+disc has rippable titles and name the rip from the disc title, and a
+"ready to write" report for blank recordables. Mount control is
+`diskutil`, transcode is `HandBrakeCLI`; `mos` is the one piece that says,
+in a single document, which to reach for.
 
 ## JSON output
 
