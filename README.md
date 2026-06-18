@@ -423,35 +423,87 @@ CoreFoundation, DiscRecording, and DiskArbitration with
 ## Shell integration
 
 The core pattern — act on every disc that turns readable, on any drive,
-hot-plug included — is one pipeline. No polling, no `sleep`:
+hot-plug included — is one pipeline. No polling, no `sleep`: `mos watch`
+hands each ready disc to a dispatcher, which reads one `mos metadata`
+document and decides what the disc *is*.
 
 ```sh
 mos watch | jq --unbuffered -r '
-    select(.event != "error" and .state == "ready")
-    | "\(.bsd_node) \(.media_class // "unknown")"' |
-while read -r dev class; do
-    case "$class" in
-        cd)     cdparanoia -B -d "$dev" ;;
-        dvd|bd) makemkvcon ... ;;
-    esac
+    select(.event != "error" and .state == "ready") | .bsd_node' |
+while read -r dev; do
+    mos_ingest "$dev"          # one document in, the right tool out
 done
 ```
 
 One event per transition drives the loop: inserting a disc fires it
 once, swapping discs fires `media_changed`, a drive plugged in mid-run
 joins the stream live, and an ejected drive doesn't end it. For a
-one-shot answer, `mos state <drive> --json` is the same contract in a
-single document. Everything else composes from tools that already exist:
-mount control is `diskutil mount` / `unmount`, CD audio is `cdparanoia`,
-DVD/BD rip is `makemkvcon`, transcode is `HandBrakeCLI`.
+one-shot answer (cron, a `tray` hook), `mos state <drive> --json` is the
+same contract in a single document — and `mos_ingest` below works
+either way, since it asks the drive itself rather than trusting the
+event.
 
-That "derive client-side" line under `metadata` is not hand-waving — the
-fingerprint subtree carries everything a third-party disc ID needs. A
-**MusicBrainz Disc ID**, for instance, is a pure function of the audio
-TOC `mos` already emits, so no second tool has to touch the drive: `jq`
-builds libdiscid's hash input (first/last track, then 100 frame offsets —
-each track and the lead-out as its LBA + 150), and the system `sha1` and
-URL-safe base64 finish it.
+### A dispatcher that handles a mixed disc pile
+
+`mos_ingest` is the worked example: a finalized M-DISC, an audio CD, and
+a movie DVD can come off the same spindle, and one `mos metadata --json`
+read tells them apart. Everything it *acts* with already exists —
+`cdparanoia`, `makemkvcon`, `dd`, `curl` — `mos` only supplies the
+identification, faithfully and in one document.
+
+```sh
+mos_ingest() {                                  # mos_ingest <drive>
+    # One document answers "what is this, and is it sealed?". @sh quotes
+    # every field for the shell, so a space in a volume path is safe.
+    eval "$(mos metadata "$1" --json | jq -r '@sh "
+        dev=\(.bsd_node // "")
+        vol=\(.volume_path // "")
+        class=\(.disc.class // "")
+        status=\(.disc.disc_info.status // "")
+        erasable=\(.disc.disc_info.erasable)
+        maker=\(.disc.disc_structure.manufacturer_id // "")
+        audio=\([.disc.toc.tracks[]? | select(.data == false)] | length)
+    "')"
+
+    # 1. Audio CD — the TOC IS the identity, so look it up before touching
+    #    a byte of audio. (A data CD has no audio tracks and falls through.)
+    if [ "$class" = cd ] && [ "$audio" -gt 0 ]; then
+        id=$(mos_discid "$1")
+        curl -s "https://musicbrainz.org/ws/2/discid/$id?fmt=json"
+        return
+    fi
+
+    # 2. Sealed M-DISC archive — registered maker MILLEN (the metadata
+    #    example above), finalized (complete), write-once (not erasable),
+    #    and mounted as a readable data volume. That is archived data: image
+    #    it 1:1. `mos capacity` sizes the dd so it stops at the recorded
+    #    extent, not a guess; mos reports, the consumer reads the sectors.
+    if [ "$maker" = MILLEN ] && [ "$status" = complete ] \
+       && [ "$erasable" = false ] && [ -n "$vol" ]; then
+        read -r blocks bs < <(mos capacity "$1" --json \
+            | jq -r '"\(.media_blocks) \(.block_bytes)"')
+        dd if="${dev/disk/rdisk}" of="$HOME/Archive/${vol##*/}.iso" \
+           bs="$bs" count="$blocks"          # /dev/diskN -> /dev/rdiskN
+        return
+    fi
+
+    # 3. Video DVD/BD — its TOC is drive-fabricated and identity-useless (the
+    #    schema says never key on it), so there is no CD-style disc-ID here;
+    #    mos has named the disc class, and makemkvcon reads titles off the
+    #    device and does the lifting (UDF video usually doesn't even mount).
+    case "$class" in
+        dvd|bd) makemkvcon mkv "dev:${dev/disk/rdisk}" all "$HOME/Rips" ;;
+    esac
+}
+```
+
+The one branch that needs `mos` to do something clever is the audio CD,
+and even there `mos` ships only the primitive. That "derive client-side"
+line under `metadata` is not hand-waving: a **MusicBrainz Disc ID** is a
+pure function of the audio TOC `mos` already emits, so no second tool
+touches the drive. `jq` builds libdiscid's hash input (first/last track,
+then 100 frame offsets — each track and the lead-out as its LBA + 150),
+and the system `sha1` and URL-safe base64 finish it:
 
 ```sh
 mos_discid() {                              # mos_discid <cd-drive>
@@ -469,13 +521,14 @@ mos_discid() {                              # mos_discid <cd-drive>
 
 It matches libdiscid's own `discid` byte-for-byte: the standard reference
 disc (track offsets 150, 15363, 32314, 46592, 63414, 80489; lead-out
-95462) yields `49HHV7Eb8UKF3aQiNmu1GR8vKTY-`. Drop it into the `cd)`
-branch above and an inserted audio CD is a database key the moment it
-turns readable — `curl -s "https://musicbrainz.org/ws/2/discid/$(mos_discid "$dev")?fmt=json"`
-for the release, or the `submission_url` to add an unknown disc. The same
-shape — `jq` over `disc.toc` plus a hasher — yields the freedb/CDDB id or
-an AccurateRip key; `mos` ships the primitive, the four lines of recipe
-stay yours.
+95462) yields `49HHV7Eb8UKF3aQiNmu1GR8vKTY-`. With the id in hand, the
+`cd` branch above resolves the release straight from
+`https://musicbrainz.org/ws/2/discid/<id>?fmt=json`, or hands you the
+`submission_url` to add an unknown disc. The same shape — `jq` over
+`disc.toc` plus a hasher — yields the freedb/CDDB id or an AccurateRip
+key; `mos` ships the primitive, the recipe stays yours. Mount control is
+`diskutil mount` / `unmount`, transcode is `HandBrakeCLI`; `mos` is the
+one piece that says, in a single document, which of them to reach for.
 
 ## JSON output
 
