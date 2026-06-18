@@ -60,7 +60,10 @@ cached TOC the maintainer flagged — these work for DVD/BD too:
 mos already reaches optical-family media properties (it reads
 `kIOCDMediaTOCKey` off IOCDMedia), so reading `kIO{CD,DVD,BD}MediaTypeKey` /
 `kIOMediaWritableKey` is the same `IORegistryEntryCreateCFProperty` call —
-proven feasible, zero new command.
+proven feasible, zero new command. All four keys are **public IOKit.framework
+SDK headers** (cross-checked against `MacOSX11.3.sdk`'s
+`storage/IO{CD,DVD,BD}Media.h` + `IOMedia.h`), so this is a public-API read —
+no private or kernel headers.
 
 **What still needs MMC:** only the precise `blank` / `appendable` / `complete`
 tri-state. That bit (`blank:1` in IODVDTypes.h / IOBDTypes.h) lives in the READ
