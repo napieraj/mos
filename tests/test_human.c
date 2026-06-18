@@ -52,13 +52,13 @@ TEST(human_block_ready_mounted_golden)
        BD archive, which mounts on macOS as an ordinary volume (a UHD/BD video
        disc would NOT mount, so it would have no Volume row). Real emit order
        and vocabulary: separate Vendor/Product/Firmware rows (never one joined
-       line), Volume is the name only, Profile is "class — name". Pins the
+       line), Volume is the name only, Media is "class — name". Pins the
        layout: keys right-aligned to the longest ("Registry ID"), ":  " gutter. */
     const mos_cli_human_pair pairs[] = {
         { "Registry ID", "4295032831" },
         { "BSD",         "/dev/disk4" },
         { "State",       "ready" },
-        { "Profile",     "bd — bd_r" },
+        { "Media",       "bd — bd_r" },
         { "Volume",      "ARCHIVE" },
         { "Vendor",      "HL-DT-ST" },
         { "Product",     "BD-RE WH16NS60" },
@@ -70,7 +70,7 @@ TEST(human_block_ready_mounted_golden)
         "Registry ID:  4295032831\n"
         "        BSD:  /dev/disk4\n"
         "      State:  ready\n"
-        "    Profile:  bd — bd_r\n"
+        "      Media:  bd — bd_r\n"
         "     Volume:  ARCHIVE\n"
         "     Vendor:  HL-DT-ST\n"
         "    Product:  BD-RE WH16NS60\n"
@@ -84,7 +84,7 @@ TEST(human_block_empty_or_open_sense_and_dashes)
     /* A faithful `mos state` for an empty/open drive selected by BSD (so both
        Index and Registry ID show). Real emit order (state.c): Index, Registry
        ID, BSD, State, Sense, then separate Vendor/Product/Firmware rows — no
-       media so no Profile/Volume. Pins the Sense evidence row and the NULL→"-"
+       media so no Media/Volume. Pins the Sense evidence row and the NULL→"-"
        dash on a structural row (BSD). */
     const mos_cli_human_pair pairs[] = {
         { "Index",       "1" },
