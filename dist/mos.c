@@ -6034,8 +6034,11 @@ const char *mos_internal_media_type_token(const char *kernel_type)
    and +RW DL; HD DVD-RAM, HD DVD-RW and -RW DL; BD-RE) plus BD-R (formattable
    to pseudo-overwrite). Pressed (ROM), write-once sequential CD-R / DVD±R /
    HD DVD-R, and the no-media case report nothing to format, so
-   mos_query_capacity gates the raw 0x23 on this — for those profiles it issues
-   no raw read and makes no exclusive-access attempt. MMC-6 profile codes
+   mos_query_capacity gates the 0x23 read on this — for those profiles it issues
+   no READ FORMAT CAPACITIES at all. The gate is purely SEMANTIC (only
+   formattable media has a formattable view), not lock avoidance: 0x23 goes
+   through the non-exclusive ReadFormatCapacities convenience method, which takes
+   no exclusive access and so works on mounted media too. MMC-6 profile codes
    (§5.4); the formattable subset of mos_profile_class above. */
 bool mos_internal_profile_is_formattable(uint16_t profile)
 {
