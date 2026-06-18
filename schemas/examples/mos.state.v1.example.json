@@ -5,6 +5,7 @@
   "current_profile": "0x0040",
   "current_profile_name": "bd_rom",
   "media_class": "bd",
+  "media_type": "bd_rom",
   "vendor": "HL-DT-ST",
   "product": "BD-RE BH16NS55",
   "firmware": "1.00",

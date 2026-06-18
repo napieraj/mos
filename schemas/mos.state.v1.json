@@ -59,6 +59,15 @@
       ],
       "description": "Coarse media class derived from current_profile by mos_profile_class() \u2014 the closed set of optical families. Present only when the profile has a class: absent for 0x0000 (no media/profile) and for classless profiles (magneto-optical, legacy removable). This is the first identical-drives disambiguator; volume_name joins it in the v0.4 media object (doc/research/2026-06-10-media-info-design.md)."
     },
+    "media_type": {
+      "enum": [
+        "cd_rom", "cd_r", "cd_rw",
+        "dvd_rom", "dvd_minus_r", "dvd_minus_rw", "dvd_plus_r", "dvd_plus_rw", "dvd_ram",
+        "hd_dvd_rom", "hd_dvd_r", "hd_dvd_rw", "hd_dvd_ram",
+        "bd_rom", "bd_r", "bd_re"
+      ],
+      "description": "Kernel optical-media type token (the IORegistry kIO{CD,DVD,BD}MediaTypeKey \"Type\" string mapped to a stable token by mos_internal_media_type_token). Read with ZERO MMC commands off the media node, so \u2014 UNLIKE current_profile/media_class \u2014 it is present even when the drive is not READY (a loading/busy/media_unreadable disc can still be named); and it is finer than media_class (ROM vs recordable: bd_r/bd_re/bd_rom, not just bd). NOT coupled to current_profile: it may be present with current_profile 0x0000. Absent (key omitted) when no optical media node carries a Type, or the string is unknown (fail-closed). The token set mirrors the C map in mos_strings.c (drift-guarded in validate.py)."
+    },
     "volume_name": {
       "type": "string",
       "minLength": 1,

@@ -38,6 +38,11 @@ const char *mos_state_result_revision(const mos_state_result *r)
     return r ? r->revision : NULL;
 }
 
+const char *mos_state_result_media_type(const mos_state_result *r)
+{
+    return r ? r->media_type : NULL;
+}
+
 uint16_t mos_state_result_current_profile(const mos_state_result *r)
 {
     return r ? r->current_profile : 0;
@@ -101,6 +106,11 @@ const char *mos_watch_event_revision(const mos_watch_event *e)
 const char *mos_watch_event_serial(const mos_watch_event *e)
 {
     return e ? e->serial : NULL;
+}
+
+const char *mos_watch_event_media_type(const mos_watch_event *e)
+{
+    return e ? e->media_type : NULL;
 }
 
 mos_state mos_watch_event_state(const mos_watch_event *e)

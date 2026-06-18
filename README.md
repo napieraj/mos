@@ -43,6 +43,7 @@ Registry ID:  4295032831
         BSD:  /dev/disk4
       State:  ready
     Profile:  bd — bd_rom
+      Media:  bd_rom
      Vendor:  HL-DT-ST
     Product:  BD-RE WH16NS60
    Firmware:  1.00
@@ -61,6 +62,7 @@ $ mos state 1 --json
   "current_profile": "0x0040",
   "current_profile_name": "bd_rom",
   "media_class": "bd",
+  "media_type": "bd_rom",
   "vendor": "HL-DT-ST",
   "product": "BD-RE WH16NS60",
   "firmware": "1.00"
@@ -158,6 +160,15 @@ it is `null` in early event lines until a free poll lands it: the read
 self-gates on exclusive access, so it backs off while a disc is mounted and
 populates on the first empty/not-ready window, then stays present for the rest
 of the session. `error` and `device_removed` events never carry it.
+
+Those same identity-carrying events (and one-shot `mos state`) also carry
+`media_type` when the kernel publishes one — a token like `bd_re`, `dvd_minus_r`,
+or `cd_rom` read straight off the media node (`kIO{CD,DVD,BD}MediaTypeKey`) with
+**zero SCSI commands**. Unlike `current_profile`/`media_class`, which are
+suppressed off the ready state, `media_type` is present whenever a disc is in the
+drive — so a `loading` or `busy` event that shows no profile can still name the
+disc, and at finer grain than `media_class` (`bd_r` vs `bd_re` vs `bd_rom`, not
+just `bd`). It is absent when no media node carries a Type.
 
 ### metadata — disc identity
 

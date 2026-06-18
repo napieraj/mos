@@ -12,7 +12,7 @@ static void emit_human(const mos_state_result *r, int index1,
     /* Order: addressing, answer, evidence, media, identity. Suppression
        mirrors the JSON contract (omitted pairs absent); structural rows
        show "-" via NULL. */
-    mos_cli_human_pair pairs[11];
+    mos_cli_human_pair pairs[12];
     size_t n = 0;
 
     /* Index, Registry ID, BSD. The selector the caller typed is dropped;
@@ -78,6 +78,14 @@ static void emit_human(const mos_state_result *r, int index1,
             snprintf(prof_buf, sizeof prof_buf, "0x%04x", profile);
         pairs[n++] = (mos_cli_human_pair){ "Profile", prof_buf };
     }
+
+    /* Media type: the kernel's optical Type token, read with zero MMC off the
+       media node. Shows even when Profile is suppressed (not-ready disc), and
+       is finer than the profile class — so on a busy/loading disc this is the
+       only line that names the media. Absent when no Type is published. */
+    const char *media_type = mos_state_result_media_type(r);
+    if (media_type)
+        pairs[n++] = (mos_cli_human_pair){ "Media", media_type };
 
     /* Volume name: the second identical-drives disambiguator (media class
        is the first). Disc-controlled bytes, escaped like the identity rows
@@ -150,6 +158,18 @@ static void emit_json(const mos_state_result *r, int index1,
         if (mos_cli_profile_present(profile) && media_class) {
             fputs(",\n  \"media_class\": ", stdout);
             mos_cli_json_str(stdout, media_class);
+        }
+    }
+
+    /* Kernel media-type token (zero-MMC, off the media node). UNLIKE
+       media_class it is NOT gated on the profile — present even when the disc
+       is not READY, naming what media_class cannot yet. Key absent when no
+       optical media node carries a Type. */
+    {
+        const char *media_type = mos_state_result_media_type(r);
+        if (media_type) {
+            fputs(",\n  \"media_type\": ", stdout);
+            mos_cli_json_str(stdout, media_type);
         }
     }
 

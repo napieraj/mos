@@ -3,6 +3,7 @@
   "state": "busy",
   "bsd_node": "/dev/disk4",
   "current_profile": "0x0000",
+  "media_type": "bd_re",
   "vendor": "HL-DT-ST",
   "product": "BD-RE BH16NS55",
   "sense": {

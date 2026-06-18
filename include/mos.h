@@ -198,6 +198,14 @@ const char    *mos_state_result_vendor(const mos_state_result *r);
 const char    *mos_state_result_product(const mos_state_result *r);
 const char    *mos_state_result_revision(const mos_state_result *r);
 
+/* Kernel optical-media type token ("cd_rom"/"dvd_minus_r"/"bd_re"/…, the
+   IORegistry kIO{CD,DVD,BD}MediaTypeKey mapped to a stable token), or NULL when
+   no optical media node carries a Type. Read zero-MMC off the media node, so —
+   unlike current_profile/media_class — it is present even when state is not
+   READY: a loading/busy/unreadable disc can still be named. Finer than the
+   profile's class (ROM vs recordable). */
+const char    *mos_state_result_media_type(const mos_state_result *r);
+
 /* GET CONFIGURATION current profile, populated only when state is READY
    (the profile byte is unreliable on empty/open trays — many firmwares
    cache the last-inserted-disc profile). 0x0000 means none/not queried. */
@@ -1154,6 +1162,12 @@ const char    *mos_watch_event_revision(const mos_watch_event *e);
    so it backs off while a disc is mounted — then stable for the session.
    NULL-tolerant. (mos state never carries serial; it is a watch/drive datum.) */
 const char    *mos_watch_event_serial(const mos_watch_event *e);
+
+/* Kernel optical-media type token (see mos_state_result_media_type), or NULL.
+   Read zero-MMC off the media node, so it is present even on a not-ready event
+   (loading / media_changed) where current_profile is 0 — naming the disc class
+   the profile cannot yet. */
+const char    *mos_watch_event_media_type(const mos_watch_event *e);
 
 /* Current and previous state (prev is MOS_STATE_UNKNOWN on snapshot), and
    the current profile — meaningful for snapshot and state_changed events. */
