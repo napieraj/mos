@@ -91,9 +91,10 @@ code; this table is the citation, not the parse.
   read: POINT descriptors A0/A1/A2 carry the per-session first/last track and
   lead-out — the session structure this read omits and `disc_info` gives only
   for the last session. **CD-only** (no DVD/BD equivalent — those expose only a
-  media-type string), so it complements rather than replaces the issued path.
-  `mos_internal_cdtoc_parse` decodes it into the per-session layout
-  (`mos.metadata.v1.disc.session_layout`).
+  media-type string); for CDs it is now the primary TOC source (see Provenance
+  below), the issued path its fallback. `mos_internal_cdtoc_parse` decodes it
+  into the per-session layout (`mos.metadata.v1.disc.session_layout`), and
+  `mos_internal_cdtoc_to_toc` into the per-track `mos_toc`.
 - **Cross-check:** libcdio `lib/driver/osx.c` `read_toc_osx` — same
   `CDTOCGetDescriptorCount` walk, `adr==1` filter, POINT 0xA0/0xA1/0xA2
   handling, and `CDConvertMSFToLBA` (minus the 150-frame pregap). Struct layout:

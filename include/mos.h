@@ -374,16 +374,21 @@ const char     *mos_bg_format_status_name(uint8_t status);
 typedef struct mos_toc mos_toc;
 
 /*
- * Query READ TOC/PMA/ATIP format 0000b (LBA) — the normalized table of
- * contents, the disc-identity primitive. Issued on demand through the
- * non-exclusive ReadTableOfContents convenience method; never part of
- * the state path. FAIL-CLOSED end to end: a hostile or incoherent TOC
- * (out-of-range, duplicate, or non-ascending tracks; a header span the
- * descriptor list doesn't cover) returns MOS_ERR_IO with *out NULL —
- * identity from a half-parsed TOC would be a falsely-stable
- * fingerprint. A TOC without a lead-out parses; identity consumers
- * must require mos_toc_have_leadout(). Same media preconditions as
- * mos_query_disc_info(). `out` REQUIRED (NULL → MOS_ERR_INVALID_ARG).
+ * Query the normalized table of contents — the disc-identity primitive;
+ * never part of the state path. For CDs the source is PRIMARILY the macOS
+ * kernel-cached full-TOC (kIOCDMediaTOCKey) — a superset of READ TOC, read
+ * with zero SCSI commands and no exclusive access, fresh off the current
+ * IOCDMedia node; the non-exclusive ReadTableOfContents convenience method
+ * (READ TOC/PMA/ATIP format 0000b, LBA) is the FALLBACK when no IOCDMedia
+ * node is up yet (just-inserted / unrecognized CD) and the only path for
+ * DVD/BD, where no cached TOC exists. FAIL-CLOSED end to end: a hostile or
+ * incoherent TOC (out-of-range, duplicate, or non-ascending tracks; a header
+ * span the descriptor list doesn't cover) returns MOS_ERR_IO with *out NULL —
+ * identity from a half-parsed TOC would be a falsely-stable fingerprint, and
+ * a fail-closed cached decode degrades to the issued read rather than to a
+ * bad TOC. A TOC without a lead-out parses; identity consumers must require
+ * mos_toc_have_leadout(). Same media preconditions as mos_query_disc_info().
+ * `out` REQUIRED (NULL → MOS_ERR_INVALID_ARG).
  */
 mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out);
 
@@ -610,8 +615,8 @@ typedef struct mos_cdtext mos_cdtext;
 /*
  * Query the disc-level (album) Title and Performer from CD-TEXT: READ
  * TOC/PMA/ATIP format 0101b through the non-exclusive
- * ReadTableOfContents convenience method (the same wrapper as
- * mos_query_toc). The "which album is in the drive" disambiguator,
+ * ReadTableOfContents convenience method (the wrapper mos_query_toc falls
+ * back to). The "which album is in the drive" disambiguator,
  * parallel to mos_query_volume for data discs. CD-ONLY: CD-TEXT lives in
  * the lead-in of CD media, so callers gate on a cd profile class; on
  * other media (or a CD without CD-TEXT) this returns MOS_ERR_IO.

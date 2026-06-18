@@ -455,7 +455,9 @@ static void emit_human(const metadata_doc *d)
 
     /* Sessions: only the multi-session case earns a row — a single session is
        already covered by the TOC row's track range. Compact per-session track
-       ranges, e.g. "2 (s1 1-12, s2 13)"; truncated gracefully if it overflows. */
+       ranges, e.g. "2 (s1 1-12, s2 13-13)"; a session missing its A0/A1
+       boundary (the JSON-null case) renders "?" rather than the 0 sentinel.
+       Truncated gracefully if it overflows. */
     char sess_buf[80];
     bool show_sessions = d->sl && mos_session_layout_count(d->sl) > 1;
     if (show_sessions) {
@@ -464,9 +466,12 @@ static void emit_human(const metadata_doc *d)
         for (uint8_t i = 0; i < sc && off > 0 && (size_t)off < sizeof sess_buf; i++) {
             uint8_t ft = mos_session_layout_first_track(d->sl, i);
             uint8_t lt = mos_session_layout_last_track(d->sl, i);
+            char range[16];
+            if (ft && lt) snprintf(range, sizeof range, "%u-%u", ft, lt);
+            else          snprintf(range, sizeof range, "?");
             off += snprintf(sess_buf + off, sizeof sess_buf - (size_t)off,
-                            "%ss%u %u-%u", i ? ", " : "",
-                            mos_session_layout_session(d->sl, i), ft, lt);
+                            "%ss%u %s", i ? ", " : "",
+                            mos_session_layout_session(d->sl, i), range);
         }
         if (off > 0 && (size_t)off < sizeof sess_buf)
             snprintf(sess_buf + off, sizeof sess_buf - (size_t)off, ")");
