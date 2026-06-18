@@ -12,7 +12,7 @@ movie DVD, and a data backup can come off the same spindle; one
 
 | Disc | How `mos` identifies it | Action |
 |------|-------------------------|--------|
-| **Audio CD** | `disc.class == "cd"` with audio tracks (`toc.tracks[].data == false`) | MusicBrainz Disc ID (computed from the TOC `mos` emits) → release lookup, then a byte-perfect [`redumper`](https://github.com/superg/redumper) dump |
+| **Audio CD** | `disc.class == "cd"` with audio tracks (`toc.tracks[].data == false`) | MusicBrainz Disc ID (computed from the TOC `mos` emits) → release lookup, then a byte-perfect [`redumper`](https://github.com/superg/redumper) dump. Pre-emphasised tracks (`toc.tracks[].pre_emphasis`) are flagged so they're preserved/de-emphasised, not ripped bright |
 | **Blank / appendable** | `disc.disc_info.status` is `blank`/`appendable` | report "ready to write" + the current write features (`mos features`) |
 | **Video DVD/BD** | class `dvd`/`bd`, mounted with `VIDEO_TS`/`BDMV` **or** unmounted | `makemkvcon -r` (robot mode) confirms it has rippable titles and reads the disc name, which names the output dir; then it decrypts + rips. No titles → it's data, not a movie, so it falls through to the archive branch |
 | **Data / archive disc** (incl. M-DISC) | a mounted data volume with no video layout; M-DISC is the registered `MILLEN`/`MR1` manufacturer ID | error-tolerant 1:1 image with [`ddrescue`](https://www.gnu.org/software/ddrescue/), verified against `mos capacity` |
@@ -30,7 +30,14 @@ Beyond routing, it uses `mos` as more than a classifier:
   stray operator eject becomes a reported event, not a retraction mid-read;
   eject when done (the "swap me" signal). No FOSS ripper does PREVENT-locking;
 - **content-protection / region** notes (CSS/CPRM/AACS) read from `mos`'s own
-  fields, and **CD-Extra** detection from `disc.session_layout`.
+  fields, and **CD-Extra** detection from `disc.session_layout`;
+- a **`mos watch`** loop that switches on each ready event's `media_type` — the
+  rich profile axis (ROM vs write-once vs rewritable: `bd_rom`/`bd_r`/`bd_re`,
+  not just `bd`) read **zero-MMC** off the kernel media node, alongside
+  `writable` — for a first cut before any metadata read. A consumer wanting only
+  pressed discs, or only blank recordables, can gate there with no second query;
+- **pre-emphasis** flagging on audio CDs (`toc.tracks[].pre_emphasis`) so an
+  emphasised track is preserved or de-emphasised, not ripped bright.
 
 Two boundaries the script draws on purpose, because they are real limits of
 what a drive can tell you:
