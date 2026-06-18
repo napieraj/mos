@@ -570,10 +570,11 @@ bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
  * size choices, BD-RE format types). The gap mos_query_capacity's other two
  * sources can't fill on blank rewritable media (no whole-disk node yet, no
  * track to read). Read-only: mos reports formattable capacities, it never
- * issues FORMAT UNIT. Raw CDB — no convenience method exists, so this is the
- * fifth raw verb; layer-1 showings + design:
- * doc/research/2026-06-18-read-format-capacities-feasibility.md. A capture
- * falsifies per the hardware ADR, never steers. */
+ * issues FORMAT UNIT. Issued via the ReadFormatCapacities convenience method
+ * (MMCDeviceInterface) — NOT a raw CDB (correcting the earlier "fifth raw
+ * verb" call; the wrapper exists in SCSITaskLib.h — see the AGENTS.md ADR +
+ * doc/research/2026-06-18-readformatcapacities-convenience-exists.md). A
+ * capture falsifies per the hardware ADR, never steers. */
 /* Stored Formattable Capacity Descriptors. The reply's CAPACITY LIST LENGTH
    is a single byte (<= 255), so a conforming drive can list at most
    floor(255/8) - 1 = 30 formattable descriptors; 32 gives slack so a valid
@@ -606,9 +607,10 @@ struct mos_capacity {
     uint32_t next_writable;   /* append point (valid iff nwa_valid)        */
     uint32_t track_size;      /* first-track size (blocks); pressed-disc
                                  capacity for single-track media           */
-    /* READ FORMAT CAPACITIES (0x23) — raw-CDB, media-dependent; stays unset
-       (have_formattable=false) on BUSY (mounted) / unsupported. Appended
-       after the original fields (mos_capacity is accessor-only across ABI). */
+    /* READ FORMAT CAPACITIES (0x23) — ReadFormatCapacities convenience read,
+       media-dependent; stays unset (have_formattable=false) on non-formattable
+       media or a unit that rejects 0x23. Appended after the original fields
+       (mos_capacity is accessor-only across ABI). */
     bool                   have_formattable;
     struct mos_format_caps formattable;
 };
@@ -616,7 +618,7 @@ struct mos_capacity {
 /* Decode a READ FORMAT CAPACITIES (0x23) reply: the Capacity List header, the
    Current/Maximum Capacity Descriptor, and up to MOS_FORMATTABLE_MAX
    Formattable Capacity Descriptors. Pure, fixed-offset, no-OOB (fuzz/ASan-
-   gated). Bounds the Capacity List Length to the realized transfer span
+   gated). Bounds the Capacity List Length to the provided buffer length
    (dual-length rule O-4) and to whole 8-byte descriptors; returns false on a
    reply too short to carry the header + Current/Max descriptor, or an
    incoherent (non-multiple-of-8) list. MMC-6 §6.24. */
@@ -626,7 +628,7 @@ bool mos_internal_format_caps_parse(const uint8_t *buf, size_t len,
 /* True for current profiles whose media supports FORMAT UNIT — the gate for
    issuing READ FORMAT CAPACITIES (0x23) at all (mos_strings.c). Rewritable
    optical + BD-R; pressed and write-once CD-R/DVD±R and no-media are false, so
-   capacity issues no raw read for them. MMC-6 §5.4. */
+   capacity issues no read for them. MMC-6 §5.4. */
 bool mos_internal_profile_is_formattable(uint16_t profile);
 
 /* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *

@@ -826,6 +826,60 @@ USB-SATA bridge over-claiming the single-byte CAPACITY LIST LENGTH is caught by
 the dual-length clamp + the whole-8-byte-descriptor floor. Each lands as a
 fixture + dated note with a generic gate, never a per-device special-case.
 
+## ADR: READ FORMAT CAPACITIES is a convenience read, not a raw CDB — count
+## back to one-of-four (2026-06-18, supersedes the "fifth raw CDB" ADR above)
+
+The 2026-06-18 entry above admitted READ FORMAT CAPACITIES (0x23) as the
+**fifth raw CDB**, on layer-1 showing (a): *"no convenience method carries
+0x23."* That showing is **false**, and this entry rebuts it on the merits (the
+append-don't-edit rule: the entry above stands as the record; this corrects
+it).
+
+**What changed: the header was read directly.** Showing (a) was derived from
+`ARCHITECTURE.md:870-873` — but that is §9.7's *illustrative* list (the ~9
+methods used to contrast `GetTrayState`'s missing sense out-params), not the
+`MMCDeviceInterface` inventory. The actual `SCSITaskLib.h` carries a
+`ReadFormatCapacities(self, buffer, bufferSize, taskStatus, senseDataBuffer)`
+convenience method — verified verbatim in `MacOSX10.5.sdk`, `MacOSX11.3.sdk`,
+and the **Tahoe `macOS 26.4`** SDK (the header annotates it *"Added in Mac OS X
+10.3"*, so it spans 10.3 → 26.4; interface UUID
+`1F651106-23CC-11D5-BBDB-003065704866`, stable / append-only). It is
+non-exclusive (carries `SCSITaskStatus*` + `SCSI_Sense_Data*`, same class as
+`GetConfiguration` / `ModeSense10`; the header notes it returns
+`kIOReturnExclusiveAccess` only if *another* client holds the device, i.e. it
+takes no lock itself). The feasibility doc's own "if a future SDK adds a wrapper this
+is superseded" clause is satisfied — except the wrapper is not future; it has
+existed since at least 10.5. Full evidence + the cross-check of the other raw
+verbs: `doc/research/2026-06-18-readformatcapacities-convenience-exists.md`.
+
+**The decision.** `mos_internal_read_format_caps` (`src/mos_query.c`) now
+issues 0x23 through `MMCDeviceInterface->ReadFormatCapacities`, **not**
+`mos_raw_cdb`. Consequences:
+- the one-raw-CDB count returns to **one-of-four** (GESN 0x4A + the two tray
+  opcodes 0x1B/0x1E + INQUIRY 0x12). `mos_raw_cdb` remains the SINGLE
+  `ObtainExclusiveAccess` call site (§3) — it simply has one fewer caller. (Two
+  same-day entries still read "one-of-five": the superseded fifth-raw ADR's own
+  count line, and the kernel-cached-TOC ADR's scope-compliance aside below.
+  Per the append-don't-edit rule their text stands; the chain — not any single
+  entry — carries the live count, which is one-of-four.);
+- no exclusive access for the formattable view, so it is reported on **mounted**
+  formattable media too (the BUSY-on-mounted back-off the entry above described
+  no longer applies); the profile gate stays, now purely semantic (only
+  formattable media has the view), not a lock-avoidance device.
+
+**Scope of the rebuttal — the other raw verbs are unaffected** (cross-checked
+against the full header): GESN and the tray opcodes rest on *masking*
+(`GetTrayState`/`SetTrayState` exist but are sense-blind, §9.7/§9.9); INQUIRY
+VPD-0x80 is genuinely unreachable (the convenience `Inquiry` takes only
+`SCSICmd_INQUIRY_StandardData`). Only 0x23 was misclassified.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR):
+that the convenience wrapper truncates the Formattable Capacity Descriptor list
+some drive returns. It takes a generic buffer + size (built to the same
+contract as `ReadDiscInformation`), so the whole reply should arrive; a capture
+showing otherwise lands as a fixture + dated note, and would not revive the raw
+CDB without its own showing.
+
 ## ADR: kernel-cached full-TOC adopted (kIOCDMediaTOCKey) — primary CD TOC
 ## source + session_layout (2026-06-18, supersedes the "banked, not built" call)
 

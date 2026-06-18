@@ -64,7 +64,7 @@
     },
     "formattable": {
       "type": ["object", "null"],
-      "description": "The formattable view from READ FORMAT CAPACITIES (0x23) — the capacities a REWRITABLE medium (DVD±RW, DVD-RAM, HD DVD-RAM/-RW, BD-RE) or BD-R reports, which media_bytes/recordable cannot give on a freshly blank rewritable (no whole-disk node yet, no track to read). This is the one RAW CDB the capacity assembly issues and it is DOUBLY GATED: first on the current PROFILE — only formattable media (the rewritable profiles + BD-R) is read, so pressed, write-once CD-R/DVD±R/HD DVD-R, and empty drives report null with no raw read attempted — then on exclusive access: null on mounted/contended media (a mounted disc holds the drive, so the read backs off without disturbing it — data, not an error). mos reports these capacities; it never issues FORMAT UNIT.",
+      "description": "The formattable view from READ FORMAT CAPACITIES (0x23) — the capacities a REWRITABLE medium (DVD±RW, DVD-RAM, HD DVD-RAM/-RW, BD-RE) or BD-R reports, which media_bytes/recordable cannot give on a freshly blank rewritable (no whole-disk node yet, no track to read). Issued via the non-exclusive ReadFormatCapacities convenience method (MMCDeviceInterface), gated on the current PROFILE — only formattable media (the rewritable profiles + BD-R) is read, so pressed, write-once CD-R/DVD±R/HD DVD-R, and empty drives report null with no read attempted. No exclusive access, so the view is reported even on MOUNTED formattable media. mos reports these capacities; it never issues FORMAT UNIT.",
       "required": ["type", "blocks", "block_bytes", "descriptors"],
       "additionalProperties": false,
       "properties": {

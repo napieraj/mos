@@ -649,10 +649,11 @@ bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
  * size choices, BD-RE format types). The gap mos_query_capacity's other two
  * sources can't fill on blank rewritable media (no whole-disk node yet, no
  * track to read). Read-only: mos reports formattable capacities, it never
- * issues FORMAT UNIT. Raw CDB — no convenience method exists, so this is the
- * fifth raw verb; layer-1 showings + design:
- * doc/research/2026-06-18-read-format-capacities-feasibility.md. A capture
- * falsifies per the hardware ADR, never steers. */
+ * issues FORMAT UNIT. Issued via the ReadFormatCapacities convenience method
+ * (MMCDeviceInterface) — NOT a raw CDB (correcting the earlier "fifth raw
+ * verb" call; the wrapper exists in SCSITaskLib.h — see the AGENTS.md ADR +
+ * doc/research/2026-06-18-readformatcapacities-convenience-exists.md). A
+ * capture falsifies per the hardware ADR, never steers. */
 /* Stored Formattable Capacity Descriptors. The reply's CAPACITY LIST LENGTH
    is a single byte (<= 255), so a conforming drive can list at most
    floor(255/8) - 1 = 30 formattable descriptors; 32 gives slack so a valid
@@ -685,9 +686,10 @@ struct mos_capacity {
     uint32_t next_writable;   /* append point (valid iff nwa_valid)        */
     uint32_t track_size;      /* first-track size (blocks); pressed-disc
                                  capacity for single-track media           */
-    /* READ FORMAT CAPACITIES (0x23) — raw-CDB, media-dependent; stays unset
-       (have_formattable=false) on BUSY (mounted) / unsupported. Appended
-       after the original fields (mos_capacity is accessor-only across ABI). */
+    /* READ FORMAT CAPACITIES (0x23) — ReadFormatCapacities convenience read,
+       media-dependent; stays unset (have_formattable=false) on non-formattable
+       media or a unit that rejects 0x23. Appended after the original fields
+       (mos_capacity is accessor-only across ABI). */
     bool                   have_formattable;
     struct mos_format_caps formattable;
 };
@@ -695,7 +697,7 @@ struct mos_capacity {
 /* Decode a READ FORMAT CAPACITIES (0x23) reply: the Capacity List header, the
    Current/Maximum Capacity Descriptor, and up to MOS_FORMATTABLE_MAX
    Formattable Capacity Descriptors. Pure, fixed-offset, no-OOB (fuzz/ASan-
-   gated). Bounds the Capacity List Length to the realized transfer span
+   gated). Bounds the Capacity List Length to the provided buffer length
    (dual-length rule O-4) and to whole 8-byte descriptors; returns false on a
    reply too short to carry the header + Current/Max descriptor, or an
    incoherent (non-multiple-of-8) list. MMC-6 §6.24. */
@@ -705,7 +707,7 @@ bool mos_internal_format_caps_parse(const uint8_t *buf, size_t len,
 /* True for current profiles whose media supports FORMAT UNIT — the gate for
    issuing READ FORMAT CAPACITIES (0x23) at all (mos_strings.c). Rewritable
    optical + BD-R; pressed and write-once CD-R/DVD±R and no-media are false, so
-   capacity issues no raw read for them. MMC-6 §5.4. */
+   capacity issues no read for them. MMC-6 §5.4. */
 bool mos_internal_profile_is_formattable(uint16_t profile);
 
 /* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *
@@ -2406,10 +2408,11 @@ mos_error mos_query_drive_inquiry(mos_handle_t *h,
  * is 0 (nothing formatted) and there is no track for READ TRACK INFORMATION.
  *
  * No IOKit: the shell (src/mos_query.c) hands us a fixed zero-init buffer
- * filled via mos_raw_cdb — no convenience method carries 0x23, so it is a raw
- * verb (the fifth; layer-1 showings + design in
- * doc/research/2026-06-18-read-format-capacities-feasibility.md). Read-only:
- * mos reports formattable capacities and never issues FORMAT UNIT (0x04).
+ * filled via the ReadFormatCapacities convenience method (MMCDeviceInterface) —
+ * NOT a raw CDB (correcting the earlier "fifth raw verb" call; the wrapper
+ * exists in SCSITaskLib.h — see the AGENTS.md ADR +
+ * doc/research/2026-06-18-readformatcapacities-convenience-exists.md). Read-
+ * only: mos reports formattable capacities and never issues FORMAT UNIT (0x04).
  *
  * Reply layout (MMC-6 §6.24, Format Capacities):
  *   Capacity List Header (4 bytes)
@@ -3154,20 +3157,17 @@ bool mos_internal_value_is_registry_id(uint64_t v)
  * MMCDeviceInterface convenience command, hands the reply to a pure decoder,
  * caches the result on the handle, and returns a borrowed pointer.
  *
- * Every command here is a NON-EXCLUSIVE convenience method, with ONE
- * documented exception: mos_query_capacity composes a formattable view from a
- * raw READ FORMAT CAPACITIES (0x23) — no convenience method carries 0x23, so
- * it is the fifth raw verb (layer-1 showings:
- * doc/research/2026-06-18-read-format-capacities-feasibility.md). It goes
- * through mos_scsi.c's mos_raw_cdb (still the SINGLE ObtainExclusiveAccess
- * call site, AGENTS scope-doctrine §3 — this file calls it, never takes the
- * lock itself). It is doubly gated: first on the current PROFILE (a cheap
- * non-exclusive GET CONFIGURATION) — only formattable media (rewritable +
- * BD-R) has a formattable view, so pressed / write-once CD-R,DVD±R / empty
- * media reach no raw read and no lock attempt at all — then, for formattable
- * profiles, on exclusive access (mos_raw_cdb fails BUSY without issuing the CDB
- * when anything holds the drive). So the formattable view stays unset on
- * non-formattable or mounted/contended media and never disturbs a nub.
+ * Every command here is a NON-EXCLUSIVE convenience method — including
+ * mos_query_capacity's formattable view, issued via
+ * MMCDeviceInterface->ReadFormatCapacities (READ FORMAT CAPACITIES, 0x23).
+ * That wrapper is present in SCSITaskLib.h (verified MacOSX 10.5–11.3), so
+ * 0x23 is NOT a raw verb — correcting the earlier "fifth raw CDB" call (see
+ * the AGENTS.md ADR and
+ * doc/research/2026-06-18-readformatcapacities-convenience-exists.md). With no
+ * ObtainExclusiveAccess it works on MOUNTED media too. It is gated on the
+ * current PROFILE (a cheap GET CONFIGURATION): only formattable media
+ * (rewritable + BD-R) has a formattable view, so pressed / write-once
+ * CD-R,DVD±R / empty media issue no read and the view stays unset there.
  */
 
 
@@ -3522,14 +3522,13 @@ mos_error mos_query_session_layout(mos_handle_t *h,
     return MOS_OK;
 }
 
-/* READ FORMAT CAPACITIES (0x23) — the one raw CDB this file composes (header
-   note). Fills the formattable view: how big the medium is now, whether it is
-   unformatted, and the capacities it could be formatted to (the blank-
-   rewritable gap the other two capacity sources can't reach). Raw because no
-   convenience method carries 0x23; mos_raw_cdb takes the exclusive lock and
-   FAILS BUSY without issuing the CDB if anything holds the drive, so this backs
-   off cleanly (returns false → formattable stays unset) on mounted/contended
-   media and never disturbs a mounted nub. Read-only: never FORMAT UNIT. */
+/* READ FORMAT CAPACITIES (0x23) via the ReadFormatCapacities convenience
+   method — the same non-exclusive MMCDeviceInterface wrapper class as the
+   verbs above (SCSITaskLib.h, verified MacOSX 10.5–11.3). Fills the formattable
+   view: how big the medium is now, whether it is unformatted, and the
+   capacities it could be formatted to (the blank-rewritable gap the other two
+   capacity sources can't reach). No ObtainExclusiveAccess, so it also works on
+   MOUNTED media. Read-only: never FORMAT UNIT. */
 #define MOS_FORMATCAP_REPLY_BUF 260u   /* 4-byte header + up to 32 * 8 desc */
 
 static bool mos_internal_read_format_caps(mos_handle_t *h,
@@ -3538,31 +3537,19 @@ static bool mos_internal_read_format_caps(mos_handle_t *h,
     if (out) *out = (struct mos_format_caps){0};
     if (!h || !h->mmc || !out) return false;
 
-    /* READ FORMAT CAPACITIES (MMC 0x23), 10-byte CDB:
-         byte0   opcode 0x23
-         byte7-8 ALLOCATION LENGTH (BE)
-         else    0   */
-    const uint8_t cdb[10] = {
-        0x23, 0, 0, 0, 0, 0, 0,
-        (uint8_t)(MOS_FORMATCAP_REPLY_BUF >> 8),
-        (uint8_t)(MOS_FORMATCAP_REPLY_BUF & 0xFF),
-        0,
-    };
+    uint8_t         buf[MOS_FORMATCAP_REPLY_BUF] = {0};
+    SCSITaskStatus  st                           = 0;
+    SCSI_Sense_Data sd                           = {0};
 
-    uint8_t  buf[MOS_FORMATCAP_REPLY_BUF] = {0};
-    uint32_t task_status                  = 0;
-    uint8_t  sense[18]                    = {0};
-    uint64_t xferred                      = 0;
+    IOReturn rc = (*h->mmc)->ReadFormatCapacities(
+        h->mmc, buf, (UInt16)sizeof(buf), &st, &sd);
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD)
+        return false;   /* no medium / unit rejects 0x23 → formattable unset */
 
-    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
-                              MOS_XFER_FROM_TARGET, 2000,
-                              &task_status, sense, &xferred);
-    if (e != MOS_OK) return false;                  /* BUSY/contended → no view */
-    if (task_status != MOS_SCSI_STATUS_GOOD) return false;
-
-    /* Dual-length rule (O-4): trust only the bytes actually delivered. */
-    size_t trusted = (xferred < sizeof buf) ? (size_t)xferred : sizeof buf;
-    return mos_internal_format_caps_parse(buf, trusted, out);
+    /* The convenience method reports no realized count, so sizeof buf is the
+       trusted length (dual-length rule O-4); the reply's own Capacity List
+       Length can only shrink the decode. */
+    return mos_internal_format_caps_parse(buf, sizeof buf, out);
 }
 
 mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out)
@@ -3597,14 +3584,14 @@ mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out)
             c->track_size    = mos_track_info_track_size(t);
         }
 
-        /* (c) Formattable view via raw READ FORMAT CAPACITIES (0x23) — the
-           blank-rewritable gap (a)/(b) can't fill (no whole-disk node, no
-           track). TWO gates: first the current profile (a cheap, non-exclusive
-           GET CONFIGURATION) — only formattable media (rewritable + BD-R) has
-           a formattable view, so for pressed / write-once CD-R,DVD±R / empty
-           media we issue NO raw read and make NO exclusive-access attempt at
-           all; then, for formattable profiles, the raw read self-gates on
-           exclusive access (unset on BUSY/contended). */
+        /* (c) Formattable view via READ FORMAT CAPACITIES (0x23), issued
+           through the non-exclusive ReadFormatCapacities convenience method —
+           the blank-rewritable gap (a)/(b) can't fill (no whole-disk node, no
+           track). Gated on the current profile (a cheap, non-exclusive GET
+           CONFIGURATION): only formattable media (rewritable + BD-R) has a
+           formattable view, so for pressed / write-once CD-R,DVD±R / empty
+           media we issue no read. No lock, so it also works on a MOUNTED
+           formattable disc (a mounted BD-RE/DVD-RAM still reports its view). */
         uint16_t profile = 0;
         if (mos_internal_mmc_get_current_profile(h, &profile) == MOS_OK &&
             mos_internal_profile_is_formattable(profile))

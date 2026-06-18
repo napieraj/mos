@@ -46,9 +46,10 @@ code; this table is the citation, not the parse.
   bits 1:0, Block Length 9-11). Formattable Capacity Descriptors are 8 bytes
   each from byte 12 (Number of Blocks 0-3, Format Type byte 4 bits 7:2, Type
   Dependent Parameter 5-7).
-- **Dual-length (O-4):** CAPACITY LIST LENGTH is bounded by the realized
-  transfer span, then floored to whole 8-byte descriptors — an over-claimed
-  length can never read past the delivered bytes.
+- **Dual-length (O-4):** CAPACITY LIST LENGTH is bounded by the reply buffer
+  length the shell passes (the ReadFormatCapacities convenience method reports
+  no realized count), then floored to whole 8-byte descriptors — an
+  over-claimed length can never read past the buffer.
 - **Cross-check:** descriptor-type codes (1 unformatted / 2 formatted / 3 no
   media) and the 8-byte descriptor stride match the MMC-6 tables; dvd+rw-tools
   (growisofs) drives DVD+RW/BD-RE off the same header + descriptor layout. No

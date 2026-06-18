@@ -104,3 +104,19 @@ drop the exclusive-access gating there, and append a superseding ADR entry
 mutable-in-place. If declined for a reason not captured here (e.g. the
 convenience wrapper is known to truncate the descriptor list), record that
 reason so the next reader does not re-discover the wrapper and re-open this.
+
+## Update (2026-06-18): implemented
+
+Maintainer approved. `mos_internal_read_format_caps` (`src/mos_query.c`) now
+issues 0x23 via `MMCDeviceInterface->ReadFormatCapacities` instead of
+`mos_raw_cdb`; the superseding AGENTS.md ADR records the count returning to
+one-of-four. Comments in `src/mos_pure.h`, `src/mos_formatcap.c`, `SPEC.md`,
+the README capacity section, and `schemas/mos.capacity.v1.json` updated to
+match. **Confirmed on the latest SDK:** the full Tahoe (`macOS 26.4`) stack
+carries `IOKit.framework/Headers/scsi/SCSITaskLib.h` with `kIOMMCDeviceInterfaceID`
+intact and `MMCDeviceInterface->ReadFormatCapacities` at the same signature
+(the header annotates it *"Added in Mac OS X 10.3"*). So the convenience method
+spans **10.3 → 26.4** — the conversion holds on the current SDK, and mos's
+convenience layer as a whole (which this rides) is intact in 26.4. (An earlier
+optical-only subset of 26.4 lacked `SCSITaskLib.h`, which briefly looked like a
+retirement; the full stack settles it — it was curation, not removal.)
