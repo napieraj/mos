@@ -16,6 +16,10 @@
 
 set -eu
 
+# Deterministic collation so the src/*.c glob below weaves in the same order on
+# every machine and CI (otherwise the committed dist/ and a regen diverge).
+export LC_ALL=C
+
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 INC="$ROOT/include"
 SRC="$ROOT/src"
@@ -159,24 +163,17 @@ strip_file() {
     ' "$1"
 }
 
-# Membership is a directory walk, not a hand-kept list: every src/*.c is woven,
-# so a new TU needs NO edit here (the duplication that let an added parser
-# link-fail when it was in CMakeLists but not here is gone — there is nothing
-# to forget). The internal headers are woven FIRST (ordered: each depends on
-# the ones before it) to supply declarations; the .c files then follow in a
-# stable sorted order. That order is NOT load-bearing — the woven headers
-# declare every cross-TU symbol and the build's -Werror discipline
-# (implicit-function-declaration, macro redefinition) rejects any
-# order-sensitive hazard in ANY order — sort is only for a deterministic,
-# diffable dist/. No exclusions are needed today (every src/*.c is a library
-# TU); if one ever is, filter it in the loop below.
+# Weave the internal headers first (ordered: each uses the ones before it),
+# then every src/*.c. A directory walk, so a new TU needs no edit here. The .c
+# order is not significant — the headers above declare every cross-TU symbol —
+# so the glob's (LC_ALL=C) order just keeps dist/ stable. No exclusions today.
 {
     for hdr in mos_scsi_status.h mos_pure.h mos_internal.h; do
         echo "/* ==== src/$hdr ==== */"
         strip_file "$SRC/$hdr"
         echo
     done
-    for f in $(ls "$SRC"/*.c | sort); do
+    for f in "$SRC"/*.c; do
         echo "/* ==== src/$(basename "$f") ==== */"
         strip_file "$f"
         echo
