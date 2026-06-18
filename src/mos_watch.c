@@ -132,6 +132,23 @@ struct mos_watch {
        Per-event time rides ts; (registry_id, stream_open_ms) stays unique
        because a replug re-mints registry_id. 0 in single-target mode. */
     uint64_t             all_stream_open_wall_ms;
+
+    /* One-shot reconciliation flag (all-mode). A DR Appeared whose snapshot
+       fails — transient: DRDeviceCopyInfo returned NULL, or the IORegistry
+       path was not yet resolvable at that instant — cannot join its device,
+       and Appeared is edge-triggered, so it never re-fires; all-mode also has
+       no discovery poll floor, so the device would stay invisible for the
+       session. A failed Appeared therefore ARMS this flag, and the next pump
+       entry clears it and re-copies the directory ONCE, joining anything not
+       already active (watch_all_add_device dedupes). Bounded: a single flag,
+       not a periodic rescan, so it recovers the drop WITHOUT reintroducing the
+       poll floor the all-watch deliberately omits. Set/read only on the single
+       run-loop thread (the watch's threading contract), so no synchronization.
+       Residual (strictly narrower than the bug it closes): if the device is
+       STILL unresolvable when the reconciliation runs, the flag is already
+       cleared and it is missed — two consecutive resolution failures, vs. the
+       one the bug needed. */
+    bool                 all_rescan_pending;
 };
 
 /* ---- Time --------------------------------------------------------- */
@@ -575,6 +592,12 @@ static void dr_device_appeared_callback(DRNotificationCenterRef center,
     mos_internal_dr_snapshot snap;
     if (mos_internal_dr_device_snapshot((CFTypeRef)object, &snap)) {
         watch_all_add_device(w, &snap, /*mid_stream=*/true);
+    } else {
+        /* Not resolvable at this Appeared edge (transient). Appeared won't
+           re-fire and all-mode has no discovery floor, so arm the one-shot
+           reconciliation (struct field doc): the next pump re-copies the
+           directory and joins anything now resolvable. */
+        w->all_rescan_pending = true;
     }
     if (w->run_loop) CFRunLoopStop(w->run_loop);
 }
@@ -865,8 +888,9 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
        (wake) + per-probe NO_DEVICE (floor). */
 
     /* Unlike single mode the doorbell is NOT latency-only: arrivals are
-       discovered only by the Appeared observer (the pump never re-scans the
-       directory), so discovery has no poll floor. A doorbell-less all-watch
+       discovered by the Appeared observer, with no periodic poll floor (the
+       pump re-scans the directory ONLY when a failed Appeared snapshot arms
+       the bounded reconciliation — never on a timer). A doorbell-less all-watch
        would "succeed" while unable to honor the hot-plug-joins contract,
        undetectably. Fail honestly instead. */
     if (!w->dr_center) {
@@ -936,6 +960,20 @@ mos_error mos_watch_next_event(mos_watch_t *w, const mos_watch_event **out,
         : start + (uint64_t)timeout_ms;
 
     for (;;) {
+        /* Bounded reconciliation: a DR Appeared that couldn't snapshot its
+           device armed all_rescan_pending (struct field doc). Drain it BEFORE
+           pumping so a re-resolved device is joined and its slot is included in
+           this pump's fan-in (its first event is relabeled device_appeared).
+           One directory re-copy per armed flag — watch_all_add_device dedupes
+           the already-active devices, so this only ADDS the missed one(s). */
+        if (w->all_mode && w->all_rescan_pending) {
+            w->all_rescan_pending = false;
+            mos_internal_dr_snapshot snap[MOS_WATCH_ALL_CAP];
+            size_t rn = mos_internal_dr_copy_snapshot(snap, MOS_WATCH_ALL_CAP);
+            for (size_t i = 0; i < rn; ++i)
+                watch_all_add_device(w, &snap[i], /*mid_stream=*/true);
+        }
+
         mos_watch_decision d = w->all_mode
             ? mos_internal_watch_all_pump(&w->all)
             : mos_internal_watch_pump(&w->core);
