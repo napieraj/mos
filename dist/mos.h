@@ -206,6 +206,14 @@ const char    *mos_state_result_revision(const mos_state_result *r);
    profile's class (ROM vs recordable). */
 const char    *mos_state_result_media_type(const mos_state_result *r);
 
+/* Kernel IOMedia Writable flag (kIOMediaWritableKey), read zero-MMC off the same
+   media node as media_type. Tri-state: -1 = no media node / flag absent, 0 =
+   read-only (ROM or write-protected), 1 = writable. Present even when state is
+   not READY, like media_type. This is the kernel's MECHANISM bit, not a
+   blank/appendable claim: the precise blank/appendable/complete tri-state is a
+   READ DISC INFORMATION fact (mos_query_disc_info), off the poll path. */
+int            mos_state_result_writable(const mos_state_result *r);
+
 /* GET CONFIGURATION current profile, populated only when state is READY
    (the profile byte is unreliable on empty/open trays — many firmwares
    cache the last-inserted-disc profile). 0x0000 means none/not queried. */
@@ -1168,6 +1176,11 @@ const char    *mos_watch_event_serial(const mos_watch_event *e);
    (loading / media_changed) where current_profile is 0 — naming the disc class
    the profile cannot yet. */
 const char    *mos_watch_event_media_type(const mos_watch_event *e);
+
+/* Kernel IOMedia Writable flag (see mos_state_result_writable). Tri-state:
+   -1 = absent, 0 = read-only, 1 = writable. Present even on a not-ready event,
+   like media_type; the kernel's mechanism bit, not a blank/appendable claim. */
+int            mos_watch_event_writable(const mos_watch_event *e);
 
 /* Current and previous state (prev is MOS_STATE_UNKNOWN on snapshot), and
    the current profile — meaningful for snapshot and state_changed events. */

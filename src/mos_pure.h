@@ -48,6 +48,13 @@ struct mos_state_result {
        a loading/busy/unreadable result can still name the disc. Appended:
        ABI-safe (accessor-only). */
     const char    *media_type;
+    /* Kernel IOMedia Writable flag (kIOMediaWritableKey), read zero-MMC off the
+       same optical media node as media_type. Tri-state: -1 = no media node / key
+       absent, 0 = read-only (ROM or write-protected), 1 = writable. A MECHANISM
+       fact (the kernel's own bit), NOT a blank/appendable assertion — the precise
+       blank/appendable/complete tri-state needs READ DISC INFORMATION, off the
+       poll path by design. Appended: ABI-safe (accessor-only). */
+    signed char    writable;
 };
 
 struct mos_watch_event {
@@ -82,6 +89,9 @@ struct mos_watch_event {
     /* Kernel optical-media "Type" token (see mos_state_result.media_type),
        NULL if absent. Appended: ABI-safe (accessor-only). */
     const char    *media_type;
+    /* Kernel IOMedia Writable flag (see mos_state_result.writable). Tri-state:
+       -1 absent, 0 read-only, 1 writable. Appended: ABI-safe (accessor-only). */
+    signed char    writable;
 };
 
 /* ---- Fixed-buffer capacities -------------------------------------- *

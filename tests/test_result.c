@@ -18,6 +18,7 @@ TEST(result_accessors_return_fields)
         .revision        = "1.00",
         .current_profile = 0x0040,           /* BD-ROM */
         .media_type      = "bd_rom",
+        .writable        = 0,                /* BD-ROM is read-only */
         .sense_key       = 0x02,
         .asc             = 0x3A,
         .ascq            = 0x01,
@@ -30,6 +31,7 @@ TEST(result_accessors_return_fields)
     EXPECT_STREQ(mos_state_result_revision(&r), "1.00");
     EXPECT_EQ(mos_state_result_current_profile(&r), 0x0040);
     EXPECT_STREQ(mos_state_result_media_type(&r), "bd_rom");
+    EXPECT_EQ(mos_state_result_writable(&r), 0);
 
     uint8_t sk = 0xFF, asc = 0xFF, ascq = 0xFF;
     mos_state_result_sense(&r, &sk, &asc, &ascq);
@@ -50,6 +52,7 @@ TEST(result_accessors_tolerate_null)
     EXPECT(mos_state_result_revision(NULL) == NULL);
     EXPECT_EQ(mos_state_result_current_profile(NULL), 0);
     EXPECT(mos_state_result_media_type(NULL) == NULL);
+    EXPECT_EQ(mos_state_result_writable(NULL), -1);
 
     uint8_t sk = 0xFF, asc = 0xFF, ascq = 0xFF;
     mos_state_result_sense(NULL, &sk, &asc, &ascq);
@@ -75,6 +78,7 @@ TEST(watch_event_accessors_return_fields)
         .revision        = "1.00",
         .serial          = "KL2G7942618WL",
         .media_type      = "bd_rom",
+        .writable        = 0,
         .state           = MOS_STATE_READY,
         .prev_state      = MOS_STATE_LOADING,
         .current_profile = 0x0040,
@@ -96,6 +100,7 @@ TEST(watch_event_accessors_return_fields)
     EXPECT_STREQ(mos_watch_event_revision(&e), "1.00");
     EXPECT_STREQ(mos_watch_event_serial(&e), "KL2G7942618WL");
     EXPECT_STREQ(mos_watch_event_media_type(&e), "bd_rom");
+    EXPECT_EQ(mos_watch_event_writable(&e), 0);
     EXPECT_EQ(mos_watch_event_state(&e), MOS_STATE_READY);
     EXPECT_EQ(mos_watch_event_prev_state(&e), MOS_STATE_LOADING);
     EXPECT_EQ(mos_watch_event_current_profile(&e), 0x0040);
@@ -119,6 +124,7 @@ TEST(watch_event_accessors_tolerate_null)
     EXPECT(mos_watch_event_revision(NULL) == NULL);
     EXPECT(mos_watch_event_serial(NULL) == NULL);
     EXPECT(mos_watch_event_media_type(NULL) == NULL);
+    EXPECT_EQ(mos_watch_event_writable(NULL), -1);
     EXPECT_EQ(mos_watch_event_current_profile(NULL), 0);
     EXPECT_EQ(mos_watch_event_error(NULL), MOS_OK);
     EXPECT_EQ(mos_watch_event_latency_ms(NULL), 0);

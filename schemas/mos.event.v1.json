@@ -110,6 +110,10 @@
       ],
       "description": "Kernel optical-media type token (kIO{CD,DVD,BD}MediaTypeKey via mos_internal_media_type_token), zero MMC off the media node. NOT profile-gated: present even on a not-ready identity event (loading / media_changed) where current_profile is 0x0000, naming the disc class the profile cannot yet, and finer than media_class. Absent when no Type is published. Token set mirrors the C map (drift-guarded)."
     },
+    "writable": {
+      "type": "boolean",
+      "description": "Kernel IOMedia Writable flag (kIOMediaWritableKey), zero MMC off the same media node as media_type. NOT profile-gated: present on a not-ready identity event too. The kernel's MECHANISM bit (true = node accepts writes, e.g. blank/appendable recordable; false = read-only ROM or write-protected) — NOT a blank/appendable/complete classification (that needs READ DISC INFORMATION, exposed only via `mos metadata`). Absent when no optical media node carries the flag. Like the other media fields, forbidden on error/device_removed events."
+    },
     "vendor": {
       "type": "string"
     },
@@ -370,6 +374,11 @@
           },
           {
             "required": [
+              "writable"
+            ]
+          },
+          {
+            "required": [
               "sense"
             ]
           },
@@ -428,6 +437,11 @@
           {
             "required": [
               "media_type"
+            ]
+          },
+          {
+            "required": [
+              "writable"
             ]
           },
           {

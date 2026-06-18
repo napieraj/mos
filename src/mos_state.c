@@ -67,6 +67,9 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
        whenever the kernel publishes a Type — so a not-ready result can still
        name the disc. */
     h->result.media_type = h->media_type;
+    /* Kernel IOMedia Writable flag, same zero-MMC origin and not-ready
+       availability as media_type (-1 absent / 0 read-only / 1 writable). */
+    h->result.writable = h->writable;
     if (rc == MOS_OK) *out = &h->result;
     return rc;
 }

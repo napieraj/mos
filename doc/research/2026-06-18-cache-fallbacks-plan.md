@@ -75,3 +75,35 @@ The reframing is the deliverable: exclusive access is mostly a solved problem
 once convenience methods are preferred; the kernel cache's real value is
 filling fields on paths that have **no command answer** (not-ready media,
 blank-vs-writable), not racing the lock.
+
+## Addendum (2026-06-18): both Axis-2 wins implemented
+
+Axis 2's two candidates above are now shipped on `mos.state.v1` + `mos.event.v1`:
+
+- **`media_type`** (Axis-2 #1). Implemented as option B — a *new, distinct*
+  field carrying the `kIO{CD,DVD,BD}MediaTypeKey` token, NOT a relaxation of
+  `media_class`'s profile coupling. It coexists with `media_class`: the profile
+  stays suppressed off the not-ready branch (the stale-profile guard is
+  untouched), and `media_type` adds the fresh-off-the-node disc class the
+  profile cannot carry there. So the "crosses the no-profile-unless-READY rule"
+  hazard the candidate flagged is sidestepped entirely — nothing about the
+  profile path changed.
+
+- **`writable`** (Axis-2 #2). Implemented as a tri-state (`-1` absent / `0`
+  read-only / `1` writable) zero-MMC read of `kIOMediaWritableKey` off the same
+  optical node. **Override of this note's "confirm with an `ioreg` dump first"
+  recommendation, by maintainer decision (2026-06-18).** The deferral was about
+  the *semantic* uncertainty — does the kernel flip Writable to false on a
+  finalized recordable? The resolution that dominates: mos emits `writable` as a
+  faithful **mechanism fact** (the kernel's own bit), and both the schema and the
+  human/JSON docs say exactly that — it is NOT a blank/appendable/complete
+  classification (that tri-state stays a READ DISC INFORMATION fact behind
+  `mos metadata`, off the poll path). Reporting the platform's bit verbatim is
+  the same "mechanism, not policy" stance the tray verbs take; it needs no
+  hardware to be correct, because mos asserts nothing about what the bit *means*
+  for blankness. Per the hardware-role ADR, a drive/bridge whose Writable bit
+  disagrees with disc-info is then a falsification fixture, not a design input.
+
+Both rode the JSON-schema ADR's pre-tag mutable-in-place clause (schemas +
+examples + negatives + emitters + accessors + docs in one change each), and
+`writable` (a boolean, no token map) needs no `validate.py` drift guard.

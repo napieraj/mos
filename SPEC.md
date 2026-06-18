@@ -262,8 +262,10 @@ media. The cheap-enrichment surface (disc-ingest gaps note,
   `Content Mask`, `Ejectable`, `Leaf`, `Open`, `Preferred Block Size`
   (`kIOMediaPreferredBlockSizeKey`), `Removable`, `Size` (`kIOMediaSizeKey`),
   `UUID`, `Whole`, **`Writable`** (`kIOMediaWritableKey`, OSBoolean). mos reads
-  Size + Preferred Block Size (capacity); `bsd_node` null ⇒ no whole-disk node ⇒
-  blank/unrecorded.
+  Size + Preferred Block Size (capacity) and **`Writable`** (`mos_internal_read_writable`
+  → `mos.state.v1`/`mos.event.v1` `writable`, tri-state -1/0/1, zero-command off the
+  optical media node) — the mechanism bit, not a blank/appendable classification;
+  `bsd_node` null ⇒ no whole-disk node ⇒ blank/unrecorded.
 - **Optical media TYPE (`kIO{CD,DVD,BD}MediaTypeKey` = `"Type"`, OSString):**
   CD → `CD-ROM` / `CD-R` / `CD-RW`; DVD → `DVD-ROM` / `-R` / `-RW` / `+R` /
   `+RW` / `-RAM` / `HD DVD-{ROM,R,RW,RAM}`; BD → `BD-ROM` / `BD-R` / `BD-RE`.

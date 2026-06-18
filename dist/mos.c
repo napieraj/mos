@@ -127,6 +127,13 @@ struct mos_state_result {
        a loading/busy/unreadable result can still name the disc. Appended:
        ABI-safe (accessor-only). */
     const char    *media_type;
+    /* Kernel IOMedia Writable flag (kIOMediaWritableKey), read zero-MMC off the
+       same optical media node as media_type. Tri-state: -1 = no media node / key
+       absent, 0 = read-only (ROM or write-protected), 1 = writable. A MECHANISM
+       fact (the kernel's own bit), NOT a blank/appendable assertion — the precise
+       blank/appendable/complete tri-state needs READ DISC INFORMATION, off the
+       poll path by design. Appended: ABI-safe (accessor-only). */
+    signed char    writable;
 };
 
 struct mos_watch_event {
@@ -161,6 +168,9 @@ struct mos_watch_event {
     /* Kernel optical-media "Type" token (see mos_state_result.media_type),
        NULL if absent. Appended: ABI-safe (accessor-only). */
     const char    *media_type;
+    /* Kernel IOMedia Writable flag (see mos_state_result.writable). Tri-state:
+       -1 absent, 0 read-only, 1 writable. Appended: ABI-safe (accessor-only). */
+    signed char    writable;
 };
 
 /* ---- Fixed-buffer capacities -------------------------------------- *
@@ -1092,6 +1102,9 @@ struct mos_handle {
                                                   the kernel "Type" key, NULL if
                                                   absent (query-time, like bsd_unit);
                                                   points to static token storage */
+    signed char               writable;        /* kIOMediaWritableKey tri-state:
+                                                  -1 absent, 0 read-only, 1 writable
+                                                  (query-time, like bsd_unit) */
     char                      vendor_str[9];   /* 8 chars + NUL */
     char                      product_str[17]; /* 16 chars + NUL */
     char                      revision_str[5]; /* 4 chars + NUL */
@@ -1255,6 +1268,12 @@ size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap);
    IORegistry read like read_cdtoc, but media-class-agnostic. mos_internal_
    media_type_token maps the result to a token. */
 size_t mos_internal_read_media_type(io_service_t svc, char *buf, size_t cap);
+
+/* Read the kernel IOMedia Writable flag (kIOMediaWritableKey, OSBoolean) off the
+   drive's IO{CD,DVD,BD}Media node. Tri-state return: -1 = no optical media node /
+   key absent, 0 = read-only, 1 = writable. Zero SCSI commands, no exclusive
+   access — the same optical-node walk as read_media_type, reading a CFBoolean. */
+int mos_internal_read_writable(io_service_t svc);
 
 /* Issue one 6-byte tray CDB (START STOP UNIT 0x1B / PREVENT ALLOW MEDIUM
    REMOVAL 0x1E) via mos_raw_cdb and classify the result. Negative mos_error
@@ -3796,6 +3815,11 @@ const char *mos_state_result_media_type(const mos_state_result *r)
     return r ? r->media_type : NULL;
 }
 
+int mos_state_result_writable(const mos_state_result *r)
+{
+    return r ? r->writable : -1;
+}
+
 uint16_t mos_state_result_current_profile(const mos_state_result *r)
 {
     return r ? r->current_profile : 0;
@@ -3864,6 +3888,11 @@ const char *mos_watch_event_serial(const mos_watch_event *e)
 const char *mos_watch_event_media_type(const mos_watch_event *e)
 {
     return e ? e->media_type : NULL;
+}
+
+int mos_watch_event_writable(const mos_watch_event *e)
+{
+    return e ? e->writable : -1;
 }
 
 mos_state mos_watch_event_state(const mos_watch_event *e)
@@ -4747,6 +4776,9 @@ void mos_internal_refresh_media_identity(mos_handle_t *h)
     h->media_type = (mos_internal_read_media_type(h->svc, type, sizeof type) > 0)
                         ? mos_internal_media_type_token(type)
                         : NULL;
+    /* Kernel IOMedia Writable flag off the same node — tri-state -1/0/1. A
+       mechanism fact (the kernel's bit), not a blank/appendable assertion. */
+    h->writable = (signed char)mos_internal_read_writable(h->svc);
 }
 
 /* Copy the kernel-cached full-TOC (kIOCDMediaTOCKey, a CDTOC CFData blob) off
@@ -4821,6 +4853,33 @@ size_t mos_internal_read_media_type(io_service_t svc, char *buf, size_t cap)
         return strlen(buf);   /* MOS_CF_AUTO / MOS_IO_AUTO release on return */
     }
     return 0;
+}
+
+/* Read the kernel IOMedia Writable flag off the drive's optical media node. Same
+   walk as read_media_type (so it tracks the same whole-disk optical node, not a
+   partition), but reads kIOMediaWritableKey as a CFBoolean. -1 when no optical
+   media node carries the key (no media / not published yet), else 0/1. */
+int mos_internal_read_writable(io_service_t svc)
+{
+    io_iterator_t it MOS_IO_AUTO = IO_OBJECT_NULL;
+    if (IORegistryEntryCreateIterator(svc, kIOServicePlane,
+            kIORegistryIterateRecursively, &it) != KERN_SUCCESS) {
+        return -1;
+    }
+    for (;;) {
+        io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
+        if (child == IO_OBJECT_NULL) break;
+        if (!IOObjectConformsTo(child, "IOCDMedia")  &&
+            !IOObjectConformsTo(child, "IODVDMedia") &&
+            !IOObjectConformsTo(child, "IOBDMedia")) continue;
+
+        CFTypeRef v MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
+                child, CFSTR(kIOMediaWritableKey), kCFAllocatorDefault, 0);
+        if (!v || CFGetTypeID(v) != CFBooleanGetTypeID()) continue;
+
+        return CFBooleanGetValue((CFBooleanRef)v) ? 1 : 0;
+    }
+    return -1;
 }
 
 /* ---- Enumeration ---------------------------------------------------- */
@@ -5634,6 +5693,9 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
        whenever the kernel publishes a Type — so a not-ready result can still
        name the disc. */
     h->result.media_type = h->media_type;
+    /* Kernel IOMedia Writable flag, same zero-MMC origin and not-ready
+       availability as media_type (-1 absent / 0 read-only / 1 writable). */
+    h->result.writable = h->writable;
     if (rc == MOS_OK) *out = &h->result;
     return rc;
 }
@@ -7835,6 +7897,7 @@ static void fill_event_state_fields(mos_watch_event *e,
     e->revision        = r->revision;
     e->serial          = r->serial;   /* NULL until a free poll grabs it (mos_watch.c) */
     e->media_type      = r->media_type;  /* static token storage or NULL — no re-home */
+    e->writable        = r->writable;    /* tri-state -1/0/1, plain scalar */
     e->sense_key       = r->sense_key;
     e->asc             = r->asc;
     e->ascq            = r->ascq;

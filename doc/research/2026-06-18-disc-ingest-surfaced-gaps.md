@@ -140,3 +140,27 @@ real-media `ioreg` dump first — but neither costs a command. Only the precise
 blank/appendable/complete tri-state still needs 0x51, and that stays off the
 poll path by design. Everything in Tier 3 is working as designed and is
 recorded so it isn't rediscovered as a "gap" next time.
+
+## Addendum (2026-06-18): #1 and #2 implemented
+
+- **#1 `pre_emphasis`** shipped on `mos.metadata.v1` TOC tracks. Derived from
+  the Q-channel control nibble exactly like `data`, but with the audio-only
+  refinement the body called for: bit 0 is pre-emphasis ONLY on an audio track,
+  so the derivation is `!(control & 0x4) && (control & 0x1)` — a data track is
+  always `false`. Best-effort caveat documented in the schema (subchannel-only
+  pre-emphasis is invisible to a TOC read), same disposition as `data`. Pure
+  parse, zero new commands, crossed nothing.
+
+- **#2 media `Type` + `writable`** shipped on `mos.state.v1` + `mos.event.v1`
+  as the `media_type` token and the `writable` tri-state — both zero-MMC reads
+  off the optical media node, present on not-ready events, so the README blank
+  gate can live in a `jq select` with no second query. The "want an `ioreg` dump
+  first" caveat on `writable` was overridden by surfacing it as a faithful
+  *mechanism fact* (the kernel's bit, asserting nothing about blankness) rather
+  than a blank classifier — see the 2026-06-18 addendum in
+  `2026-06-18-cache-fallbacks-plan.md` for the full reasoning. The CD-only cached
+  `TOC` was already mos's primary CD TOC source (kIOCDMediaTOCKey ADR), so no
+  separate work there.
+
+Tier-2 #3 (volume-settled event) and all of Tier 3 remain as recorded —
+declined/out-of-scope, working as designed.

@@ -68,6 +68,10 @@
       ],
       "description": "Kernel optical-media type token (the IORegistry kIO{CD,DVD,BD}MediaTypeKey \"Type\" string mapped to a stable token by mos_internal_media_type_token). Read with ZERO MMC commands off the media node, so \u2014 UNLIKE current_profile/media_class \u2014 it is present even when the drive is not READY (a loading/busy/media_unreadable disc can still be named); and it is finer than media_class (ROM vs recordable: bd_r/bd_re/bd_rom, not just bd). NOT coupled to current_profile: it may be present with current_profile 0x0000. Absent (key omitted) when no optical media node carries a Type, or the string is unknown (fail-closed). The token set mirrors the C map in mos_strings.c (drift-guarded in validate.py)."
     },
+    "writable": {
+      "type": "boolean",
+      "description": "Kernel IOMedia Writable flag (kIOMediaWritableKey), read with ZERO MMC commands off the same media node as media_type, so it is present even when the drive is not READY and is NOT coupled to current_profile. This is the kernel's MECHANISM bit (true = the media node accepts writes, e.g. a blank/appendable recordable; false = read-only, a ROM or write-protected disc) \u2014 NOT a blank/appendable/complete classification, which is a READ DISC INFORMATION fact mos exposes only through `mos metadata`, off the poll path by design. Absent (key omitted) when no optical media node carries the flag."
+    },
     "volume_name": {
       "type": "string",
       "minLength": 1,

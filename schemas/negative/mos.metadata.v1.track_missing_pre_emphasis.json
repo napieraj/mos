@@ -4,19 +4,18 @@
   "captured_at": "2026-06-12T19:48:00.123Z",
   "volume_path": null,
   "disc": {
-    "profile": "0x0040",
-    "class": "bd",
+    "profile": "0x0008",
+    "class": "cd",
     "toc": {
       "first_track": 1,
       "last_track": 1,
-      "leadout_lba": 31457280,
+      "leadout_lba": 50000,
       "tracks": [
         {
           "track": 1,
           "adr": 1,
-          "control": 4,
-          "data": true,
-          "pre_emphasis": false,
+          "control": 0,
+          "data": false,
           "start_lba": 0
         }
       ]
