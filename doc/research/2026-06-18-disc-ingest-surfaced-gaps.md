@@ -27,28 +27,58 @@ only in the R–W subchannel, which `mos` does not read), so it is best-effort,
 like `data`. Worth a one-line schema note.
 **Recommendation:** the cleanest pickup here. Pre-tag, mutable-in-place.
 
-## Tier 2 — useful to the example, but cross a deliberate design line
+## Tier 2 — watch-stream enrichments to weigh
 
-### 2. Disc-completion (blank / appendable / complete) on the watch stream
+### 2. Cheap watch enrichment: media `Type` + `writable` (zero MMC)
 **Surfaced:** the final PR review — `mos.event.v1` carries `state` and
 `media_class`, but a blank recordable is also `state: ready` (the drive can
 read it; it has no content), so the README watch loop had to add a per-disc
-`mos metadata` call to gate blank media out of the rip branches.
-**What would help:** a `disc_status` (or `writable`/`blank`) field on the
-identity-carrying events so the gate can live in the `jq select`, stream-side,
-with no second query.
-**Crosses:** the explicit state-path-stays-cheap decision. `mos_state.c:58-60`:
-*"Disc-completion (blank vs finalized) is not enriched here — no state decision
-needs it; it ships as an on-demand typed query (mos_query_disc_info)."* Blank
-vs written is **only** answerable by READ DISC INFORMATION (0x51) or READ TRACK
-INFORMATION — neither is on the TUR⊕GESN poll path. Putting `disc_status` on
-every event means issuing 0x51 on the polled hot path, which the architecture
-avoids by design (the profile already distinguishes ROM from recordable; it
-cannot distinguish blank from written).
-**Recommendation:** keep it consumer-side (the per-disc `mos metadata` the
-example uses) unless an opt-in "enriched watch" mode is wanted. If built, it is
-a schema change to `mos.event.v1` (new field, ADR + drift-guard + fixtures) and
-a poll-path cost decision — a maintainer call, not a free add.
+`mos metadata` call to gate blank media out of the rip branches. The question
+was whether that gate can be cheap. **It can** — the kernel publishes the
+needed facts as registry properties, no MMC command, confirmed verbatim
+against the IO{CD,DVD,BD}StorageFamily / IOStorageFamily sources:
+
+| Node | Key (string) | Values | Command |
+|------|--------------|--------|---------|
+| IOCDMedia  | `kIOCDMediaTOCKey` ("TOC")     | full-TOC blob (mos already reads this) | none, **CD only** |
+| IOCDMedia  | `kIOCDMediaTypeKey` ("Type")   | `CD-ROM` `CD-R` `CD-RW` | none |
+| IODVDMedia | `kIODVDMediaTypeKey` ("Type")  | `DVD-ROM` `DVD-R` `DVD-RW` `DVD+R` `DVD+RW` `DVD-RAM` `HD DVD-ROM/-R/-RW/-RAM` | none |
+| IOBDMedia  | `kIOBDMediaTypeKey` ("Type")   | `BD-ROM` `BD-R` `BD-RE` | none |
+| IOMedia (all) | `kIOMediaWritableKey` ("Writable", OSBoolean) | true / false | none |
+| IOMedia (all) | whole-disk node presence | already the event's `bsd_node` | none |
+
+So a stream-side gate is achievable without 0x51, and — unlike the CD-only
+cached TOC the maintainer flagged — these work for DVD/BD too:
+- **media `Type`** → ROM vs recordable, the cross-class registry signal (every
+  optical media class exposes a `"Type"` key);
+- **`Writable`** → a recordable accepting writes (blank/appendable) vs a
+  ROM/finalized disc;
+- **`bsd_node: null`** → no whole-disk node = blank/unrecorded — mos's own
+  schema already says `media_bytes`/`bsd_node` are null for "a blank/unrecorded
+  recordable disc", so this proxy is *already in today's stream*.
+
+mos already reaches optical-family media properties (it reads
+`kIOCDMediaTOCKey` off IOCDMedia), so reading `kIO{CD,DVD,BD}MediaTypeKey` /
+`kIOMediaWritableKey` is the same `IORegistryEntryCreateCFProperty` call —
+proven feasible, zero new command.
+
+**What still needs MMC:** only the precise `blank` / `appendable` / `complete`
+tri-state. That bit (`blank:1` in IODVDTypes.h / IOBDTypes.h) lives in the READ
+DISC INFORMATION reply struct, reachable only via the disc-info command — off
+the TUR⊕GESN poll path by design (`mos_state.c:58`: completion "is not enriched
+here — no state decision needs it"). So the *coarse* gate (recordable +
+writable + has-content) is free; only the *exact* tri-state costs 0x51.
+
+**Recommendation:** the cheapest win is to surface `media_type` (from the
+`"Type"` key) and `writable` (kIOMediaWritableKey) on identity-carrying events
+— zero MMC, all classes — so the README's blank gate can live in the `jq
+select` with no second query, and `media_class` gains ROM-vs-recordable
+resolution for free. (This corrects this note's first framing, which assumed
+the gate necessarily cost an MMC command.) It is still additive to
+`mos.event.v1` (new fields → ADR + the C↔schema drift guard + fixtures), and
+the optical `Writable`/blank semantics want an `ioreg -c IOMedia` dump on real
+media to confirm before building (hardware-falsification doctrine). Surfacing
+the cached CD `TOC` on watch is a separate, CD-only cheap win on top.
 
 ### 3. A "volume mounted / settled" signal in the watch stream
 **Surfaced:** the watch→mount race. `mos watch` fires `ready` the moment the
@@ -96,9 +126,14 @@ and is consistent with the ADR. Noted here so the trade-off is on record.
 
 ## Summary
 
-The one genuinely cheap, in-scope pickup is **#1 (`pre_emphasis` derived bool)**.
-**#2 (disc_status on events)** is the most-wanted-by-a-consumer but is not free —
-it costs a command on the polled path and a `mos.event.v1` schema change, so it
-is a maintainer trade-off, not an obvious add. Everything in Tier 3 is working
-as designed and is recorded here only so it isn't rediscovered as a "gap" next
-time.
+Two cheap, in-scope pickups, both confirmed against Apple source: **#1
+(`pre_emphasis` derived bool)** and **#2 (media `Type` + `writable` on watch
+events)** — the latter is the consumer-requested blank gate, and it turns out
+to be a *zero-MMC registry read* (the `"Type"` key exists on all three optical
+media classes; the cached `TOC` is the CD-only bonus), not the MMC cost this
+note first assumed. Both are `mos.event.v1` schema additions, so each needs an
+ADR + the drift guard + fixtures, and the optical `Writable` semantics want a
+real-media `ioreg` dump first — but neither costs a command. Only the precise
+blank/appendable/complete tri-state still needs 0x51, and that stays off the
+poll path by design. Everything in Tier 3 is working as designed and is
+recorded so it isn't rediscovered as a "gap" next time.
