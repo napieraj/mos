@@ -744,6 +744,40 @@ uint32_t mos_track_info_free_blocks(const mos_track_info *t);
 uint32_t mos_track_info_track_size(const mos_track_info *t);
 uint32_t mos_track_info_last_recorded(const mos_track_info *t);
 
+/* ---- Session layout (CD-only, kernel-cached full-TOC) -- */
+
+/* Result of a session-layout query. Opaque, handle-owned; valid until the
+   next mos_query_session_layout() call or mos_close(). */
+typedef struct mos_session_layout mos_session_layout;
+
+/*
+ * Read the macOS kernel-cached full-TOC (kIOCDMediaTOCKey, the Apple CDTOC
+ * blob on the IOCDMedia node) and decode it into per-session boundaries —
+ * for each session, the first/last track number and the lead-out LBA. This
+ * is the richer structure the issued READ TOC format-0000b (mos_query_toc)
+ * omits and that READ DISC INFORMATION carries only for the LAST session: it
+ * resolves a multi-session disc (e.g. CD-Extra — audio in session 1, a data
+ * track in session 2). CD-ONLY: the property exists only on IOCDMedia, so
+ * this is meaningful only for the cd media class. ZERO SCSI COMMANDS and no
+ * exclusive access — a pure IORegistry read, like the cached capacity, so it
+ * works while the disc is mounted. `out` REQUIRED (NULL => MOS_ERR_INVALID_ARG);
+ * MOS_ERR_IO when no cached TOC is present (not a CD, no media, or the
+ * property is absent) or the blob carried no session boundaries.
+ */
+mos_error mos_query_session_layout(mos_handle_t *h,
+                                   const mos_session_layout **out);
+
+/* Accessors. NULL-tolerant (NULL reads as 0/false). i is a 0-based index in
+   [0, count). first_track / last_track read 0 when the session carried no
+   POINT 0xA0 / 0xA1 (0 is not a valid track number, so it doubles as the
+   "absent" sentinel); leadout_lba is meaningful only when have_leadout. */
+uint8_t  mos_session_layout_count(const mos_session_layout *s);
+uint8_t  mos_session_layout_session(const mos_session_layout *s, uint8_t i);
+uint8_t  mos_session_layout_first_track(const mos_session_layout *s, uint8_t i);
+uint8_t  mos_session_layout_last_track(const mos_session_layout *s, uint8_t i);
+bool     mos_session_layout_have_leadout(const mos_session_layout *s, uint8_t i);
+uint32_t mos_session_layout_leadout_lba(const mos_session_layout *s, uint8_t i);
+
 /* ---- Disc capacity ---------------------------------- */
 
 /* Result of a capacity query. Opaque, handle-owned; valid until the next

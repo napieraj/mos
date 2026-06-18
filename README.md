@@ -185,7 +185,10 @@ but unmounted, possibly damaged. It also surfaces, when the medium has
 them: the registered disc-maker identity for Blu-ray (manufacturer /
 media-type ID — `MILLEN` / `MR1` for Millenniata M-DISC); the physical
 format and copyright-management info for DVD/HD-DVD; per-track capacity
-and append state; and album/track CD-TEXT for audio CDs.
+and append state; album/track CD-TEXT for audio CDs; and, for CDs, the
+per-session layout (`session_layout`: first/last track and lead-out per
+session) decoded from the kernel-cached full-TOC — the multi-session
+structure the issued READ TOC omits, read with no SCSI command.
 
 `mos metadata --json` emits one `mos.metadata.v1` document. Its `disc`
 object is a fingerprint subtree — a fixed, closed key set you can hash

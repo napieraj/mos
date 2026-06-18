@@ -48,7 +48,8 @@
         "volume_name",
         "disc_structure",
         "track_info",
-        "cdtext"
+        "cdtext",
+        "session_layout"
       ],
       "additionalProperties": false,
       "properties": {
@@ -553,6 +554,57 @@
               ],
               "minimum": 0,
               "description": "Last Recorded Address (bytes 28..31), or null when LRA_V (byte 7 bit 1) is clear."
+            }
+          }
+        },
+        "session_layout": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "description": "Per-session boundaries from the macOS kernel-cached full-TOC (kIOCDMediaTOCKey, the Apple CDTOC blob on the IOCDMedia node) — read with zero SCSI commands and no exclusive access, fresh off the current media node. CD-ONLY (no cached-TOC equivalent exists for DVD/BD): null on non-CD media, or when the IOCDMedia node carries no cached TOC (just-inserted/unrecognized media). This is the richer structure the issued READ TOC format-0000b (`toc` above) does not carry and that disc_info gives only for the LAST session: for each session, the first/last track and the lead-out, so a multi-session disc (e.g. CD-Extra: audio in session 1, a data track in session 2) is resolvable. Decode + cross-check (libcdio read_toc_osx) in SPEC.md.",
+          "items": {
+            "type": "object",
+            "required": [
+              "session",
+              "first_track",
+              "last_track",
+              "leadout_lba"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "session": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 99,
+                "description": "Session number."
+              },
+              "first_track": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1,
+                "maximum": 99,
+                "description": "First track number in the session (POINT 0xA0 PMIN), or null when the session carried no 0xA0 descriptor."
+              },
+              "last_track": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1,
+                "maximum": 99,
+                "description": "Last track number in the session (POINT 0xA1 PMIN), or null when the session carried no 0xA1 descriptor."
+              },
+              "leadout_lba": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "description": "Session lead-out start LBA (POINT 0xA2 MSF, converted minus the 150-frame pregap), or null when the session carried no 0xA2 descriptor."
+              }
             }
           }
         }

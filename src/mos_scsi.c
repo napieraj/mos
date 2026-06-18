@@ -21,6 +21,7 @@
 #include <IOKit/scsi/SCSICmds_REQUEST_SENSE_Defs.h>
 #include <IOKit/storage/IOStorageProtocolCharacteristics.h>
 #include <IOKit/storage/IOMedia.h>   /* kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey */
+#include <IOKit/storage/IOCDMedia.h> /* kIOCDMediaTOCKey (CD-only cached full-TOC) */
 
 #include <stdlib.h>
 #include <string.h>
@@ -185,6 +186,41 @@ void mos_internal_refresh_media_identity(mos_handle_t *h)
     h->bsd_unit = mos_internal_bsd_unit(h->svc, &h->media_id,
                                         &h->media_bytes,
                                         &h->media_block_bytes);  /* -1 if no media */
+}
+
+/* Copy the kernel-cached full-TOC (kIOCDMediaTOCKey, a CDTOC CFData blob) off
+   the drive's IOCDMedia node. CD-only: the property exists only on IOCDMedia
+   (no DVD/BD equivalent — those expose only a media-type string). A pure
+   IORegistry read, no SCSI command and no exclusive access, like the cached
+   kIOMediaSize capacity — so it works on mounted media. Returns the bytes
+   copied (clamped to cap), 0 when absent. */
+size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    io_iterator_t it MOS_IO_AUTO = IO_OBJECT_NULL;
+    if (IORegistryEntryCreateIterator(svc, kIOServicePlane,
+            kIORegistryIterateRecursively, &it) != KERN_SUCCESS) {
+        return 0;
+    }
+    for (;;) {
+        io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
+        if (child == IO_OBJECT_NULL) break;
+        /* IOCDMedia is the CD whole-media node carrying the TOC; the string
+           conformance check avoids a hard IOCDMedia.h class dependency in the
+           walk and naturally excludes DVD/BD media and partitions. */
+        if (!IOObjectConformsTo(child, "IOCDMedia")) continue;
+
+        CFTypeRef v MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
+                child, CFSTR(kIOCDMediaTOCKey), kCFAllocatorDefault, 0);
+        if (!v || CFGetTypeID(v) != CFDataGetTypeID()) continue;
+
+        CFIndex n = CFDataGetLength((CFDataRef)v);
+        if (n <= 0) continue;
+        size_t copy = ((size_t)n < cap) ? (size_t)n : cap;
+        CFDataGetBytes((CFDataRef)v, CFRangeMake(0, (CFIndex)copy), buf);
+        return copy;   /* MOS_CF_AUTO / MOS_IO_AUTO release on this return */
+    }
+    return 0;
 }
 
 /* ---- Enumeration ---------------------------------------------------- */

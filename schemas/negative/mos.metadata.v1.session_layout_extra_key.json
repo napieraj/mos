@@ -1,0 +1,25 @@
+{
+  "schema": "mos.metadata.v1",
+  "bsd_node": "/dev/disk4",
+  "captured_at": "2026-06-18T19:48:00.123Z",
+  "volume_path": "/Volumes/Audio CD",
+  "disc": {
+    "profile": "0x0008",
+    "class": "cd",
+    "toc": null,
+    "disc_info": null,
+    "disc_structure": null,
+    "volume_name": "Audio CD",
+    "track_info": null,
+    "cdtext": null,
+    "session_layout": [
+      {
+        "session": 1,
+        "first_track": 1,
+        "last_track": 4,
+        "leadout_lba": 86347,
+        "extra": "session item is additionalProperties:false"
+      }
+    ]
+  }
+}

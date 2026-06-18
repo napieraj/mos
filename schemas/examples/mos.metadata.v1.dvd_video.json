@@ -61,7 +61,8 @@
       "track_size": 2298496,
       "last_recorded": 2298495
     },
-    "cdtext": null
+    "cdtext": null,
+    "session_layout": null
   },
   "bsd_node": "/dev/disk4"
 }

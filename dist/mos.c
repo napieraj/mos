@@ -249,6 +249,54 @@ typedef struct mos_toc {   /* tagged: mos.h forward-declares it opaquely */
 bool mos_internal_toc_parse(const uint8_t *buf, size_t len, mos_toc *out);
 
 
+/* ---- CDTOC (kernel-cached full-TOC) session layout (mos_cdtoc.c) ------- *
+ * Decode of the macOS kernel-cached full-TOC blob (kIOCDMediaTOCKey, the
+ * Apple CDTOC struct in IOKit/storage/IOCDTypes.h) into per-session
+ * boundaries — the multi-session structure the issued READ TOC format-0000b
+ * (mos_internal_toc_parse) omits, and that disc_info gives only for the LAST
+ * session. CD-only; the blob is read off the IOCDMedia node with zero SCSI
+ * commands and no exclusive access (mos_scsi.c).
+ *
+ * CDTOC wire layout (IOCDTypes.h; libcdio lib/driver/osx.c read_toc_osx
+ * cross-check in SPEC.md):
+ *   [0..1]  length (BE) — bytes AFTER this field; tocSize = length + 2
+ *   [2]     sessionFirst   (advisory; the descriptors are authoritative)
+ *   [3]     sessionLast
+ *   [4..]   CDTOCDescriptor, 11 bytes each:
+ *             [0]      session number
+ *             [1]      (adr<<4)|control  — adr in the high nibble, control in
+ *                                          the low, on both endiannesses (the
+ *                                          IOCDTypes bitfield is laid out to
+ *                                          this byte order either way)
+ *             [2]      tno
+ *             [3]      point
+ *             [4..6]   address MSF (ATIME; not decoded)
+ *             [7]      zero
+ *             [8..10]  p MSF = PMIN / PSEC / PFRAME
+ * Per-session POINTs carry the boundaries: 0xA0 PMIN = first track, 0xA1 PMIN
+ * = last track, 0xA2 p MSF = lead-out (→ LBA, minus the 150-frame pregap).
+ * Only adr==1 descriptors bound a session (the libcdio filter). FAIL-CLOSED:
+ * a device-reported length may only SHRINK the descriptor walk. */
+#define MOS_SESSION_MAX 99
+typedef struct {
+    uint8_t  session;       /* session number, 1..99                          */
+    bool     have_first;
+    bool     have_last;
+    bool     have_leadout;
+    uint8_t  first_track;   /* POINT 0xA0 PMIN  (meaningful iff have_first)    */
+    uint8_t  last_track;    /* POINT 0xA1 PMIN  (meaningful iff have_last)     */
+    uint32_t leadout_lba;   /* POINT 0xA2 MSF→LBA (meaningful iff have_leadout)*/
+} mos_session_entry;
+
+typedef struct mos_session_layout {  /* tagged: mos.h forward-declares opaquely */
+    uint8_t           count;         /* populated entries, ascending session    */
+    mos_session_entry sessions[MOS_SESSION_MAX];
+} mos_session_layout;
+
+bool mos_internal_cdtoc_parse(const uint8_t *buf, size_t len,
+                              mos_session_layout *out);
+
+
 /* THE DUAL-LENGTH RULE (seam contract O-4; AGENTS scope doctrine layer 3).
  *
  * Every variable-size transfer has three lengths from three authorities:
@@ -1045,6 +1093,11 @@ struct mos_handle {
     /* Handle-owned track-info result (mos_query_track_info). Same terms. */
     struct mos_track_info     track_info;
 
+    /* Handle-owned session-layout result (mos_query_session_layout): the
+       per-session boundaries decoded from the kernel-cached full-TOC. Same
+       terms; plain values, no borrowed pointers. */
+    struct mos_session_layout session_layout;
+
     /* Handle-owned capacity result (mos_query_capacity). Assembled from
        the open-time IOMedia size above + a fresh track_info read. */
     struct mos_capacity       capacity;
@@ -1154,6 +1207,14 @@ mos_error mos_internal_ioreturn_to_mos_error(IOReturn rc);
    reports current media. Local IORegistry walk off h->svc; no SCSI
    command, no exclusive access (mos_scsi.c). */
 void mos_internal_refresh_media_identity(mos_handle_t *h);
+
+/* Copy the kernel-cached full-TOC (kIOCDMediaTOCKey, a CDTOC CFData blob) off
+   the drive's IOCDMedia node into `buf`, returning the byte count copied
+   (clamped to `cap`), or 0 when absent — not a CD (the property is IOCDMedia-
+   only), no media, or no property. Zero SCSI commands, no exclusive access: a
+   pure IORegistry read like the cached capacity (mos_scsi.c). The pure parser
+   mos_internal_cdtoc_parse turns the blob into the per-session layout. */
+size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap);
 
 /* Issue one 6-byte tray CDB (START STOP UNIT 0x1B / PREVENT ALLOW MEDIUM
    REMOVAL 0x1E) via mos_raw_cdb and classify the result. Negative mos_error
@@ -1371,6 +1432,98 @@ bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
        CD-TEXT (null), like the other media reads. */
     out->have = out->title[0] || out->performer[0] || out->track_count > 0;
     return out->have;
+}
+
+/* ==== src/mos_cdtoc.c ==== */
+/*
+ * mos_cdtoc.c — pure, bounds-safe decode of the macOS kernel-cached full-TOC
+ * blob (kIOCDMediaTOCKey, the Apple CDTOC struct) into per-session boundaries.
+ * No IOKit: the shell (mos_scsi.c) copies the registry CFData into a fixed
+ * zero-init buffer and hands us its size. The CDTOC length field is
+ * device-reported, hence hostile — it may only SHRINK the descriptor walk,
+ * never extend it; no payload byte is ever used as an offset.
+ *
+ * This is the richer session structure the issued READ TOC format-0000b
+ * (mos_internal_toc_parse) omits: per session, the first/last track and the
+ * lead-out. CD-only (the property lives only on IOCDMedia). Wire layout and
+ * provenance (IOCDTypes.h; libcdio lib/driver/osx.c read_toc_osx cross-check)
+ * are in mos_pure.h and SPEC.md.
+ */
+
+
+#include <string.h>
+
+#define CDTOC_HEADER   4u   /* length(2) + sessionFirst(1) + sessionLast(1)   */
+#define CDTOC_DESC_LEN 11u  /* sizeof(CDTOCDescriptor): 1+1+1+1+3+1+3          */
+
+/* CDConvertMSFToLBA (IOCDTypes.h): (min*60 + sec)*75 + frame - 150. The 150 is
+   the 2-second pregap offset; clamp a degenerate sub-150 MSF to 0 rather than
+   wrap (hostile input, not a conforming lead-out). */
+static uint32_t mos_internal_cdmsf_to_lba(uint8_t m, uint8_t s, uint8_t f)
+{
+    uint32_t frames = ((uint32_t)m * 60u + s) * 75u + f;
+    return frames >= 150u ? frames - 150u : 0u;
+}
+
+bool mos_internal_cdtoc_parse(const uint8_t *buf, size_t len,
+                              mos_session_layout *out)
+{
+    if (!out) return false;
+    *out = (mos_session_layout){0};
+    if (!buf || len < CDTOC_HEADER) return false;
+
+    /* tocSize = length + sizeof(length): the descriptor region is what remains
+       after the 4-byte header. The device length only shrinks the trusted end
+       (dual-length rule O-4); the header range bytes 2/3 are advisory — the
+       descriptors are the truth, so the compaction below trusts them, not the
+       header's sessionFirst/sessionLast. */
+    size_t toc_size = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    size_t end = (len < toc_size) ? len : toc_size;
+    if (end < CDTOC_HEADER) return false;
+
+    /* Working boundaries indexed by session number 1..99 (index 0 unused). */
+    struct { bool first, last, lead; uint8_t ft, lt; uint32_t lo; }
+        acc[MOS_SESSION_MAX + 1];
+    memset(acc, 0, sizeof acc);
+
+    for (size_t off = CDTOC_HEADER; off + CDTOC_DESC_LEN <= end;
+         off += CDTOC_DESC_LEN) {
+        const uint8_t *d = &buf[off];
+        uint8_t session = d[0];
+        uint8_t adr     = (uint8_t)((d[1] >> 4) & 0x0f);  /* high nibble, both
+                                                             endiannesses */
+        uint8_t point   = d[3];
+
+        /* Only ADR=1 (Q-channel position) descriptors bound sessions — the
+           libcdio filter; ADR 2/3 (catalogue/ISRC) carry no boundary. */
+        if (adr != 0x01) continue;
+        if (session < 1u || session > MOS_SESSION_MAX) continue;
+
+        uint8_t pmin = d[8], psec = d[9], pframe = d[10];   /* p MSF */
+        switch (point) {
+        case 0xA0:                                          /* first track # */
+            acc[session].first = true; acc[session].ft = pmin; break;
+        case 0xA1:                                          /* last track #  */
+            acc[session].last = true; acc[session].lt = pmin; break;
+        case 0xA2:                                          /* lead-out MSF  */
+            acc[session].lead = true;
+            acc[session].lo = mos_internal_cdmsf_to_lba(pmin, psec, pframe);
+            break;
+        default: break;   /* track points (1..99) carry no session boundary */
+        }
+    }
+
+    /* Compact populated sessions in ascending order. */
+    for (uint8_t s = 1; s <= MOS_SESSION_MAX && out->count < MOS_SESSION_MAX;
+         s++) {
+        if (!acc[s].first && !acc[s].last && !acc[s].lead) continue;
+        mos_session_entry *e = &out->sessions[out->count++];
+        e->session      = s;
+        e->have_first   = acc[s].first;  e->first_track  = acc[s].ft;
+        e->have_last    = acc[s].last;   e->last_track   = acc[s].lt;
+        e->have_leadout = acc[s].lead;   e->leadout_lba  = acc[s].lo;
+    }
+    return out->count > 0;
 }
 
 /* ==== src/mos_config.c ==== */
@@ -3252,6 +3405,33 @@ mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
     return MOS_OK;
 }
 
+/* Worst-case CDTOC blob: 4-byte header + descriptors. A conforming CD never
+   approaches this (99 tracks + a handful of sessions x 3 lead-in POINTs); the
+   parser is bounds-safe on truncation regardless (dual-length rule O-4). */
+#define MOS_CDTOC_REPLY_BUF 4096u
+
+mos_error mos_query_session_layout(mos_handle_t *h,
+                                   const mos_session_layout **out)
+{
+    if (out) *out = NULL;
+    if (!h || !out) return MOS_ERR_INVALID_ARG;
+
+    /* The IOCDMedia node is media-scoped: re-resolve so a handle held across a
+       media change reads the CURRENT disc's cached TOC, not the open-time one
+       (same freshness contract as capacity/state). No SCSI command. */
+    mos_internal_refresh_media_identity(h);
+
+    uint8_t buf[MOS_CDTOC_REPLY_BUF];
+    size_t len = mos_internal_read_cdtoc(h->svc, buf, sizeof buf);
+    if (len == 0) return MOS_ERR_IO;        /* not a CD, no media, no property */
+
+    if (!mos_internal_cdtoc_parse(buf, len, &h->session_layout)) {
+        return MOS_ERR_IO;                  /* unparseable / no boundaries */
+    }
+    *out = &h->session_layout;
+    return MOS_OK;
+}
+
 /* READ FORMAT CAPACITIES (0x23) — the one raw CDB this file composes (header
    note). Fills the formattable view: how big the medium is now, whether it is
    unformatted, and the capacities it could be formatted to (the blank-
@@ -4029,6 +4209,53 @@ uint32_t mos_track_info_last_recorded(const mos_track_info *t)
     return t ? t->last_recorded : 0;
 }
 
+/* ---- mos_session_layout accessors (mos_query_session_layout) -------- *
+ * Plain values, NULL-tolerant. i is bounds-checked against count; an
+ * out-of-range index reads as 0/false. first_track/last_track use 0 as the
+ * "session carried no POINT 0xA0/0xA1" sentinel (tracks are 1..99); the
+ * emitter renders 0 as JSON null. leadout_lba needs have_leadout. */
+
+static const mos_session_entry *mos_internal_session_at(
+    const mos_session_layout *s, uint8_t i)
+{
+    return (s && i < s->count) ? &s->sessions[i] : NULL;
+}
+
+uint8_t mos_session_layout_count(const mos_session_layout *s)
+{
+    return s ? s->count : 0;
+}
+
+uint8_t mos_session_layout_session(const mos_session_layout *s, uint8_t i)
+{
+    const mos_session_entry *e = mos_internal_session_at(s, i);
+    return e ? e->session : 0;
+}
+
+uint8_t mos_session_layout_first_track(const mos_session_layout *s, uint8_t i)
+{
+    const mos_session_entry *e = mos_internal_session_at(s, i);
+    return (e && e->have_first) ? e->first_track : 0;
+}
+
+uint8_t mos_session_layout_last_track(const mos_session_layout *s, uint8_t i)
+{
+    const mos_session_entry *e = mos_internal_session_at(s, i);
+    return (e && e->have_last) ? e->last_track : 0;
+}
+
+bool mos_session_layout_have_leadout(const mos_session_layout *s, uint8_t i)
+{
+    const mos_session_entry *e = mos_internal_session_at(s, i);
+    return e ? e->have_leadout : false;
+}
+
+uint32_t mos_session_layout_leadout_lba(const mos_session_layout *s, uint8_t i)
+{
+    const mos_session_entry *e = mos_internal_session_at(s, i);
+    return (e && e->have_leadout) ? e->leadout_lba : 0;
+}
+
 /* ---- mos_capacity accessors (mos_query_capacity) ------------------- *
  * Plain values, NULL-tolerant. Two independent halves: have_media_size
  * gates the kernel IOMedia size; have_recordable gates the READ TRACK
@@ -4231,6 +4458,7 @@ uint8_t mos_error_recovery_read_retry_count(const mos_error_recovery *e)
 #include <IOKit/scsi/SCSICmds_REQUEST_SENSE_Defs.h>
 #include <IOKit/storage/IOStorageProtocolCharacteristics.h>
 #include <IOKit/storage/IOMedia.h>   /* kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey */
+#include <IOKit/storage/IOCDMedia.h> /* kIOCDMediaTOCKey (CD-only cached full-TOC) */
 
 #include <stdlib.h>
 #include <string.h>
@@ -4395,6 +4623,41 @@ void mos_internal_refresh_media_identity(mos_handle_t *h)
     h->bsd_unit = mos_internal_bsd_unit(h->svc, &h->media_id,
                                         &h->media_bytes,
                                         &h->media_block_bytes);  /* -1 if no media */
+}
+
+/* Copy the kernel-cached full-TOC (kIOCDMediaTOCKey, a CDTOC CFData blob) off
+   the drive's IOCDMedia node. CD-only: the property exists only on IOCDMedia
+   (no DVD/BD equivalent — those expose only a media-type string). A pure
+   IORegistry read, no SCSI command and no exclusive access, like the cached
+   kIOMediaSize capacity — so it works on mounted media. Returns the bytes
+   copied (clamped to cap), 0 when absent. */
+size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    io_iterator_t it MOS_IO_AUTO = IO_OBJECT_NULL;
+    if (IORegistryEntryCreateIterator(svc, kIOServicePlane,
+            kIORegistryIterateRecursively, &it) != KERN_SUCCESS) {
+        return 0;
+    }
+    for (;;) {
+        io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
+        if (child == IO_OBJECT_NULL) break;
+        /* IOCDMedia is the CD whole-media node carrying the TOC; the string
+           conformance check avoids a hard IOCDMedia.h class dependency in the
+           walk and naturally excludes DVD/BD media and partitions. */
+        if (!IOObjectConformsTo(child, "IOCDMedia")) continue;
+
+        CFTypeRef v MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
+                child, CFSTR(kIOCDMediaTOCKey), kCFAllocatorDefault, 0);
+        if (!v || CFGetTypeID(v) != CFDataGetTypeID()) continue;
+
+        CFIndex n = CFDataGetLength((CFDataRef)v);
+        if (n <= 0) continue;
+        size_t copy = ((size_t)n < cap) ? (size_t)n : cap;
+        CFDataGetBytes((CFDataRef)v, CFRangeMake(0, (CFIndex)copy), buf);
+        return copy;   /* MOS_CF_AUTO / MOS_IO_AUTO release on this return */
+    }
+    return 0;
 }
 
 /* ---- Enumeration ---------------------------------------------------- */

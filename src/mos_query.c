@@ -331,6 +331,33 @@ mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
     return MOS_OK;
 }
 
+/* Worst-case CDTOC blob: 4-byte header + descriptors. A conforming CD never
+   approaches this (99 tracks + a handful of sessions x 3 lead-in POINTs); the
+   parser is bounds-safe on truncation regardless (dual-length rule O-4). */
+#define MOS_CDTOC_REPLY_BUF 4096u
+
+mos_error mos_query_session_layout(mos_handle_t *h,
+                                   const mos_session_layout **out)
+{
+    if (out) *out = NULL;
+    if (!h || !out) return MOS_ERR_INVALID_ARG;
+
+    /* The IOCDMedia node is media-scoped: re-resolve so a handle held across a
+       media change reads the CURRENT disc's cached TOC, not the open-time one
+       (same freshness contract as capacity/state). No SCSI command. */
+    mos_internal_refresh_media_identity(h);
+
+    uint8_t buf[MOS_CDTOC_REPLY_BUF];
+    size_t len = mos_internal_read_cdtoc(h->svc, buf, sizeof buf);
+    if (len == 0) return MOS_ERR_IO;        /* not a CD, no media, no property */
+
+    if (!mos_internal_cdtoc_parse(buf, len, &h->session_layout)) {
+        return MOS_ERR_IO;                  /* unparseable / no boundaries */
+    }
+    *out = &h->session_layout;
+    return MOS_OK;
+}
+
 /* READ FORMAT CAPACITIES (0x23) — the one raw CDB this file composes (header
    note). Fills the formattable view: how big the medium is now, whether it is
    unformatted, and the capacities it could be formatted to (the blank-
