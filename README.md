@@ -447,63 +447,76 @@ event.
 
 `mos_ingest` is the worked example: a finalized M-DISC, an audio CD, and
 a movie DVD can come off the same spindle, and one `mos metadata --json`
-read tells them apart. Everything it *acts* with already exists —
-`cdparanoia`, `makemkvcon`, `dd`, `curl` — `mos` only supplies the
-identification, faithfully and in one document.
+read tells them apart and hands each to the right tool. `mos` does the
+identification — faithfully, in one document — and the tools it routes to
+are the ones that already own each job: `redumper` for byte-perfect
+preservation dumps, `ddrescue` for error-tolerant imaging of aging media,
+`makemkvcon` for encrypted video, MusicBrainz for the audio-CD database
+key. None of them re-query the drive to find out what it is holding.
 
 ```sh
 mos_ingest() {                                  # mos_ingest <drive>
-    # One document answers "what is this, and is it sealed?". @sh quotes
-    # every field for the shell, so a space in a volume path is safe.
+    # One metadata document answers "what is this, and is it sealed?".
+    # @sh quotes every field for the shell, so a space in a path is safe.
     eval "$(mos metadata "$1" --json | jq -r '@sh "
-        dev=\(.bsd_node // "")
+        node=\(.bsd_node // "")
         vol=\(.volume_path // "")
         class=\(.disc.class // "")
         status=\(.disc.disc_info.status // "")
         erasable=\(.disc.disc_info.erasable)
         maker=\(.disc.disc_structure.manufacturer_id // "")
+        mediaid=\(.disc.disc_structure.media_type_id // "")
         audio=\([.disc.toc.tracks[]? | select(.data == false)] | length)
     "')"
+    disk=${node#/dev/}                          # diskN  (redumper, diskutil)
+    raw=${node/disk/rdisk}                       # /dev/rdiskN  (ddrescue, dd)
 
-    # 1. Audio CD — the TOC IS the identity, so look it up before touching
-    #    a byte of audio. (A data CD has no audio tracks and falls through.)
+    # 1. Audio CD — the TOC is the identity, so look up the release first
+    #    (no second tool touches the drive), then take a byte-perfect,
+    #    offset-corrected preservation dump. redumper is the redump.org
+    #    standard and reads the drive itself by its BSD name.
     if [ "$class" = cd ] && [ "$audio" -gt 0 ]; then
-        id=$(mos_discid "$1")
-        curl -s "https://musicbrainz.org/ws/2/discid/$id?fmt=json"
+        mb_lookup "$1"                          # release metadata / submission
+        redumper --drive="$disk" --image-path="$HOME/Rips/$disk"
         return
     fi
 
-    # 2. Sealed M-DISC archive — registered maker MILLEN (the metadata
-    #    example above), finalized (complete), write-once (not erasable),
-    #    and mounted as a readable data volume. That is archived data: image
-    #    it 1:1. `mos capacity` sizes the dd so it stops at the recorded
-    #    extent, not a guess; mos reports, the consumer reads the sectors.
-    if [ "$maker" = MILLEN ] && [ "$status" = complete ] \
-       && [ "$erasable" = false ] && [ -n "$vol" ]; then
-        read -r blocks bs < <(mos capacity "$1" --json \
-            | jq -r '"\(.media_blocks) \(.block_bytes)"')
-        dd if="${dev/disk/rdisk}" of="$HOME/Archive/${vol##*/}.iso" \
-           bs="$bs" count="$blocks"          # /dev/diskN -> /dev/rdiskN
+    # 2. Sealed M-DISC archive — registered MILLEN/MR1 (the metadata example
+    #    above), finalized, write-once, mounted as data: archived data. Image
+    #    it with ddrescue, not dd — a mapfile lets a second pass retry only the
+    #    sectors an aging disc failed, where dd aborts on the first error. mos
+    #    reports; the consumer unmounts and reads the sectors (scope doctrine),
+    #    and `mos capacity` is the size oracle to verify the image against.
+    if [ "$maker" = MILLEN ] && [ "$mediaid" = MR1 ] \
+       && [ "$status" = complete ] && [ "$erasable" = false ] && [ -n "$vol" ]; then
+        img="$HOME/Archive/${vol##*/}.iso"
+        size=$(mos capacity "$1" --json | jq '.media_bytes')   # reads mounted
+        diskutil unmountDisk "$disk"            # ddrescue needs the disc free
+        ddrescue -b2048 -n     "$raw" "$img" "$img.map"   # fast pass, no split
+        ddrescue -b2048 -d -r3 "$raw" "$img" "$img.map"   # retry the gaps
+        [ "$(stat -f%z "$img")" = "$size" ] && echo "sealed: $img ($size bytes)"
         return
     fi
 
-    # 3. Video DVD/BD — its TOC is drive-fabricated and identity-useless (the
-    #    schema says never key on it), so there is no CD-style disc-ID here;
-    #    mos has named the disc class, and makemkvcon reads titles off the
-    #    device and does the lifting (UDF video usually doesn't even mount).
+    # 3. Video DVD/BD — the TOC is drive-fabricated and identity-useless (the
+    #    schema says never key on it), so there is no CD-style disc-ID. mos has
+    #    named the class; makemkvcon decrypts and rips the titles. For a raw
+    #    preservation image instead, redumper dumps DVD/BD by BSD name too.
     case "$class" in
-        dvd|bd) makemkvcon mkv "dev:${dev/disk/rdisk}" all "$HOME/Rips" ;;
+        dvd|bd) makemkvcon mkv "dev:$raw" all "$HOME/Rips" ;;
     esac
 }
 ```
 
-The one branch that needs `mos` to do something clever is the audio CD,
-and even there `mos` ships only the primitive. That "derive client-side"
-line under `metadata` is not hand-waving: a **MusicBrainz Disc ID** is a
-pure function of the audio TOC `mos` already emits, so no second tool
-touches the drive. `jq` builds libdiscid's hash input (first/last track,
-then 100 frame offsets — each track and the lead-out as its LBA + 150),
-and the system `sha1` and URL-safe base64 finish it:
+The branches above route; the audio-CD identity is the one place `mos`
+supplies a primitive worth showing. A **MusicBrainz Disc ID** is a pure
+function of the audio TOC `mos` already emits, so no second tool touches
+the drive: `jq` builds libdiscid's hash input (first/last track, then 100
+frame offsets — each track and the lead-out as its LBA + 150), and the
+system `sha1` and URL-safe base64 finish it. The lookup wants the disc ID
+*and* the raw TOC (so the service can fuzzy-match a disc it doesn't yet
+know and hand back a submission URL), plus a real `User-Agent` — a bare
+`curl` UA is rejected, and the rate cap is one request a second.
 
 ```sh
 mos_discid() {                              # mos_discid <cd-drive>
@@ -517,18 +530,35 @@ mos_discid() {                              # mos_discid <cd-drive>
       while read o; do s="$s$(printf '%08X' "$o")"; done
       printf '%s' "$s" | openssl dgst -sha1 -binary | base64 | tr '+/=' '._-'; }
 }
+
+mb_lookup() {                               # mb_lookup <cd-drive>
+    local ua="mos-ingest/1.0 ( you@example.com )"   # MusicBrainz: identify yourself
+    local id; id=$(mos_discid "$1")
+    local toc; toc=$(mos metadata "$1" --json | jq -r '.disc.toc as $t
+        | [ $t.first_track, $t.last_track, $t.leadout_lba + 150 ]
+          + [ $t.tracks[].start_lba + 150 ] | join("+")')
+    curl -s -A "$ua" \
+        "https://musicbrainz.org/ws/2/discid/$id?toc=$toc&cdstubs=no&fmt=json"
+}
 ```
 
-It matches libdiscid's own `discid` byte-for-byte: the standard reference
-disc (track offsets 150, 15363, 32314, 46592, 63414, 80489; lead-out
-95462) yields `49HHV7Eb8UKF3aQiNmu1GR8vKTY-`. With the id in hand, the
-`cd` branch above resolves the release straight from
-`https://musicbrainz.org/ws/2/discid/<id>?fmt=json`, or hands you the
-`submission_url` to add an unknown disc. The same shape — `jq` over
-`disc.toc` plus a hasher — yields the freedb/CDDB id or an AccurateRip
-key; `mos` ships the primitive, the recipe stays yours. Mount control is
-`diskutil mount` / `unmount`, transcode is `HandBrakeCLI`; `mos` is the
-one piece that says, in a single document, which of them to reach for.
+`mos_discid` matches libdiscid's own `discid` byte-for-byte: the standard
+reference disc (track offsets 150, 15363, 32314, 46592, 63414, 80489;
+lead-out 95462) yields `49HHV7Eb8UKF3aQiNmu1GR8vKTY-`. The same shape —
+`jq` over `disc.toc` plus a hasher — yields the freedb/CDDB id or an
+AccurateRip key; `mos` ships the primitive, the recipe stays yours.
+
+Two boundaries the example draws on purpose. The M-DISC branch keys on
+`MILLEN`/`MR1` because that signature is **Blu-ray only**: it lives in the
+BD Disc Information structure (`disc_structure`), and DVD M-DISC carries no
+equivalent — so `disc_structure` is `null` there and the branch correctly
+won't fire (mos surfaces the registered ID; the `MILLEN` → M-DISC reading
+is the consumer's). And the dump tools take the drive themselves —
+`redumper --drive=diskN`, `ddrescue` on `/dev/rdiskN` — so a mounted disc
+must be unmounted first (`mos` reports state but, by design, never
+unmounts for you). Mount control is `diskutil`, transcode is
+`HandBrakeCLI`; `mos` is the one piece that says, in a single document,
+which of them to reach for.
 
 ## JSON output
 
