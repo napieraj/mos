@@ -34,6 +34,7 @@ void register_discstruct_tests  (void);
 void register_cdtext_tests      (void);
 void register_physstruct_tests  (void);
 void register_trackinfo_tests   (void);
+void register_cdtoc_tests       (void);
 void register_formatcap_tests   (void);
 void register_perf_tests        (void);
 void register_modepage_tests    (void);
@@ -86,6 +87,7 @@ int main(void)
 
     printf("\nREAD TRACK INFORMATION decode (hostile input):\n");
     register_trackinfo_tests();
+    register_cdtoc_tests();
 
     printf("\nREAD FORMAT CAPACITIES decode (hostile input):\n");
     register_formatcap_tests();

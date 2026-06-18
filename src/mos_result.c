@@ -562,6 +562,53 @@ uint32_t mos_track_info_last_recorded(const mos_track_info *t)
     return t ? t->last_recorded : 0;
 }
 
+/* ---- mos_session_layout accessors (mos_query_session_layout) -------- *
+ * Plain values, NULL-tolerant. i is bounds-checked against count; an
+ * out-of-range index reads as 0/false. first_track/last_track use 0 as the
+ * "session carried no POINT 0xA0/0xA1" sentinel (tracks are 1..99); the
+ * emitter renders 0 as JSON null. leadout_lba needs have_leadout. */
+
+static const mos_session_entry *mos_internal_session_at(
+    const mos_session_layout *s, uint8_t i)
+{
+    return (s && i < s->count) ? &s->sessions[i] : NULL;
+}
+
+uint8_t mos_session_layout_count(const mos_session_layout *s)
+{
+    return s ? s->count : 0;
+}
+
+uint8_t mos_session_layout_session(const mos_session_layout *s, uint8_t i)
+{
+    const mos_session_entry *e = mos_internal_session_at(s, i);
+    return e ? e->session : 0;
+}
+
+uint8_t mos_session_layout_first_track(const mos_session_layout *s, uint8_t i)
+{
+    const mos_session_entry *e = mos_internal_session_at(s, i);
+    return (e && e->have_first) ? e->first_track : 0;
+}
+
+uint8_t mos_session_layout_last_track(const mos_session_layout *s, uint8_t i)
+{
+    const mos_session_entry *e = mos_internal_session_at(s, i);
+    return (e && e->have_last) ? e->last_track : 0;
+}
+
+bool mos_session_layout_have_leadout(const mos_session_layout *s, uint8_t i)
+{
+    const mos_session_entry *e = mos_internal_session_at(s, i);
+    return e ? e->have_leadout : false;
+}
+
+uint32_t mos_session_layout_leadout_lba(const mos_session_layout *s, uint8_t i)
+{
+    const mos_session_entry *e = mos_internal_session_at(s, i);
+    return (e && e->have_leadout) ? e->leadout_lba : 0;
+}
+
 /* ---- mos_capacity accessors (mos_query_capacity) ------------------- *
  * Plain values, NULL-tolerant. Two independent halves: have_media_size
  * gates the kernel IOMedia size; have_recordable gates the READ TRACK

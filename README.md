@@ -185,7 +185,10 @@ but unmounted, possibly damaged. It also surfaces, when the medium has
 them: the registered disc-maker identity for Blu-ray (manufacturer /
 media-type ID — `MILLEN` / `MR1` for Millenniata M-DISC); the physical
 format and copyright-management info for DVD/HD-DVD; per-track capacity
-and append state; and album/track CD-TEXT for audio CDs.
+and append state; album/track CD-TEXT for audio CDs; and, for CDs, the
+per-session layout (`session_layout`: first/last track and lead-out per
+session) decoded from the kernel-cached full-TOC — the multi-session
+structure the issued READ TOC omits, read with no SCSI command.
 
 `mos metadata --json` emits one `mos.metadata.v1` document. Its `disc`
 object is a fingerprint subtree — a fixed, closed key set you can hash
@@ -195,6 +198,36 @@ the normal regime, not an error — a present-but-unmounted disc reads a
 `null` volume, which is the common case for BD/UHD video that doesn't
 mount on macOS. Full field reference:
 [`schemas/mos.metadata.v1.json`](schemas/mos.metadata.v1.json).
+
+For CDs the TOC comes from the macOS kernel-cached full-TOC
+(`kIOCDMediaTOCKey`) — a superset of the issued READ TOC, read with no SCSI
+command — so a multi-session disc shows structure the issued read can't. Here
+a CD-Extra (audio in session 1, a data track in session 2) adds a `Sessions`
+row, the human form of the `session_layout` array:
+
+```
+$ mos metadata 1
+     BSD:  /dev/disk4
+  Volume:  GREATEST_HITS
+    Path:  /Volumes/GREATEST_HITS
+ Profile:  cd — cd_rom
+    Disc:  complete, 2 sessions, 13 tracks
+   Media:  -
+     TOC:  tracks 1-13, lead-out LBA 287100
+   Track:  -
+ CD-Text:  -
+Sessions:  2 (s1 1-12, s2 13-13)
+```
+
+In `--json` that row is the `session_layout` array — a sibling of the
+fingerprint `toc`, CD-only and `null` otherwise:
+
+```jsonc
+"session_layout": [
+  { "session": 1, "first_track": 1, "last_track": 12, "leadout_lba": 251000 },
+  { "session": 2, "first_track": 13, "last_track": 13, "leadout_lba": 287100 }
+]
+```
 
 ### drive — static facts
 

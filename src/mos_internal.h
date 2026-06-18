@@ -74,6 +74,11 @@ struct mos_handle {
     /* Handle-owned track-info result (mos_query_track_info). Same terms. */
     struct mos_track_info     track_info;
 
+    /* Handle-owned session-layout result (mos_query_session_layout): the
+       per-session boundaries decoded from the kernel-cached full-TOC. Same
+       terms; plain values, no borrowed pointers. */
+    struct mos_session_layout session_layout;
+
     /* Handle-owned capacity result (mos_query_capacity). Assembled from
        the open-time IOMedia size above + a fresh track_info read. */
     struct mos_capacity       capacity;
@@ -183,6 +188,14 @@ mos_error mos_internal_ioreturn_to_mos_error(IOReturn rc);
    reports current media. Local IORegistry walk off h->svc; no SCSI
    command, no exclusive access (mos_scsi.c). */
 void mos_internal_refresh_media_identity(mos_handle_t *h);
+
+/* Copy the kernel-cached full-TOC (kIOCDMediaTOCKey, a CDTOC CFData blob) off
+   the drive's IOCDMedia node into `buf`, returning the byte count copied
+   (clamped to `cap`), or 0 when absent — not a CD (the property is IOCDMedia-
+   only), no media, or no property. Zero SCSI commands, no exclusive access: a
+   pure IORegistry read like the cached capacity (mos_scsi.c). The pure parser
+   mos_internal_cdtoc_parse turns the blob into the per-session layout. */
+size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap);
 
 /* Issue one 6-byte tray CDB (START STOP UNIT 0x1B / PREVENT ALLOW MEDIUM
    REMOVAL 0x1E) via mos_raw_cdb and classify the result. Negative mos_error

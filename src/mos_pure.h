@@ -170,6 +170,63 @@ typedef struct mos_toc {   /* tagged: mos.h forward-declares it opaquely */
 bool mos_internal_toc_parse(const uint8_t *buf, size_t len, mos_toc *out);
 
 
+/* ---- CDTOC (kernel-cached full-TOC) session layout (mos_cdtoc.c) ------- *
+ * Decode of the macOS kernel-cached full-TOC blob (kIOCDMediaTOCKey, the
+ * Apple CDTOC struct in IOKit/storage/IOCDTypes.h) into per-session
+ * boundaries — the multi-session structure the issued READ TOC format-0000b
+ * (mos_internal_toc_parse) omits, and that disc_info gives only for the LAST
+ * session. CD-only; the blob is read off the IOCDMedia node with zero SCSI
+ * commands and no exclusive access (mos_scsi.c).
+ *
+ * CDTOC wire layout (IOCDTypes.h; libcdio lib/driver/osx.c read_toc_osx
+ * cross-check in SPEC.md):
+ *   [0..1]  length (BE) — bytes AFTER this field; tocSize = length + 2
+ *   [2]     sessionFirst   (advisory; the descriptors are authoritative)
+ *   [3]     sessionLast
+ *   [4..]   CDTOCDescriptor, 11 bytes each:
+ *             [0]      session number
+ *             [1]      (adr<<4)|control  — adr in the high nibble, control in
+ *                                          the low, on both endiannesses (the
+ *                                          IOCDTypes bitfield is laid out to
+ *                                          this byte order either way)
+ *             [2]      tno
+ *             [3]      point
+ *             [4..6]   address MSF (ATIME; not decoded)
+ *             [7]      zero
+ *             [8..10]  p MSF = PMIN / PSEC / PFRAME
+ * Per-session POINTs carry the boundaries: 0xA0 PMIN = first track, 0xA1 PMIN
+ * = last track, 0xA2 p MSF = lead-out (→ LBA, minus the 150-frame pregap).
+ * Only adr==1 descriptors bound a session (the libcdio filter). FAIL-CLOSED:
+ * a device-reported length may only SHRINK the descriptor walk. */
+#define MOS_SESSION_MAX 99
+typedef struct {
+    uint8_t  session;       /* session number, 1..99                          */
+    bool     have_first;
+    bool     have_last;
+    bool     have_leadout;
+    uint8_t  first_track;   /* POINT 0xA0 PMIN  (meaningful iff have_first)    */
+    uint8_t  last_track;    /* POINT 0xA1 PMIN  (meaningful iff have_last)     */
+    uint32_t leadout_lba;   /* POINT 0xA2 MSF→LBA (meaningful iff have_leadout)*/
+} mos_session_entry;
+
+typedef struct mos_session_layout {  /* tagged: mos.h forward-declares opaquely */
+    uint8_t           count;         /* populated entries, ascending session    */
+    mos_session_entry sessions[MOS_SESSION_MAX];
+} mos_session_layout;
+
+bool mos_internal_cdtoc_parse(const uint8_t *buf, size_t len,
+                              mos_session_layout *out);
+
+/* Decode the SAME CDTOC blob into the per-track mos_toc (format-0000b's shape):
+   first/last track, lead-out (the highest session's A2), and {track, adr,
+   control, start_lba} per track. This is what lets the cached full-TOC be the
+   PRIMARY CD TOC source (mos_query_toc). Fail-closed to the same standard as
+   mos_internal_toc_parse — a duplicate track or a gap in first..last refuses
+   the whole, so the caller falls back to the issued READ TOC. False when no
+   coherent track list is present. */
+bool mos_internal_cdtoc_to_toc(const uint8_t *buf, size_t len, mos_toc *out);
+
+
 /* THE DUAL-LENGTH RULE (seam contract O-4; AGENTS scope doctrine layer 3).
  *
  * Every variable-size transfer has three lengths from three authorities:

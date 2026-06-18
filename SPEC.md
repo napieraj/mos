@@ -78,6 +78,36 @@ code; this table is the citation, not the parse.
   36.55 Mbit/s = 4568 kB/s. Nominal (hence the "~"); a class with no defined
   base falls back to the absolute rate.
 
+### `src/mos_pure.c` (`mos_internal_toc_parse`) — READ TOC/PMA/ATIP format 0000b
+- **Spec:** MMC-6 §6.27.2.3; the formatted TOC — per-track ADR/control + start
+  LBA plus the lead-out (track 0xAA). Issued via the non-exclusive
+  `ReadTableOfContents` convenience method (`mos_query.c` `mos_query_toc`,
+  `format=0x00`).
+- **Richer kernel-cached source — `src/mos_cdtoc.c`.** macOS caches a *full-TOC*
+  as `kIOCDMediaTOCKey` — a `CDTOC` blob on the `IOCDMedia` node, read with
+  **zero SCSI commands and no exclusive access**, fresh off the current media
+  node each query (so the "stale cache" worry does not apply — the kernel
+  refreshes it on every media change). It is a *superset* of this format-0000b
+  read: POINT descriptors A0/A1/A2 carry the per-session first/last track and
+  lead-out — the session structure this read omits and `disc_info` gives only
+  for the last session. **CD-only** (no DVD/BD equivalent — those expose only a
+  media-type string); for CDs it is now the primary TOC source (see Provenance
+  below), the issued path its fallback. `mos_internal_cdtoc_parse` decodes it
+  into the per-session layout (`mos.metadata.v1.disc.session_layout`), and
+  `mos_internal_cdtoc_to_toc` into the per-track `mos_toc`.
+- **Cross-check:** libcdio `lib/driver/osx.c` `read_toc_osx` — same
+  `CDTOCGetDescriptorCount` walk, `adr==1` filter, POINT 0xA0/0xA1/0xA2
+  handling, and `CDConvertMSFToLBA` (minus the 150-frame pregap). Struct layout:
+  Apple `IOCDTypes.h` (`CDTOC` / `CDTOCDescriptor` / `CDMSF`).
+- **Provenance:** the earlier "banked, not built" stance
+  (`doc/research/2026-06-14-state-verb-rename.md`; analysis
+  `doc/research/2026-06-13-disc-tools-state-survey.md` §6) was overridden
+  2026-06-18 — see the AGENTS.md ADR. The cached full-TOC is now the **primary**
+  CD TOC source: `mos_query_toc` decodes it via `mos_internal_cdtoc_to_toc`
+  (fail-closed to this format-0000b standard — a duplicate track or a gap in
+  first..last refuses the whole), with the issued `ReadTableOfContents` as the
+  fallback (no `IOCDMedia` node yet) and the only path for DVD/BD.
+
 ### `src/mos_cdtext.c` — READ TOC/PMA/ATIP format 0101b (CD-TEXT)
 - **Spec:** MMC-3 §6.27 / Red Book CD-TEXT; 18-byte packs.
 - **Cross-check:** libcdio `lib/driver/cdtext.c` (CRC present, not

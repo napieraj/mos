@@ -61,6 +61,9 @@
         { "track": 3, "title": "Blue in Green", "performer": null },
         { "track": 4, "title": "All Blues", "performer": null }
       ]
-    }
+    },
+    "session_layout": [
+      { "session": 1, "first_track": 1, "last_track": 4, "leadout_lba": 86347 }
+    ]
   }
 }

@@ -42,6 +42,7 @@ typedef struct {
     const mos_physical_structure *ps;    /* NULL = non-DVD/HD-DVD or unavail */
     const mos_track_info *ti;            /* NULL = unavailable          */
     const mos_cdtext     *ct;            /* NULL = non-CD or no CD-TEXT   */
+    const mos_session_layout *sl;        /* NULL = non-CD or no cached TOC */
     bool                 mounted;
     char                 volume_name[256];
     char                 volume_path[1024];
@@ -250,6 +251,35 @@ static void emit_json(const metadata_doc *d)
         fputs("null", stdout);
     }
 
+    /* session_layout: per-session boundaries from the kernel-cached full-TOC
+       (kIOCDMediaTOCKey), CD-only. The richer structure the issued READ TOC
+       format-0000b above lacks; a sibling of toc, NOT part of the fingerprint.
+       first_track/last_track are null when the session carried no POINT
+       0xA0/0xA1; leadout_lba null when no 0xA2. */
+    fputs(",\n    \"session_layout\": ", stdout);
+    if (d->sl) {
+        fputs("[", stdout);
+        uint8_t sn = mos_session_layout_count(d->sl);
+        for (uint8_t i = 0; i < sn; i++) {
+            uint8_t ft = mos_session_layout_first_track(d->sl, i);
+            uint8_t lt = mos_session_layout_last_track(d->sl, i);
+            fprintf(stdout, "%s\n      {\"session\": %u, \"first_track\": ",
+                    i ? "," : "", mos_session_layout_session(d->sl, i));
+            if (ft) fprintf(stdout, "%u", ft); else fputs("null", stdout);
+            fputs(", \"last_track\": ", stdout);
+            if (lt) fprintf(stdout, "%u", lt); else fputs("null", stdout);
+            fputs(", \"leadout_lba\": ", stdout);
+            if (mos_session_layout_have_leadout(d->sl, i))
+                fprintf(stdout, "%u", mos_session_layout_leadout_lba(d->sl, i));
+            else
+                fputs("null", stdout);
+            fputs("}", stdout);
+        }
+        fputs(sn ? "\n    ]" : "]", stdout);
+    } else {
+        fputs("null", stdout);
+    }
+
     fputs(",\n    \"volume_name\": ", stdout);
     if (d->mounted && d->volume_name[0])
         mos_cli_json_str(stdout, d->volume_name);
@@ -423,6 +453,34 @@ static void emit_human(const metadata_doc *d)
     pairs[n++] = (mos_cli_human_pair){
         "CD-Text", (ct_title || ct_perf || cdt_ntracks) ? cdt_esc : NULL };
 
+    /* Sessions: only the multi-session case earns a row — a single session is
+       already covered by the TOC row's track range. Compact per-session track
+       ranges, e.g. "2 (s1 1-12, s2 13-13)"; a session missing its A0/A1
+       boundary (the JSON-null case) renders "?" rather than the 0 sentinel.
+       Truncated gracefully if it overflows. */
+    char sess_buf[80];
+    bool show_sessions = d->sl && mos_session_layout_count(d->sl) > 1;
+    if (show_sessions) {
+        uint8_t sc = mos_session_layout_count(d->sl);
+        int off = snprintf(sess_buf, sizeof sess_buf, "%u (", sc);
+        for (uint8_t i = 0; i < sc && off > 0 && (size_t)off < sizeof sess_buf; i++) {
+            uint8_t ft = mos_session_layout_first_track(d->sl, i);
+            uint8_t lt = mos_session_layout_last_track(d->sl, i);
+            char range[16];
+            if (ft && lt) snprintf(range, sizeof range, "%u-%u", ft, lt);
+            else          snprintf(range, sizeof range, "?");
+            off += snprintf(sess_buf + off, sizeof sess_buf - (size_t)off,
+                            "%ss%u %s", i ? ", " : "",
+                            mos_session_layout_session(d->sl, i), range);
+        }
+        if (off > 0 && (size_t)off < sizeof sess_buf)
+            snprintf(sess_buf + off, sizeof sess_buf - (size_t)off, ")");
+        /* Suppress the row entirely when single-session (not a "-" row): the
+           common case is one session, already covered by the TOC row, and a
+           near-always-"-" Sessions row would be pure clutter. */
+        pairs[n++] = (mos_cli_human_pair){ "Sessions", sess_buf };
+    }
+
     (void)mos_cli_human_block(stdout, pairs, n);
 }
 
@@ -506,6 +564,11 @@ int mos_cli_run_metadata(void)
     if (pcls && strcmp(pcls, "cd") == 0) {
         const mos_cdtext *ct = NULL;
         if (mos_query_cdtext(h, &ct) == MOS_OK) d.ct = ct;
+        /* Session layout from the kernel-cached full-TOC — CD-only, zero
+           command, no exclusive access; null when the IOCDMedia node carries
+           no cached TOC (just-inserted/unrecognized media). */
+        const mos_session_layout *sl = NULL;
+        if (mos_query_session_layout(h, &sl) == MOS_OK) d.sl = sl;
     }
     (void)mos_query_volume(h, &d.mounted,
                            d.volume_name, sizeof d.volume_name,

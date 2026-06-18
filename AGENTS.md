@@ -825,3 +825,65 @@ write-once disc or a drive that does not implement 0x23 answers 5/20/00 or a
 USB-SATA bridge over-claiming the single-byte CAPACITY LIST LENGTH is caught by
 the dual-length clamp + the whole-8-byte-descriptor floor. Each lands as a
 fixture + dated note with a generic gate, never a per-device special-case.
+
+## ADR: kernel-cached full-TOC adopted (kIOCDMediaTOCKey) — primary CD TOC
+## source + session_layout (2026-06-18, supersedes the "banked, not built" call)
+
+`doc/research/2026-06-14-state-verb-rename.md:155` recorded **"CD cached full-TOC
+(`kIOCDMediaTOCKey`): BANKED, not built (owner's call)"** — a hardware-contingent
+fallback to reach for only if the convenience `ReadTableOfContents` disappointed
+on real hardware. The maintainer overrode that on 2026-06-18. This entry records
+the override and why it dominates; the append-don't-edit rule applies (the
+06-14 note stands; this rebuts it).
+
+**What the cache is.** macOS caches the full-TOC as `kIOCDMediaTOCKey` — a
+`CDTOC` blob on the `IOCDMedia` node, read via `IORegistryEntryCreateCFProperty`
+with **zero SCSI commands and no exclusive access**, the same registry-read
+modality as the cached `kIOMediaSize` capacity and the DR directory. It is a
+*superset* of the issued READ TOC format-0000b: POINT descriptors A0/A1/A2 carry
+the per-session first/last track and lead-out — the session structure
+format-0000b omits and `disc_info` gives only for the last session. Decode:
+`src/mos_cdtoc.c` (`mos_internal_cdtoc_parse`); read shell:
+`src/mos_scsi.c` (`mos_internal_read_cdtoc`).
+
+**Why the override dominates.** (1) *Cheaper and contention-free* — zero command,
+no `ObtainExclusiveAccess`, works on mounted media. (2) *The staleness worry was
+unsupported* — mos reads it FRESH off the current `IOCDMedia` node every query
+(`mos_internal_refresh_media_identity` re-walks the registry first), and the
+kernel refreshes its own cache on media change, so there is no stale-handle
+window. (3) *Source-proven, ADR-legitimately* — libcdio's `read_toc_osx`
+(`lib/driver/osx.c`) uses exactly this property; that is **verified platform
+source**, which the hardware-role ADR admits as a design basis (distinct from the
+ADR-forbidden "known good on a drive I ran" — mos has never run on hardware; the
+basis here is the source, not a run). (4) *No migration cost* — pre-first-tag,
+there are no consumers of the `toc` fingerprint provenance, so re-sourcing it is
+free (the JSON-schema ADR's mutable-in-place clause).
+
+**The decision, in two parts (both shipped).**
+- **`session_layout`.** A new `mos.metadata.v1.disc.session_layout` array —
+  per-session `{session, first_track, last_track, leadout_lba}` — CD-only, null
+  on non-CD or when no `IOCDMedia` node carries a cached TOC. A *sibling* of
+  `toc`; it does not alter `toc`.
+- **Primary CD TOC source.** `mos_query_toc` prefers the cached full-TOC for CDs
+  (`mos_internal_cdtoc_to_toc`, fail-closed to the format-0000b standard) and
+  falls back to the issued `ReadTableOfContents` when no `IOCDMedia` node is up
+  yet (just-inserted / unrecognized media) — and that fallback stays the **only**
+  route for DVD/BD, where no cached TOC exists. So "use it for everything" is
+  "use it everywhere it exists, with the issued read as the CD fallback." The
+  fail-closed cdtoc→toc decode (duplicate track / gap refuses the whole) means a
+  hostile or partial blob degrades to the issued read, never to a half-parsed
+  fingerprint.
+
+**Scope-doctrine compliance.** This adds **no command surface** — `kIOCDMediaTOCKey`
+is a registry property read, not an MMC command, so the one-raw-CDB count stays
+one-of-five and layer-1 is untouched. Privilege footprint (layer 3) unchanged:
+the same console grant, no entitlement, no exclusive access. Input space (layer 4):
+the CDTOC `length` field is device-reported and treated as hostile — it may only
+SHRINK the descriptor walk (dual-length rule O-4); no payload byte is used as an
+offset (`tests/test_cdtoc.c` pins the fail-closed cases).
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+drive/bridge where the kernel builds no `IOCDMedia` node for valid CD media (the
+issued-READ-TOC fallback covers it); a `CDTOC` blob that disagrees with the
+issued TOC on the same disc (lands as a fixture + dated note with a generic
+gate, never a per-device special-case).
