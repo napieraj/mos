@@ -35,7 +35,8 @@ because the reporter-only contract is genuinely useful by itself and
 adding control verbs introduces a different class of failure mode
 (locked drives, surprised users, cleanup-on-process-death
 obligations). The control surface, shipped in v0.4, is
-`mos tray {eject, close, lock, unlock}` (`eject --force` = unlock-then-eject).
+`mos tray {eject, close, lock, unlock}` (`eject --force` = open no matter what:
+force-unmount + clear locks, then eject).
 Each verb is issued as a raw CDB that needs exclusive access — and is
 therefore BUSY on a mounted disc (§3, §9.9); the convenience methods
 are structurally sense-blind (§9.7/§9.9), so the raw path is the only

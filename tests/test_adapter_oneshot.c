@@ -546,21 +546,25 @@ TEST(adapter_tray_cdbs_pinned_byte_for_byte)
     return rc;
 }
 
-TEST(adapter_tray_eject_force_is_unlock_then_eject)
+TEST(adapter_tray_eject_force_clean_drive_just_ejects)
 {
     mos_fake_reset();
     mos_error err = MOS_ERR_IO;
     mos_handle_t *h = mos_open_by_index(1, &err);
     EXPECT(h != NULL);
 
+    /* New --force contract is REACTIVE: it clears a blocker only when one
+       actually refuses the eject. On a clean drive the eject succeeds on the
+       first try, so force issues NOTHING extra — no preemptive ALLOW, no
+       unmount. Exactly one CDB (the eject), one acquire, balance 0. (The old
+       contract issued an ALLOW before every forced eject — 2 acquires; this
+       pins that that preemptive step is gone.) */
     mos_fake_set_raw_reply(0x00 /*GOOD*/, NULL, 0, 0, NULL);
     mos_tray_outcome out = (mos_tray_outcome)-1;
     EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/true, &out, NULL));
     EXPECT_EQ(MOS_TRAY_DONE, out);
-    /* Two CDBs, each its own acquire/release — net balance 0; the LAST
-       authored CDB is the eject (ALLOW preceded it). */
     EXPECT_EQ(0, mos_fake_lock_balance());
-    EXPECT_EQ(2, mos_fake_lock_acquires());
+    EXPECT_EQ(1, mos_fake_lock_acquires());
     uint8_t cdb[16];
     EXPECT_EQ(6, (int)mos_fake_last_cdb(cdb));
     static const uint8_t eject[6] = { 0x1B, 0, 0, 0, 0x02, 0 };
@@ -660,7 +664,7 @@ int main(void)
     RUN(adapter_disc_id_decodes_and_fails_closed);
     RUN(adapter_feature_enumeration_order_and_stop);
     RUN(adapter_tray_cdbs_pinned_byte_for_byte);
-    RUN(adapter_tray_eject_force_is_unlock_then_eject);
+    RUN(adapter_tray_eject_force_clean_drive_just_ejects);
     RUN(adapter_tray_locked_eject_classifies_refused_locked);
     RUN(adapter_tray_refused_other_carries_its_sense);
     RUN(adapter_tray_exclusive_denied_is_negative_error);

@@ -876,3 +876,22 @@ CFDictionaryRef DADiskCopyDescription(DADiskRef disk)
     }
     return d;
 }
+
+/* Unmount path (mos_internal_da_unmount). The real DADiskUnmount is async and
+   delivers via the session's dispatch queue; the fake models an immediate
+   SUCCESS by invoking the callback synchronously with a NULL dissenter, which
+   satisfies the semaphore handshake in mos_internal_da_unmount.
+   DASessionSetDispatchQueue is a no-op. Both exist so the headless binary links
+   — it does not link -framework DiskArbitration. */
+void DASessionSetDispatchQueue(DASessionRef session, dispatch_queue_t queue)
+{
+    (void)session;
+    (void)queue;
+}
+
+void DADiskUnmount(DADiskRef disk, DADiskUnmountOptions options,
+                   DADiskUnmountCallback callback, void *context)
+{
+    (void)options;
+    if (callback) callback(disk, NULL, context);   /* NULL dissenter = success */
+}

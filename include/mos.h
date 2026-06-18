@@ -996,9 +996,11 @@ mos_error mos_enumerate_features(mos_handle_t *h,
  * acquires and RELEASES exclusive access within the call:
  *
  *   - MOS_ERR_BUSY / MOS_ERR_EXCLUSIVE_ACCESS when the drive is mounted as a
- *     volume or held by another client — unmount/quiesce is the CONSUMER's
- *     call (mos never unmounts for you, the deliberate contrast with
- *     `drutil tray eject`). A robot orchestrator locks/ejects between stages.
+ *     volume or held by another client — on the DEFAULT path unmount/quiesce is
+ *     the CONSUMER's call (the deliberate contrast with `drutil tray eject`).
+ *     The one exception is mos_tray_eject(force=true), which force-unmounts a
+ *     mount to open no matter what; it still cannot preempt another client
+ *     (MOS_ERR_EXCLUSIVE_ACCESS). A robot orchestrator locks/ejects between stages.
  *   - On a command the drive ANSWERED, MOS_OK and *out carries the outcome
  *     (DONE / REFUSED_LOCKED / REFUSED_OTHER) — mechanism facts only.
  *
@@ -1018,14 +1020,20 @@ mos_error mos_enumerate_features(mos_handle_t *h,
  */
 
 /* Eject the tray / unload the medium (START STOP UNIT 0x1B, LoEj=1 START=0).
-   `force` issues an ALLOW (clear basic Prevent) immediately before the eject,
-   so a basic lock does not turn the eject into a REFUSED_LOCKED — the same
-   unlock-then-eject sequence the macOS kernel's own EjectTheMedia performs.
-   force does NOT clear a Persistent Prevent lock, and need not: an
-   initiator-issued eject succeeds under Persistent Prevent by spec
-   (04-349r1 §6.18.3.2). Without force, a basic-locked drive answers
-   REFUSED_LOCKED — a reported fact. (`sense` reflects the eject, not the
-   pre-step ALLOW.) */
+   `force` means OPEN NO MATTER WHAT, as ONE flow: the eject is attempted, and
+   force then clears whichever blocker the failure names and re-ejects —
+     - MOS_ERR_BUSY (a Finder/system mount) -> FORCE-UNMOUNT the volume
+       (DADiskUnmount, kDADiskUnmountOptionForce — DATA-LOSS CAPABLE: it kills
+       open file handles; that is the contract of --force) and re-eject;
+     - REFUSED_LOCKED (a basic Prevent lock) -> clear both Prevent states (so
+       nothing is left locked) and re-eject.
+   The one blocker force cannot clear is another userland client holding
+   exclusive access (no SCSI preempt): that returns MOS_ERR_EXCLUSIVE_ACCESS and
+   the tray stays closed. force-unmount needs DiskArbitration; in an opt-out
+   build (MOS_USE_DISKARBITRATION=0) a mounted disc reports MOS_ERR_BUSY instead.
+   Without force, a basic-locked drive answers REFUSED_LOCKED and a mounted disc
+   MOS_ERR_BUSY — both reported facts, nothing cleared. (`sense` reflects the
+   final eject, not the prevent-clears.) */
 mos_error mos_tray_eject (mos_handle_t *h, bool force,
                           mos_tray_outcome *out, uint8_t sense[3]);
 

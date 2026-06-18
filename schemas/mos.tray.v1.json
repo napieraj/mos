@@ -36,7 +36,7 @@
     },
     "force": {
       "type": ["boolean", "null"],
-      "description": "eject only (null on every other action): when true, an ALLOW (clear basic Prevent) was issued immediately before the eject — the unlock-then-eject sequence the macOS kernel's own EjectTheMedia performs. Does not clear a Persistent Prevent lock, and need not: an initiator eject succeeds under Persistent Prevent (04-349r1 §6.18.3.2)."
+      "description": "eject only (null on every other action): true when --force was requested — \"open no matter what\". The eject is attempted and, on a clearable blocker, the blocker is cleared and the eject re-issued: a Finder/system mount is FORCE-UNMOUNTED (DADiskUnmount, data-loss capable — kills open file handles), and a basic Prevent lock is cleared (along with the persistent state, so a lock in the way leaves nothing locked). The one blocker --force cannot clear is another userland client holding exclusive access (no SCSI preempt): that surfaces as mos.error.v1 with code exclusive_access. Without --force a mounted disc is mos.error.v1 busy and a basic lock is outcome refused_locked — both reported facts, nothing cleared."
     },
     "persistent": {
       "type": ["boolean", "null"],

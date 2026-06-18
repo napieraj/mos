@@ -344,7 +344,8 @@ it — the query path stays reporter-only.
 
 ```sh
 $ mos tray eject 1              # eject (START STOP UNIT, LoEj)
-$ mos tray eject 1 --force      # ALLOW (unlock) first, then eject
+$ mos tray eject 1 --force      # open no matter what: clear both Prevent
+                                # states + force-unmount a mount, then eject
 $ mos tray close 1
 $ mos tray lock 1               # prevent removal until an unlock
 $ mos tray lock 1 --persistent  # robot-grade: the operator eject button
@@ -358,11 +359,24 @@ $ mos tray unlock 1             # release a lock (add --persistent to
 `outcome`: `done`, `refused_locked` (an eject hit a lock — a reported
 fact, not a failure; the process still exits 0), or `refused_other`
 (carrying the drive's SCSI `sense` triple so a non-lock rejection is
-diagnosable). `mos` issues the command and reports what happened; it
+diagnosable). By default `mos` issues the command and reports what happened; it
 **does not unmount for you** — the deliberate contrast with `drutil tray
-eject`'s unmount-then-eject policy. A lock targets a drive macOS has not
-mounted; on a mounted disc the verb returns busy (`mos.error.v1`, exit
-75). A lock **persists past the process** by design: the PREVENT state is
+eject`'s unmount-then-eject policy, so on a mounted disc a plain eject returns
+busy (`mos.error.v1`, exit 75).
+
+`mos tray eject --force` is the opt-in to that policy and then some — "open no
+matter what". It's one flow: the eject is tried, and `--force` clears whatever
+blocked it and re-ejects — a mounted volume is **force-unmounted**, a basic
+Prevent lock is cleared (along with the persistent one, so a lock in the way
+leaves nothing locked). The force-unmount is **data-loss capable** — it kills
+open file handles, so reach for it on a kiosk/robot drive, not a disc something
+may be writing. The one thing it can't defeat is another program holding the
+drive exclusively (e.g. makemkvcon mid-rip): mos can't preempt a peer, so it
+reports `exclusive_access` and leaves the tray shut. (`--force` needs
+DiskArbitration; a build with `MOS_USE_DISKARBITRATION=0` can't unmount, so a
+mounted disc still returns busy.)
+
+A lock **persists past the process** by design: the PREVENT state is
 the drive's, cleared only by an explicit unlock, a bus reset, or
 power-off — so a ripping robot can lock an idle drive and any later `mos
 tray unlock` recovers it.

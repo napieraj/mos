@@ -1,8 +1,9 @@
 /* cli/tray.c — the tray command: `mos tray <action> [selector] [flags]`.
  *
- * action ∈ {eject, close, lock, unlock}. eject takes --force (ALLOW first);
- * lock/unlock take --persistent (the Persistent Prevent state). Emits one
- * mos.tray.v1 document or a human line.
+ * action ∈ {eject, close, lock, unlock}. eject takes --force (open no matter
+ * what: force-unmount a mount + clear a Prevent lock in the way, then eject;
+ * see mos_tray_eject); lock/unlock take --persistent (the Persistent Prevent
+ * state). Emits one mos.tray.v1 document or a human line.
  *
  * A control verb (START STOP UNIT / PREVENT ALLOW MEDIUM REMOVAL), not a
  * query. A command the drive ANSWERED — including a 5/53/02 locked-eject

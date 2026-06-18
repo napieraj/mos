@@ -112,7 +112,12 @@ BSD form; the explicit form of the positional BSD selector.
 .B \-\-force
 With
 .BR "tray eject" :
-issue an ALLOW (unlock) before ejecting.
+open no matter what \(em force-unmount a mounted volume
+.RB ( DADiskUnmount ,
+data-loss capable: it kills open file handles) and clear a Prevent lock that is
+in the way, then eject. The one blocker it cannot clear is another program
+holding the drive exclusively, which is reported as
+.BR exclusive_access .
 .TP
 .B \-\-persistent
 With
@@ -202,7 +207,7 @@ List every drive:
 Act on each disc that becomes readable, hot-plug included:
 .B mos watch | jq ...
 .TP
-Eject drive 1, unlocking first if needed:
+Eject drive 1 no matter what (force-unmount + clear any lock, then eject):
 .B mos tray eject 1 \-\-force
 .SH SEE ALSO
 .BR drutil (1),

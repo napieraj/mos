@@ -1215,6 +1215,13 @@ bool mos_internal_da_volume(const char *bsd_name,
                             char *name_buf, size_t name_cap,
                             char *path_buf, size_t path_cap);
 
+/* Force-unmount every volume on whole-disk "diskN" via DiskArbitration
+   (kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole). True on success.
+   The SOLE DA action mos performs (async DADiskUnmount, awaited on a semaphore),
+   used only by `tray eject --force`. Returns false when DA is opted out at build
+   time (capability absent) — the force eject then reports the mount as BUSY. */
+bool mos_internal_da_unmount(const char *bsd_name);
+
 /* Extract one device's snapshot (registry id, bsd unit, identity) from a
    DRDeviceRef passed as CFTypeRef (this header stays free of DiscRecording
    types). False when the registry path doesn't resolve — the same skip gate
@@ -1874,13 +1881,18 @@ void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
 
 /* ==== src/mos_da.c ==== */
 /*
- * mos_da.c — one-shot DiskArbitration volume lookup.
+ * mos_da.c — DiskArbitration: a one-shot volume lookup and the force-unmount.
  *
- * One modality only: a synchronous DADiskCopyDescription read of what the
- * mounted-volume layer already knows — no session scheduling, no run loop,
- * no callbacks, no commands to the drive (AGENTS.md scope doctrine). Callers
- * gate on the media nub (bsd_unit present); with no IOMedia node nothing is
- * mounted and DA is never consulted.
+ * Two modalities, both confined here:
+ *   1. SYNCHRONOUS volume lookup (mos_internal_da_volume) — a DADiskCopyDescription
+ *      read of what the mounted-volume layer already knows: no session
+ *      scheduling, no run loop, no callbacks, no commands to the drive
+ *      (AGENTS.md scope doctrine). Callers gate on the media nub (bsd_unit
+ *      present); with no IOMedia node nothing is mounted and DA is never consulted.
+ *   2. The ASYNC force-unmount (mos_internal_da_unmount) — the single DA ACTION
+ *      mos performs, used ONLY by `tray eject --force`. DADiskUnmount delivers
+ *      via a callback on a dispatch queue; we block on a semaphore until it
+ *      fires (see that function). Data-loss capable, strictly opt-in.
  *
  * Trust terms: the description dictionary is system-supplied but its values
  * are volume-controlled (a hostile disc names its volume), so extraction
@@ -1899,6 +1911,7 @@ void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
 
 #if MOS_USE_DISKARBITRATION
 #include <DiskArbitration/DiskArbitration.h>
+#include <dispatch/dispatch.h>   /* semaphore wait on the async unmount callback */
 
 /* Mounted-volume name and mount path for a whole-disk "diskN". True only
    when DA has a description AND the volume is mounted (VolumePath present);
@@ -1954,6 +1967,60 @@ bool mos_internal_da_volume(const char *bsd_name,
     return mounted;
 }
 
+typedef struct { dispatch_semaphore_t sem; bool ok; } mos_da_unmount_ctx;
+
+static void mos_internal_da_unmount_cb(DADiskRef disk,
+                                       DADissenterRef dissenter, void *context)
+{
+    (void)disk;
+    mos_da_unmount_ctx *c = (mos_da_unmount_ctx *)context;
+    c->ok = (dissenter == NULL);     /* NULL dissenter ⇒ unmount accepted */
+    dispatch_semaphore_signal(c->sem);
+}
+
+/* Force-unmount EVERY volume on whole-disk "diskN"
+   (kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole). True on success.
+   ONLY the `tray eject --force` path calls this: a forced unmount kills open
+   file handles (data-loss capable) — that is the "open no matter what"
+   contract, strictly opt-in behind --force. This is the SINGLE DiskArbitration
+   ACTION mos performs; unlike the synchronous description read above, DADiskUnmount
+   is asynchronous (returns void, delivers via callback — verified against
+   DADisk.h: takes the disk, not a session; options Force=0x00080000, Whole=0x1;
+   success = NULL dissenter). We make it synchronous-from-our-side: deliver the
+   callback on a background queue and block this thread on a semaphore until it
+   fires. The wait is UNBOUNDED on purpose — the callback is guaranteed exactly
+   once when the unmount resolves, so the context cannot outlive a late callback
+   (no use-after-free), and a genuinely wedged force-unmount blocks here just as
+   `diskutil` would (the I/O path itself is stuck). */
+bool mos_internal_da_unmount(const char *bsd_name)
+{
+    if (!bsd_name || !bsd_name[0]) return false;
+
+    DASessionRef session = DASessionCreate(kCFAllocatorDefault);
+    if (!session) return false;
+
+    bool      ok   = false;
+    DADiskRef disk = DADiskCreateFromBSDName(kCFAllocatorDefault,
+                                             session, bsd_name);
+    if (disk) {
+        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+        mos_da_unmount_ctx   ctx = { sem, false };
+        DASessionSetDispatchQueue(session,
+            dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
+        DADiskUnmount(disk,
+                      kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole,
+                      mos_internal_da_unmount_cb, &ctx);
+        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+        DASessionSetDispatchQueue(session, NULL);   /* detach before release */
+        ok = ctx.ok;
+        dispatch_release(sem);
+        CFRelease(disk);
+    }
+
+    CFRelease(session);
+    return ok;
+}
+
 #else  /* !MOS_USE_DISKARBITRATION */
 
 /* No DiskArbitration linked: the mount layer is never consulted, so every
@@ -1966,6 +2033,17 @@ bool mos_internal_da_volume(const char *bsd_name,
     (void)bsd_name;
     if (name_buf && name_cap) name_buf[0] = 0;
     if (path_buf && path_cap) path_buf[0] = 0;
+    return false;
+}
+
+/* No DiskArbitration linked: there is no unmount path, so a forced eject cannot
+   clear a Finder/system mount. Returns false (capability absent), which leaves
+   `tray eject --force` reporting the mount as MOS_ERR_BUSY rather than opening
+   it — the honest degradation for the opt-out build (the consumer unmounts
+   with `diskutil unmountDisk` first, exactly as without --force). */
+bool mos_internal_da_unmount(const char *bsd_name)
+{
+    (void)bsd_name;
     return false;
 }
 
@@ -6514,22 +6592,46 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
 
-    /* force = unlock-then-eject (the kernel EjectTheMedia sequence), saving
-       the caller the detect-5/53/02 -> unlock -> retry round trip. The basic
-       ALLOW is best-effort: an unlocked drive answers GOOD anyway, and a
-       transport/lock failure surfaces on the eject below. Each CDB releases
-       exclusive access on return, so there is a brief inter-CDB
-       unlocked-but-not-ejected window — benign for the dedicated robot.
-       Folding both under one hold would need a second ObtainExclusiveAccess
-       call site (§3), out of scope. force does not (and need not) clear a
-       Persistent Prevent lock: an initiator eject succeeds under it by spec
-       (04-349r1 §6.18.3.2). The ALLOW's sense is discarded (NULL); the
-       returned sense reflects the eject. */
-    if (force) {
-        mos_tray_outcome ignored = MOS_TRAY_DONE;
-        (void)mos_internal_tray_cmd(h, cdb_unlock, &ignored, NULL);
+    /* ONE flow. Every eject grabs exclusive access (in mos_raw_cdb) and issues
+       the CDB; a plain eject reports the result verbatim. --force diverges only
+       on a CLEARABLE failure and then RECONVERGES on the same eject CDB:
+
+         - MOS_ERR_BUSY = a Finder/system mount holds exclusive access
+           (SCSITaskLib: "media is still mounted"; mos_pure.c maps it,
+           mos_scsi.c static-asserts the constant) -> force-unmount, re-eject.
+         - REFUSED_LOCKED = a basic Prevent lock refused the eject CDB -> clear
+           BOTH Prevent states (basic then persistent, so nothing is left
+           locked when a lock was in the way), re-eject.
+
+       The one failure --force cannot clear is MOS_ERR_EXCLUSIVE_ACCESS = another
+       userland client (no SCSI preempt exists): it falls through and surfaces,
+       tray shut. At most two blockers (mount, lock) stack, so the loop is
+       bounded at two passes. Each CDB grabs/releases exclusive access per call
+       — mos_raw_cdb stays the sole §3 lock site; no second one is introduced.
+       (A drive with ONLY a Persistent Prevent and no mount/basic-lock ejects on
+       the first CDB — an initiator eject succeeds under Persistent Prevent by
+       spec — so it opens without a speculative clear; --force clears persistent
+       only when a lock actually blocked, never issuing a command it can't know
+       it needs.) */
+    mos_error e = mos_internal_tray_cmd(h, cdb_eject, out, sense);
+    if (!force) return e;
+
+    for (int pass = 0; pass < 2; pass++) {
+        if (e == MOS_ERR_BUSY) {                          /* Finder/system mount */
+            char name[24];
+            if (!mos_bsd_name_format(h->bsd_unit, name, sizeof name) ||
+                !mos_internal_da_unmount(name))
+                break;                                    /* mount uncleared */
+        } else if (e == MOS_OK && *out == MOS_TRAY_REFUSED_LOCKED) {  /* basic Prevent */
+            mos_tray_outcome ignored = MOS_TRAY_DONE;
+            (void)mos_internal_tray_cmd(h, cdb_unlock,         &ignored, NULL);
+            (void)mos_internal_tray_cmd(h, cdb_unlock_persist, &ignored, NULL);
+        } else {
+            break;   /* DONE, EXCLUSIVE_ACCESS (peer client), or transport — stop */
+        }
+        e = mos_internal_tray_cmd(h, cdb_eject, out, sense);   /* reconverge */
     }
-    return mos_internal_tray_cmd(h, cdb_eject, out, sense);
+    return e;
 }
 
 mos_error mos_tray_close(mos_handle_t *h, mos_tray_outcome *out, uint8_t sense[3])

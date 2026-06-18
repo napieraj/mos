@@ -51,6 +51,6 @@ complete -c mos -s h -l help    -d 'Show help'
 complete -c mos      -l version -d 'Show version'
 
 # Subcommand-scoped options.
-complete -c mos -l force      -n '__fish_mos_using_subcommand tray'  -d 'eject: ALLOW (unlock) first'
+complete -c mos -l force      -n '__fish_mos_using_subcommand tray'  -d 'eject: open no matter what (unmount + clear locks)'
 complete -c mos -l persistent -n '__fish_mos_using_subcommand tray'  -d 'lock/unlock: Persistent Prevent'
 complete -c mos -l dump       -n '__fish_mos_using_subcommand probe' -d 'One-shot DiscRecording capture'
