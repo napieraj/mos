@@ -1,11 +1,16 @@
 /*
- * mos_da.c — one-shot DiskArbitration volume lookup.
+ * mos_da.c — DiskArbitration: a one-shot volume lookup and the force-unmount.
  *
- * One modality only: a synchronous DADiskCopyDescription read of what the
- * mounted-volume layer already knows — no session scheduling, no run loop,
- * no callbacks, no commands to the drive (AGENTS.md scope doctrine). Callers
- * gate on the media nub (bsd_unit present); with no IOMedia node nothing is
- * mounted and DA is never consulted.
+ * Two modalities, both confined here:
+ *   1. SYNCHRONOUS volume lookup (mos_internal_da_volume) — a DADiskCopyDescription
+ *      read of what the mounted-volume layer already knows: no session
+ *      scheduling, no run loop, no callbacks, no commands to the drive
+ *      (AGENTS.md scope doctrine). Callers gate on the media nub (bsd_unit
+ *      present); with no IOMedia node nothing is mounted and DA is never consulted.
+ *   2. The ASYNC force-unmount (mos_internal_da_unmount) — the single DA ACTION
+ *      mos performs, used ONLY by `tray eject --force`. DADiskUnmount delivers
+ *      via a callback on a dispatch queue; we block on a semaphore until it
+ *      fires (see that function). Data-loss capable, strictly opt-in.
  *
  * Trust terms: the description dictionary is system-supplied but its values
  * are volume-controlled (a hostile disc names its volume), so extraction

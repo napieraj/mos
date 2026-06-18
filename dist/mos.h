@@ -996,9 +996,11 @@ mos_error mos_enumerate_features(mos_handle_t *h,
  * acquires and RELEASES exclusive access within the call:
  *
  *   - MOS_ERR_BUSY / MOS_ERR_EXCLUSIVE_ACCESS when the drive is mounted as a
- *     volume or held by another client — unmount/quiesce is the CONSUMER's
- *     call (mos never unmounts for you, the deliberate contrast with
- *     `drutil tray eject`). A robot orchestrator locks/ejects between stages.
+ *     volume or held by another client — on the DEFAULT path unmount/quiesce is
+ *     the CONSUMER's call (the deliberate contrast with `drutil tray eject`).
+ *     The one exception is mos_tray_eject(force=true), which force-unmounts a
+ *     mount to open no matter what; it still cannot preempt another client
+ *     (MOS_ERR_EXCLUSIVE_ACCESS). A robot orchestrator locks/ejects between stages.
  *   - On a command the drive ANSWERED, MOS_OK and *out carries the outcome
  *     (DONE / REFUSED_LOCKED / REFUSED_OTHER) — mechanism facts only.
  *
