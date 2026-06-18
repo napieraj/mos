@@ -7,10 +7,11 @@
  * is 0 (nothing formatted) and there is no track for READ TRACK INFORMATION.
  *
  * No IOKit: the shell (src/mos_query.c) hands us a fixed zero-init buffer
- * filled via mos_raw_cdb — no convenience method carries 0x23, so it is a raw
- * verb (the fifth; layer-1 showings + design in
- * doc/research/2026-06-18-read-format-capacities-feasibility.md). Read-only:
- * mos reports formattable capacities and never issues FORMAT UNIT (0x04).
+ * filled via the ReadFormatCapacities convenience method (MMCDeviceInterface) —
+ * NOT a raw CDB (correcting the earlier "fifth raw verb" call; the wrapper
+ * exists in SCSITaskLib.h — see the AGENTS.md ADR +
+ * doc/research/2026-06-18-readformatcapacities-convenience-exists.md). Read-
+ * only: mos reports formattable capacities and never issues FORMAT UNIT (0x04).
  *
  * Reply layout (MMC-6 §6.24, Format Capacities):
  *   Capacity List Header (4 bytes)

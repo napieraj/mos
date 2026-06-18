@@ -46,9 +46,10 @@ code; this table is the citation, not the parse.
   bits 1:0, Block Length 9-11). Formattable Capacity Descriptors are 8 bytes
   each from byte 12 (Number of Blocks 0-3, Format Type byte 4 bits 7:2, Type
   Dependent Parameter 5-7).
-- **Dual-length (O-4):** CAPACITY LIST LENGTH is bounded by the realized
-  transfer span, then floored to whole 8-byte descriptors — an over-claimed
-  length can never read past the delivered bytes.
+- **Dual-length (O-4):** CAPACITY LIST LENGTH is bounded by the reply buffer
+  length the shell passes (the ReadFormatCapacities convenience method reports
+  no realized count), then floored to whole 8-byte descriptors — an
+  over-claimed length can never read past the buffer.
 - **Cross-check:** descriptor-type codes (1 unformatted / 2 formatted / 3 no
   media) and the 8-byte descriptor stride match the MMC-6 tables; dvd+rw-tools
   (growisofs) drives DVD+RW/BD-RE off the same header + descriptor layout. No
@@ -189,3 +190,111 @@ code; this table is the citation, not the parse.
   from DiscRecording's directory on every path EXCEPT `mos drive`, which
   prefers a fresh raw standard INQUIRY via mos_inqdata.c and falls back to the
   DR cache only on BUSY.)
+
+## macOS IOKit platform surface (the command/wrapper/registry inventory)
+
+**Why this exists.** Before admitting a raw CDB, a feasibility analysis must
+show no convenience method carries the data (AGENTS scope-doctrine layer 1).
+`ARCHITECTURE.md` §9.7 lists only the ~9 methods its GetTrayState masking-trap
+argument needs — an **illustrative subset, not the inventory**. Reading it as
+the inventory is what wrongly admitted READ FORMAT CAPACITIES as a raw CDB (the
+`ReadFormatCapacities` wrapper existed all along; corrected 2026-06-18). This
+section is the **complete** inventory — consult it, never §9.7's subset, when
+deciding raw-vs-convenience. Verified verbatim against the **macOS 26.4
+(Tahoe)** SDK (`IOKit.framework/Headers/scsi/SCSITaskLib.h`, `…/storage/IO*Media.h`,
+`IOStorageDeviceCharacteristics.h`, `IOSCSIMultimediaCommandsDevice.h`). The
+`MMCDeviceInterface` UUID `1F651106-23CC-11D5-BBDB-003065704866` is stable /
+append-only, so 10.5 / 11.3 are subsets of this list.
+
+### MMCDeviceInterface — command-issuing convenience methods (NON-exclusive)
+
+Each issues one command and returns `SCSITaskStatus *` + `SCSI_Sense_Data *`
+out-params; none takes `ObtainExclusiveAccess` (fails `kIOReturnExclusiveAccess`
+only if ANOTHER client holds the device). Signature: `self`, the listed params,
+then `(taskStatus, senseDataBuffer)`.
+
+| Method | Issues (spec) | mos use |
+|--------|---------------|---------|
+| `Inquiry` | INQUIRY (SPC-2) | standard INQUIRY (`mos_inqdata.c`, `mos drive`). **StandardData-only — no EVPD/PAGE_CODE**, so the VPD-0x80 serial is raw (`mos_serial.c`). |
+| `TestUnitReady` | TEST_UNIT_READY (SPC-2) | the state core's readiness probe (`mos_state_core.c`). |
+| `GetConfiguration` | GET_CONFIGURATION (MMC-2) | current profile + feature walk (`mos_config.c`, `mos_scsi.c`). RT / STARTING_FEATURE_NUMBER. |
+| `ModeSense10` | MODE_SENSE_10 (SPC-2) | pages 0x2A + 0x01 (`mos_modepage.c`, `mos drive`). LLBAA / DBD / PC / PAGE_CODE. |
+| `SetWriteParametersModePage` | MODE_SELECT (SPC-2) | **unused** — mos never tunes the drive. |
+| `GetTrayState` | GET_EVENT_STATUS_NOTIFICATION (MMC-2) | **NOT used — masking trap**: no sense out-params, hard-codes closed+success on failure (§9.7). mos issues raw GESN 0x4A. |
+| `SetTrayState` | START_STOP_UNIT (SBC-3) | **NOT used for tray** — sense-blind, eject/load only; mos issues raw 0x1B + PREVENT ALLOW 0x1E for honest outcomes + lock. |
+| `ReadTableOfContents` | READ_TOC_PMA_ATIP (MMC-2/SFF-8020i) | fallback CD TOC (`mos_scsi.c`); primary is the cached `kIOCDMediaTOCKey`. MSF / FORMAT / TRACK_SESSION_NUMBER. |
+| `ReadDiscInformation` | READ_DISC_INFORMATION (MMC-2) | disc completion / erasable / sessions (`mos_discinfo.c`). |
+| `ReadTrackInformation` | READ_TRACK_INFORMATION (MMC-2) | append point / track size (`mos_query.c`). ADDRESS_NUMBER_TYPE / LBA. |
+| `ReadDVDStructure` | READ_DVD_STRUCTURE (MMC-2) | **unused** — mos uses the generic `ReadDiscStructure` (below). |
+| `GetPerformance` | GET_PERFORMANCE (MMC-2) | max read/write speeds (`mos_perf.c`). TOLERANCE / WRITE / EXCEPT. |
+| `GetSCSITaskDeviceInterface` | — (handle accessor) | → the raw-task interface below. |
+| `GetPerformanceV2` | GET_PERFORMANCE (Mt. Fuji 5) | **unused** — `GetPerformance` suffices. |
+| `SetCDSpeed` | SET_CD_SPEED (MMC-2) | **unused** — mos reports speed, never sets it. |
+| `ReadFormatCapacities` | READ_FORMAT_CAPACITIES (MMC-2; "Added in 10.3") | formattable view (`mos_query.c` → `mos_formatcap.c`). **Non-exclusive** — the convenience method that corrected the raw-CDB error. |
+| `ReadDiscStructure` | READ_DISC_STRUCTURE (MMC-5) | BD disc-id (DI) + DVD physical/copyright (`mos_discstruct.c` / `mos_physstruct.c`). MEDIA_TYPE / FORMAT. |
+| `ReadDiscInformationV2` | READ_DISC_INFORMATION (MMC-5) | **unused** — DATA_TYPE variant. |
+| `ReadTrackInformationV2` | READ_TRACK_INFORMATION (Mt. Fuji 5) | **unused** — OPEN-bit variant. |
+| `SetStreaming` | SET_STREAMING (MMC-5) | **unused** — mos reports, never sets. |
+
+Non-command members: `AddCallbackDispatcherToRunLoop` /
+`RemoveCallbackDispatcherFromRunLoop` (async run-loop wiring — unused; mos is
+synchronous).
+
+### SCSITaskDeviceInterface — the raw-CDB path (`mos_raw_cdb`, the ONLY exclusive site)
+
+mos authors a raw CDB only with a layer-1 showing; the **four** raw verbs (GESN
+0x4A, START STOP UNIT 0x1B, PREVENT ALLOW MEDIUM REMOVAL 0x1E, INQUIRY EVPD
+0x80) all go through `mos_scsi.c`'s `mos_raw_cdb` — the SINGLE
+`ObtainExclusiveAccess` call site. Lifecycle: `ObtainExclusiveAccess` →
+`CreateSCSITask` → `SetCommandDescriptorBlock` (+ `SetScatterGatherEntries`,
+`SetTimeoutDuration`) → `ExecuteTaskSync` → `GetTaskStatus` /
+`GetRealizedDataTransferCount` / `GetAutoSenseData` → `ReleaseExclusiveAccess`.
+Also available: `IsExclusiveAccessAvailable`, `AbortTask`, the async
+`ExecuteTaskAsync` / `SetTaskCompletionCallback` (unused — synchronous only).
+
+### IOKit registry properties — ZERO commands (`IORegistryEntryCreateCFProperty`)
+
+Read off the media / device nodes: no MMC, no exclusive access, work on mounted
+media. The cheap-enrichment surface (disc-ingest gaps note,
+`doc/research/2026-06-18-disc-ingest-surfaced-gaps.md`).
+
+- **IOMedia (generic, every media class):** `Content` / `Content Hint` /
+  `Content Mask`, `Ejectable`, `Leaf`, `Open`, `Preferred Block Size`
+  (`kIOMediaPreferredBlockSizeKey`), `Removable`, `Size` (`kIOMediaSizeKey`),
+  `UUID`, `Whole`, **`Writable`** (`kIOMediaWritableKey`, OSBoolean). mos reads
+  Size + Preferred Block Size (capacity); `bsd_node` null ⇒ no whole-disk node ⇒
+  blank/unrecorded.
+- **Optical media TYPE (`kIO{CD,DVD,BD}MediaTypeKey` = `"Type"`, OSString):**
+  CD → `CD-ROM` / `CD-R` / `CD-RW`; DVD → `DVD-ROM` / `-R` / `-RW` / `+R` /
+  `+RW` / `-RAM` / `HD DVD-{ROM,R,RW,RAM}`; BD → `BD-ROM` / `BD-R` / `BD-RE`.
+  ROM-vs-recordable for free (mos does not read these yet — candidate watch
+  enrichment / not-ready fallback for media_class).
+- **`kIOCDMediaTOCKey` (`"TOC"`):** the cached full-TOC `CDTOC` blob. **CD only**
+  (no DVD/BD equivalent). mos's primary CD TOC source (`mos_cdtoc.c`).
+- **Device Characteristics (drive node):** `kIOPropertySupportedCDFeaturesKey` /
+  `…DVDFeaturesKey` / `…BDFeaturesKey` (`"CD/DVD/BD Features"` capability
+  bitfields — bit meanings in `IOSCSIMultimediaCommandsDevice.h`),
+  `kIOPropertyProductSerialNumberKey` (`"Serial Number"` — the optical SCSI
+  stack leaves it empty, so mos reads serial via raw VPD 0x80; see the
+  2026-06-16 serial doc). Plus `kIOBSDNameKey` / `kIOBSDUnitKey` (the BSD
+  vocabulary).
+
+### Disc-state structs — via the `*MediaBSDClient` ioctls (command-gated, not free)
+
+`IO{CD,DVD,BD}Types.h` define reply structs reached by `DKIOC*` ioctls on the
+`IO{CD,DVD,BD}MediaBSDClient` — each is a **command**, not a registry read:
+`CDTOC` / `CDMSF` (IOCDTypes); `DVDDiscInfo` (`discStatus`, `erasable`),
+`DVDRZoneInfo` (`blank` / `damage` / `incremental`), `DVDPhysicalFormatInfo`,
+`DVDCopyrightInfo`, and the `DVDKeyFormat` / CSS / CPRM / region enums
+(IODVDTypes). mos reaches the same data through the MMCDeviceInterface
+convenience methods above, not these ioctls.
+
+### Decision order for a new verb
+
+1. In the registry table → a zero-command read. Done.
+2. Else a command-issuing convenience method above → non-exclusive, no lock.
+   Prefer it.
+3. Only if **neither** carries it — a documented absence (INQUIRY's missing
+   EVPD) or a masking convenience (GetTrayState) — author a raw CDB through
+   `mos_raw_cdb` with the AGENTS layer-1 showing. Never infer "no convenience
+   method" from §9.7; that is a subset, this table is the inventory.

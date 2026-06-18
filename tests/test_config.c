@@ -406,6 +406,34 @@ TEST(profile_class_total_over_name_table)
     return 0;
 }
 
+TEST(media_type_token_maps_every_kernel_string)
+{
+    /* Every kIO{CD,DVD,BD}MediaTypeKey value (IO{CD,DVD,BD}Media.h, verified
+       through macOS 26.4) maps to a token; unknown / hostile / NULL → NULL
+       (fail-closed). The schema enum (mos.state.v1 media_type) mirrors this. */
+    EXPECT_STREQ("cd_rom",       mos_internal_media_type_token("CD-ROM"));
+    EXPECT_STREQ("cd_r",         mos_internal_media_type_token("CD-R"));
+    EXPECT_STREQ("cd_rw",        mos_internal_media_type_token("CD-RW"));
+    EXPECT_STREQ("dvd_rom",      mos_internal_media_type_token("DVD-ROM"));
+    EXPECT_STREQ("dvd_minus_r",  mos_internal_media_type_token("DVD-R"));
+    EXPECT_STREQ("dvd_minus_rw", mos_internal_media_type_token("DVD-RW"));
+    EXPECT_STREQ("dvd_plus_r",   mos_internal_media_type_token("DVD+R"));
+    EXPECT_STREQ("dvd_plus_rw",  mos_internal_media_type_token("DVD+RW"));
+    EXPECT_STREQ("dvd_ram",      mos_internal_media_type_token("DVD-RAM"));
+    EXPECT_STREQ("hd_dvd_rom",   mos_internal_media_type_token("HD DVD-ROM"));
+    EXPECT_STREQ("hd_dvd_r",     mos_internal_media_type_token("HD DVD-R"));
+    EXPECT_STREQ("hd_dvd_rw",    mos_internal_media_type_token("HD DVD-RW"));
+    EXPECT_STREQ("hd_dvd_ram",   mos_internal_media_type_token("HD DVD-RAM"));
+    EXPECT_STREQ("bd_rom",       mos_internal_media_type_token("BD-ROM"));
+    EXPECT_STREQ("bd_r",         mos_internal_media_type_token("BD-R"));
+    EXPECT_STREQ("bd_re",        mos_internal_media_type_token("BD-RE"));
+    EXPECT(mos_internal_media_type_token("BD-XL")   == NULL);  /* not a Type value */
+    EXPECT(mos_internal_media_type_token("bd-r")    == NULL);  /* case-exact */
+    EXPECT(mos_internal_media_type_token("garbage") == NULL);
+    EXPECT(mos_internal_media_type_token(NULL)      == NULL);
+    return 0;
+}
+
 
 
 
@@ -867,6 +895,7 @@ void register_config_tests(void)
     RUN(toc_fail_closed_on_hostile_shapes);
     RUN(toc_fail_closed_on_header_descriptor_mismatch);
     RUN(profile_class_total_over_name_table);
+    RUN(media_type_token_maps_every_kernel_string);
     RUN(trusted_len_each_authority_binds);
     RUN(trusted_len_hostile_and_degenerate_inputs);
     RUN(config_misaligned_additional_length_span_fits);
