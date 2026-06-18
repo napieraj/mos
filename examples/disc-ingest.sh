@@ -215,7 +215,7 @@ ingest_one() {                              # ingest_one <drive-selector>
 
     # @sh quotes every field for the shell, so a space in a path is safe.
     # erasable is coerced through tostring so a bool/null never trips @sh.
-    local node vol class profile status erasable manufacturer mediaid disctype audio sessions
+    local node vol class profile status erasable manufacturer mediaid disctype audio preemph sessions
     eval "$(printf '%s' "$meta" | jq -r '@sh "
         node=\(.bsd_node // "")
         vol=\(.volume_path // "")
@@ -227,6 +227,7 @@ ingest_one() {                              # ingest_one <drive-selector>
         mediaid=\(.disc.disc_structure.media_type_id // "")
         disctype=\(.disc.disc_structure.disc_type // "")
         audio=\([.disc.toc.tracks[]? | select(.data == false)] | length)
+        preemph=\([.disc.toc.tracks[]? | select(.pre_emphasis == true)] | length)
         sessions=\((.disc.session_layout // []) | length)
     "')"
 
@@ -256,6 +257,12 @@ ingest_one() {                              # ingest_one <drive-selector>
     #    so the data session isn't silently dropped.
     if [ "$class" = cd ] && [ "$audio" -gt 0 ]; then
         [ "$sessions" -gt 1 ] && log "CD-Extra: $sessions sessions — data session not auto-extracted"
+        # mos derives pre_emphasis per track from the Q-channel control nibble.
+        # Pre-emphasised audio rips bright unless de-emphasised: redumper PRESERVES
+        # the flag in its cuesheet (correct for archival), while WAV/FLAC tools
+        # (whipper/EAC) apply the 50/15us de-emphasis curve. Flag it so it isn't
+        # silently lost — best-effort, like the tools that read it from the TOC.
+        [ "$preemph" -gt 0 ] && log "pre-emphasis: $preemph track(s) flagged — preserve the flag (redumper) or de-emphasise (whipper/EAC)"
         if need curl "MusicBrainz lookup"; then mb_lookup "$meta" || warn "MB lookup failed"; fi
         tray_lock "$sel"
         if need redumper "CD dump"; then
@@ -380,9 +387,38 @@ main() {
     # transition — an insert fires once, a swap fires media_changed, a
     # hot-plugged drive joins live, an eject doesn't end the stream.
     log "following 'mos watch' — insert a disc (Ctrl-C to stop)"
+    # Every ready event already carries media_type and writable, read ZERO-MMC
+    # off the kernel media node — no second query. We log them as a cheap preview
+    # and still hand the disc to ingest_one for the authoritative metadata read.
+    # A consumer that only wanted finalized discs could gate right here instead,
+    # e.g. add `and .writable == false` to skip blank/appendable recordables, or
+    # `and (.media_type|test("rom$"))` for pressed media — no metadata call.
+    # (writable is a bool, so use an explicit null test: jq's `//` treats false
+    # as empty, so `.writable // "?"` would wrongly map false to "?".)
     "$MOS" watch | jq --unbuffered -r '
-        select(.event != "error" and .state == "ready") | .bsd_node' |
-    while read -r dev; do ingest_one "$dev"; done
+        select(.event != "error" and .state == "ready")
+        | [ .bsd_node,
+            (.media_type // "?"),
+            (.writable | if . == null then "?" else tostring end) ]
+        | @tsv' |
+    while IFS=$'\t' read -r dev mtype writable; do
+        # media_type is the RICH profile axis — ROM vs write-once vs rewritable
+        # (cd_rom/cd_r/cd_rw, dvd_minus_r/dvd_plus_r, dvd_ram, bd_rom/bd_r/bd_re,
+        # ...), finer than the coarse class and free on the event. Switch on it
+        # for a zero-MMC first cut: a pressed disc is read-only inventory, a
+        # write-once is an archive candidate, a rewritable is scratch/reuse. The
+        # authoritative routing still happens in ingest_one (it needs the TOC,
+        # disc_info, and the mount), but a consumer could route entirely here.
+        local tier
+        case "$mtype" in
+            *_rom)            tier=pressed-ROM ;;
+            *_rw|*_re|*_ram)  tier=rewritable ;;
+            *_r)              tier=write-once ;;
+            *)                tier=unknown-type ;;
+        esac
+        log "ready: $dev — ${mtype} ($tier, writable=$writable)"
+        ingest_one "$dev"
+    done
 }
 
 main "$@"
