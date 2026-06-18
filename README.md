@@ -340,7 +340,7 @@ the primitive and the orchestrator owns the fan-out:
 
 ```sh
 for id in $(mos list --json | jq '.drives[].registry_id'); do
-    mos tray lock --persistent "$id"
+    mos tray lock "$id" --persistent
 done
 ```
 
