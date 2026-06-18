@@ -5,7 +5,7 @@
 # This is the fully worked version of the barebones snippet in the project
 # README's "Shell integration" section. It exists to show what `mos` is for:
 # a single `mos metadata --json` document tells you what a disc IS — audio CD,
-# sealed M-DISC archive, blank recordable, encrypted video — and that is
+# a finalized M-DISC archive, blank recordable, encrypted video — and that is
 # enough to hand it to the tool that already owns the job. mos identifies;
 # nothing here re-queries the drive to find out what it is holding.
 #
@@ -155,7 +155,7 @@ inventory_append() {
             class:       ($meta.disc.class // null),
             profile:     ($meta.disc.profile // null),
             volume_name: ($meta.disc.volume_name // null),
-            maker:       ($meta.disc.disc_structure.manufacturer_id // null)
+            manufacturer:       ($meta.disc.disc_structure.manufacturer_id // null)
         }')
     if [ "${DRY_RUN:-0}" = 1 ]; then log "inventory += $row"
     else printf '%s\n' "$row" >>"$INVENTORY"; fi
@@ -215,7 +215,7 @@ ingest_one() {                              # ingest_one <drive-selector>
 
     # @sh quotes every field for the shell, so a space in a path is safe.
     # erasable is coerced through tostring so a bool/null never trips @sh.
-    local node vol class profile status erasable maker mediaid disctype audio sessions
+    local node vol class profile status erasable manufacturer mediaid disctype audio sessions
     eval "$(printf '%s' "$meta" | jq -r '@sh "
         node=\(.bsd_node // "")
         vol=\(.volume_path // "")
@@ -223,7 +223,7 @@ ingest_one() {                              # ingest_one <drive-selector>
         profile=\(.disc.profile // "")
         status=\(.disc.disc_info.status // "")
         erasable=\(.disc.disc_info.erasable // false | tostring)
-        maker=\(.disc.disc_structure.manufacturer_id // "")
+        manufacturer=\(.disc.disc_structure.manufacturer_id // "")
         mediaid=\(.disc.disc_structure.media_type_id // "")
         disctype=\(.disc.disc_structure.disc_type // "")
         audio=\([.disc.toc.tracks[]? | select(.data == false)] | length)
@@ -249,7 +249,7 @@ ingest_one() {                              # ingest_one <drive-selector>
     local label=${vol##*/}                  # mounted volume name, if any
     local drive_json; drive_json=$("$MOS" drive "$sel" --json 2>/dev/null || echo null)
     log "$sel -> class=${class:-?} profile=${profile:-?} status=${status:-?}" \
-        "maker=${maker:-} audio=$audio sessions=$sessions vol=${label:-none}"
+        "manufacturer=${manufacturer:-} audio=$audio sessions=$sessions vol=${label:-none}"
 
     # 1. Audio CD — identify, then byte-perfect dump. A CD-Extra (audio in
     #    session 1, data in session 2 — session_layout length > 1) is flagged
@@ -325,7 +325,7 @@ ingest_one() {                              # ingest_one <drive-selector>
     if [ -n "$vol" ]; then
         local kind="data disc"
         [ "$erasable" = false ] && kind="write-once data disc"
-        [ "$maker" = MILLEN ] && [ "$mediaid" = MR1 ] && kind="M-DISC ($disctype)"
+        [ "$manufacturer" = MILLEN ] && [ "$mediaid" = MR1 ] && kind="M-DISC ($disctype)"
         log "$kind on $vol: archiving to ISO"
         local img="$ARCHIVE_DIR/${label:-disc}.iso"
         local size; size=$("$MOS" capacity "$sel" --json 2>/dev/null | jq -r '.media_bytes // empty')

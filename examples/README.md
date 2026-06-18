@@ -15,7 +15,7 @@ movie DVD, and a data backup can come off the same spindle; one
 | **Audio CD** | `disc.class == "cd"` with audio tracks (`toc.tracks[].data == false`) | MusicBrainz Disc ID (computed from the TOC `mos` emits) → release lookup, then a byte-perfect [`redumper`](https://github.com/superg/redumper) dump |
 | **Blank / appendable** | `disc.disc_info.status` is `blank`/`appendable` | report "ready to write" + the current write features (`mos features`) |
 | **Video DVD/BD** | class `dvd`/`bd`, mounted with `VIDEO_TS`/`BDMV` **or** unmounted | `makemkvcon -r` (robot mode) confirms it has rippable titles and reads the disc name, which names the output dir; then it decrypts + rips. No titles → it's data, not a movie, so it falls through to the archive branch |
-| **Sealed / data disc** (incl. M-DISC) | a mounted data volume with no video layout; M-DISC is the registered `MILLEN`/`MR1` maker ID | error-tolerant 1:1 image with [`ddrescue`](https://www.gnu.org/software/ddrescue/), verified against `mos capacity` |
+| **Data / archive disc** (incl. M-DISC) | a mounted data volume with no video layout; M-DISC is the registered `MILLEN`/`MR1` manufacturer ID | error-tolerant 1:1 image with [`ddrescue`](https://www.gnu.org/software/ddrescue/), verified against `mos capacity` |
 
 Beyond routing, it uses `mos` as more than a classifier:
 

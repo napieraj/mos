@@ -432,19 +432,6 @@ then 100 frame offsets, each track and the lead-out as its LBA + 150) and
 `sha1` plus URL-safe base64 finish it.
 
 ```sh
-# A MusicBrainz Disc ID, computed entirely from the TOC mos emits.
-mos_discid() {                              # mos_discid <cd-drive>
-    mos metadata "$1" --json | jq -r '
-        .disc.toc as $t
-        | [ $t.first_track, $t.last_track, $t.leadout_lba + 150 ]
-          + [ range(1;100) as $n
-              | (first(($t.tracks[]|select(.track==$n).start_lba)) // -150) + 150 ]
-        | .[]' |
-    { read f; read l; s=$(printf '%02X%02X' "$f" "$l")
-      while read o; do s="$s$(printf '%08X' "$o")"; done
-      printf '%s' "$s" | openssl dgst -sha1 -binary | base64 | tr '+/=' '._-'; }
-}
-
 # Act on every disc the moment it turns ready, on any drive, hot-plug
 # included. One event per transition — an insert fires once, a swap fires
 # media_changed, a hot-plugged drive joins live, an eject doesn't end it.
@@ -453,15 +440,24 @@ mos watch | jq --unbuffered -r '
     | "\(.bsd_node) \(.media_class // "unknown")"' |
 while read -r dev class; do
     case "$class" in
-        cd)     mos_discid "$dev" ;;                       # audio-CD database key
-        dvd|bd) makemkvcon mkv "dev:${dev/disk/rdisk}" all "$HOME/Rips" ;;
+    # Audio CD: a MusicBrainz Disc ID, computed entirely from the TOC mos emits.
+    cd) mos metadata "$dev" --json | jq -r '
+            .disc.toc as $t
+            | [ $t.first_track, $t.last_track, $t.leadout_lba + 150 ]
+              + [ range(1;100) as $n
+                  | (first(($t.tracks[]|select(.track==$n).start_lba)) // -150) + 150 ]
+            | .[]' |
+        { read f; read l; s=$(printf '%02X%02X' "$f" "$l")
+          while read o; do s="$s$(printf '%08X' "$o")"; done
+          printf '%s' "$s" | openssl dgst -sha1 -binary | base64 | tr '+/=' '._-'; } ;;
+    dvd|bd) makemkvcon mkv "dev:${dev/disk/rdisk}" all "$HOME/Rips" ;;
     esac
 done
 ```
 
-`mos_discid` matches libdiscid's own `discid` byte-for-byte: the standard
-reference disc (track offsets 150, 15363, 32314, 46592, 63414, 80489;
-lead-out 95462) yields `49HHV7Eb8UKF3aQiNmu1GR8vKTY-`. Feed it to
+That inline `cd` pipeline matches libdiscid's own `discid` byte-for-byte:
+the standard reference disc (track offsets 150, 15363, 32314, 46592,
+63414, 80489; lead-out 95462) yields `49HHV7Eb8UKF3aQiNmu1GR8vKTY-`. Feed it to
 `https://musicbrainz.org/ws/2/discid/<id>?fmt=json` for the release. The
 same shape — `jq` over `disc.toc` plus a hasher — yields the freedb/CDDB
 id or an AccurateRip key; `mos` ships the primitive, the recipe stays
@@ -472,7 +468,7 @@ The full version of this dispatcher —
 [`examples/disc-ingest.sh`](examples/disc-ingest.sh) — grows the two-line
 stub into a disc-pile router driven by one `mos metadata` read per disc:
 MusicBrainz lookup and byte-perfect `redumper` dumps for audio CDs,
-error-tolerant `ddrescue` imaging for sealed M-DISC/data archives (sized
+error-tolerant `ddrescue` imaging for M-DISC and data archives (sized
 against `mos capacity`), `makemkvcon -r` robot mode to confirm a video
 disc has rippable titles and name the rip from the disc title, and a
 "ready to write" report for blank recordables. Mount control is
