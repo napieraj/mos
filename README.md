@@ -439,6 +439,12 @@ mos watch | jq --unbuffered -r '
     select(.event != "error" and .state == "ready")
     | "\(.bsd_node) \(.media_class // "unknown")"' |
 while read -r dev class; do
+    # `ready` only means the drive can read the disc — a blank recordable is
+    # ready too. Gate on disc content so an empty/appendable disc (still
+    # writable) isn't piped into a rip; disc_info carries what the event can't.
+    case "$(mos metadata "$dev" --json | jq -r '.disc.disc_info.status')" in
+        blank|appendable) continue ;;
+    esac
     case "$class" in
     # Audio CD: a MusicBrainz Disc ID, computed entirely from the TOC mos emits.
     cd) mos metadata "$dev" --json | jq -r '
