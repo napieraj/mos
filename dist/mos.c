@@ -710,6 +710,13 @@ bool mos_internal_format_caps_parse(const uint8_t *buf, size_t len,
    capacity issues no read for them. MMC-6 §5.4. */
 bool mos_internal_profile_is_formattable(uint16_t profile);
 
+/* Map a kernel optical-media "Type" string (kIO{CD,DVD,BD}MediaTypeKey) to a
+   mos token (cd_rom … bd_re), or NULL for unknown/hostile/NULL input. The
+   zero-MMC media-type axis (present even when the MMC profile is suppressed off
+   the not-ready branch; finer than mos_profile_class). Design:
+   doc/research/2026-06-18-media-class-not-ready-fallback.md. */
+const char *mos_internal_media_type_token(const char *kernel_type);
+
 /* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *
  *
  * The drive's read/write performance from GET PERFORMANCE (0xAC, Type 00h
@@ -5718,6 +5725,7 @@ enrich:
 #include <stdio.h>   /* snprintf for hex escapes */
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>  /* strcmp for the media-type token map */
 
 const char *mos_state_description(mos_state s)
 {
@@ -5833,6 +5841,43 @@ const char *mos_profile_class(uint16_t profile_code)
         default:
             return NULL;   /* no-profile, MO, legacy removable, or unknown */
     }
+}
+
+/* Map a kernel optical-media Type string (the IORegistry `kIO{CD,DVD,BD}Media
+   TypeKey` = "Type", verbatim "BD-R" / "DVD-ROM" / … per IO{CD,DVD,BD}Media.h,
+   verified through macOS 26.4) to a mos token. This is the zero-MMC media-type
+   axis: present even when the MMC profile is suppressed off the not-ready
+   branch, and finer than mos_profile_class (ROM-vs-recordable). Design:
+   doc/research/2026-06-18-media-class-not-ready-fallback.md. Unknown / hostile
+   strings return NULL (fail-closed, input-space layer 4). Tokens follow the
+   mos_profile_name lower_snake_case convention; the kernel Type is coarser than
+   the MMC profile (no DL / restricted-vs-sequential split), so this token set
+   is its own. The schema enum (mos.state.v1 media_type) mirrors this table —
+   the C↔schema drift guard keeps them in lockstep. */
+const char *mos_internal_media_type_token(const char *kernel_type)
+{
+    if (!kernel_type) return NULL;
+    static const struct { const char *kernel, *token; } map[] = {
+        { "CD-ROM",     "cd_rom"       },
+        { "CD-R",       "cd_r"         },
+        { "CD-RW",      "cd_rw"        },
+        { "DVD-ROM",    "dvd_rom"      },
+        { "DVD-R",      "dvd_minus_r"  },
+        { "DVD-RW",     "dvd_minus_rw" },
+        { "DVD+R",      "dvd_plus_r"   },
+        { "DVD+RW",     "dvd_plus_rw"  },
+        { "DVD-RAM",    "dvd_ram"      },
+        { "HD DVD-ROM", "hd_dvd_rom"   },
+        { "HD DVD-R",   "hd_dvd_r"     },
+        { "HD DVD-RW",  "hd_dvd_rw"    },
+        { "HD DVD-RAM", "hd_dvd_ram"   },
+        { "BD-ROM",     "bd_rom"       },
+        { "BD-R",       "bd_r"         },
+        { "BD-RE",      "bd_re"        },
+    };
+    for (size_t i = 0; i < sizeof map / sizeof map[0]; i++)
+        if (strcmp(kernel_type, map[i].kernel) == 0) return map[i].token;
+    return NULL;
 }
 
 /* True for current profiles whose media supports FORMAT UNIT — i.e. where READ

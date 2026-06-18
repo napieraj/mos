@@ -631,6 +631,13 @@ bool mos_internal_format_caps_parse(const uint8_t *buf, size_t len,
    capacity issues no read for them. MMC-6 §5.4. */
 bool mos_internal_profile_is_formattable(uint16_t profile);
 
+/* Map a kernel optical-media "Type" string (kIO{CD,DVD,BD}MediaTypeKey) to a
+   mos token (cd_rom … bd_re), or NULL for unknown/hostile/NULL input. The
+   zero-MMC media-type axis (present even when the MMC profile is suppressed off
+   the not-ready branch; finer than mos_profile_class). Design:
+   doc/research/2026-06-18-media-class-not-ready-fallback.md. */
+const char *mos_internal_media_type_token(const char *kernel_type);
+
 /* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *
  *
  * The drive's read/write performance from GET PERFORMANCE (0xAC, Type 00h
