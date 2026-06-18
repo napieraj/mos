@@ -41,6 +41,13 @@ struct mos_state_result {
        once per session on the probe handle (mos_watch.c). Appended at the end:
        ABI-safe. */
     const char    *serial;
+    /* Kernel optical-media "Type" token (kIO{CD,DVD,BD}MediaTypeKey mapped by
+       mos_internal_media_type_token), NULL if absent. Read zero-MMC off the
+       media node in refresh_media_identity, so it is present even when the MMC
+       profile (and thus media_class) is suppressed off the not-ready branch —
+       a loading/busy/unreadable result can still name the disc. Appended:
+       ABI-safe (accessor-only). */
+    const char    *media_type;
 };
 
 struct mos_watch_event {
@@ -72,6 +79,9 @@ struct mos_watch_event {
     uint8_t        ascq;
     mos_error      error;
     uint32_t       latency_ms;
+    /* Kernel optical-media "Type" token (see mos_state_result.media_type),
+       NULL if absent. Appended: ABI-safe (accessor-only). */
+    const char    *media_type;
 };
 
 /* ---- Fixed-buffer capacities -------------------------------------- *

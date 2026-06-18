@@ -41,6 +41,10 @@ struct mos_handle {
                                                   (query-time, like bsd_unit) */
     uint32_t                  media_block_bytes; /* kIOMediaPreferredBlockSizeKey;
                                                     0 == absent */
+    const char               *media_type;      /* mos_internal_media_type_token of
+                                                  the kernel "Type" key, NULL if
+                                                  absent (query-time, like bsd_unit);
+                                                  points to static token storage */
     char                      vendor_str[9];   /* 8 chars + NUL */
     char                      product_str[17]; /* 16 chars + NUL */
     char                      revision_str[5]; /* 4 chars + NUL */
@@ -196,6 +200,14 @@ void mos_internal_refresh_media_identity(mos_handle_t *h);
    pure IORegistry read like the cached capacity (mos_scsi.c). The pure parser
    mos_internal_cdtoc_parse turns the blob into the per-session layout. */
 size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap);
+
+/* Copy the kernel optical-media "Type" string (kIO{CD,DVD,BD}MediaTypeKey, all
+   literally "Type") off the drive's IO{CD,DVD,BD}Media node into `buf` (NUL-
+   terminated), returning the length copied or 0 when absent (no media, or no
+   media-type node yet). Zero SCSI commands, no exclusive access — a pure
+   IORegistry read like read_cdtoc, but media-class-agnostic. mos_internal_
+   media_type_token maps the result to a token. */
+size_t mos_internal_read_media_type(io_service_t svc, char *buf, size_t cap);
 
 /* Issue one 6-byte tray CDB (START STOP UNIT 0x1B / PREVENT ALLOW MEDIUM
    REMOVAL 0x1E) via mos_raw_cdb and classify the result. Negative mos_error

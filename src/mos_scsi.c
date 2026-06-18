@@ -186,6 +186,14 @@ void mos_internal_refresh_media_identity(mos_handle_t *h)
     h->bsd_unit = mos_internal_bsd_unit(h->svc, &h->media_id,
                                         &h->media_bytes,
                                         &h->media_block_bytes);  /* -1 if no media */
+    /* Media-type token off the IO{CD,DVD,BD}Media node — zero-MMC, present even
+       when not READY (so the profile, and thus media_class, is suppressed).
+       NULL when no media node carries a Type, or the string is unknown
+       (fail-closed map). */
+    char type[16] = {0};
+    h->media_type = (mos_internal_read_media_type(h->svc, type, sizeof type) > 0)
+                        ? mos_internal_media_type_token(type)
+                        : NULL;
 }
 
 /* Copy the kernel-cached full-TOC (kIOCDMediaTOCKey, a CDTOC CFData blob) off
@@ -219,6 +227,45 @@ size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap)
         size_t copy = ((size_t)n < cap) ? (size_t)n : cap;
         CFDataGetBytes((CFDataRef)v, CFRangeMake(0, (CFIndex)copy), buf);
         return copy;   /* MOS_CF_AUTO / MOS_IO_AUTO release on this return */
+    }
+    return 0;
+}
+
+/* Copy the kernel optical-media "Type" string off the drive's IO{CD,DVD,BD}Media
+   node (kIO{CD,DVD,BD}MediaTypeKey are all the literal "Type"). Media-class-
+   agnostic sibling of read_cdtoc: same recursive walk, but matches any of the
+   three optical media classes and reads a CFString. Pure IORegistry read, no
+   SCSI command, no exclusive access — present even when the drive is not READY.
+   Returns the NUL-terminated length copied, 0 when absent. */
+size_t mos_internal_read_media_type(io_service_t svc, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    io_iterator_t it MOS_IO_AUTO = IO_OBJECT_NULL;
+    if (IORegistryEntryCreateIterator(svc, kIOServicePlane,
+            kIORegistryIterateRecursively, &it) != KERN_SUCCESS) {
+        return 0;
+    }
+    for (;;) {
+        io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
+        if (child == IO_OBJECT_NULL) break;
+        /* String conformance (like read_cdtoc) avoids a hard class-header
+           dependency; "Type" is the same key string on all three classes. */
+        if (!IOObjectConformsTo(child, "IOCDMedia")  &&
+            !IOObjectConformsTo(child, "IODVDMedia") &&
+            !IOObjectConformsTo(child, "IOBDMedia")) continue;
+
+        CFTypeRef v MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
+                child, CFSTR("Type"), kCFAllocatorDefault, 0);
+        if (!v || CFGetTypeID(v) != CFStringGetTypeID()) continue;
+
+        /* CFStringGetCString NUL-terminates and returns false on overflow; the
+           buffer is sized for the longest token ("HD DVD-ROM" = 10 + NUL). */
+        if (!CFStringGetCString((CFStringRef)v, buf, (CFIndex)cap,
+                                kCFStringEncodingUTF8)) {
+            buf[0] = '\0';
+            continue;
+        }
+        return strlen(buf);   /* MOS_CF_AUTO / MOS_IO_AUTO release on return */
     }
     return 0;
 }

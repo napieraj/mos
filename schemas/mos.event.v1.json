@@ -101,6 +101,15 @@
         "hd_dvd"
       ]
     },
+    "media_type": {
+      "enum": [
+        "cd_rom", "cd_r", "cd_rw",
+        "dvd_rom", "dvd_minus_r", "dvd_minus_rw", "dvd_plus_r", "dvd_plus_rw", "dvd_ram",
+        "hd_dvd_rom", "hd_dvd_r", "hd_dvd_rw", "hd_dvd_ram",
+        "bd_rom", "bd_r", "bd_re"
+      ],
+      "description": "Kernel optical-media type token (kIO{CD,DVD,BD}MediaTypeKey via mos_internal_media_type_token), zero MMC off the media node. NOT profile-gated: present even on a not-ready identity event (loading / media_changed) where current_profile is 0x0000, naming the disc class the profile cannot yet, and finer than media_class. Absent when no Type is published. Token set mirrors the C map (drift-guarded)."
+    },
     "vendor": {
       "type": "string"
     },
@@ -356,6 +365,11 @@
           },
           {
             "required": [
+              "media_type"
+            ]
+          },
+          {
+            "required": [
               "sense"
             ]
           },
@@ -409,6 +423,11 @@
           {
             "required": [
               "media_class"
+            ]
+          },
+          {
+            "required": [
+              "media_type"
             ]
           },
           {

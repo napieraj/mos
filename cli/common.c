@@ -206,6 +206,16 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
                 mos_cli_json_str(stdout, mclass);
             }
         }
+        /* Kernel media-type token — NOT profile-gated, so a not-ready
+           state_changed/media_changed event names the disc even while
+           media_class is suppressed. Key absent when no Type is published. */
+        {
+            const char *mtype = mos_watch_event_media_type(e);
+            if (mtype) {
+                fputs(",\"media_type\":", stdout);
+                mos_cli_json_str(stdout, mtype);
+            }
+        }
         if (vendor && *vendor) {
             fputs(",\"vendor\":", stdout);  mos_cli_json_str(stdout, vendor);
         }

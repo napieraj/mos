@@ -60,6 +60,13 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
        (mos_query_disc_info; ARCHITECTURE.md §4.4). */
 
     mos_error rc = mos_internal_query_state_core(&env, &h->result);
+    /* Media-type token read zero-MMC off the media node in
+       refresh_media_identity above (NULL if absent). The core classifies state
+       and does not touch it; set it here. Unlike media_class (derived from the
+       profile, which is suppressed off the not-ready branch), this is present
+       whenever the kernel publishes a Type — so a not-ready result can still
+       name the disc. */
+    h->result.media_type = h->media_type;
     if (rc == MOS_OK) *out = &h->result;
     return rc;
 }

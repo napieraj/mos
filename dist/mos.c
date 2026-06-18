@@ -120,6 +120,13 @@ struct mos_state_result {
        once per session on the probe handle (mos_watch.c). Appended at the end:
        ABI-safe. */
     const char    *serial;
+    /* Kernel optical-media "Type" token (kIO{CD,DVD,BD}MediaTypeKey mapped by
+       mos_internal_media_type_token), NULL if absent. Read zero-MMC off the
+       media node in refresh_media_identity, so it is present even when the MMC
+       profile (and thus media_class) is suppressed off the not-ready branch —
+       a loading/busy/unreadable result can still name the disc. Appended:
+       ABI-safe (accessor-only). */
+    const char    *media_type;
 };
 
 struct mos_watch_event {
@@ -151,6 +158,9 @@ struct mos_watch_event {
     uint8_t        ascq;
     mos_error      error;
     uint32_t       latency_ms;
+    /* Kernel optical-media "Type" token (see mos_state_result.media_type),
+       NULL if absent. Appended: ABI-safe (accessor-only). */
+    const char    *media_type;
 };
 
 /* ---- Fixed-buffer capacities -------------------------------------- *
@@ -1078,6 +1088,10 @@ struct mos_handle {
                                                   (query-time, like bsd_unit) */
     uint32_t                  media_block_bytes; /* kIOMediaPreferredBlockSizeKey;
                                                     0 == absent */
+    const char               *media_type;      /* mos_internal_media_type_token of
+                                                  the kernel "Type" key, NULL if
+                                                  absent (query-time, like bsd_unit);
+                                                  points to static token storage */
     char                      vendor_str[9];   /* 8 chars + NUL */
     char                      product_str[17]; /* 16 chars + NUL */
     char                      revision_str[5]; /* 4 chars + NUL */
@@ -1233,6 +1247,14 @@ void mos_internal_refresh_media_identity(mos_handle_t *h);
    pure IORegistry read like the cached capacity (mos_scsi.c). The pure parser
    mos_internal_cdtoc_parse turns the blob into the per-session layout. */
 size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap);
+
+/* Copy the kernel optical-media "Type" string (kIO{CD,DVD,BD}MediaTypeKey, all
+   literally "Type") off the drive's IO{CD,DVD,BD}Media node into `buf` (NUL-
+   terminated), returning the length copied or 0 when absent (no media, or no
+   media-type node yet). Zero SCSI commands, no exclusive access — a pure
+   IORegistry read like read_cdtoc, but media-class-agnostic. mos_internal_
+   media_type_token maps the result to a token. */
+size_t mos_internal_read_media_type(io_service_t svc, char *buf, size_t cap);
 
 /* Issue one 6-byte tray CDB (START STOP UNIT 0x1B / PREVENT ALLOW MEDIUM
    REMOVAL 0x1E) via mos_raw_cdb and classify the result. Negative mos_error
@@ -3769,6 +3791,11 @@ const char *mos_state_result_revision(const mos_state_result *r)
     return r ? r->revision : NULL;
 }
 
+const char *mos_state_result_media_type(const mos_state_result *r)
+{
+    return r ? r->media_type : NULL;
+}
+
 uint16_t mos_state_result_current_profile(const mos_state_result *r)
 {
     return r ? r->current_profile : 0;
@@ -3832,6 +3859,11 @@ const char *mos_watch_event_revision(const mos_watch_event *e)
 const char *mos_watch_event_serial(const mos_watch_event *e)
 {
     return e ? e->serial : NULL;
+}
+
+const char *mos_watch_event_media_type(const mos_watch_event *e)
+{
+    return e ? e->media_type : NULL;
 }
 
 mos_state mos_watch_event_state(const mos_watch_event *e)
@@ -4707,6 +4739,14 @@ void mos_internal_refresh_media_identity(mos_handle_t *h)
     h->bsd_unit = mos_internal_bsd_unit(h->svc, &h->media_id,
                                         &h->media_bytes,
                                         &h->media_block_bytes);  /* -1 if no media */
+    /* Media-type token off the IO{CD,DVD,BD}Media node — zero-MMC, present even
+       when not READY (so the profile, and thus media_class, is suppressed).
+       NULL when no media node carries a Type, or the string is unknown
+       (fail-closed map). */
+    char type[16] = {0};
+    h->media_type = (mos_internal_read_media_type(h->svc, type, sizeof type) > 0)
+                        ? mos_internal_media_type_token(type)
+                        : NULL;
 }
 
 /* Copy the kernel-cached full-TOC (kIOCDMediaTOCKey, a CDTOC CFData blob) off
@@ -4740,6 +4780,45 @@ size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap)
         size_t copy = ((size_t)n < cap) ? (size_t)n : cap;
         CFDataGetBytes((CFDataRef)v, CFRangeMake(0, (CFIndex)copy), buf);
         return copy;   /* MOS_CF_AUTO / MOS_IO_AUTO release on this return */
+    }
+    return 0;
+}
+
+/* Copy the kernel optical-media "Type" string off the drive's IO{CD,DVD,BD}Media
+   node (kIO{CD,DVD,BD}MediaTypeKey are all the literal "Type"). Media-class-
+   agnostic sibling of read_cdtoc: same recursive walk, but matches any of the
+   three optical media classes and reads a CFString. Pure IORegistry read, no
+   SCSI command, no exclusive access — present even when the drive is not READY.
+   Returns the NUL-terminated length copied, 0 when absent. */
+size_t mos_internal_read_media_type(io_service_t svc, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    io_iterator_t it MOS_IO_AUTO = IO_OBJECT_NULL;
+    if (IORegistryEntryCreateIterator(svc, kIOServicePlane,
+            kIORegistryIterateRecursively, &it) != KERN_SUCCESS) {
+        return 0;
+    }
+    for (;;) {
+        io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
+        if (child == IO_OBJECT_NULL) break;
+        /* String conformance (like read_cdtoc) avoids a hard class-header
+           dependency; "Type" is the same key string on all three classes. */
+        if (!IOObjectConformsTo(child, "IOCDMedia")  &&
+            !IOObjectConformsTo(child, "IODVDMedia") &&
+            !IOObjectConformsTo(child, "IOBDMedia")) continue;
+
+        CFTypeRef v MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
+                child, CFSTR("Type"), kCFAllocatorDefault, 0);
+        if (!v || CFGetTypeID(v) != CFStringGetTypeID()) continue;
+
+        /* CFStringGetCString NUL-terminates and returns false on overflow; the
+           buffer is sized for the longest token ("HD DVD-ROM" = 10 + NUL). */
+        if (!CFStringGetCString((CFStringRef)v, buf, (CFIndex)cap,
+                                kCFStringEncodingUTF8)) {
+            buf[0] = '\0';
+            continue;
+        }
+        return strlen(buf);   /* MOS_CF_AUTO / MOS_IO_AUTO release on return */
     }
     return 0;
 }
@@ -5548,6 +5627,13 @@ mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
        (mos_query_disc_info; ARCHITECTURE.md §4.4). */
 
     mos_error rc = mos_internal_query_state_core(&env, &h->result);
+    /* Media-type token read zero-MMC off the media node in
+       refresh_media_identity above (NULL if absent). The core classifies state
+       and does not touch it; set it here. Unlike media_class (derived from the
+       profile, which is suppressed off the not-ready branch), this is present
+       whenever the kernel publishes a Type — so a not-ready result can still
+       name the disc. */
+    h->result.media_type = h->media_type;
     if (rc == MOS_OK) *out = &h->result;
     return rc;
 }
@@ -7748,6 +7834,7 @@ static void fill_event_state_fields(mos_watch_event *e,
     e->product         = r->product;
     e->revision        = r->revision;
     e->serial          = r->serial;   /* NULL until a free poll grabs it (mos_watch.c) */
+    e->media_type      = r->media_type;  /* static token storage or NULL — no re-home */
     e->sense_key       = r->sense_key;
     e->asc             = r->asc;
     e->ascq            = r->ascq;

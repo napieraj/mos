@@ -160,6 +160,23 @@ def check_cli_enum_drift(here: Path) -> int:
         m = re.search(re.escape(func) + r'\b.*?\{(.*?)\n\}', src, re.DOTALL)
         return set(re.findall(r'return\s+"([a-z_]+)"', m.group(1))) if m else set()
 
+    # mos_internal_media_type_token is a { "<kernel>", "<token>" } map, not a
+    # return-string table — capture the second (token) string of each pair.
+    def map_tokens(path: Path, func: str) -> set:
+        src = path.read_text()
+        m = re.search(re.escape(func) + r'\b.*?\{(.*?)\n\}', src, re.DOTALL)
+        return (set(re.findall(r'\{\s*"[^"]*"\s*,\s*"([a-z0-9_]+)"\s*\}', m.group(1)))
+                if m else set())
+
+    c_media_type = map_tokens(root / "src" / "mos_strings.c",
+                              "mos_internal_media_type_token")
+    checks.append(("media_type", c_media_type,
+                   "src/mos_strings.c mos_internal_media_type_token()",
+                   (("mos.state.v1.media_type",
+                     enum_at(here / "mos.state.v1.json", "media_type")),
+                    ("mos.event.v1.media_type",
+                     enum_at(here / "mos.event.v1.json", "media_type")))))
+
     c_disc_status = fn_returns(root / "src" / "mos_strings.c",
                                "mos_disc_status_description")
     checks.append(("disc_status", c_disc_status,

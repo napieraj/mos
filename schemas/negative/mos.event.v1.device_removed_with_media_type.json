@@ -1,0 +1,12 @@
+{
+  "_comment": "device_removed is terminal and carries prev_state only; no current-side/identity fields are permitted. media_type is a media field, disallowed by the oneOf 'device_removed' branch (symmetric with device_removed_with_serial / media_class).",
+  "schema": "mos.event.v1",
+  "event": "device_removed",
+  "registry_id": 4295032831,
+  "stream_open_ms": 1746526503000,
+  "seq": 7,
+  "ts": "2025-05-06T10:16:01Z",
+  "bsd_node": "/dev/disk4",
+  "prev_state": "ready",
+  "media_type": "bd_re"
+}
