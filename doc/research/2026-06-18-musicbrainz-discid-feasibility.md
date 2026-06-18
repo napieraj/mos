@@ -1,6 +1,8 @@
 # MusicBrainz Disc ID as a first-class `mos` fingerprint — feasibility
 
-**Date:** 2026-06-18. **Status:** feasibility, pre-implementation.
+**Date:** 2026-06-18. **Status:** CLOSED — declined in-library; resolved as a
+documented consumer recipe (see "Decision" at the end). Retained as the record of
+why the in-library path was costed and not taken.
 **Branch:** `claude/musicbrainz-toc-fingerprint-cli`.
 **Depends on:** the CD-TOC work on `claude/set-speed-feasibility-lty091`
 (`src/mos_cdtoc.c`, `mos_query_toc`, the `mos_toc` accessors) — this analysis is
@@ -205,6 +207,26 @@ Sequence:
 4. Accessor + metadata emit + schema/examples/negatives + README/SPEC in the
    commit that flips the "computed consumer-side" prose.
 5. Multisession fixture as a follow-up falsification item.
+
+## Decision (2026-06-18) — declined in-library, documented as a recipe
+
+The maintainer's resolution: **do not** add the hashing to the library. The two
+costs above (≈220 lines of net-new SHA-1 + base64, and the override of
+`ROADMAP.md:105` plus the schema's "computed consumer-side" prose) both vanish if
+the ID is computed *consumer-side*, which the feasibility work proved is trivial —
+`mos` already emits the complete input. The better demonstration of mos's power is
+showing how short that consumer recipe is, not absorbing a crypto primitive the
+library otherwise has no use for.
+
+So instead of a `mos_discid.c`, the README "Shell integration" section now carries
+a verified `mos_discid()` shell function: `jq` over `disc.toc` builds libdiscid's
+hash input (LBA + 150 framing, `%02X%02X` + 100×`%08X`), the system `sha1` +
+URL-safe base64 finish it. It was run against the canonical reference disc here and
+reproduces `49HHV7Eb8UKF3aQiNmu1GR8vKTY-` byte-for-byte. This **vindicates the
+original survey conclusion** (third-party IDs are consumer territory) and keeps
+`ROADMAP.md:105` and the fingerprint-subtree schema prose intact — no doctrine
+override is needed, so none is logged. The line stays exactly where it was: `mos`
+ships the primitive; the four-line recipe stays the consumer's.
 
 ## Sources
 
