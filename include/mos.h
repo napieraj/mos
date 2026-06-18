@@ -713,8 +713,8 @@ const char *mos_protection_name(uint8_t protection);
 typedef struct mos_track_info mos_track_info;
 
 /*
- * Query READ TRACK INFORMATION (0x52) for the first track (the track
- * containing LBA 0) through the non-exclusive ReadTrackInformation
+ * Query READ TRACK INFORMATION (0x52) for the first track (logical track
+ * number 1) through the non-exclusive ReadTrackInformation
  * convenience method: the capacity / append-state surface — track start,
  * next writable address, free blocks, track size, last recorded address,
  * plus the track/data mode and blank/damage bits. For a single-track
@@ -794,7 +794,7 @@ uint32_t mos_capacity_track_size(const mos_capacity *c);
 typedef struct mos_drive_perf mos_drive_perf;
 
 /*
- * Query GET PERFORMANCE (0xAC, Type 03h Write Speed) through the
+ * Query GET PERFORMANCE (0xAC, Type 00h Performance Data) through the
  * non-exclusive GetPerformance convenience method: the drive's supported
  * read/write speeds, summarized as the max read and max write speed
  * (kB/s) and the descriptor count. The MMC-sanctioned modern speed
@@ -1100,7 +1100,16 @@ uint32_t       mos_watch_event_latency_ms(const mos_watch_event *e);
 /* Open a watch on a drive. Returns NULL on failure with *err_out set.
    Backoff parameters control the polling rate during stable vs.
    transition states. Default values (0 for either) select sensible
-   defaults: stable_ms=2000, transition_ms=200. */
+   defaults: stable_ms=2000, transition_ms=200.
+
+   Precondition: transition_poll_ms <= stable_poll_ms. Transitional states
+   poll at transition_poll_ms (the faster, smaller interval), and after a
+   probe error the retry interval starts at transition_poll_ms and doubles,
+   converging UP to stable_poll_ms. An inverted pair (transition > stable) is
+   not rejected but degrades: transitional states then poll SLOWER than stable
+   ones, and error backoff clamps straight to stable_poll_ms on the first
+   error (no progressive backoff). Pass transition_poll_ms <= stable_poll_ms
+   to get the intended cadence. */
 mos_watch_t *mos_watch_open_by_bsd_name(const char *bsd_name,
                                         uint32_t stable_poll_ms,
                                         uint32_t transition_poll_ms,

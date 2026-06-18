@@ -2344,7 +2344,9 @@ static bool mos_internal_mode_page_find(const uint8_t *buf, size_t len,
             *plen = page_len;
             return true;
         }
-        if (page_total == 0) break;          /* no-progress guard */
+        /* off strictly advances: page_total = hdr + page_len and hdr is 2
+           (page_0) or 4 (SPF), so page_total >= 2 — the loop always makes
+           progress and terminates when off + page_total exceeds end. */
         off += page_total;
     }
     return false;

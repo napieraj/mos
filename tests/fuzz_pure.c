@@ -642,7 +642,7 @@ static void fuzz_trackinfo(uint64_t iters)
     }
 }
 
-/* GET PERFORMANCE (0xAC Type 03h) decode. No strings; the property is no-OOB
+/* GET PERFORMANCE (0xAC Type 00h) decode. No strings; the property is no-OOB
    — the descriptor walk (8-byte header + N*16) must never read past
    [buf, buf+len) whatever the planted data length / count claims. */
 static void fuzz_perf(uint64_t iters)
