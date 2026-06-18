@@ -1,7 +1,10 @@
 .\" man page for mos (mac-optical-state)
-.\" Source of truth for the grammar is cli/main.c (usage) and include/mos.h
-.\" (states, exit codes). Keep this file in sync with both when the surface
-.\" changes; the CLI contract test (tests/cli/test_cli.sh) pins the behavior.
+.\" The SUBCOMMANDS block is GENERATED from the cli/<verb>.c command
+.\" descriptors by scripts/gen-cli-docs.py (same source as `mos --help` and
+.\" the shell completions) — edit the descriptors, not that block, then run
+.\" `make cli-docs`. The rest is hand-written: keep it in sync with cli/main.c
+.\" (usage) and include/mos.h (states, exit codes); tests/cli/test_cli.sh
+.\" pins the behavior.
 .TH MOS 1 "2026-06-18" "mac-optical-state" "User Commands"
 .SH NAME
 mos \- report the state of a macOS optical drive
@@ -35,67 +38,38 @@ is also an embeddable pure-C library; see
 .B mos.h
 and the project documentation.
 .SH SUBCOMMANDS
+.\" BEGIN GENERATED SUBCOMMANDS — gen-cli-docs.py (edit cli/<verb>.c descriptors)
 .TP
-.BR state " [" \fIdrive\fR ]
-Report drive state. This is the default verb: a bare drive selector
-.RB ( "mos 2" ", " "mos disk4" )
-runs it without the verb word. Emits
-.IR mos.state.v1 .
+.BR state " [drive]"
+Report drive state (default verb)
 .TP
 .B list
-List all drives with their states. Emits
-.IR mos.list.v1 .
+List all drives with their states
 .TP
-.BR watch " [" \fIdrive\fR ]
-Stream state events as newline-delimited JSON
-.RI ( mos.event.v1 )
-until SIGINT. Watches all drives unless a drive narrows it; hot-plugged
-drives join the stream and a removed drive does not end it.
-.B \-\-json
-is a no-op here (watch is always NDJSON).
+.BR watch " [drive]"
+Stream state events as NDJSON until SIGINT
 .TP
-.BR metadata " [" \fIdrive\fR ]
-Disc identity record \(em profile, TOC, disc info, mounted volume. Emits
-.IR mos.metadata.v1 .
+.BR metadata " [drive]"
+Disc identity record (profile, TOC, volume)
 .TP
-.BR drive " [" \fIdrive\fR ]
-Drive facts \(em identity, serial, content protection, firmware date. Emits
-.IR mos.drive.v1 .
+.BR drive " [drive]"
+Drive facts (identity, protection, firmware)
 .TP
-.BR features " [" \fIdrive\fR ]
-MMC feature list with current bits (the medium-writability surface). Emits
-.IR mos.features.v1 .
+.BR features " [drive]"
+MMC feature list with current bits
 .TP
-.BR tray " \fIaction\fR [" \fIdrive\fR ]
-Control the tray. \fIaction\fR is one of
-.BR eject ", " close ", " lock ", or " unlock .
-.B eject
-takes
-.BR \-\-force
-(issue an ALLOW first, so a basic lock does not block the eject);
-.B lock
-and
-.B unlock
-take
-.BR \-\-persistent
-(the Persistent Prevent state, which converts the operator eject button
-into an event rather than ejecting). Emits
-.IR mos.tray.v1 .
-A refusal (for example, an eject hitting a lock) is a reported outcome,
-not an error.
+.BR tray " <action> [drive]"
+Control the tray (eject, close, lock, unlock)
 .TP
-.BR capacity " [" \fIdrive\fR ]
-Disc capacity \(em media size plus the recordable free / append space. Emits
-.IR mos.capacity.v1 .
+.BR capacity " [drive]"
+Disc capacity (media size + free/append space)
 .TP
-.BR probe " \fIdrive\fR"
-Diagnostic. Streams raw IOKit / DiscRecording notification events as NDJSON
-.RI ( mos.probe.v0 )
-until SIGINT; with
-.BR \-\-dump ,
-a one-shot DiscRecording Info/Status plist capture (takes no drive
-argument). Present only when the binary was built with
-.BR \-DMOS_CLI_PROBE=ON " (the default)."
+.BR probe " <drive>"
+Diagnostic notification stream (mos.probe.v0)
+.\" END GENERATED SUBCOMMANDS
+.PP
+Each subcommand's options, the drive selector, and exit codes are detailed
+in the sections below.
 .SH DRIVE SELECTOR
 The
 .I drive

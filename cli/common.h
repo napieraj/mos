@@ -35,7 +35,7 @@ extern const char *progname;
  * `--help`'s subcommand list, and the generated shell completions all read
  * it. Each command OWNS its descriptor in its own cli/<verb>.c (name,
  * synopsis, one-line summary, entry point); main.c fixes their order and
- * membership in one array, which scripts/gen-completions.py and
+ * membership in one array, which scripts/gen-cli-docs.py and
  * schemas/check_readme.py parse for the verb list. Adding a verb is a new
  * cli/<verb>.c with its descriptor plus one line in that array. */
 enum {

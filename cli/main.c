@@ -15,7 +15,7 @@
 
 /* The command table — the single source of truth for the verb surface.
    Each descriptor lives in its own cli/<verb>.c; this array fixes their
-   order and membership and is what scripts/gen-completions.py and
+   order and membership and is what scripts/gen-cli-docs.py and
    schemas/check_readme.py parse for the verb list (the &mos_cli_command_*
    tokens). A new verb is a new descriptor + one line here. */
 static const mos_cli_command *const mos_cli_commands[] = {

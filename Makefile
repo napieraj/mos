@@ -50,7 +50,7 @@ define require_cmake
 	fi
 endef
 
-.PHONY: help configure build build-universal test check-readme completions \
+.PHONY: help configure build build-universal test check-readme cli-docs \
         preflight hooks \
         sign sign-universal notarize staple dist release \
         install install-signed uninstall clean
@@ -61,7 +61,7 @@ help:
 	@echo "  build-universal  Universal (arm64 + x86_64) release build"
 	@echo "  test             Build + run pure-data unit tests"
 	@echo "  check-readme     Verify README examples track schemas + emit_human"
-	@echo "  completions      Regenerate shell completions from the CLI dispatch"
+	@echo "  cli-docs         Regenerate shell completions + man SUBCOMMANDS from the command table"
 	@echo "  preflight        Run all OS-independent CI gates locally (pre-push mirror)"
 	@echo "  hooks            Enable the committed git hooks (.githooks) for this clone"
 	@echo "  install          Install locally (ad-hoc signed by linker)"
@@ -134,16 +134,17 @@ test: $(BUILD)/CMakeCache.txt
 check-readme:
 	python3 schemas/check_readme.py
 
-# ---- Shell completions -------------------------------------------------
+# ---- CLI docs (completions + man SUBCOMMANDS) --------------------------
 #
-# completions/{mos.bash,_mos,mos.fish} are GENERATED from the CLI dispatch
-# (cli/main.c subcommands + long_options, cli/tray.c actions) so the verb
-# and action lists never drift by hand. Run this after adding a subcommand
-# or flag and commit the result; preflight + CI gate it with
-# `gen-completions.py --check`.
+# completions/{mos.bash,_mos,mos.fish} and the SUBCOMMANDS block of man/mos.1
+# are GENERATED from the command table (each cli/<verb>.c descriptor, plus
+# cli/main.c's array + long_options and cli/tray.c actions) so they never drift
+# by hand from what `mos --help` prints. Run this after adding a subcommand or
+# flag and commit the result; preflight + CI gate it with
+# `gen-cli-docs.py --check`.
 
-completions:
-	python3 scripts/gen-completions.py
+cli-docs:
+	python3 scripts/gen-cli-docs.py
 
 # ---- Local CI mirror + git hooks ---------------------------------------
 #
