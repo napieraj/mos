@@ -432,6 +432,28 @@ it. That pattern causes real installs to fail during the gap between
 tag-push and sha-fill with a message users can't act on. Keep the
 formula head-only until you have the real hash.
 
+**Pre-publish checklist (run once before the first tagged release).**
+These are what `brew` runs on a clean machine — catch them locally instead
+of after publishing. Needs Homebrew installed (macOS):
+
+- [ ] `brew style homebrew/mos.rb` — formula style passes.
+- [ ] `brew audit --strict --online homebrew/mos.rb` — naming, license,
+      homepage, dependencies (and, once `url`/`sha256` are present, the
+      stable-source download/checksum audit).
+- [ ] `brew install --HEAD --build-from-source homebrew/mos.rb` then
+      `brew test mos` — exercises the `install` and `test do` blocks
+      (the `--index 99` → exit 66 + `mos.error.v1` contract).
+- [ ] In a fresh shell after install: `man mos` resolves and `mos `<Tab>
+      completes — confirms the `cmake --install` man-page/completion wiring
+      is linked from the keg.
+
+**Tap.** Users install via the `napieraj/tap` tap
+(`github.com/napieraj/homebrew-tap`), whose `Formula/mos.rb` is what `brew`
+reads — `homebrew/mos.rb` here is the canonical source. After the tag-time
+`url`/`sha256` commit above, copy the same change into the tap repo and
+re-run the audit there, so the two never drift. `brew bump-formula-pr` does
+this in one step if the tap is set up for it.
+
 ## PR checklist
 
 - [ ] New public API additions have `mos_` prefix and live in
