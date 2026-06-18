@@ -787,6 +787,43 @@ uint32_t mos_capacity_free_blocks(const mos_capacity *c);
 uint32_t mos_capacity_next_writable(const mos_capacity *c);
 uint32_t mos_capacity_track_size(const mos_capacity *c);
 
+/* Formattable view from READ FORMAT CAPACITIES (0x23) — the capacities a
+   rewritable medium reports (DVD±RW, DVD-RAM, BD-RE), which the media-size and
+   recordable halves above cannot give on a freshly BLANK rewritable (no
+   whole-disk node yet, no track to read). Meaningful only when
+   have_formattable is true. The read is DOUBLY GATED: it runs only for
+   formattable media — the rewritable profiles plus BD-R (gated on the current
+   profile, so pressed / write-once CD-R,DVD±R / empty drives report
+   have_formattable=false with no raw read attempted) — and, for those, it is a
+   raw CDB that SELF-GATES on exclusive access, so a mounted or otherwise-held
+   drive also reports false (data, not an error; the natural moment is an
+   unmounted blank disc). mos reports these capacities; it never issues
+   FORMAT UNIT.
+
+   The Current/Maximum Capacity Descriptor: format_type is 1 unformatted /
+   2 formatted / 3 no-media (map with mos_format_capacity_type_name);
+   formattable_blocks x formattable_block_bytes is its capacity. Then the
+   Formattable Capacity Descriptor list (the drive's format options):
+   _descriptor_count entries (0..MOS max), each read by index — blocks, the
+   raw format-type code, and the type-dependent parameter (the block length for
+   the common types). Out-of-range i / NULL c read as 0. */
+bool     mos_capacity_have_formattable(const mos_capacity *c);
+uint8_t  mos_capacity_format_type(const mos_capacity *c);
+uint32_t mos_capacity_formattable_blocks(const mos_capacity *c);
+uint32_t mos_capacity_formattable_block_bytes(const mos_capacity *c);
+uint8_t  mos_capacity_formattable_descriptor_count(const mos_capacity *c);
+uint32_t mos_capacity_formattable_descriptor_blocks(const mos_capacity *c,
+                                                    uint8_t i);
+uint8_t  mos_capacity_formattable_descriptor_type(const mos_capacity *c,
+                                                  uint8_t i);
+uint32_t mos_capacity_formattable_descriptor_param(const mos_capacity *c,
+                                                   uint8_t i);
+
+/* Stable snake_case token for a Current/Maximum Capacity Descriptor type:
+   1 -> "unformatted", 2 -> "formatted", 3 -> "no_media"; NULL for 0/reserved
+   (consumers fall back to the numeric code). */
+const char *mos_format_capacity_type_name(uint8_t type);
+
 /* ---- Drive speeds ----------------------------------- */
 
 /* Result of a drive-speed query. Opaque, handle-owned; valid until the

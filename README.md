@@ -303,14 +303,21 @@ tray unlock` recovers it.
 
 ### capacity
 
-`mos capacity --json` (`mos.capacity.v1`) reports the loaded disc's size,
-and works even on a **mounted** disc — where a tool that issued a raw READ
-CAPACITY would fail busy. A `recordable` sub-object adds the append-state
-view (free blocks, next-writable point, track size) for blank/appendable
-media. The two
-halves are independently nullable: a pressed disc reports a byte size but
-no append point; a blank recordable reports an append point but no
-whole-disk size yet. Full fields:
+`mos capacity --json` (`mos.capacity.v1`) reports the loaded disc's size; the
+size and `recordable` views work even on a **mounted** disc — where a tool
+that issued a raw READ CAPACITY would fail busy. A `recordable` sub-object
+adds the append-state view (free blocks, next-writable point, track size) for
+blank/appendable media; a `formattable` sub-object adds the capacities a
+**blank rewritable** (BD-RE, DVD-RAM, DVD±RW, HD DVD-RAM/-RW) or BD-R reports
+via READ FORMAT CAPACITIES — the one capacity the other two views can't give
+it (no whole-disk node yet, no track). That read is gated twice: on the disc
+**profile** (only formattable media is read — pressed, write-once CD-R/DVD±R,
+and empty drives skip it entirely), then on exclusive access, so `formattable`
+is null on non-formattable or mounted/contended drives (and mos never issues
+FORMAT UNIT — it reports the capacities, it doesn't format). The
+three views are independently nullable: a pressed disc reports a byte size but
+no append point; a blank recordable reports an append point but no whole-disk
+size yet; a blank rewritable reports its formattable capacities. Full fields:
 [`schemas/mos.capacity.v1.json`](schemas/mos.capacity.v1.json).
 
 ## Using the library

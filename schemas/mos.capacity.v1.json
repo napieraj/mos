@@ -10,7 +10,8 @@
     "media_bytes",
     "block_bytes",
     "media_blocks",
-    "recordable"
+    "recordable",
+    "formattable"
   ],
   "additionalProperties": false,
   "properties": {
@@ -26,7 +27,7 @@
     "media_bytes": {
       "type": ["integer", "null"],
       "minimum": 1,
-      "description": "Whole-disk capacity in bytes (kIOMediaSizeKey) — the kernel's cached READ CAPACITY result. null when there is no whole-disk node: a blank/unrecorded recordable disc or an empty drive. This is the READABLE capacity of recorded media; the maximum FORMATTABLE capacity of a blank disc (READ FORMAT CAPACITIES) is deliberately not reported — see the feasibility note."
+      "description": "Whole-disk capacity in bytes (kIOMediaSizeKey) — the kernel's cached READ CAPACITY result. null when there is no whole-disk node: a blank/unrecorded recordable disc or an empty drive. This is the READABLE capacity of recorded media; the FORMATTABLE capacity of a blank rewritable disc is reported separately under `formattable` (READ FORMAT CAPACITIES)."
     },
     "block_bytes": {
       "type": ["integer", "null"],
@@ -58,6 +59,56 @@
           "type": "integer",
           "minimum": 0,
           "description": "Track size in blocks (Track Information Block Track Size)."
+        }
+      }
+    },
+    "formattable": {
+      "type": ["object", "null"],
+      "description": "The formattable view from READ FORMAT CAPACITIES (0x23) — the capacities a REWRITABLE medium (DVD±RW, DVD-RAM, HD DVD-RAM/-RW, BD-RE) or BD-R reports, which media_bytes/recordable cannot give on a freshly blank rewritable (no whole-disk node yet, no track to read). This is the one RAW CDB the capacity assembly issues and it is DOUBLY GATED: first on the current PROFILE — only formattable media (the rewritable profiles + BD-R) is read, so pressed, write-once CD-R/DVD±R/HD DVD-R, and empty drives report null with no raw read attempted — then on exclusive access: null on mounted/contended media (a mounted disc holds the drive, so the read backs off without disturbing it — data, not an error). mos reports these capacities; it never issues FORMAT UNIT.",
+      "required": ["type", "blocks", "block_bytes", "descriptors"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": ["string", "null"],
+          "enum": ["unformatted", "formatted", "no_media", null],
+          "description": "Current/Maximum Capacity Descriptor type token (mos_format_capacity_type_name): 'unformatted' (1), 'formatted' (2), 'no_media' (3); null for a reserved code (0)."
+        },
+        "blocks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Current/Maximum number of addressable blocks."
+        },
+        "block_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Current/Maximum block length in bytes."
+        },
+        "descriptors": {
+          "type": "array",
+          "description": "Formattable Capacity Descriptors — the capacities the drive could FORMAT the medium to (DVD-RAM size choices, BD-RE format types). Empty when the drive lists none.",
+          "items": {
+            "type": "object",
+            "required": ["blocks", "format_type", "param"],
+            "additionalProperties": false,
+            "properties": {
+              "blocks": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Number of blocks of this formattable capacity."
+              },
+              "format_type": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 63,
+                "description": "Raw Format Type code (descriptor byte 4 bits 7:2); media-specific, surfaced as the number."
+              },
+              "param": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Type-dependent parameter (descriptor bytes 5-7); the block length for the common format types."
+              }
+            }
+          }
         }
       }
     }

@@ -176,6 +176,7 @@ set(MOS_PURE_SOURCES
     src/mos_cdtext.c
     src/mos_physstruct.c
     src/mos_trackinfo.c
+    src/mos_formatcap.c
     src/mos_perf.c
     src/mos_modepage.c
     src/mos_vpd80.c
@@ -347,6 +348,7 @@ if(MOS_BUILD_TESTS)
         tests/test_cdtext.c
         tests/test_physstruct.c
         tests/test_trackinfo.c
+        tests/test_formatcap.c
         tests/test_perf.c
         tests/test_modepage.c
         tests/test_vpd80.c

@@ -39,6 +39,24 @@ code; this table is the citation, not the parse.
 - **Cross-check:** offsets match the Linux kernel's packed
   `struct track_information`, `include/uapi/linux/cdrom.h`.
 
+### `src/mos_formatcap.c` — READ FORMAT CAPACITIES
+- **Spec:** MMC-6 §6.24, opcode 0x23. Capacity List Header (4 bytes; byte 3 is
+  the single-byte CAPACITY LIST LENGTH = 8 + 8·N). Current/Maximum Capacity
+  Descriptor at bytes 4-11 (Number of Blocks 4-7, Descriptor Type byte 8
+  bits 1:0, Block Length 9-11). Formattable Capacity Descriptors are 8 bytes
+  each from byte 12 (Number of Blocks 0-3, Format Type byte 4 bits 7:2, Type
+  Dependent Parameter 5-7).
+- **Dual-length (O-4):** CAPACITY LIST LENGTH is bounded by the realized
+  transfer span, then floored to whole 8-byte descriptors — an over-claimed
+  length can never read past the delivered bytes.
+- **Cross-check:** descriptor-type codes (1 unformatted / 2 formatted / 3 no
+  media) and the 8-byte descriptor stride match the MMC-6 tables; dvd+rw-tools
+  (growisofs) drives DVD+RW/BD-RE off the same header + descriptor layout. No
+  committed capture yet — a hardware reply is a falsifier per the hardware ADR,
+  never a design input.
+- **Not decoded:** the per-Format-Type meaning of the Type Dependent Parameter
+  (surfaced raw as `param`). mos never issues FORMAT UNIT (0x04).
+
 ### `src/mos_physstruct.c` — READ DISC STRUCTURE (DVD/HD-DVD)
 - **Spec:** MMC-5, opcode 0xAD, media type 0; Physical Format Information
   (format 0x00) and Copyright Management Information (format 0x01). The
