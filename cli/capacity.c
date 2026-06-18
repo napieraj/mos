@@ -13,6 +13,11 @@
 
 #include <sysexits.h>
 
+/* Local cap on Formattable Capacity Descriptors copied for emit. Matches the
+   library's MOS_FORMATTABLE_MAX (32); the copy loop clamps to it regardless,
+   so a future library bump can't overflow this array. */
+#define MOS_CLI_FMT_MAX 32
+
 typedef struct {
     int64_t  bsd_unit;
     bool     have_media;
@@ -24,6 +29,14 @@ typedef struct {
     uint32_t free_blocks;
     uint32_t next_writable;
     uint32_t track_size;
+    /* READ FORMAT CAPACITIES view (null when have_formattable is false). */
+    bool     have_formattable;
+    uint8_t  format_type;             /* Current/Max descriptor type code */
+    uint32_t formattable_blocks;
+    uint32_t formattable_block_bytes;
+    uint8_t  fmt_count;
+    struct { uint32_t blocks; uint8_t type; uint32_t param; }
+             fmt[MOS_CLI_FMT_MAX];
 } capacity_doc;
 
 static void emit_json(const capacity_doc *d)
@@ -63,12 +76,34 @@ static void emit_json(const capacity_doc *d)
     } else {
         fputs("null", stdout);
     }
+
+    /* Formattable view (READ FORMAT CAPACITIES). null on mounted/contended/
+       unsupported media (the raw read self-gates). type is a fixed token or
+       null for a reserved code; format_type per descriptor is the raw code. */
+    fputs(",\n  \"formattable\": ", stdout);
+    if (d->have_formattable) {
+        const char *tn = mos_format_capacity_type_name(d->format_type);
+        fputs("{\"type\": ", stdout);
+        if (tn) fprintf(stdout, "\"%s\"", tn);
+        else    fputs("null", stdout);
+        fprintf(stdout, ", \"blocks\": %u, \"block_bytes\": %u, "
+                        "\"descriptors\": [",
+                d->formattable_blocks, d->formattable_block_bytes);
+        for (uint8_t i = 0; i < d->fmt_count; i++)
+            fprintf(stdout,
+                    "%s{\"blocks\": %u, \"format_type\": %u, \"param\": %u}",
+                    i ? ", " : "", d->fmt[i].blocks, d->fmt[i].type,
+                    d->fmt[i].param);
+        fputs("]}", stdout);
+    } else {
+        fputs("null", stdout);
+    }
     fputs("\n}\n", stdout);
 }
 
 static void emit_human(const capacity_doc *d)
 {
-    mos_cli_human_pair pairs[3];
+    mos_cli_human_pair pairs[4];
     size_t n = 0;
 
     char bsd_buf[24];
@@ -105,6 +140,21 @@ static void emit_human(const capacity_doc *d)
     }
     pairs[n++] = (mos_cli_human_pair){ "Recordable",
                                        d->have_recordable ? rec_buf : NULL };
+
+    /* "unformatted, 11826176 blocks x 2048 B, 3 format options" -> ~58. */
+    char fmt_buf[80];
+    if (d->have_formattable) {
+        const char *tn = mos_format_capacity_type_name(d->format_type);
+        int off = snprintf(fmt_buf, sizeof fmt_buf, "%s, %u blocks x %u B",
+                           tn ? tn : "unknown", d->formattable_blocks,
+                           d->formattable_block_bytes);
+        if (off > 0 && (size_t)off < sizeof fmt_buf && d->fmt_count)
+            snprintf(fmt_buf + off, sizeof fmt_buf - (size_t)off,
+                     ", %u format option%s", d->fmt_count,
+                     d->fmt_count == 1 ? "" : "s");
+    }
+    pairs[n++] = (mos_cli_human_pair){ "Formattable",
+                                       d->have_formattable ? fmt_buf : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }
@@ -160,6 +210,18 @@ int mos_cli_run_capacity(void)
     d.free_blocks     = mos_capacity_free_blocks(c);
     d.next_writable   = mos_capacity_next_writable(c);
     d.track_size      = mos_capacity_track_size(c);
+
+    d.have_formattable        = mos_capacity_have_formattable(c);
+    d.format_type             = mos_capacity_format_type(c);
+    d.formattable_blocks      = mos_capacity_formattable_blocks(c);
+    d.formattable_block_bytes = mos_capacity_formattable_block_bytes(c);
+    d.fmt_count               = mos_capacity_formattable_descriptor_count(c);
+    if (d.fmt_count > MOS_CLI_FMT_MAX) d.fmt_count = MOS_CLI_FMT_MAX;
+    for (uint8_t i = 0; i < d.fmt_count; i++) {
+        d.fmt[i].blocks = mos_capacity_formattable_descriptor_blocks(c, i);
+        d.fmt[i].type   = mos_capacity_formattable_descriptor_type(c, i);
+        d.fmt[i].param  = mos_capacity_formattable_descriptor_param(c, i);
+    }
 
     if (flag_json) emit_json(&d);
     else           emit_human(&d);

@@ -770,3 +770,58 @@ descriptor is handled generically — a version-carrying feature with a payload
 < 4 bytes reads as absent (fail closed, like the walker); presence-only schemes
 key only on the descriptor existing. Any surprise lands as a fixture + dated
 note with a generic gate, never a per-device special-case.
+
+## ADR: fifth raw CDB admitted — READ FORMAT CAPACITIES (0x23)
+## (2026-06-18, the one-raw-CDB count goes to one-of-five)
+
+The scope doctrine (layer 1) admits a raw CDB only with two showings: (a) no
+convenience method can carry the information, and (b) the nub-collision /
+exclusive-access analysis. This entry records the fifth raw CDB — READ FORMAT
+CAPACITIES (0x23), `src/mos_query.c`'s `mos_internal_read_format_caps` feeding
+`mos.capacity.v1.formattable` via the pure parser `src/mos_formatcap.c`. Full
+derivation: `doc/research/2026-06-18-read-format-capacities-feasibility.md`.
+
+**Showing (a) — no convenience path — SATISFIED from the header.** The
+`MMCDeviceInterface` convenience inventory (ARCHITECTURE.md §9.7) carries no
+READ FORMAT CAPACITIES wrapper — same absence shape as the missing READ
+CAPACITY and VPD-serial wrappers. The kernel's cached size (IOMedia node) and
+READ TRACK INFORMATION both come up empty on a freshly **blank rewritable**
+(no whole-disk node yet, no track), which is exactly the medium whose
+formattable capacity 0x23 reports. So a raw CDB is the only route.
+
+**Showing (b) — nub-collision — the serial's, not GESN's.** 0x23 is issued on
+the `mos_raw_cdb` path, which stays the SINGLE `ObtainExclusiveAccess` call
+site (§3) — `mos_query_capacity` calls it, never takes the lock itself.
+`ObtainExclusiveAccess` fails BUSY **without issuing the CDB** when a mounted
+nub or other client holds the drive, so the formattable read backs off to
+`have_formattable=false` and never disturbs a live nub. The target medium
+(blank rewritable) is unmounted, where the lock is free. No state change → no
+lock-lifetime question (unlike the tray PREVENT verbs). It is read-only: mos
+reports formattable capacities and never issues FORMAT UNIT (0x04).
+
+**Doubly gated — the profile gate keeps capacity lock-free for most discs.**
+Before the lock, `mos_query_capacity` reads the current profile (a cheap
+non-exclusive GET CONFIGURATION) and issues 0x23 only for formattable media —
+the rewritable profiles + BD-R (`mos_internal_profile_is_formattable`,
+src/mos_strings.c). Pressed, write-once CD-R/DVD±R/HD DVD-R, and empty media
+reach NO raw read and NO exclusive-access attempt at all, so `mos capacity`
+stays lock-free for them and only the formattable profiles ever take the brief
+lock (maintainer refinement, 2026-06-18). This is what makes folding into the
+existing one-shot `mos capacity` cost-neutral for the common cases.
+
+**Count and placement.** The one-raw-CDB count becomes **one-of-five**: GESN
+(0x4A) + the two tray opcodes (0x1B, 0x1E) + INQUIRY (0x12) + READ FORMAT
+CAPACITIES (0x23). Folded into `mos capacity` (not a separate verb) by
+maintainer decision: it answers the same "how big is this disc" question as
+the other two capacity views, so a second verb would be redundant surface; and
+`mos capacity` is a deliberate one-shot, not the polled `mos state` hot path,
+so adding a self-gating raw read there carries none of the no-lock-on-READY
+cost that kept the serial out of `state`. Privilege footprint (layer 3)
+unchanged: same SCSITaskUserClient console grant, no root, no entitlement.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+write-once disc or a drive that does not implement 0x23 answers 5/20/00 or a
+"no media" descriptor → `formattable` null/`no_media`, expected not a defect; a
+USB-SATA bridge over-claiming the single-byte CAPACITY LIST LENGTH is caught by
+the dual-length clamp + the whole-8-byte-descriptor floor. Each lands as a
+fixture + dated note with a generic gate, never a per-device special-case.

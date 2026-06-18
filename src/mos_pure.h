@@ -504,6 +504,42 @@ bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
  * media_bytes / block_bytes are 0 when the node carries no size (blank or
  * absent media); have_recordable is false when TRACK INFORMATION didn't
  * answer. New fields append at the END. */
+/* ---- READ FORMAT CAPACITIES decode (mos_formatcap.c) --------------- *
+ *
+ * The formattable view of the loaded medium from READ FORMAT CAPACITIES
+ * (MMC 0x23): the Current/Maximum Capacity Descriptor (how big it is now and
+ * whether it is unformatted/formatted) plus the Formattable Capacity
+ * Descriptor list — the capacities the drive could FORMAT it to (DVD-RAM's
+ * size choices, BD-RE format types). The gap mos_query_capacity's other two
+ * sources can't fill on blank rewritable media (no whole-disk node yet, no
+ * track to read). Read-only: mos reports formattable capacities, it never
+ * issues FORMAT UNIT. Raw CDB — no convenience method exists, so this is the
+ * fifth raw verb; layer-1 showings + design:
+ * doc/research/2026-06-18-read-format-capacities-feasibility.md. A capture
+ * falsifies per the hardware ADR, never steers. */
+/* Stored Formattable Capacity Descriptors. The reply's CAPACITY LIST LENGTH
+   is a single byte (<= 255), so a conforming drive can list at most
+   floor(255/8) - 1 = 30 formattable descriptors; 32 gives slack so a valid
+   reply is never truncated, and the parser's cap is then a pure array-bounds
+   guard (unreachable on conformant input, defensive against a hostile len). */
+#define MOS_FORMATTABLE_MAX 32
+
+struct mos_format_descriptor {
+    uint32_t blocks;       /* Number of Blocks (bytes 0-3)                  */
+    uint32_t param;        /* Type Dependent Parameter (bytes 5-7); the
+                              block length for the common format types      */
+    uint8_t  format_type;  /* Format Type (byte 4 bits 7:2)                 */
+};
+
+struct mos_format_caps {
+    uint8_t  cur_type;        /* Current/Max Descriptor Type (byte 8 bits 1:0):
+                                 1 unformatted, 2 formatted, 3 no media     */
+    uint32_t cur_blocks;      /* Current/Max Number of Blocks               */
+    uint32_t cur_block_bytes; /* Current/Max Block Length (bytes 9-11)      */
+    uint8_t  count;           /* Formattable descriptors stored (<= MAX)    */
+    struct mos_format_descriptor d[MOS_FORMATTABLE_MAX];
+};
+
 struct mos_capacity {
     uint64_t media_bytes;     /* kIOMediaSizeKey; 0 == no whole-disk size  */
     uint32_t block_bytes;     /* kIOMediaPreferredBlockSizeKey; 0 == none  */
@@ -513,7 +549,28 @@ struct mos_capacity {
     uint32_t next_writable;   /* append point (valid iff nwa_valid)        */
     uint32_t track_size;      /* first-track size (blocks); pressed-disc
                                  capacity for single-track media           */
+    /* READ FORMAT CAPACITIES (0x23) — raw-CDB, media-dependent; stays unset
+       (have_formattable=false) on BUSY (mounted) / unsupported. Appended
+       after the original fields (mos_capacity is accessor-only across ABI). */
+    bool                   have_formattable;
+    struct mos_format_caps formattable;
 };
+
+/* Decode a READ FORMAT CAPACITIES (0x23) reply: the Capacity List header, the
+   Current/Maximum Capacity Descriptor, and up to MOS_FORMATTABLE_MAX
+   Formattable Capacity Descriptors. Pure, fixed-offset, no-OOB (fuzz/ASan-
+   gated). Bounds the Capacity List Length to the realized transfer span
+   (dual-length rule O-4) and to whole 8-byte descriptors; returns false on a
+   reply too short to carry the header + Current/Max descriptor, or an
+   incoherent (non-multiple-of-8) list. MMC-6 §6.24. */
+bool mos_internal_format_caps_parse(const uint8_t *buf, size_t len,
+                                    struct mos_format_caps *out);
+
+/* True for current profiles whose media supports FORMAT UNIT — the gate for
+   issuing READ FORMAT CAPACITIES (0x23) at all (mos_strings.c). Rewritable
+   optical + BD-R; pressed and write-once CD-R/DVD±R and no-media are false, so
+   capacity issues no raw read for them. MMC-6 §5.4. */
+bool mos_internal_profile_is_formattable(uint16_t profile);
 
 /* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *
  *

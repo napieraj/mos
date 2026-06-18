@@ -16,6 +16,10 @@
 
 set -eu
 
+# Deterministic collation so the src/*.c glob below weaves in the same order on
+# every machine and CI (otherwise the committed dist/ and a regen diverge).
+export LC_ALL=C
+
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 INC="$ROOT/include"
 SRC="$ROOT/src"
@@ -159,90 +163,21 @@ strip_file() {
     ' "$1"
 }
 
+# Weave the internal headers first (ordered: each uses the ones before it),
+# then every src/*.c. A directory walk, so a new TU needs no edit here. The .c
+# order is not significant — the headers above declare every cross-TU symbol —
+# so the glob's (LC_ALL=C) order just keeps dist/ stable. No exclusions today.
 {
-    echo "/* ==== src/mos_scsi_status.h ==== */"
-    strip_file "$SRC/mos_scsi_status.h"
-    echo
-    echo "/* ==== src/mos_pure.h ==== */"
-    strip_file "$SRC/mos_pure.h"
-    echo
-    echo "/* ==== src/mos_internal.h ==== */"
-    strip_file "$SRC/mos_internal.h"
-    echo
-    echo "/* ==== src/mos_sense.c ==== */"
-    strip_file "$SRC/mos_sense.c"
-    echo
-    echo "/* ==== src/mos_pure.c ==== */"
-    strip_file "$SRC/mos_pure.c"
-    echo
-    echo "/* ==== src/mos_config.c ==== */"
-    strip_file "$SRC/mos_config.c"
-    echo
-    echo "/* ==== src/mos_discinfo.c ==== */"
-    strip_file "$SRC/mos_discinfo.c"
-
-    echo "/* ==== src/mos_discstruct.c ==== */"
-    strip_file "$SRC/mos_discstruct.c"
-    echo
-    echo "/* ==== src/mos_cdtext.c ==== */"
-    strip_file "$SRC/mos_cdtext.c"
-    echo
-    echo "/* ==== src/mos_physstruct.c ==== */"
-    strip_file "$SRC/mos_physstruct.c"
-    echo
-    echo "/* ==== src/mos_trackinfo.c ==== */"
-    strip_file "$SRC/mos_trackinfo.c"
-    echo
-    echo "/* ==== src/mos_perf.c ==== */"
-    strip_file "$SRC/mos_perf.c"
-    echo
-    echo "/* ==== src/mos_modepage.c ==== */"
-    strip_file "$SRC/mos_modepage.c"
-    echo
-    echo "/* ==== src/mos_vpd80.c ==== */"
-    strip_file "$SRC/mos_vpd80.c"
-    echo
-    echo "/* ==== src/mos_inqdata.c ==== */"
-    strip_file "$SRC/mos_inqdata.c"
-    echo
-    echo "/* ==== src/mos_result.c ==== */"
-    strip_file "$SRC/mos_result.c"
-    echo
-    echo "/* ==== src/mos_state_core.c ==== */"
-    strip_file "$SRC/mos_state_core.c"
-    echo
-    echo "/* ==== src/mos_watch_core.c ==== */"
-    strip_file "$SRC/mos_watch_core.c"
-    echo
-    echo "/* ==== src/mos_state.c ==== */"
-    strip_file "$SRC/mos_state.c"
-    echo
-    echo "/* ==== src/mos_watch.c ==== */"
-    strip_file "$SRC/mos_watch.c"
-    echo
-    echo "/* ==== src/mos_strings.c ==== */"
-    strip_file "$SRC/mos_strings.c"
-    echo
-    echo "/* ==== src/mos_dr.c ==== */"
-    strip_file "$SRC/mos_dr.c"
-    echo
-    echo "/* ==== src/mos_da.c ==== */"
-    strip_file "$SRC/mos_da.c"
-    echo
-    echo "/* ==== src/mos_scsi.c ==== */"
-    strip_file "$SRC/mos_scsi.c"
-    echo
-    echo "/* ==== src/mos_query.c ==== */"
-    strip_file "$SRC/mos_query.c"
-    echo
-    echo "/* ==== src/mos_serial.c ==== */"
-    strip_file "$SRC/mos_serial.c"
-    echo
-    echo "/* ==== src/mos_drive_inquiry.c ==== */"
-    strip_file "$SRC/mos_drive_inquiry.c"
-    echo
-    echo "/* ==== src/mos_tray.c ==== */"
-    strip_file "$SRC/mos_tray.c"
+    for hdr in mos_scsi_status.h mos_pure.h mos_internal.h; do
+        echo "/* ==== src/$hdr ==== */"
+        strip_file "$SRC/$hdr"
+        echo
+    done
+    for f in "$SRC"/*.c; do
+        echo "/* ==== src/$(basename "$f") ==== */"
+        strip_file "$f"
+        echo
+    done
 } >> "$H"
 
 # The manifest is deterministic on purpose: dist/ is committed, and CI

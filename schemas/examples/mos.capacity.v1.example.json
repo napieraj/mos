@@ -8,5 +8,6 @@
     "free_blocks": 0,
     "next_writable": null,
     "track_size": 12219392
-  }
+  },
+  "formattable": null
 }

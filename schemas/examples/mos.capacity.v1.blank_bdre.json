@@ -1,0 +1,16 @@
+{
+  "schema": "mos.capacity.v1",
+  "bsd_node": null,
+  "media_bytes": null,
+  "block_bytes": null,
+  "media_blocks": null,
+  "recordable": null,
+  "formattable": {
+    "type": "unformatted",
+    "blocks": 11826176,
+    "block_bytes": 2048,
+    "descriptors": [
+      { "blocks": 11826176, "format_type": 0, "param": 2048 }
+    ]
+  }
+}

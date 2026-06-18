@@ -4,5 +4,6 @@
   "media_bytes": null,
   "block_bytes": 2048,
   "media_blocks": null,
-  "recordable": null
+  "recordable": null,
+  "formattable": null
 }

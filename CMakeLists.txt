@@ -151,18 +151,14 @@ endif()
 # mos_core happens to pull IOKit anyway. See ARCHITECTURE.md §3 and
 # AGENTS.md rule 3.
 
-# Source-of-truth lists, named once and reused by every target (the library
-# archives AND the macOS adapter/emit test executables, which compile these
-# TUs directly against the fake rather than linking the archive). A new TU is
-# added here once, not copied into each target — the duplication that used to
-# let an added parser link-fail in the adapter/emit jobs is gone.
+# Pure (IOKit-free) vs core (IOKit) archive split. The classification is
+# semantic — not in the filename — so it lives here; scripts/amalgamate.sh
+# globs src/*.c and does not repeat it.
 #
-# MOS_PURE_SOURCES — the IOKit-free layer (mos_pure archive; also linked by
-#   the unit tests on every platform).
-# MOS_CORE_BASE_SOURCES — the IOKit adapter TUs EXCEPT the watch run-loop TU.
-#   The adapter/emit test targets compile these against the fake; mos_watch.c
-#   is held out because it needs the separate watch fake, so only the watch
-#   test target (and the real mos_core) add it.
+# MOS_PURE_SOURCES — IOKit-free layer (mos_pure archive; the unit tests link it).
+# MOS_CORE_BASE_SOURCES — IOKit adapter TUs except the watch run-loop; mos_watch.c
+#   is held out (it needs the separate watch fake), so only the watch test
+#   target and the real mos_core add it.
 # MOS_CORE_SOURCES — the full adapter layer (BASE + mos_watch.c).
 set(MOS_PURE_SOURCES
     src/mos_pure.c
@@ -176,6 +172,7 @@ set(MOS_PURE_SOURCES
     src/mos_cdtext.c
     src/mos_physstruct.c
     src/mos_trackinfo.c
+    src/mos_formatcap.c
     src/mos_perf.c
     src/mos_modepage.c
     src/mos_vpd80.c
@@ -347,6 +344,7 @@ if(MOS_BUILD_TESTS)
         tests/test_cdtext.c
         tests/test_physstruct.c
         tests/test_trackinfo.c
+        tests/test_formatcap.c
         tests/test_perf.c
         tests/test_modepage.c
         tests/test_vpd80.c

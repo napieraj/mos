@@ -5,5 +5,6 @@
   "block_bytes": 2048,
   "media_blocks": 12219392,
   "recordable": null,
+  "formattable": null,
   "format_capacity_bytes": 25025314816
 }

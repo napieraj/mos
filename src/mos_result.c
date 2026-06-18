@@ -616,6 +616,55 @@ uint32_t mos_capacity_track_size(const mos_capacity *c)
     return c ? c->track_size : 0;
 }
 
+/* Formattable view (READ FORMAT CAPACITIES). All gated by have_formattable;
+   the indexed accessors clamp to the stored count and read 0 out of range. */
+
+bool mos_capacity_have_formattable(const mos_capacity *c)
+{
+    return c ? c->have_formattable : false;
+}
+
+uint8_t mos_capacity_format_type(const mos_capacity *c)
+{
+    return c ? c->formattable.cur_type : 0;
+}
+
+uint32_t mos_capacity_formattable_blocks(const mos_capacity *c)
+{
+    return c ? c->formattable.cur_blocks : 0;
+}
+
+uint32_t mos_capacity_formattable_block_bytes(const mos_capacity *c)
+{
+    return c ? c->formattable.cur_block_bytes : 0;
+}
+
+uint8_t mos_capacity_formattable_descriptor_count(const mos_capacity *c)
+{
+    return c ? c->formattable.count : 0;
+}
+
+uint32_t mos_capacity_formattable_descriptor_blocks(const mos_capacity *c,
+                                                    uint8_t i)
+{
+    if (!c || i >= c->formattable.count) return 0;
+    return c->formattable.d[i].blocks;
+}
+
+uint8_t mos_capacity_formattable_descriptor_type(const mos_capacity *c,
+                                                 uint8_t i)
+{
+    if (!c || i >= c->formattable.count) return 0;
+    return c->formattable.d[i].format_type;
+}
+
+uint32_t mos_capacity_formattable_descriptor_param(const mos_capacity *c,
+                                                   uint8_t i)
+{
+    if (!c || i >= c->formattable.count) return 0;
+    return c->formattable.d[i].param;
+}
+
 /* ---- mos_drive_perf accessors (mos_query_drive_perf) ---------------- *
  * Plain values, NULL-tolerant. Speeds meaningful only when have. */
 

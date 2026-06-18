@@ -124,6 +124,36 @@ const char *mos_profile_class(uint16_t profile_code)
     }
 }
 
+/* True for current profiles whose media supports FORMAT UNIT — i.e. where READ
+   FORMAT CAPACITIES (0x23) returns a meaningful formattable view: the
+   rewritable optical profiles (CD-RW; DVD-RAM, DVD-RW RO/sequential, DVD+RW
+   and +RW DL; HD DVD-RAM, HD DVD-RW and -RW DL; BD-RE) plus BD-R (formattable
+   to pseudo-overwrite). Pressed (ROM), write-once sequential CD-R / DVD±R /
+   HD DVD-R, and the no-media case report nothing to format, so
+   mos_query_capacity gates the raw 0x23 on this — for those profiles it issues
+   no raw read and makes no exclusive-access attempt. MMC-6 profile codes
+   (§5.4); the formattable subset of mos_profile_class above. */
+bool mos_internal_profile_is_formattable(uint16_t profile)
+{
+    switch (profile) {
+        case 0x000A:  /* CD-RW                       */
+        case 0x0012:  /* DVD-RAM                     */
+        case 0x0013:  /* DVD-RW Restricted Overwrite */
+        case 0x0014:  /* DVD-RW Sequential Recording */
+        case 0x001A:  /* DVD+RW                      */
+        case 0x002A:  /* DVD+RW Dual Layer           */
+        case 0x0052:  /* HD DVD-RAM                  */
+        case 0x0053:  /* HD DVD-RW                   */
+        case 0x005A:  /* HD DVD-RW Dual Layer        */
+        case 0x0041:  /* BD-R SRM                    */
+        case 0x0042:  /* BD-R RRM (random recording) */
+        case 0x0043:  /* BD-RE                       */
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* Standard INQUIRY VERSION byte (byte 2) → SPC compliance token. Values from
    the Linux kernel scsi.h table (SCSI_SPC_* are resp[2]+1; the wire byte is
    one less). Unknown / legacy SCSI-1/2 values return NULL (numeric fallback). */
@@ -233,6 +263,18 @@ const char *mos_bg_format_status_name(uint8_t status)
         case 1:  return "inactive";   /* CDM_MRW_BGFORMAT_INACTIVE */
         case 2:  return "active";     /* CDM_MRW_BGFORMAT_ACTIVE   */
         case 3:  return "complete";   /* CDM_MRW_BGFORMAT_COMPLETE */
+        default: return NULL;
+    }
+}
+
+/* Current/Maximum Capacity Descriptor type (READ FORMAT CAPACITIES, byte 8
+   bits 1:0). 0 is reserved → NULL (consumer falls back to the numeric code). */
+const char *mos_format_capacity_type_name(uint8_t type)
+{
+    switch (type) {
+        case 1:  return "unformatted";
+        case 2:  return "formatted";
+        case 3:  return "no_media";
         default: return NULL;
     }
 }
