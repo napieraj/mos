@@ -3,6 +3,13 @@
 
 #include <sysexits.h>
 
+/* Command descriptor (see mos_cli_command in common.h). */
+const mos_cli_command mos_cli_command_list = {
+    .name = "list", .synopsis = "", .run = mos_cli_run_list,
+    .summary = "List all drives with their states",
+    .flags = MOS_CLI_CMD_NO_DRIVE,
+};
+
 int mos_cli_run_list(void)
 {
     static mos_cli_list_row rows[MOS_CLI_LIST_CAP];

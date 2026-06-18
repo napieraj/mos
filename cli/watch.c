@@ -49,13 +49,18 @@ static uint32_t getenv_uint(const char *name, uint32_t default_value)
     return (uint32_t)n;
 }
 
+/* Command descriptor (see mos_cli_command in common.h). The NDJSON flag is
+   what makes watch NDJSON end to end: main.c forces --json on for it and the
+   shared error emitter (cli/common.c) reads the same flag off mos_cli_selected
+   to pick compact single-line framing — no per-verb global. */
+const mos_cli_command mos_cli_command_watch = {
+    .name = "watch", .synopsis = "[drive]", .run = mos_cli_run_watch,
+    .summary = "Stream state events as NDJSON until SIGINT",
+    .flags = MOS_CLI_CMD_NDJSON,
+};
+
 int mos_cli_run_watch(void)
 {
-    /* Watch is NDJSON end to end — event stream and error envelope alike,
-       one format for orchestrators. Forcing the flag here puts
-       mos_cli_emit_unknown_and_fail on its compact single-line framing. */
-    flag_json = true;
-
     /* Install the SIGINT handler before opening, so a Ctrl-C during the
        open call still cleans up. */
     struct sigaction sa;

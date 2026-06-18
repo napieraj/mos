@@ -1,5 +1,8 @@
-/* cli/main.c — argument parsing, usage, dispatch. One file per command;
- * a new verb is a new cli/<verb>.c plus a dispatch line below. */
+/* cli/main.c — argument parsing, usage, dispatch. One file per command,
+ * each owning its mos_cli_command descriptor (name, synopsis, summary, run);
+ * a new verb is a new cli/<verb>.c with its descriptor plus one entry in the
+ * mos_cli_commands[] table below — which drives dispatch, --help's subcommand
+ * list, and (parsed from source) the shell completions, all from one place. */
 #include "common.h"
 #include "mos_pure.h"   /* mos_internal_value_is_registry_id (selector floor) */
 
@@ -10,6 +13,27 @@
 #include <string.h>
 #include <sysexits.h>
 
+/* The command table — the single source of truth for the verb surface.
+   Each descriptor lives in its own cli/<verb>.c; this array fixes their
+   order and membership and is what scripts/gen-completions.py and
+   schemas/check_readme.py parse for the verb list (the &mos_cli_command_*
+   tokens). A new verb is a new descriptor + one line here. */
+static const mos_cli_command *const mos_cli_commands[] = {
+    &mos_cli_command_state,
+    &mos_cli_command_list,
+    &mos_cli_command_watch,
+    &mos_cli_command_metadata,
+    &mos_cli_command_drive,
+    &mos_cli_command_features,
+    &mos_cli_command_tray,
+    &mos_cli_command_capacity,
+#ifdef MOS_CLI_PROBE
+    &mos_cli_command_probe,
+#endif
+};
+static const size_t mos_cli_ncommands =
+    sizeof mos_cli_commands / sizeof mos_cli_commands[0];
+
 void mos_cli_print_usage(FILE *f)
 {
     fprintf(f,
@@ -17,31 +41,29 @@ void mos_cli_print_usage(FILE *f)
         "\n"
         "Report the state of a macOS optical drive.\n"
         "\n"
-        "Subcommands:\n"
-        "  state [drive]     Report drive state (default verb; a bare drive\n"
-        "                    selector also runs it, e.g. `mos 2`, `mos disk4`).\n"
-        "  list              List all drives with their states.\n"
-        "  watch  [drive]    Stream state events (NDJSON) until SIGINT;\n"
-        "                    all drives unless a drive narrows it (hot-plug\n"
-        "                    joins; removal is per-drive, stream continues).\n"
-        "  metadata [drive]  Disc identity record (profile, TOC, disc\n"
-        "                    info, mounted volume) — mos.metadata.v1.\n"
-        "  drive [drive]     Drive facts (identity, content protection)\n"
-        "                    — mos.drive.v1.\n"
-        "  features [drive]  MMC feature list with current bits (the\n"
-        "                    medium-writability surface) — mos.features.v1.\n"
-        "  tray <action> [drive]\n"
-        "                    Control the tray: eject | close | lock |\n"
-        "                    unlock — mos.tray.v1. eject takes --force\n"
-        "                    (unlock first); lock/unlock take --persistent.\n"
-        "  capacity [drive]  Disc capacity: media size + recordable\n"
-        "                    free/append space — mos.capacity.v1.\n"
-#ifdef MOS_CLI_PROBE
-        "  probe  <drive>    Diagnostic: stream raw IOKit/DiscRecording\n"
-        "                    notification events (NDJSON, mos.probe.v0)\n"
-        "                    until SIGINT; with --dump, a one-shot\n"
-        "                    DiscRecording Info/Status plist capture.\n"
-#endif
+        "Subcommands:\n",
+        progname);
+
+    /* Subcommand list, generated from the command table so `--help` and the
+       shell completions show the same text from one source (each command's
+       own cli/<verb>.c descriptor). The description column sits at 20; a
+       name+synopsis wider than 18 wraps its summary to the next line. */
+    for (size_t k = 0; k < mos_cli_ncommands; k++) {
+        const mos_cli_command *c = mos_cli_commands[k];
+        char left[40];
+        if (c->synopsis && *c->synopsis)
+            snprintf(left, sizeof left, "%s %s", c->name, c->synopsis);
+        else
+            snprintf(left, sizeof left, "%s", c->name);
+        if (strlen(left) <= 18)
+            fprintf(f, "  %-18s%s\n", left, c->summary);
+        else
+            fprintf(f, "  %s\n%20s%s\n", left, "", c->summary);
+    }
+
+    fputs(
+        "\n"
+        "A bare drive selector runs `state` (e.g. `mos 2`, `mos disk4`).\n"
         "\n"
         "Drive (positional): an Index from 'mos list' (all digits), a\n"
         "registry_id from JSON output (all digits, above 2^32), or a BSD\n"
@@ -78,7 +100,7 @@ void mos_cli_print_usage(FILE *f)
         "Exit:   sysexits.h codes — 0 on observed state, 64 usage, 66 no\n"
         "        device, 69 unavailable, 70 internal, 71 OS err, 74 I/O,\n"
         "        75 temp-fail.\n",
-        progname);
+        f);
 }
 
 static void print_version(void)
@@ -193,56 +215,51 @@ int main(int argc, char **argv)
        `state` verb (mos_cli_arg_has_digit above), so `mos 2`, `mos disk4`,
        `mos /dev/disk4` report state with no verb word; a digit-free
        non-verb still reaches the unknown-subcommand diagnostic. */
+    const mos_cli_command *selected = &mos_cli_command_state; /* default verb */
     if (argc >= 2 && argv[1][0] != '-' && argv[1][0] != '\0' &&
         !mos_cli_arg_has_digit(argv[1])) {
         const char *cmd = argv[1];
 
-        if (strcmp(cmd, "state") == 0) {
-            /* the default verb; nothing to set. */
-        } else if (strcmp(cmd, "list") == 0) {
-            flag_list = true;
-        } else if (strcmp(cmd, "watch") == 0) {
-            flag_watch = true;
-        } else if (strcmp(cmd, "metadata") == 0) {
-            flag_metadata = true;
-        } else if (strcmp(cmd, "drive") == 0) {
-            flag_drive = true;
-        } else if (strcmp(cmd, "features") == 0) {
-            flag_features = true;
-        } else if (strcmp(cmd, "tray") == 0) {
-            flag_tray = true;
-            /* tray takes an action word (eject/close/lock/unlock) ahead of
-               any drive/flags. Capture it here; the second shift below
-               hides it from getopt so the shared selector/flag parsing runs
-               unchanged. A missing or flag-shaped action stays NULL and is
-               diagnosed by mos_cli_run_tray. */
-            if (argc >= 3 && argv[2][0] != '-' && argv[2][0] != '\0')
-                opt_tray_action = argv[2];
-        } else if (strcmp(cmd, "capacity") == 0) {
-            flag_capacity = true;
-        } else if (strcmp(cmd, "probe") == 0) {
-#ifdef MOS_CLI_PROBE
-            flag_probe = true;
-#else
-            /* Known verb, compiled out: a specific diagnostic, not the
-               unknown-subcommand message — the verb exists, this binary
-               just lacks it. */
-            fprintf(stderr, "%s: 'probe' is not built into this binary "
-                    "(diagnostic subcommand; rebuild with "
-                    "-DMOS_CLI_PROBE=ON)\n", progname);
-            return EX_USAGE;
+        selected = NULL;
+        for (size_t k = 0; k < mos_cli_ncommands; k++) {
+            if (strcmp(cmd, mos_cli_commands[k]->name) == 0) {
+                selected = mos_cli_commands[k];
+                break;
+            }
+        }
+        if (!selected) {
+#ifndef MOS_CLI_PROBE
+            /* probe is a real verb, just not compiled into this binary: keep
+               the specific diagnostic rather than the unknown-subcommand
+               message (the verb exists, this binary just lacks it). */
+            if (strcmp(cmd, "probe") == 0) {
+                fprintf(stderr, "%s: 'probe' is not built into this binary "
+                        "(diagnostic subcommand; rebuild with "
+                        "-DMOS_CLI_PROBE=ON)\n", progname);
+                return EX_USAGE;
+            }
 #endif
-        } else {
             fprintf(stderr, "%s: unknown subcommand: ", progname);
             mos_cli_safe_ascii(stderr, cmd);
-            fputs("\nRecognized: state, list, watch, metadata, drive, "
-                  "features, tray, capacity"
-#ifdef MOS_CLI_PROBE
-                  ", probe"
-#endif
-                  ".\n", stderr);
+            /* Recognized list, generated from the same table so it can't drift
+               from what actually dispatches. */
+            fputs("\nRecognized:", stderr);
+            for (size_t k = 0; k < mos_cli_ncommands; k++)
+                fprintf(stderr, "%s %s",
+                        k ? "," : "", mos_cli_commands[k]->name);
+            fputs(".\n", stderr);
             return EX_USAGE;
         }
+
+        /* tray takes an action word (eject/close/lock/unlock) ahead of any
+           drive/flags. Capture it here; the second shift below hides it from
+           getopt so the shared selector/flag parsing runs unchanged. A
+           missing or flag-shaped action stays NULL and is diagnosed by
+           mos_cli_run_tray. */
+        if ((selected->flags & MOS_CLI_CMD_TRAY_ACTION) &&
+            argc >= 3 && argv[2][0] != '-' && argv[2][0] != '\0')
+            opt_tray_action = argv[2];
+
         /* Shift past the subcommand word so getopt starts at position 1.
            Copy the real program name into the new argv[0] first, so
            getopt's own diagnostics keep it (glibc prints argv[0]; Apple's
@@ -254,7 +271,7 @@ int main(int argc, char **argv)
         /* tray's action word now sits at argv[1] (opt_tray_action still
            points to it — only pointers moved). Shift again so getopt sees
            only the modifiers and the selector. */
-        if (flag_tray && opt_tray_action) {
+        if ((selected->flags & MOS_CLI_CMD_TRAY_ACTION) && opt_tray_action) {
             argv[1] = argv[0];
             argc--;
             argv++;
@@ -347,11 +364,13 @@ int main(int argc, char **argv)
         optind++;
     }
 
-    /* list enumerates everything; a drive subject contradicts it. */
-    if (flag_list && (opt_index > 0 || opt_bsd != NULL || opt_registry)) {
+    /* A no-drive verb (list) enumerates everything; a drive subject
+       contradicts it. */
+    if ((selected->flags & MOS_CLI_CMD_NO_DRIVE) &&
+        (opt_index > 0 || opt_bsd != NULL || opt_registry)) {
         fprintf(stderr,
-                "%s: list takes no drive argument (it enumerates all)\n",
-                progname);
+                "%s: %s takes no drive argument (it enumerates all)\n",
+                progname, selected->name);
         return EX_USAGE;
     }
 
@@ -364,7 +383,8 @@ int main(int argc, char **argv)
     /* --force / --persistent belong to tray; reject them on any other verb
        the way --dump is rejected outside probe. The finer eject-vs-lock
        match happens in mos_cli_run_tray, where the action word is known. */
-    if ((flag_force || flag_persistent) && !flag_tray) {
+    if ((flag_force || flag_persistent) &&
+        !(selected->flags & MOS_CLI_CMD_TRAY_ACTION)) {
         fprintf(stderr,
                 "%s: --force/--persistent apply only to the tray subcommand\n",
                 progname);
@@ -374,7 +394,7 @@ int main(int argc, char **argv)
 #ifdef MOS_CLI_PROBE
     /* Verb-vs-verb contradictions can't arise — verbs come only from the
        one-word dispatch. */
-    if (flag_dump && !flag_probe) {
+    if (flag_dump && !(selected->flags & MOS_CLI_CMD_PROBE)) {
         fprintf(stderr, "%s: --dump requires the probe subcommand\n",
                 progname);
         return EX_USAGE;
@@ -390,7 +410,7 @@ int main(int argc, char **argv)
                         "plists; --json does not apply\n", progname);
         return EX_USAGE;
     }
-    if (flag_probe && !flag_dump && opt_registry) {
+    if ((selected->flags & MOS_CLI_CMD_PROBE) && !flag_dump && opt_registry) {
         /* probe resolves by BSD name only (cli/probe.c walks IOMedia up to
            the SCSI peripheral); a registry-id selector has no path there.
            Reject it explicitly rather than fall through to the "requires a
@@ -400,7 +420,8 @@ int main(int argc, char **argv)
                 progname);
         return EX_USAGE;
     }
-    if (flag_probe && !flag_dump && !opt_index && !opt_bsd) {
+    if ((selected->flags & MOS_CLI_CMD_PROBE) && !flag_dump &&
+        !opt_index && !opt_bsd) {
         /* No sole-drive default: the probe targets one explicit drive (or
            --dump for the whole directory). */
         fprintf(stderr, "%s: probe requires a drive (index or BSD form) "
@@ -410,15 +431,11 @@ int main(int argc, char **argv)
     /* probe streams NDJSON unconditionally; --json is a no-op, as in watch. */
 #endif
 
-#ifdef MOS_CLI_PROBE
-    if (flag_probe) return mos_cli_run_probe();
-#endif
-    if (flag_list)  return mos_cli_run_list();
-    if (flag_metadata) return mos_cli_run_metadata();
-    if (flag_drive) return mos_cli_run_drive();
-    if (flag_features) return mos_cli_run_features();
-    if (flag_tray) return mos_cli_run_tray();
-    if (flag_capacity) return mos_cli_run_capacity();
-    if (flag_watch) return mos_cli_run_watch();
-    return mos_cli_run_state();
+    /* Force JSON for NDJSON-streaming verbs (watch), then publish the
+       selection so the shared emitters can read its flags (e.g. compact
+       error framing). Dispatch through the table — one return, no per-verb
+       chain. */
+    if (selected->flags & MOS_CLI_CMD_NDJSON) flag_json = true;
+    mos_cli_selected = selected;
+    return selected->run();
 }

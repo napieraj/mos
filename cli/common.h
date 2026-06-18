@@ -16,25 +16,63 @@
 #include "io.h"
 #include "human.h"
 
-/* Parsed-option state, set by cli/main.c before dispatch. */
+/* Parsed-option state, set by cli/main.c before dispatch. The verb itself is
+   carried by the selected mos_cli_command (below), not a per-verb boolean. */
 extern int         opt_index;     /* 0 = unset; 1-based when set */
 extern const char *opt_bsd;
 extern uint64_t    opt_registry;  /* 0 = unset; set only positionally */
 extern const char *opt_tray_action; /* tray sub-verb eject|close|lock|unlock;
                                        NULL = missing. Parsed argv (opt_), positional. */
-extern bool        flag_list;
 extern bool        flag_json;
-extern bool        flag_watch;
-extern bool        flag_metadata;
-extern bool        flag_drive;
-extern bool        flag_features;
-extern bool        flag_tray;     /* tray subcommand (control verbs) */
-extern bool        flag_capacity; /* capacity subcommand (mos.capacity.v1) */
 extern bool        flag_force;     /* tray eject --force (unlock-then-eject) */
 extern bool        flag_persistent;/* tray lock/unlock --persistent */
-extern bool        flag_probe;    /* probe subcommand (MOS_CLI_PROBE builds) */
 extern bool        flag_dump;     /* probe --dump one-shot DR capture */
 extern const char *progname;
+
+/* ---- Command table ---------------------------------------------------- *
+ *
+ * The single source of truth for the verb surface: cli/main.c's dispatch,
+ * `--help`'s subcommand list, and the generated shell completions all read
+ * it. Each command OWNS its descriptor in its own cli/<verb>.c (name,
+ * synopsis, one-line summary, entry point); main.c fixes their order and
+ * membership in one array, which scripts/gen-completions.py and
+ * schemas/check_readme.py parse for the verb list. Adding a verb is a new
+ * cli/<verb>.c with its descriptor plus one line in that array. */
+enum {
+    MOS_CLI_CMD_NO_DRIVE    = 1u << 0, /* rejects a drive selector (list) */
+    MOS_CLI_CMD_TRAY_ACTION = 1u << 1, /* consumes an action word (tray) */
+    MOS_CLI_CMD_PROBE       = 1u << 2, /* probe-only selector rules */
+    MOS_CLI_CMD_NDJSON      = 1u << 3, /* streams NDJSON (watch): main forces
+                                          --json on, and the error envelope
+                                          uses compact single-line framing */
+};
+
+typedef struct {
+    const char *name;        /* verb word; must contain no digit (the
+                                bare-selector gate in main.c relies on it) */
+    const char *synopsis;    /* args after the verb ("[drive]", ""); help text */
+    const char *summary;     /* one-line description: help list + completions */
+    int       (*run)(void);  /* entry point */
+    unsigned    flags;       /* MOS_CLI_CMD_* */
+} mos_cli_command;
+
+extern const mos_cli_command mos_cli_command_state;
+extern const mos_cli_command mos_cli_command_list;
+extern const mos_cli_command mos_cli_command_watch;
+extern const mos_cli_command mos_cli_command_metadata;
+extern const mos_cli_command mos_cli_command_drive;
+extern const mos_cli_command mos_cli_command_features;
+extern const mos_cli_command mos_cli_command_tray;
+extern const mos_cli_command mos_cli_command_capacity;
+#ifdef MOS_CLI_PROBE
+extern const mos_cli_command mos_cli_command_probe;
+#endif
+
+/* The command selected for this invocation (set by cli/main.c before the
+   command runs; NULL in harnesses that call a run fn directly). The shared
+   emitters in cli/common.c read its flags — e.g. NDJSON framing — instead
+   of a per-verb global, so the verb surface is uniformly table-driven. */
+extern const mos_cli_command *mos_cli_selected;
 
 /* stdout finalization (shared one-shot/watch write-outcome fold). */
 int  mos_cli_finalize_oneshot_stdout(int success_code);

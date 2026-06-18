@@ -399,6 +399,15 @@ static io_service_t resolve_io_service_by_bsd(const char *bsd_name) {
 
 /* ---- Entry point --------------------------------------------------- */
 
+/* Command descriptor (see mos_cli_command in common.h). Compiled only in
+   MOS_CLI_PROBE builds, like the rest of this TU; main.c's table includes it
+   under the same guard. */
+const mos_cli_command mos_cli_command_probe = {
+    .name = "probe", .synopsis = "<drive>", .run = mos_cli_run_probe,
+    .summary = "Diagnostic notification stream (mos.probe.v0)",
+    .flags = MOS_CLI_CMD_PROBE,
+};
+
 int mos_cli_run_probe(void)
 {
     if (flag_dump) {
