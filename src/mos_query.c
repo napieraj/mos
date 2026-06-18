@@ -58,15 +58,35 @@ mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out)
     return MOS_OK;
 }
 
+/* Worst-case CDTOC blob (also reused by mos_query_session_layout below): a
+   conforming CD never approaches this; the parser is bounds-safe on truncation
+   regardless (dual-length rule O-4). */
+#define MOS_CDTOC_REPLY_BUF 4096u
+
 mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
 {
     if (out) *out = NULL;
     if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
-    /* Format 0000b worst case: 4-byte header + 100 descriptors
-       (99 tracks + lead-out) x 8. sizeof buf is the trusted length (O-4);
-       the reply's own TOC Data Length only shrinks the parse. MSF=0 (LBA),
-       starting track 0 (= from first). */
+    /* PRIMARY (CD): the macOS kernel-cached full-TOC (kIOCDMediaTOCKey) — a
+       superset of format-0000b, read with ZERO SCSI commands and no exclusive
+       access, fresh off the current IOCDMedia node. CD-only by construction:
+       the read returns 0 for DVD/BD (no IOCDMedia node) and for a just-inserted
+       CD whose node isn't up yet — both fall through to the issued READ TOC
+       below, which stays the universal path and the only one for DVD/BD.
+       AGENTS.md ADR 2026-06-18. */
+    mos_internal_refresh_media_identity(h);
+    uint8_t cdtoc[MOS_CDTOC_REPLY_BUF];
+    size_t  clen = mos_internal_read_cdtoc(h->svc, cdtoc, sizeof cdtoc);
+    if (clen && mos_internal_cdtoc_to_toc(cdtoc, clen, &h->toc)) {
+        *out = &h->toc;
+        return MOS_OK;
+    }
+
+    /* FALLBACK: the issued READ TOC/PMA/ATIP format 0000b. Worst case: 4-byte
+       header + 100 descriptors (99 tracks + lead-out) x 8. sizeof buf is the
+       trusted length (O-4); the reply's own TOC Data Length only shrinks the
+       parse. MSF=0 (LBA), starting track 0 (= from first). */
     uint8_t         buf[4 + 100 * 8] = {0};
     SCSITaskStatus  st               = 0;
     SCSI_Sense_Data sd               = {0};
@@ -330,11 +350,6 @@ mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
     *out = &h->track_info;
     return MOS_OK;
 }
-
-/* Worst-case CDTOC blob: 4-byte header + descriptors. A conforming CD never
-   approaches this (99 tracks + a handful of sessions x 3 lead-in POINTs); the
-   parser is bounds-safe on truncation regardless (dual-length rule O-4). */
-#define MOS_CDTOC_REPLY_BUF 4096u
 
 mos_error mos_query_session_layout(mos_handle_t *h,
                                    const mos_session_layout **out)

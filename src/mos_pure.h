@@ -217,6 +217,15 @@ typedef struct mos_session_layout {  /* tagged: mos.h forward-declares opaquely 
 bool mos_internal_cdtoc_parse(const uint8_t *buf, size_t len,
                               mos_session_layout *out);
 
+/* Decode the SAME CDTOC blob into the per-track mos_toc (format-0000b's shape):
+   first/last track, lead-out (the highest session's A2), and {track, adr,
+   control, start_lba} per track. This is what lets the cached full-TOC be the
+   PRIMARY CD TOC source (mos_query_toc). Fail-closed to the same standard as
+   mos_internal_toc_parse — a duplicate track or a gap in first..last refuses
+   the whole, so the caller falls back to the issued READ TOC. False when no
+   coherent track list is present. */
+bool mos_internal_cdtoc_to_toc(const uint8_t *buf, size_t len, mos_toc *out);
+
 
 /* THE DUAL-LENGTH RULE (seam contract O-4; AGENTS scope doctrine layer 3).
  *

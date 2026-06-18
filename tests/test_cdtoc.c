@@ -159,6 +159,98 @@ TEST(cdtoc_fail_closed_on_hostile_buffers)
     return 0;
 }
 
+/* ---- mos_internal_cdtoc_to_toc: the primary-CD-TOC-source decode --------- */
+
+/* Put a track POINT (1..99): adr 1, the given control nibble, p MSF = start. */
+static void put_track(uint8_t *b, size_t *off, uint8_t session, uint8_t track,
+                      uint8_t control, uint8_t m, uint8_t s, uint8_t f)
+{
+    uint8_t *d = &b[*off];
+    memset(d, 0, DESC);
+    d[0] = session;
+    d[1] = (uint8_t)((1u << 4) | (control & 0x0f));   /* adr 1, control */
+    d[3] = track;
+    d[8] = m; d[9] = s; d[10] = f;
+    *off += DESC;
+}
+
+TEST(cdtoc_to_toc_audio_cd)
+{
+    /* 3-track audio CD, single session: tracks at 0/10/20 s, lead-out 30 s. */
+    uint8_t b[256] = {0};
+    size_t off = 4;
+    put_desc(b, &off, 1, 1, 0xA0, 1, 0, 0);
+    put_desc(b, &off, 1, 1, 0xA1, 3, 0, 0);
+    put_desc(b, &off, 1, 1, 0xA2, 0, 30, 0);          /* lead-out */
+    put_track(b, &off, 1, 1, 0, 0, 2, 0);             /* track starts (MSF) */
+    put_track(b, &off, 1, 2, 0, 0, 12, 0);
+    put_track(b, &off, 1, 3, 0, 0, 22, 0);
+    finalize(b, off, 1, 1);
+
+    mos_toc t;
+    EXPECT(mos_internal_cdtoc_to_toc(b, off, &t));
+    EXPECT_EQ(mos_toc_first_track(&t), 1);
+    EXPECT_EQ(mos_toc_last_track(&t), 3);
+    EXPECT_EQ(mos_toc_track_count(&t), 3);
+    EXPECT(mos_toc_have_leadout(&t));
+    EXPECT_EQ(mos_toc_leadout_lba(&t), msf_lba(0, 30, 0));
+    EXPECT_EQ(mos_toc_track_number(&t, 0), 1);
+    EXPECT_EQ(mos_toc_track_start_lba(&t, 0), msf_lba(0, 2, 0));
+    EXPECT_EQ(mos_toc_track_control(&t, 0), 0);        /* audio */
+    return 0;
+}
+
+TEST(cdtoc_to_toc_data_control_bit)
+{
+    /* A data track carries control bit 2 — the data-vs-audio determinant. */
+    uint8_t b[128] = {0};
+    size_t off = 4;
+    put_desc(b, &off, 1, 1, 0xA2, 1, 0, 0);
+    put_track(b, &off, 1, 1, 0x4, 0, 2, 0);           /* control 0x4 = data */
+    finalize(b, off, 1, 1);
+
+    mos_toc t;
+    EXPECT(mos_internal_cdtoc_to_toc(b, off, &t));
+    EXPECT_EQ(mos_toc_track_count(&t), 1);
+    EXPECT_EQ(mos_toc_track_control(&t, 0), 0x4);      /* bit 2 = data track */
+    EXPECT((mos_toc_track_control(&t, 0) & 0x4) != 0);
+    return 0;
+}
+
+TEST(cdtoc_to_toc_fail_closed)
+{
+    mos_toc t;
+
+    /* A gap in first..last (track 2 missing) refuses the whole -> fall back. */
+    uint8_t g[256] = {0};
+    size_t off = 4;
+    put_track(g, &off, 1, 1, 0, 0, 2, 0);
+    put_track(g, &off, 1, 3, 0, 0, 22, 0);            /* 2 missing */
+    finalize(g, off, 1, 1);
+    EXPECT(!mos_internal_cdtoc_to_toc(g, off, &t));
+
+    /* A duplicate track number is incoherent -> refuse. */
+    uint8_t d[256] = {0};
+    off = 4;
+    put_track(d, &off, 1, 1, 0, 0, 2, 0);
+    put_track(d, &off, 1, 1, 0, 0, 12, 0);            /* dup */
+    finalize(d, off, 1, 1);
+    EXPECT(!mos_internal_cdtoc_to_toc(d, off, &t));
+
+    /* No track POINTs at all (only lead-out) -> no identity -> refuse. */
+    uint8_t n[64] = {0};
+    off = 4;
+    put_desc(n, &off, 1, 1, 0xA2, 1, 0, 0);
+    finalize(n, off, 1, 1);
+    EXPECT(!mos_internal_cdtoc_to_toc(n, off, &t));
+
+    /* Too-short / NULL stay in bounds and refuse. */
+    EXPECT(!mos_internal_cdtoc_to_toc(n, 3, &t));
+    EXPECT(!mos_internal_cdtoc_to_toc(NULL, sizeof n, &t));
+    EXPECT(!mos_internal_cdtoc_to_toc(n, sizeof n, NULL));
+    return 0;
+}
+
 void register_cdtoc_tests(void)
 {
     RUN(cdtoc_single_session);
@@ -166,4 +258,7 @@ void register_cdtoc_tests(void)
     RUN(cdtoc_partial_session_nulls);
     RUN(cdtoc_non_adr1_ignored);
     RUN(cdtoc_fail_closed_on_hostile_buffers);
+    RUN(cdtoc_to_toc_audio_cd);
+    RUN(cdtoc_to_toc_data_control_bit);
+    RUN(cdtoc_to_toc_fail_closed);
 }

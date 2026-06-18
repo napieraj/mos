@@ -859,17 +859,20 @@ basis here is the source, not a run). (4) *No migration cost* — pre-first-tag,
 there are no consumers of the `toc` fingerprint provenance, so re-sourcing it is
 free (the JSON-schema ADR's mutable-in-place clause).
 
-**The decision, in two parts.**
-- **`session_layout` (shipped this commit).** A new `mos.metadata.v1.disc.session_layout`
-  array — per-session `{session, first_track, last_track, leadout_lba}` — CD-only,
-  null on non-CD or when no `IOCDMedia` node carries a cached TOC. A *sibling* of
+**The decision, in two parts (both shipped).**
+- **`session_layout`.** A new `mos.metadata.v1.disc.session_layout` array —
+  per-session `{session, first_track, last_track, leadout_lba}` — CD-only, null
+  on non-CD or when no `IOCDMedia` node carries a cached TOC. A *sibling* of
   `toc`; it does not alter `toc`.
-- **Primary CD TOC source (the direction; lands next on this branch).**
-  `mos_query_toc` will prefer the cached full-TOC for CDs and fall back to the
-  issued `ReadTableOfContents` when no `IOCDMedia` node is up yet (just-inserted /
-  unrecognized media). DVD/BD are **unchanged** — no cached TOC exists there, so
-  the issued path stays the only route. "Use it for everything" is therefore
-  "use it everywhere it exists, with the issued read as the CD fallback."
+- **Primary CD TOC source.** `mos_query_toc` prefers the cached full-TOC for CDs
+  (`mos_internal_cdtoc_to_toc`, fail-closed to the format-0000b standard) and
+  falls back to the issued `ReadTableOfContents` when no `IOCDMedia` node is up
+  yet (just-inserted / unrecognized media) — and that fallback stays the **only**
+  route for DVD/BD, where no cached TOC exists. So "use it for everything" is
+  "use it everywhere it exists, with the issued read as the CD fallback." The
+  fail-closed cdtoc→toc decode (duplicate track / gap refuses the whole) means a
+  hostile or partial blob degrades to the issued read, never to a half-parsed
+  fingerprint.
 
 **Scope-doctrine compliance.** This adds **no command surface** — `kIOCDMediaTOCKey`
 is a registry property read, not an MMC command, so the one-raw-CDB count stays

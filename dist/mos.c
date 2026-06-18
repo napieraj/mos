@@ -296,6 +296,15 @@ typedef struct mos_session_layout {  /* tagged: mos.h forward-declares opaquely 
 bool mos_internal_cdtoc_parse(const uint8_t *buf, size_t len,
                               mos_session_layout *out);
 
+/* Decode the SAME CDTOC blob into the per-track mos_toc (format-0000b's shape):
+   first/last track, lead-out (the highest session's A2), and {track, adr,
+   control, start_lba} per track. This is what lets the cached full-TOC be the
+   PRIMARY CD TOC source (mos_query_toc). Fail-closed to the same standard as
+   mos_internal_toc_parse — a duplicate track or a gap in first..last refuses
+   the whole, so the caller falls back to the issued READ TOC. False when no
+   coherent track list is present. */
+bool mos_internal_cdtoc_to_toc(const uint8_t *buf, size_t len, mos_toc *out);
+
 
 /* THE DUAL-LENGTH RULE (seam contract O-4; AGENTS scope doctrine layer 3).
  *
@@ -1524,6 +1533,72 @@ bool mos_internal_cdtoc_parse(const uint8_t *buf, size_t len,
         e->have_leadout = acc[s].lead;   e->leadout_lba  = acc[s].lo;
     }
     return out->count > 0;
+}
+
+bool mos_internal_cdtoc_to_toc(const uint8_t *buf, size_t len, mos_toc *out)
+{
+    if (!out) return false;
+    *out = (mos_toc){0};
+    if (!buf || len < CDTOC_HEADER) return false;
+
+    size_t toc_size = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    size_t end = (len < toc_size) ? len : toc_size;
+    if (end < CDTOC_HEADER) return false;
+
+    /* Track descriptors indexed by track number 1..99; A2 carries the disc
+       lead-out (the highest session's). FAIL-CLOSED to the format-0000b
+       standard: a duplicate track or a gap in first..last refuses the whole,
+       and mos_query_toc falls back to the issued READ TOC. */
+    struct { bool seen; uint8_t adr, control; uint32_t lba; }
+        tk[MOS_TOC_MAX_TRACKS + 1];
+    memset(tk, 0, sizeof tk);
+    bool     have_leadout = false;
+    uint32_t leadout = 0;
+    uint8_t  leadout_session = 0;
+
+    for (size_t off = CDTOC_HEADER; off + CDTOC_DESC_LEN <= end;
+         off += CDTOC_DESC_LEN) {
+        const uint8_t *d = &buf[off];
+        if (((d[1] >> 4) & 0x0f) != 0x01) continue;     /* adr 1 only */
+        uint8_t session = d[0];
+        uint8_t point   = d[3];
+        uint32_t lba = mos_internal_cdmsf_to_lba(d[8], d[9], d[10]);
+
+        if (point >= 1u && point <= MOS_TOC_MAX_TRACKS) {
+            if (tk[point].seen) return false;           /* duplicate = incoherent */
+            tk[point].seen    = true;
+            tk[point].adr     = 0x01;
+            tk[point].control = (uint8_t)(d[1] & 0x0f);
+            tk[point].lba     = lba;
+        } else if (point == 0xA2) {                     /* lead-out (per session) */
+            if (!have_leadout || session >= leadout_session) {
+                have_leadout = true; leadout = lba; leadout_session = session;
+            }
+        }
+        /* A0/A1 first/last-track POINTs are advisory; first/last are taken from
+           the identity-bearing track set below. */
+    }
+
+    uint8_t first = 0, last = 0;
+    for (uint8_t t = 1; t <= MOS_TOC_MAX_TRACKS; t++)
+        if (tk[t].seen) { if (!first) first = t; last = t; }
+    if (!first) return false;                           /* no tracks */
+
+    uint8_t n = 0;
+    for (uint8_t t = first; t <= last; t++) {
+        if (!tk[t].seen) return false;                  /* gap in first..last */
+        out->tracks[n].track     = t;
+        out->tracks[n].adr       = tk[t].adr;
+        out->tracks[n].control   = tk[t].control;
+        out->tracks[n].start_lba = tk[t].lba;
+        n++;
+    }
+    out->first_track  = first;
+    out->last_track   = last;
+    out->track_count  = n;
+    out->have_leadout = have_leadout;
+    out->leadout_lba  = leadout;
+    return true;
 }
 
 /* ==== src/mos_config.c ==== */
@@ -3132,15 +3207,35 @@ mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out)
     return MOS_OK;
 }
 
+/* Worst-case CDTOC blob (also reused by mos_query_session_layout below): a
+   conforming CD never approaches this; the parser is bounds-safe on truncation
+   regardless (dual-length rule O-4). */
+#define MOS_CDTOC_REPLY_BUF 4096u
+
 mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
 {
     if (out) *out = NULL;
     if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
-    /* Format 0000b worst case: 4-byte header + 100 descriptors
-       (99 tracks + lead-out) x 8. sizeof buf is the trusted length (O-4);
-       the reply's own TOC Data Length only shrinks the parse. MSF=0 (LBA),
-       starting track 0 (= from first). */
+    /* PRIMARY (CD): the macOS kernel-cached full-TOC (kIOCDMediaTOCKey) — a
+       superset of format-0000b, read with ZERO SCSI commands and no exclusive
+       access, fresh off the current IOCDMedia node. CD-only by construction:
+       the read returns 0 for DVD/BD (no IOCDMedia node) and for a just-inserted
+       CD whose node isn't up yet — both fall through to the issued READ TOC
+       below, which stays the universal path and the only one for DVD/BD.
+       AGENTS.md ADR 2026-06-18. */
+    mos_internal_refresh_media_identity(h);
+    uint8_t cdtoc[MOS_CDTOC_REPLY_BUF];
+    size_t  clen = mos_internal_read_cdtoc(h->svc, cdtoc, sizeof cdtoc);
+    if (clen && mos_internal_cdtoc_to_toc(cdtoc, clen, &h->toc)) {
+        *out = &h->toc;
+        return MOS_OK;
+    }
+
+    /* FALLBACK: the issued READ TOC/PMA/ATIP format 0000b. Worst case: 4-byte
+       header + 100 descriptors (99 tracks + lead-out) x 8. sizeof buf is the
+       trusted length (O-4); the reply's own TOC Data Length only shrinks the
+       parse. MSF=0 (LBA), starting track 0 (= from first). */
     uint8_t         buf[4 + 100 * 8] = {0};
     SCSITaskStatus  st               = 0;
     SCSI_Sense_Data sd               = {0};
@@ -3404,11 +3499,6 @@ mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
     *out = &h->track_info;
     return MOS_OK;
 }
-
-/* Worst-case CDTOC blob: 4-byte header + descriptors. A conforming CD never
-   approaches this (99 tracks + a handful of sessions x 3 lead-in POINTs); the
-   parser is bounds-safe on truncation regardless (dual-length rule O-4). */
-#define MOS_CDTOC_REPLY_BUF 4096u
 
 mos_error mos_query_session_layout(mos_handle_t *h,
                                    const mos_session_layout **out)

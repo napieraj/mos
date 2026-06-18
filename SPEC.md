@@ -101,8 +101,10 @@ code; this table is the citation, not the parse.
 - **Provenance:** the earlier "banked, not built" stance
   (`doc/research/2026-06-14-state-verb-rename.md`; analysis
   `doc/research/2026-06-13-disc-tools-state-survey.md` §6) was overridden
-  2026-06-18 — see the AGENTS.md ADR. The cached full-TOC is being adopted as
-  the **primary** CD TOC source with the issued `ReadTableOfContents` as the
+  2026-06-18 — see the AGENTS.md ADR. The cached full-TOC is now the **primary**
+  CD TOC source: `mos_query_toc` decodes it via `mos_internal_cdtoc_to_toc`
+  (fail-closed to this format-0000b standard — a duplicate track or a gap in
+  first..last refuses the whole), with the issued `ReadTableOfContents` as the
   fallback (no `IOCDMedia` node yet) and the only path for DVD/BD.
 
 ### `src/mos_cdtext.c` — READ TOC/PMA/ATIP format 0101b (CD-TEXT)
