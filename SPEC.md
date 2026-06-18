@@ -106,6 +106,13 @@ code; this table is the citation, not the parse.
   VERSION byte 2; VERSION DESCRIPTORS bytes 58-73 (eight BE16 codes, 0x0000 =
   empty slot). Needs a raw read with allocation length ≥74 — the convenience
   Inquiry returns only the 36-byte header.
+- **Under-delivery refused:** a conformant standard INQUIRY always returns at
+  least the 36-byte standard header (Additional Length ≥31), so a trusted
+  region shorter than 36 bytes means the transport cut the transfer mid-
+  identity (declared > delivered). The parser refuses (returns false) rather
+  than emit a partial vendor/product/revision — `mos drive` prefers this read
+  over the DR cache, so an incomplete read must defer to the complete cached
+  identity. The canonical-data corollary of the dual-length rule (O-4).
 - **Cross-check:** Linux `include/scsi/scsi.h` (the VERSION value table, as
   `resp[2]+1`); sg3_utils `src/sg_inq_data.c` `sg_version_descriptor_arr`
   (the descriptor code→name table; mos maps the "no version claimed" family
@@ -116,6 +123,13 @@ code; this table is the citation, not the parse.
   is the (single-byte) PAGE LENGTH; the serial is the ASCII bytes 4..n.
   Byte 2 stays reserved for this page — it is NOT the high byte of a 2-byte
   length (that generalization is page 0x83's, not 0x80's).
+- **Under-delivery refused / overflow marked:** the serial is a durable cache
+  key, so completeness is enforced two ways. If PAGE LENGTH exceeds the bytes
+  delivered (the transport under-filled the reply), the parser refuses rather
+  than cache a silent prefix — complete or nothing. If the serial is complete
+  on the wire but longer than the output buffer, it is truncated with a visible
+  trailing `...` marker (never a silent prefix); real serials sit far below the
+  64-byte sink, so this is a pathological/hostile-input guard.
 - **Cross-check:** sg3_utils `sg_inq.c` (`fetch_unit_serial_num` →
   `vpd_fetch_page` with maxlen −1) takes the single-byte `b[3]` length and
   the serial at `b + 4`. Linux `drivers/scsi/scsi.c` reads

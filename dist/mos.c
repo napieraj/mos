@@ -2392,8 +2392,10 @@ bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
  * No IOKit: the shell hands us a fixed zero-init buffer (filled via
  * mos_raw_cdb) bounded to the bytes the transport actually returned
  * (dual-length rule O-4 — the realized count, not the device-claimed
- * length, is the trusted span). The page's own PAGE LENGTH can only shrink
- * the serial region within that span, never extend it.
+ * length, is the trusted span). The page's own PAGE LENGTH never extends
+ * past that span; if it exceeds it (the transport under-delivered) the
+ * reply is refused rather than emitted as a prefix — a durable identity key
+ * is complete or nothing (the canonical-data corollary of O-4).
  *
  * Page 0x80 layout (SPC-4 §7.7.13, Unit Serial Number VPD page):
  *   [0]      PERIPHERAL QUALIFIER (7:5) | PERIPHERAL DEVICE TYPE (4:0)
@@ -2410,12 +2412,15 @@ bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
 #define VPD_HDR 4u   /* bytes 0..3 before the serial */
 
 /* Decode page 0x80 into out[0..out_cap). True only when the reply echoes
-   page code 0x80 and carries a non-empty serial (trailing spaces / NULs
-   trimmed). out is always NUL-terminated. A drive that does not implement
-   the page (it is optional) or has none programmed (all-spaces) returns
-   false → the caller leaves serial null, never an empty string. Non-ASCII
-   bytes are copied verbatim and escaped at the output sink
-   (mos_cli_json_str / mos_safe_ascii), as with vendor/product/revision. */
+   page code 0x80 and carries a complete, non-empty serial (trailing spaces /
+   NULs trimmed). out is always NUL-terminated. A drive that does not implement
+   the page (it is optional), has none programmed (all-spaces), or under-
+   delivers the reply (PAGE LENGTH > bytes received) returns false → the caller
+   leaves serial null, never an empty or truncated string. A serial that is
+   complete on the wire but longer than out_cap is truncated with a visible
+   "..." marker (never a silent prefix — see the copy step). Non-ASCII bytes
+   are copied verbatim and escaped at the output sink (mos_cli_json_str /
+   mos_safe_ascii), as with vendor/product/revision. */
 bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
                                      char *out, size_t out_cap)
 {
@@ -2424,11 +2429,22 @@ bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
     if (len < VPD_HDR) return false;          /* no room for the VPD header */
     if (buf[1] != 0x80) return false;         /* wrong page echoed — refuse */
 
-    /* PAGE LENGTH (byte 3) bounded by the bytes actually present (O-4): a
-       hostile/over-long length cannot read past the trusted span. */
+    /* PAGE LENGTH (byte 3) is the serial byte count the drive CLAIMS. The
+       reply must actually carry all of it. If PAGE LENGTH exceeds the bytes
+       delivered (avail — the realized-transfer span, O-4), the transport
+       under-filled (a non-conformant USB-SATA bridge, a short transfer) and we
+       hold only a PREFIX of the serial. REFUSE rather than emit it: this value
+       is a DURABLE IDENTITY KEY the caller caches sticky (mos watch grabs it
+       once per session), and a silent prefix can collide with another drive or
+       misidentify this one — an incomplete key is worse than none. Complete or
+       nothing. (A conforming drive, given mos_serial.c's ample 252-byte
+       allocation, returns the whole serial, so page_len <= avail holds.) This
+       still bounds the read: refusing happens before any serial byte is read,
+       so a hostile over-long PAGE LENGTH cannot read past the trusted span. */
     size_t page_len = buf[3];
     size_t avail    = len - VPD_HDR;
-    size_t serial_len = (page_len < avail) ? page_len : avail;
+    if (page_len > avail) return false;
+    size_t serial_len = page_len;
 
     /* Trim trailing wire padding — spaces (SPC pad) and NULs. Leading and
        interior bytes are data and stay (mirrors mos_dr.c identity trim). */
@@ -2439,11 +2455,35 @@ bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
     }
     if (serial_len == 0) return false;        /* page present, no serial */
 
-    /* Copy bounded by out_cap (reserve the NUL). A serial longer than the
-       buffer is truncated, never overflowed — real serials are << the cap. */
-    size_t copy = (serial_len < out_cap - 1) ? serial_len : out_cap - 1;
-    for (size_t i = 0; i < copy; i++) out[i] = (char)buf[VPD_HDR + i];
-    out[copy] = 0;
+    /* Copy into out, reserving the NUL. A serial that fits is copied whole.
+       One that exceeds the buffer is truncated WITH A VISIBLE TRAILING MARKER
+       ("…" as ASCII "..."), never silently: this value can be cached as a
+       durable identity key, and a silent prefix is indistinguishable from a
+       complete serial — a different-but-equally-wrong key. The marker signals
+       "incomplete" so the consumer never mistakes the prefix for the whole
+       serial. ASCII so it survives both sinks unescaped (mos_safe_ascii /
+       mos_cli_json_str). Real serials sit far below the buffer (mos_serial.c
+       sinks 64 bytes), so this fires only on a pathological/hostile over-long
+       serial; it never overflows. (Distinct from the transport-under-delivery
+       refusal above: there we hold only a prefix of UNKNOWN length and refuse;
+       here we hold the WHOLE serial and our sink is merely too small, so the
+       marked prefix is honest about exactly what it is.) */
+    static const char MARK[] = "...";
+    const size_t mark_len = sizeof MARK - 1u;       /* 3 */
+    if (serial_len <= out_cap - 1u) {
+        for (size_t i = 0; i < serial_len; i++) out[i] = (char)buf[VPD_HDR + i];
+        out[serial_len] = 0;
+    } else if (out_cap > mark_len + 1u) {
+        size_t copy = out_cap - 1u - mark_len;
+        for (size_t i = 0; i < copy; i++) out[i] = (char)buf[VPD_HDR + i];
+        for (size_t i = 0; i < mark_len; i++) out[copy + i] = MARK[i];
+        out[copy + mark_len] = 0;
+    } else {
+        /* out_cap too small even to hold the marker — plain bounded copy. */
+        size_t copy = out_cap - 1u;
+        for (size_t i = 0; i < copy; i++) out[i] = (char)buf[VPD_HDR + i];
+        out[copy] = 0;
+    }
     return true;
 }
 
@@ -2464,7 +2504,11 @@ bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
  * No IOKit: the shell hands us a fixed zero-init buffer bounded to the bytes
  * the transport actually returned. Every length here is device-reported,
  * hence hostile; each field is bounded by BOTH the passed len and the reply's
- * own Additional Length (byte 4) — the dual-length rule (O-4).
+ * own Additional Length (byte 4) — the dual-length rule (O-4). A reply whose
+ * trusted region does not reach the 36-byte standard header (an under-
+ * delivered transfer that cut the identity short) is REFUSED, not surfaced as
+ * a partial identity: this is canonical drive truth the CLI prefers over the
+ * DR cache, so an incomplete read must defer to it (see the parser body).
  *
  * Standard INQUIRY layout (SPC-4 §6.4.2):
  *   [2]      VERSION              — SPC compliance level
@@ -2476,9 +2520,10 @@ bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
  */
 
 
-#define VD_HDR     5u    /* through ADDITIONAL LENGTH (byte 4) */
-#define VD_OFFSET 58u    /* first version descriptor           */
-#define VD_MAX     8u    /* eight descriptor slots, bytes 58-73 */
+#define VD_HDR      5u   /* through ADDITIONAL LENGTH (byte 4)            */
+#define INQ_STD_HDR 36u  /* the standard 36-byte header (vendor..revision) */
+#define VD_OFFSET  58u   /* first version descriptor                      */
+#define VD_MAX      8u   /* eight descriptor slots, bytes 58-73           */
 
 /* Copy the ASCII field at [start, start+width) into out[0..out_cap), bounded
    by the trusted `end`, trailing spaces/NULs trimmed. out is "" when the
@@ -2504,13 +2549,33 @@ bool mos_internal_inqdata_parse(const uint8_t *buf, size_t len,
     *out = (mos_drive_inquiry){0};
     if (!buf || len < VD_HDR) return false;   /* need the fixed header */
 
-    out->spc_version = buf[2];
-
     /* Trusted end: the smaller of the buffer span and the reply's own
        declared total (5 + Additional Length). A lying-long Additional Length
        cannot extend past `len`; an honest-short one shrinks the region. */
     size_t declared = VD_HDR + (size_t)buf[4];
     size_t end = (declared < len) ? declared : len;
+
+    /* A conformant STANDARD INQUIRY always returns at least the 36-byte
+       standard header (Additional Length >= 31), so vendor (8-15), product
+       (16-31), and revision (32-35) are wholly present. If the trusted region
+       stops short of byte 36 — the device declared a sub-header total OR the
+       transport under-delivered (declared > delivered, so the dual-length
+       floor caps `end` at the bytes that actually arrived) — at least one
+       identity field is cut or absent. REFUSE the whole reply rather than
+       surface a partial identity: `mos drive` treats this read as the
+       drive's CANONICAL truth and prefers it over the DiscRecording cache
+       (cli/drive.c), so a half-arrived "BD" (a USB-SATA bridge that cut the
+       transfer mid-PRODUCT) would mask the full cached model. Returning false
+       makes mos_query_drive_inquiry fail → the caller falls back to DR and the
+       COMPLETE identity wins. Bounds stay safe: the gate precedes every field
+       read, so a truncated reply is rejected before a byte is copied. This is
+       the dual-length rule's canonical-data corollary — under-delivery of a
+       value the caller trusts as authoritative is refused, not trusted-as-
+       short (AGENTS.md; contrast a genuinely short reply, declared <= len,
+       which reaches byte 36 and parses). */
+    if (end < INQ_STD_HDR) return false;
+
+    out->spc_version = buf[2];
 
     copy_field(buf, end,  8u,  8u, out->vendor,   sizeof out->vendor);
     copy_field(buf, end, 16u, 16u, out->product,  sizeof out->product);
