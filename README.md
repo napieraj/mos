@@ -424,34 +424,15 @@ CoreFoundation, DiscRecording, and DiskArbitration with
 
 The core pattern — act on every disc that turns readable, on any drive,
 hot-plug included — is one pipeline. No polling, no `sleep`. `mos` says
-what the disc *is*; existing tools do the work:
+what the disc *is*; existing tools do the work. The `cd` branch shows what
+"derive client-side" under `metadata` means: a **MusicBrainz Disc ID** is
+a pure function of the audio TOC `mos` already emits, so no second tool
+touches the drive — `jq` builds libdiscid's hash input (first/last track,
+then 100 frame offsets, each track and the lead-out as its LBA + 150) and
+`sha1` plus URL-safe base64 finish it.
 
 ```sh
-mos watch | jq --unbuffered -r '
-    select(.event != "error" and .state == "ready")
-    | "\(.bsd_node) \(.media_class // "unknown")"' |
-while read -r dev class; do
-    case "$class" in
-        cd)     mos_discid "$dev" ;;                       # audio-CD key (below)
-        dvd|bd) makemkvcon mkv "dev:${dev/disk/rdisk}" all "$HOME/Rips" ;;
-    esac
-done
-```
-
-One event per transition drives the loop: inserting a disc fires it
-once, swapping discs fires `media_changed`, a drive plugged in mid-run
-joins the stream live, and an ejected drive doesn't end it. For a
-one-shot answer (cron, a `tray` hook), `mos state <drive> --json` is the
-same contract in a single document.
-
-The `cd` branch shows what "derive client-side" under `metadata` means: a
-**MusicBrainz Disc ID** is a pure function of the audio TOC `mos` already
-emits, so no second tool touches the drive. `jq` builds libdiscid's hash
-input (first/last track, then 100 frame offsets — each track and the
-lead-out as its LBA + 150), and the system `sha1` and URL-safe base64
-finish it:
-
-```sh
+# A MusicBrainz Disc ID, computed entirely from the TOC mos emits.
 mos_discid() {                              # mos_discid <cd-drive>
     mos metadata "$1" --json | jq -r '
         .disc.toc as $t
@@ -463,15 +444,29 @@ mos_discid() {                              # mos_discid <cd-drive>
       while read o; do s="$s$(printf '%08X' "$o")"; done
       printf '%s' "$s" | openssl dgst -sha1 -binary | base64 | tr '+/=' '._-'; }
 }
+
+# Act on every disc the moment it turns ready, on any drive, hot-plug
+# included. One event per transition — an insert fires once, a swap fires
+# media_changed, a hot-plugged drive joins live, an eject doesn't end it.
+mos watch | jq --unbuffered -r '
+    select(.event != "error" and .state == "ready")
+    | "\(.bsd_node) \(.media_class // "unknown")"' |
+while read -r dev class; do
+    case "$class" in
+        cd)     mos_discid "$dev" ;;                       # audio-CD database key
+        dvd|bd) makemkvcon mkv "dev:${dev/disk/rdisk}" all "$HOME/Rips" ;;
+    esac
+done
 ```
 
-It matches libdiscid's own `discid` byte-for-byte: the standard reference
-disc (track offsets 150, 15363, 32314, 46592, 63414, 80489; lead-out
-95462) yields `49HHV7Eb8UKF3aQiNmu1GR8vKTY-`. Feed it to
+`mos_discid` matches libdiscid's own `discid` byte-for-byte: the standard
+reference disc (track offsets 150, 15363, 32314, 46592, 63414, 80489;
+lead-out 95462) yields `49HHV7Eb8UKF3aQiNmu1GR8vKTY-`. Feed it to
 `https://musicbrainz.org/ws/2/discid/<id>?fmt=json` for the release. The
 same shape — `jq` over `disc.toc` plus a hasher — yields the freedb/CDDB
 id or an AccurateRip key; `mos` ships the primitive, the recipe stays
-yours.
+yours. For a one-shot answer (cron, a `tray` hook), `mos state <drive>
+--json` is the same contract in a single document.
 
 The full version of this dispatcher —
 [`examples/disc-ingest.sh`](examples/disc-ingest.sh) — grows the two-line
