@@ -15,6 +15,7 @@
           "adr": 1,
           "control": 4,
           "data": true,
+          "pre_emphasis": false,
           "start_lba": 0
         }
       ]

@@ -194,6 +194,9 @@ void mos_internal_refresh_media_identity(mos_handle_t *h)
     h->media_type = (mos_internal_read_media_type(h->svc, type, sizeof type) > 0)
                         ? mos_internal_media_type_token(type)
                         : NULL;
+    /* Kernel IOMedia Writable flag off the same node — tri-state -1/0/1. A
+       mechanism fact (the kernel's bit), not a blank/appendable assertion. */
+    h->writable = (signed char)mos_internal_read_writable(h->svc);
 }
 
 /* Copy the kernel-cached full-TOC (kIOCDMediaTOCKey, a CDTOC CFData blob) off
@@ -268,6 +271,33 @@ size_t mos_internal_read_media_type(io_service_t svc, char *buf, size_t cap)
         return strlen(buf);   /* MOS_CF_AUTO / MOS_IO_AUTO release on return */
     }
     return 0;
+}
+
+/* Read the kernel IOMedia Writable flag off the drive's optical media node. Same
+   walk as read_media_type (so it tracks the same whole-disk optical node, not a
+   partition), but reads kIOMediaWritableKey as a CFBoolean. -1 when no optical
+   media node carries the key (no media / not published yet), else 0/1. */
+int mos_internal_read_writable(io_service_t svc)
+{
+    io_iterator_t it MOS_IO_AUTO = IO_OBJECT_NULL;
+    if (IORegistryEntryCreateIterator(svc, kIOServicePlane,
+            kIORegistryIterateRecursively, &it) != KERN_SUCCESS) {
+        return -1;
+    }
+    for (;;) {
+        io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
+        if (child == IO_OBJECT_NULL) break;
+        if (!IOObjectConformsTo(child, "IOCDMedia")  &&
+            !IOObjectConformsTo(child, "IODVDMedia") &&
+            !IOObjectConformsTo(child, "IOBDMedia")) continue;
+
+        CFTypeRef v MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
+                child, CFSTR(kIOMediaWritableKey), kCFAllocatorDefault, 0);
+        if (!v || CFGetTypeID(v) != CFBooleanGetTypeID()) continue;
+
+        return CFBooleanGetValue((CFBooleanRef)v) ? 1 : 0;
+    }
+    return -1;
 }
 
 /* ---- Enumeration ---------------------------------------------------- */

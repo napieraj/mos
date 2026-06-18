@@ -12,6 +12,7 @@
   "current_profile_name": "dvd_rom",
   "media_class": "dvd",
   "media_type": "dvd_rom",
+  "writable": false,
   "vendor": "HL-DT-ST",
   "product": "BD-RE BH16NS55",
   "firmware": "1.00",

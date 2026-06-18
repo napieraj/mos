@@ -208,6 +208,7 @@ static void fill_event_state_fields(mos_watch_event *e,
     e->revision        = r->revision;
     e->serial          = r->serial;   /* NULL until a free poll grabs it (mos_watch.c) */
     e->media_type      = r->media_type;  /* static token storage or NULL — no re-home */
+    e->writable        = r->writable;    /* tri-state -1/0/1, plain scalar */
     e->sense_key       = r->sense_key;
     e->asc             = r->asc;
     e->ascq            = r->ascq;

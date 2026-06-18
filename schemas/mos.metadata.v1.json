@@ -114,6 +114,7 @@
                   "adr",
                   "control",
                   "data",
+                  "pre_emphasis",
                   "start_lba"
                 ],
                 "additionalProperties": false,
@@ -136,6 +137,10 @@
                   "data": {
                     "type": "boolean",
                     "description": "Q-channel control bit 2 (data track). Derived from control; carried explicitly so consumers need no bit arithmetic."
+                  },
+                  "pre_emphasis": {
+                    "type": "boolean",
+                    "description": "Audio track recorded with 50/15 us pre-emphasis (Q-channel control bit 0). Derived from control like 'data', and meaningful only on AUDIO tracks: on a data track (control bit 2 set) bit 0 is not pre-emphasis, so this is always false there. BEST-EFFORT, like the audio-ripping tools that read it from the TOC: a disc that flags pre-emphasis only in the R-W subchannel (which mos does not read) reads false here. A consumer that must be exact de-emphasizes on subchannel evidence too."
                   },
                   "start_lba": {
                     "type": "integer",

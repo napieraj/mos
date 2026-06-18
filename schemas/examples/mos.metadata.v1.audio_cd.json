@@ -16,6 +16,7 @@
           "adr": 1,
           "control": 0,
           "data": false,
+          "pre_emphasis": false,
           "start_lba": 0
         },
         {
@@ -23,6 +24,7 @@
           "adr": 1,
           "control": 0,
           "data": false,
+          "pre_emphasis": false,
           "start_lba": 24537
         },
         {
@@ -30,6 +32,7 @@
           "adr": 1,
           "control": 0,
           "data": false,
+          "pre_emphasis": false,
           "start_lba": 47477
         },
         {
@@ -37,6 +40,7 @@
           "adr": 1,
           "control": 0,
           "data": false,
+          "pre_emphasis": false,
           "start_lba": 67852
         }
       ]

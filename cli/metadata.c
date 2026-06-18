@@ -86,14 +86,21 @@ static void emit_json(const metadata_doc *d)
         size_t n = mos_toc_track_count(d->toc);
         for (size_t i = 0; i < n; i++) {
             uint8_t control = mos_toc_track_control(d->toc, i);
+            /* data = control bit 2; pre_emphasis = control bit 0, but bit 0 is
+               pre-emphasis ONLY on an audio track, so a data track is always
+               false (same best-effort TOC-flag basis as `data`). */
+            bool is_data = (control & 0x4) != 0;
+            bool pre_emph = !is_data && (control & 0x1) != 0;
             fprintf(stdout,
                     "%s\n        {\"track\": %u, \"adr\": %u, "
-                    "\"control\": %u, \"data\": %s, \"start_lba\": %u}",
+                    "\"control\": %u, \"data\": %s, \"pre_emphasis\": %s, "
+                    "\"start_lba\": %u}",
                     i ? "," : "",
                     mos_toc_track_number(d->toc, i),
                     mos_toc_track_adr(d->toc, i),
                     control,
-                    (control & 0x4) ? "true" : "false",
+                    is_data ? "true" : "false",
+                    pre_emph ? "true" : "false",
                     mos_toc_track_start_lba(d->toc, i));
         }
         fputs("\n      ]\n    }", stdout);

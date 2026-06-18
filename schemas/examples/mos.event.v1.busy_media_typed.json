@@ -10,5 +10,6 @@
   "prev_state": "ready",
   "current_profile": "0x0000",
   "media_type": "bd_re",
+  "writable": true,
   "latency_ms": 27
 }

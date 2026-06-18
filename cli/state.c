@@ -12,7 +12,7 @@ static void emit_human(const mos_state_result *r, int index1,
     /* Order: addressing, answer, evidence, media, identity. Suppression
        mirrors the JSON contract (omitted pairs absent); structural rows
        show "-" via NULL. */
-    mos_cli_human_pair pairs[12];
+    mos_cli_human_pair pairs[13];
     size_t n = 0;
 
     /* Index, Registry ID, BSD. The selector the caller typed is dropped;
@@ -86,6 +86,12 @@ static void emit_human(const mos_state_result *r, int index1,
     const char *media_type = mos_state_result_media_type(r);
     if (media_type)
         pairs[n++] = (mos_cli_human_pair){ "Media", media_type };
+
+    /* Writable: the kernel's IOMedia flag, tri-state — row suppressed when
+       absent (-1), mirroring the JSON key suppression. yes/no, not blank. */
+    int writable = mos_state_result_writable(r);
+    if (writable >= 0)
+        pairs[n++] = (mos_cli_human_pair){ "Writable", writable ? "yes" : "no" };
 
     /* Volume name: the second identical-drives disambiguator (media class
        is the first). Disc-controlled bytes, escaped like the identity rows
@@ -171,6 +177,16 @@ static void emit_json(const mos_state_result *r, int index1,
             fputs(",\n  \"media_type\": ", stdout);
             mos_cli_json_str(stdout, media_type);
         }
+    }
+
+    /* Kernel IOMedia Writable flag (zero-MMC, off the same node). Tri-state:
+       emit the boolean only when known (>= 0); -1 (absent) suppresses the key,
+       mirroring media_type. The mechanism bit, not a blank assertion. */
+    {
+        int writable = mos_state_result_writable(r);
+        if (writable >= 0)
+            fprintf(stdout, ",\n  \"writable\": %s",
+                    writable ? "true" : "false");
     }
 
     /* Mounted-volume name (DA one-shot). Present only when non-empty —

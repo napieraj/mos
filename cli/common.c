@@ -216,6 +216,13 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
                 mos_cli_json_str(stdout, mtype);
             }
         }
+        /* Kernel IOMedia Writable flag — tri-state, emitted only when known
+           (>= 0), NOT profile-gated (present on a not-ready event too). */
+        {
+            int writable = mos_watch_event_writable(e);
+            if (writable >= 0)
+                fprintf(stdout, ",\"writable\":%s", writable ? "true" : "false");
+        }
         if (vendor && *vendor) {
             fputs(",\"vendor\":", stdout);  mos_cli_json_str(stdout, vendor);
         }

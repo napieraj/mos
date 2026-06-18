@@ -45,6 +45,9 @@ struct mos_handle {
                                                   the kernel "Type" key, NULL if
                                                   absent (query-time, like bsd_unit);
                                                   points to static token storage */
+    signed char               writable;        /* kIOMediaWritableKey tri-state:
+                                                  -1 absent, 0 read-only, 1 writable
+                                                  (query-time, like bsd_unit) */
     char                      vendor_str[9];   /* 8 chars + NUL */
     char                      product_str[17]; /* 16 chars + NUL */
     char                      revision_str[5]; /* 4 chars + NUL */
@@ -208,6 +211,12 @@ size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap);
    IORegistry read like read_cdtoc, but media-class-agnostic. mos_internal_
    media_type_token maps the result to a token. */
 size_t mos_internal_read_media_type(io_service_t svc, char *buf, size_t cap);
+
+/* Read the kernel IOMedia Writable flag (kIOMediaWritableKey, OSBoolean) off the
+   drive's IO{CD,DVD,BD}Media node. Tri-state return: -1 = no optical media node /
+   key absent, 0 = read-only, 1 = writable. Zero SCSI commands, no exclusive
+   access — the same optical-node walk as read_media_type, reading a CFBoolean. */
+int mos_internal_read_writable(io_service_t svc);
 
 /* Issue one 6-byte tray CDB (START STOP UNIT 0x1B / PREVENT ALLOW MEDIUM
    REMOVAL 0x1E) via mos_raw_cdb and classify the result. Negative mos_error

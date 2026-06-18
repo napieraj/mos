@@ -44,6 +44,7 @@ Registry ID:  4295032831
       State:  ready
     Profile:  bd — bd_rom
       Media:  bd_rom
+   Writable:  no
      Vendor:  HL-DT-ST
     Product:  BD-RE WH16NS60
    Firmware:  1.00
@@ -63,6 +64,7 @@ $ mos state 1 --json
   "current_profile_name": "bd_rom",
   "media_class": "bd",
   "media_type": "bd_rom",
+  "writable": false,
   "vendor": "HL-DT-ST",
   "product": "BD-RE WH16NS60",
   "firmware": "1.00"
@@ -169,6 +171,15 @@ suppressed off the ready state, `media_type` is present whenever a disc is in th
 drive — so a `loading` or `busy` event that shows no profile can still name the
 disc, and at finer grain than `media_class` (`bd_r` vs `bd_re` vs `bd_rom`, not
 just `bd`). It is absent when no media node carries a Type.
+
+Alongside it, `writable` (the kernel's `kIOMediaWritableKey` flag, same zero-MMC
+read) reports whether the media node accepts writes — `true` for a blank or
+appendable recordable, `false` for a ROM or write-protected disc — so a watch
+consumer can gate blank/recordable media without a second query. It is the
+kernel's *mechanism* bit, not a blank/appendable/complete classification: that
+finer tri-state is a READ DISC INFORMATION fact, surfaced only by `mos metadata`
+(it stays off the poll path by design). Like `media_type`, `writable` is present
+on not-ready events and absent when no media node carries the flag.
 
 ### metadata — disc identity
 

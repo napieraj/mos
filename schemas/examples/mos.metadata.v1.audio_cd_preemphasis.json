@@ -1,0 +1,48 @@
+{
+  "schema": "mos.metadata.v1",
+  "bsd_node": "/dev/disk4",
+  "captured_at": "2026-06-12T19:48:00.123Z",
+  "volume_path": null,
+  "disc": {
+    "profile": "0x0008",
+    "class": "cd",
+    "toc": {
+      "first_track": 1,
+      "last_track": 2,
+      "leadout_lba": 50000,
+      "tracks": [
+        {
+          "track": 1,
+          "adr": 1,
+          "control": 0,
+          "data": false,
+          "pre_emphasis": false,
+          "start_lba": 0
+        },
+        {
+          "track": 2,
+          "adr": 1,
+          "control": 1,
+          "data": false,
+          "pre_emphasis": true,
+          "start_lba": 24537
+        }
+      ]
+    },
+    "disc_info": {
+      "status": "complete",
+      "erasable": false,
+      "sessions": 1,
+      "tracks": 2,
+      "bg_format": 0,
+      "bg_format_name": "none"
+    },
+    "disc_structure": null,
+    "volume_name": null,
+    "track_info": null,
+    "cdtext": null,
+    "session_layout": [
+      { "session": 1, "first_track": 1, "last_track": 2, "leadout_lba": 50000 }
+    ]
+  }
+}
