@@ -466,10 +466,15 @@ edit; they stand, this rebuts on the merits):
 
 **DA-action re-admission (narrows the 2026-06-11 "DA retired entirely" /
 2026-06-12 "synchronous description read ONLY" addenda).** `mos_internal_da_unmount`
-is the SINGLE DiskArbitration **action** mos performs: it needs a scheduled
-session + run loop (the callback modality), unlike the synchronous
-`DADiskCopyDescription` those addenda authorized. It is bounded by a 5 s
-run-loop deadline and confined to `tray eject --force`. DA stays opt-out
+is the SINGLE DiskArbitration **action** mos performs. `DADiskUnmount` is async
+(returns void, delivers via callback), unlike the synchronous
+`DADiskCopyDescription` those addenda authorized — so mos makes it synchronous-
+from-its-side: deliver the callback on a global dispatch queue
+(`DASessionSetDispatchQueue`) and block on a semaphore until it fires. The wait
+is UNBOUNDED by design: the callback fires exactly once when the unmount
+resolves, so the context can't outlive a late callback (no use-after-free), and
+a wedged force-unmount blocks here exactly as `diskutil` would (the I/O path is
+stuck). Confined to `tray eject --force`. DA stays opt-out
 (`MOS_USE_DISKARBITRATION=0`): the no-DA build links a stub returning false, so
 a forced eject of a mounted disc reports `MOS_ERR_BUSY` (capability absent) —
 the consumer unmounts with `diskutil unmountDisk` first, as without `--force`.

@@ -77,7 +77,8 @@ void mos_cli_print_usage(FILE *f)
         "  -i, --index N     1-based drive index (the Index column in\n"
         "                    'mos list'); explicit form of the positional\n"
         "      --bsd NAME    BSD form; explicit form of the positional\n"
-        "      --force       tray eject: ALLOW (unlock) before ejecting\n"
+        "      --force       tray eject: open no matter what (force-unmount +\n"
+        "                    clear locks, then eject)\n"
         "      --persistent  tray lock/unlock: the Persistent Prevent state\n"
         "                    (survives the operator eject button as an event)\n"
 #ifdef MOS_CLI_PROBE

@@ -24,7 +24,8 @@ extern uint64_t    opt_registry;  /* 0 = unset; set only positionally */
 extern const char *opt_tray_action; /* tray sub-verb eject|close|lock|unlock;
                                        NULL = missing. Parsed argv (opt_), positional. */
 extern bool        flag_json;
-extern bool        flag_force;     /* tray eject --force (unlock-then-eject) */
+extern bool        flag_force;     /* tray eject --force (open no matter what:
+                                      force-unmount + clear locks, then eject) */
 extern bool        flag_persistent;/* tray lock/unlock --persistent */
 extern bool        flag_dump;     /* probe --dump one-shot DR capture */
 extern const char *progname;

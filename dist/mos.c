@@ -1217,9 +1217,9 @@ bool mos_internal_da_volume(const char *bsd_name,
 
 /* Force-unmount every volume on whole-disk "diskN" via DiskArbitration
    (kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole). True on success.
-   The SOLE DA action mos performs (scheduled session + run loop), used only by
-   `tray eject --force`. Returns false when DA is opted out at build time
-   (capability absent) — the force eject then reports the mount as BUSY. */
+   The SOLE DA action mos performs (async DADiskUnmount, awaited on a semaphore),
+   used only by `tray eject --force`. Returns false when DA is opted out at build
+   time (capability absent) — the force eject then reports the mount as BUSY. */
 bool mos_internal_da_unmount(const char *bsd_name);
 
 /* Extract one device's snapshot (registry id, bsd unit, identity) from a
@@ -1906,6 +1906,7 @@ void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
 
 #if MOS_USE_DISKARBITRATION
 #include <DiskArbitration/DiskArbitration.h>
+#include <dispatch/dispatch.h>   /* semaphore wait on the async unmount callback */
 
 /* Mounted-volume name and mount path for a whole-disk "diskN". True only
    when DA has a description AND the volume is mounted (VolumePath present);
@@ -1961,20 +1962,15 @@ bool mos_internal_da_volume(const char *bsd_name,
     return mounted;
 }
 
-/* Run-loop deadline for the force-unmount, in 100 ms ticks (5 s total). The
-   unmount is async (callback), so we pump the run loop until it lands or the
-   deadline passes — never blocking the caller indefinitely. */
-#define MOS_DA_UNMOUNT_DEADLINE_TICKS 50
-
-typedef struct { bool done; bool ok; } mos_da_unmount_ctx;
+typedef struct { dispatch_semaphore_t sem; bool ok; } mos_da_unmount_ctx;
 
 static void mos_internal_da_unmount_cb(DADiskRef disk,
                                        DADissenterRef dissenter, void *context)
 {
     (void)disk;
     mos_da_unmount_ctx *c = (mos_da_unmount_ctx *)context;
-    c->ok   = (dissenter == NULL);   /* NULL dissenter ⇒ unmount accepted */
-    c->done = true;
+    c->ok = (dissenter == NULL);     /* NULL dissenter ⇒ unmount accepted */
+    dispatch_semaphore_signal(c->sem);
 }
 
 /* Force-unmount EVERY volume on whole-disk "diskN"
@@ -1982,11 +1978,15 @@ static void mos_internal_da_unmount_cb(DADiskRef disk,
    ONLY the `tray eject --force` path calls this: a forced unmount kills open
    file handles (data-loss capable) — that is the "open no matter what"
    contract, strictly opt-in behind --force. This is the SINGLE DiskArbitration
-   ACTION mos performs; unlike the synchronous description read above it needs a
-   scheduled session + run loop (the callback modality). DADiskUnmount takes the
-   disk, not a session (the disk carries its session); verified against DADisk.h
-   (options kDADiskUnmountOptionForce=0x00080000, Whole=0x1; success = NULL
-   dissenter). */
+   ACTION mos performs; unlike the synchronous description read above, DADiskUnmount
+   is asynchronous (returns void, delivers via callback — verified against
+   DADisk.h: takes the disk, not a session; options Force=0x00080000, Whole=0x1;
+   success = NULL dissenter). We make it synchronous-from-our-side: deliver the
+   callback on a background queue and block this thread on a semaphore until it
+   fires. The wait is UNBOUNDED on purpose — the callback is guaranteed exactly
+   once when the unmount resolves, so the context cannot outlive a late callback
+   (no use-after-free), and a genuinely wedged force-unmount blocks here just as
+   `diskutil` would (the I/O path itself is stuck). */
 bool mos_internal_da_unmount(const char *bsd_name)
 {
     if (!bsd_name || !bsd_name[0]) return false;
@@ -1998,16 +1998,17 @@ bool mos_internal_da_unmount(const char *bsd_name)
     DADiskRef disk = DADiskCreateFromBSDName(kCFAllocatorDefault,
                                              session, bsd_name);
     if (disk) {
-        mos_da_unmount_ctx ctx = { false, false };
-        CFRunLoopRef       rl  = CFRunLoopGetCurrent();
-        DASessionScheduleWithRunLoop(session, rl, kCFRunLoopDefaultMode);
+        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+        mos_da_unmount_ctx   ctx = { sem, false };
+        DASessionSetDispatchQueue(session,
+            dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
         DADiskUnmount(disk,
                       kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole,
                       mos_internal_da_unmount_cb, &ctx);
-        for (int i = 0; i < MOS_DA_UNMOUNT_DEADLINE_TICKS && !ctx.done; i++)
-            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, true);
-        DASessionUnscheduleFromRunLoop(session, rl, kCFRunLoopDefaultMode);
-        ok = ctx.done && ctx.ok;
+        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+        DASessionSetDispatchQueue(session, NULL);   /* detach before release */
+        ok = ctx.ok;
+        dispatch_release(sem);
         CFRelease(disk);
     }
 
