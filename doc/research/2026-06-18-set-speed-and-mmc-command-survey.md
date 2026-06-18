@@ -42,17 +42,21 @@ three lines after admitting the read. The tray verbs report a *mechanism fact*
 and change a *removal* state mos already models; set-speed tunes a *policy* mos
 does not model and cannot honestly read back.
 
-**The MMC frontier worth keeping warm is entirely read-only.** Three genuinely
-in-remit, not-yet-built reads are each a clean `mos.drive.v1` / `mos.capacity.v1`
-enrichment behind a consumer gate: **READ TRACK INFORMATION** (0x52 — NWA / track
-bounds, the blank-media capacity peer to READ FORMAT CAPACITIES), **READ DISC
-STRUCTURE** (0xAD — layer count / disc type / OTP-PTP, the physical-format
-identity GET CONFIGURATION can't carry), and **MECHANISM STATUS** (0xBD — changer
-slot state, the one mechanical fact 0x2A and GESN both omit). Each is convenience-
-first or a sixth-raw-CDB-grade ask, each is deferrable behind a named falsifier,
-none reopens the command surface the way set-speed would. Everything past them
-(MODE SELECT, FORMAT UNIT, BLANK, WRITE, CLOSE TRACK/SESSION, SEND/REPORT KEY) is
-firmly out and stays out.
+**The MMC frontier worth keeping warm is entirely read-only — and is mostly
+already built.** Correction to this note's first draft (caught when the user
+asked to be walked through "the strongest one"): **READ TRACK INFORMATION (0x52)
+and READ DISC STRUCTURE (0xAD) are already shipped**, both as non-exclusive
+convenience reads — the draft wrongly listed them as not-yet-built candidates
+without grepping the tree (`src/mos_trackinfo.c`, `src/mos_physstruct.c` /
+`src/mos_discstruct.c`; full inventory in Part 4). The genuinely-unbuilt
+read-only reads are only two, and both are weak: **MECHANISM STATUS** (0xBD —
+changer slot state, the one mechanical fact 0x2A and GESN both omit) and **READ
+BUFFER CAPACITY** (0x5C — live buffer fill), each deferrable behind a named
+consumer that does not yet exist. The more honest "frontier" is the **residue
+inside already-shipped commands** — chiefly that the 0x52 read is *first-track
+only* (no multi-track / multi-session walk). Everything past these (MODE SELECT,
+FORMAT UNIT, BLANK, WRITE, CLOSE TRACK/SESSION, SEND/REPORT KEY) is firmly out
+and stays out.
 
 **Recommendation: record set-speed as a dated decline (this note is the record);
 keep GET PERFORMANCE read-only; park the three reads in ROADMAP as consumer-gated
@@ -174,27 +178,34 @@ dated entry to make then. Today: decline.
 
 ## Part 4 — the read-only MMC frontier (what *is* worth considering)
 
-The honest other half of the question. These are read-only, oracle-is-MMC,
-genuinely in or one-step-outside the remit. None is committed; each is a
-consumer-gated enrichment.
+The honest other half of the question — corrected after auditing the actual
+command surface (the first draft listed shipped commands as candidates). These
+are read-only, oracle-is-MMC, genuinely in or one-step-outside the remit.
 
-**Already shipped (for orientation — the in-remit reads mos issues today):** TEST
-UNIT READY, GET CONFIGURATION, GET EVENT STATUS NOTIFICATION (the one raw state
-CDB), READ TOC/PMA/ATIP (0x43 — `ReadTableOfContents`, both format 0000b and the
-CD-TEXT 0101b decode, `src/mos_query.c`), READ DISC INFORMATION (0x51,
-convenience), INQUIRY (0x12, standard + VPD 0x80), MODE SENSE 10 (0x5A, pages
-0x2A/0x01), GET PERFORMANCE (0xAC, read-only), READ FORMAT CAPACITIES (0x23),
-REQUEST SENSE (0x03, BG-format progress). The raw-CDB count stands at one-of-five
-(GESN, START STOP UNIT, PREVENT ALLOW, INQUIRY, READ FORMAT CAPACITIES).
+**Already shipped — the in-remit reads mos issues today** (full audit:
+`grep '(\*h->mmc)->' src/*.c` plus the `mos_raw_cdb` call sites):
 
-| Command (opcode) | In-remit? | What it adds | Path | Status / gate |
+- *Convenience methods (non-exclusive, no raw CDB):* TEST UNIT READY, GET
+  CONFIGURATION, MODE SENSE 10 (pages 0x2A / 0x01), READ DISC INFORMATION (0x51),
+  READ TOC/PMA/ATIP (0x43, format 0000b + CD-TEXT 0101b), **READ TRACK
+  INFORMATION (0x52)**, **READ DISC STRUCTURE (0xAD, DVD/HD-DVD physical +
+  copyright, BD disc-info)**, GET PERFORMANCE (0xAC, read-only).
+- *Raw CDBs (exclusive, `mos_raw_cdb`):* GET EVENT STATUS NOTIFICATION (0x4A,
+  state), START STOP UNIT (0x1B) + PREVENT ALLOW (0x1E) (tray), INQUIRY (0x12,
+  standard + VPD 0x80), READ FORMAT CAPACITIES (0x23). Count: **one-of-five**.
+
+So the two reads the first draft nominated as the strongest candidates were
+already built — 0x52 feeds `mos.capacity.v1` (recordable view) and
+`mos.metadata.v1` (`track_info`); 0xAD feeds `mos drive` physical-format
+identity. What actually remains is thin:
+
+| Command (opcode) | In-remit? | What it would add | Path | Status / gate |
 |---|---|---|---|---|
-| **READ TRACK INFORMATION (0x52)** | **Yes** | NWA, track start/size, packet/FP, blank-track bounds — the capacity peer to 0x23 for write-once/sequential media | convenience `ReadTrackInformation` (§9.7 inventory) — **no raw CDB** | **Strongest candidate.** Survey A-item; folds into `mos capacity`. Gate: a consumer needing NWA/free-space on appendable media (the survey named it; no caller yet). |
-| **READ DISC STRUCTURE / READ DVD STRUCTURE (0xAD)** | **Yes, read-only** | Physical format: layer count (SL/DL), OTP vs PTP, disc type/category, BCA presence, book version — drive/disc *identity* GET CONFIGURATION cannot carry | convenience `ReadDVDStructure` | Candidate for `mos drive`. Two cautions: (a) **firmware-date-gated refusals** — post-2022 Renesas silicon starts refusing READ DISC STRUCTURE without an AACS handshake (`ROADMAP.md:170-173`), so the parser must classify a `5/...` refusal to null, not defect; (b) read **only** the physical-format/identity formats, never the CSS/region-key formats (those are SEND/REPORT KEY territory, out). |
-| **MECHANISM STATUS (0xBD)** | **Edge — yes for changers** | Changer slot occupancy, current slot, door/tray open, mechanism fault, "changer supports disc present" | convenience? — confirm; likely raw | The unique residue 0x2A and GESN both omit: *multi-slot* mechanical state. Only earns its place if a changer/jukebox consumer appears; single-tray drives get nothing new over GESN tray state. Park. |
-| **READ BUFFER CAPACITY (0x5C)** | **Edge — burn-adjacent** | Drive buffer total + current fill | likely raw | Read-only and spec-clean, but its only use is burn-underrun monitoring — a burn-engine concern, same family as set-speed. The *static* buffer size already comes from MODE SENSE 0x2A (shipped). Decline the live-fill read absent a burn consumer. |
-| **READ CAPACITY (0x25)** | Yes, read-only | Last-LBA / block size for a single-layer mounted disc | convenience absent → raw | **Already analyzed** — `doc/research/2026-06-13-read-capacity-feasibility.md`: deferrable behind a falsifier; READ FORMAT CAPACITIES (shipped) covers the blank-media case it was wanted for. No change. |
-| **READ CD (0xBE) / READ(10)(12) (0x28/0xA8)** | **No** | Raw/cooked sector data | raw, exclusive | This is *reading the media content*, the third I/O modality scope-doctrine layer 3 disqualifies (block-device I/O + privilege). Filesystem/sector parsing is the consumer's. Out. |
+| **0x52 multi-track / multi-session walk** | **Residue of a shipped read** | Per-track / last-incomplete-track NWA — the *append point of a multi-session disc*, which the current first-track-only read (`mos_query_track_info`, ADDRESS=1) does not reach | convenience, already wired — would loop over tracks from READ DISC INFORMATION's last-track | The only "in-remit, not built" item with a plausible consumer (multi-session append tooling). Today's first-track read is correct for single-track pressed/blank media; a multi-session appendable disc needs the last incomplete track. Park behind that consumer. |
+| **MECHANISM STATUS (0xBD)** | **Edge — yes for changers** | Changer slot occupancy, current slot, door/tray open, mechanism fault | no convenience wrapper → would be a sixth raw CDB | The unique residue 0x2A and GESN both omit: *multi-slot* mechanical state. Only earns a raw verb if a changer/jukebox consumer appears; single-tray drives get nothing new over GESN tray state. Park. |
+| **READ BUFFER CAPACITY (0x5C)** | **Edge — burn-adjacent** | Drive buffer total + *live* fill | no convenience wrapper → raw | Read-only and spec-clean, but its only use is burn-underrun monitoring — a burn-engine concern, same family as set-speed. The *static* buffer size already comes from MODE SENSE 0x2A (shipped). Decline absent a burn consumer. |
+| **READ CAPACITY (0x25)** | Yes, read-only | Last-LBA / block size for a mounted disc | convenience absent → raw | **Already analyzed** — `doc/research/2026-06-13-read-capacity-feasibility.md`: deferred behind a falsifier; the kernel's cached IOMedia size + READ FORMAT CAPACITIES cover its cases. No change. |
+| **READ CD (0xBE) / READ(10)(12) (0x28/0xA8)** | **No** | Raw/cooked sector data | raw, exclusive | *Reading media content* — the third I/O modality scope-doctrine layer 3 disqualifies (block-device I/O + privilege). Filesystem/sector parsing is the consumer's. Out. |
 
 **Hard out (mutation / write / DRM / SPC-generic), restated so the line is on
 the record):**
@@ -220,9 +231,10 @@ the record):**
 |---|---|---|
 | SET CD SPEED (0xBB) | **Decline** | obsolete; mutation; no consumer; wrong side of "never tunes the drive" |
 | SET STREAMING (0xB6) | **Decline** | modern speed-*set* = write side of GET PERFORMANCE read; no consumer; not readback-able; burn-engine owns it |
-| READ TRACK INFORMATION (0x52) | **Park — strongest read candidate** | convenience path, NWA/capacity, consumer-gated |
-| READ DISC STRUCTURE (0xAD) | **Park — identity candidate** | layer/type identity; firmware-refusal + key-format cautions |
-| MECHANISM STATUS (0xBD) | **Park — changers only** | unique multi-slot residue; needs a changer consumer |
+| READ TRACK INFORMATION (0x52) | **Already shipped** | first-track read feeds `mos.capacity.v1` + `mos.metadata.v1` |
+| READ DISC STRUCTURE (0xAD) | **Already shipped** | DVD/HD-DVD physical + copyright, BD disc-info → `mos drive` |
+| 0x52 multi-track / multi-session walk | **Park — only real read candidate** | last-incomplete-track NWA for multi-session append; needs that consumer |
+| MECHANISM STATUS (0xBD) | **Park — changers only** | unique multi-slot residue; would be a raw verb; needs a changer consumer |
 | READ BUFFER CAPACITY (0x5C) | **Decline absent burn consumer** | live-fill is burn-adjacent; static buffer already via 0x2A |
 | READ CAPACITY (0x25) | **No change** | already deferred (2026-06-13 note) |
 | READ CD / READ(10/12) | **Out** | reading media content — layer-3 disqualified |
@@ -230,8 +242,9 @@ the record):**
 
 **Net:** the set-speed door the tray precedent seemed to open is closed on the
 merits, by the tray ADR's own two tests and the MODE SENSE ADR's own exclusion —
-no new doctrine needed, this note is the dated record. The frontier worth keeping
-warm is three read-only enrichments, each parked behind a named consumer, exactly
-the way READ CAPACITY already is. If any of the three is later built, it lands as
-a feasibility note + ADR in the established pattern, not on the strength of this
-survey.
+no new doctrine needed, this note is the dated record. The read-only "frontier"
+turned out to be mostly already built (0x52, 0xAD shipped); what genuinely remains
+is one plausible enrichment (the 0x52 multi-session walk) and two weak edge reads
+(0xBD changers, 0x5C burn buffer), each parked behind a consumer that does not yet
+exist. If any is later built, it lands as a feasibility note + ADR in the
+established pattern, not on the strength of this survey.
