@@ -1,0 +1,242 @@
+.\" man page for mos (mac-optical-state)
+.\" Source of truth for the grammar is cli/main.c (usage) and include/mos.h
+.\" (states, exit codes). Keep this file in sync with both when the surface
+.\" changes; the CLI contract test (tests/cli/test_cli.sh) pins the behavior.
+.TH MOS 1 "2026-06-18" "mac-optical-state" "User Commands"
+.SH NAME
+mos \- report the state of a macOS optical drive
+.SH SYNOPSIS
+.B mos
+.RI [ subcommand ]
+.RI [ drive ]
+.RI [ options ]
+.br
+.B mos
+.I drive
+.RI "(bare selector runs " state )
+.SH DESCRIPTION
+.B mos
+reports what a macOS optical drive is actually doing \(em tray open, tray
+closed on an empty slot, loading, unit ready, busy \(em by querying the drive
+directly over MMC. Unlike
+.BR drutil (1),
+which prints
+.I No Media Inserted
+for both an open tray and a closed-but-empty one,
+.B mos
+distinguishes them.
+.PP
+A state query costs at most two MMC commands (TEST UNIT READY plus a tray
+probe or profile read). It needs no entitlements and no root \(em only the
+console user's SCSITaskUserClient grant on the drive.
+.PP
+.B mos
+is also an embeddable pure-C library; see
+.B mos.h
+and the project documentation.
+.SH SUBCOMMANDS
+.TP
+.BR state " [" \fIdrive\fR ]
+Report drive state. This is the default verb: a bare drive selector
+.RB ( "mos 2" ", " "mos disk4" )
+runs it without the verb word. Emits
+.IR mos.state.v1 .
+.TP
+.B list
+List all drives with their states. Emits
+.IR mos.list.v1 .
+.TP
+.BR watch " [" \fIdrive\fR ]
+Stream state events as newline-delimited JSON
+.RI ( mos.event.v1 )
+until SIGINT. Watches all drives unless a drive narrows it; hot-plugged
+drives join the stream and a removed drive does not end it.
+.B \-\-json
+is a no-op here (watch is always NDJSON).
+.TP
+.BR metadata " [" \fIdrive\fR ]
+Disc identity record \(em profile, TOC, disc info, mounted volume. Emits
+.IR mos.metadata.v1 .
+.TP
+.BR drive " [" \fIdrive\fR ]
+Drive facts \(em identity, serial, content protection, firmware date. Emits
+.IR mos.drive.v1 .
+.TP
+.BR features " [" \fIdrive\fR ]
+MMC feature list with current bits (the medium-writability surface). Emits
+.IR mos.features.v1 .
+.TP
+.BR tray " \fIaction\fR [" \fIdrive\fR ]
+Control the tray. \fIaction\fR is one of
+.BR eject ", " close ", " lock ", or " unlock .
+.B eject
+takes
+.BR \-\-force
+(issue an ALLOW first, so a basic lock does not block the eject);
+.B lock
+and
+.B unlock
+take
+.BR \-\-persistent
+(the Persistent Prevent state, which converts the operator eject button
+into an event rather than ejecting). Emits
+.IR mos.tray.v1 .
+A refusal (for example, an eject hitting a lock) is a reported outcome,
+not an error.
+.TP
+.BR capacity " [" \fIdrive\fR ]
+Disc capacity \(em media size plus the recordable free / append space. Emits
+.IR mos.capacity.v1 .
+.TP
+.BR probe " \fIdrive\fR"
+Diagnostic. Streams raw IOKit / DiscRecording notification events as NDJSON
+.RI ( mos.probe.v0 )
+until SIGINT; with
+.BR \-\-dump ,
+a one-shot DiscRecording Info/Status plist capture (takes no drive
+argument). Present only when the binary was built with
+.BR \-DMOS_CLI_PROBE=ON " (the default)."
+.SH DRIVE SELECTOR
+The
+.I drive
+is a positional argument, like
+.BR "diskutil info disk4" .
+With a single drive attached it may be omitted; with several it is
+required. Three forms:
+.TP
+.B Index
+A 1-based index from the
+.B Index
+column of
+.BR "mos list" ;
+all digits (for example,
+.BR 1 ).
+Positional and not durable \(em it races device hot-plug. Use it only for
+one-shot, human-driven invocations.
+.TP
+.B registry_id
+The drive's attachment identity, as printed in the
+.B Registry ID:
+row or the JSON
+.B registry_id
+field; all digits, at or above 2^32. Never reused; stable for the life of
+an attachment.
+.TP
+.B BSD form
+.BR disk4 ", " rdisk4 ", or " /dev/disk4 .
+.PP
+.RB ( probe
+accepts an index or BSD form only, no registry_id.)
+.SH OPTIONS
+.TP
+.BR \-i ", " \-\-index " \fIN\fR"
+1-based drive index; the explicit form of the positional Index selector.
+.TP
+.BR \-\-bsd " \fINAME\fR"
+BSD form; the explicit form of the positional BSD selector.
+.TP
+.B \-\-force
+With
+.BR "tray eject" :
+issue an ALLOW (unlock) before ejecting.
+.TP
+.B \-\-persistent
+With
+.BR "tray lock" " / " "tray unlock" :
+select the Persistent Prevent state.
+.TP
+.B \-\-dump
+With
+.BR probe :
+one-shot DiscRecording dictionary capture (text + XML plists; takes no
+drive argument).
+.TP
+.BR \-j ", " \-\-json
+Emit JSON
+.RI ( mos.state.v1 " / " mos.error.v1 " / " mos.list.v1 ).
+Takes no argument \(em each schema name carries its own version.
+.TP
+.BR \-h ", " \-\-help
+Show usage and exit.
+.TP
+.B \-\-version
+Show version and exit.
+.SH ENVIRONMENT
+These apply to
+.B watch
+only. Each is an integer number of milliseconds in the range
+0..3600000, where 0 selects the library default; an out-of-range or
+non-numeric value warns on stderr and falls back to the default.
+.TP
+.B MOS_WATCH_STABLE_MS
+Poll period in stable states (default 2000).
+.TP
+.B MOS_WATCH_TRANSITION_MS
+Poll period in transitional states (default 200).
+.SH STATES
+.BR open ", " empty ", " loading ", " ready ", " busy ", " formatting ", "
+.BR media_unreadable ", " device_fault ", " empty_or_open ", " unknown .
+.SH EXIT STATUS
+.B mos
+uses
+.BR sysexits.h (3)
+codes:
+.TP
+.B 0
+A drive state was observed (including
+.BR unknown ,
+which is a valid result).
+.TP
+.B 64
+Usage error
+.RB ( EX_USAGE ).
+.TP
+.B 66
+No such device
+.RB ( EX_NOINPUT ).
+.TP
+.B 69
+Unavailable \(em driver rejected or command unsupported
+.RB ( EX_UNAVAILABLE ).
+.TP
+.B 70
+Internal error
+.RB ( EX_SOFTWARE ).
+.TP
+.B 71
+OS error
+.RB ( EX_OSERR ).
+.TP
+.B 74
+I/O error
+.RB ( EX_IOERR ).
+.TP
+.B 75
+Temporary failure \(em busy, contended, or timed out
+.RB ( EX_TEMPFAIL ).
+.SH EXAMPLES
+.TP
+Report the state of the only attached drive:
+.B mos state
+.TP
+Report drive 1 as JSON:
+.B mos state 1 \-\-json
+.TP
+List every drive:
+.B mos list
+.TP
+Act on each disc that becomes readable, hot-plug included:
+.B mos watch | jq ...
+.TP
+Eject drive 1, unlocking first if needed:
+.B mos tray eject 1 \-\-force
+.SH SEE ALSO
+.BR drutil (1),
+.BR diskutil (8),
+.BR sysexits (3)
+.PP
+Project home:
+.UR https://github.com/napieraj/mos
+.UE
+.SH LICENSE
+0BSD.

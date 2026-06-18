@@ -50,7 +50,7 @@ define require_cmake
 	fi
 endef
 
-.PHONY: help configure build build-universal test check-readme \
+.PHONY: help configure build build-universal test check-readme completions \
         preflight hooks \
         sign sign-universal notarize staple dist release \
         install install-signed uninstall clean
@@ -61,6 +61,7 @@ help:
 	@echo "  build-universal  Universal (arm64 + x86_64) release build"
 	@echo "  test             Build + run pure-data unit tests"
 	@echo "  check-readme     Verify README examples track schemas + emit_human"
+	@echo "  completions      Regenerate shell completions from the CLI dispatch"
 	@echo "  preflight        Run all OS-independent CI gates locally (pre-push mirror)"
 	@echo "  hooks            Enable the committed git hooks (.githooks) for this clone"
 	@echo "  install          Install locally (ad-hoc signed by linker)"
@@ -132,6 +133,17 @@ test: $(BUILD)/CMakeCache.txt
 
 check-readme:
 	python3 schemas/check_readme.py
+
+# ---- Shell completions -------------------------------------------------
+#
+# completions/{mos.bash,_mos,mos.fish} are GENERATED from the CLI dispatch
+# (cli/main.c subcommands + long_options, cli/tray.c actions) so the verb
+# and action lists never drift by hand. Run this after adding a subcommand
+# or flag and commit the result; preflight + CI gate it with
+# `gen-completions.py --check`.
+
+completions:
+	python3 scripts/gen-completions.py
 
 # ---- Local CI mirror + git hooks ---------------------------------------
 #

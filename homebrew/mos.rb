@@ -48,6 +48,12 @@ class Mos < Formula
            *std_cmake_args
     system "cmake", "--build",   "build"
     system "cmake", "--install", "build"
+    # The man page and shell completions are installed by `cmake --install`
+    # into share/man/man1, share/bash-completion/completions,
+    # share/zsh/site-functions, and share/fish/vendor_completions.d — the
+    # standard keg locations Homebrew links automatically. No explicit
+    # man1.install / *_completion.install here (those would double-install
+    # the same files and conflict).
   end
 
   test do

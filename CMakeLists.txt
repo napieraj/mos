@@ -563,4 +563,20 @@ if(APPLE)
 
     install(FILES include/mos.h
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+    # man page and shell completions. Static artifacts (no generation step):
+    # the man page tracks cli/main.c's usage text, the completions track the
+    # same closed verb/flag grammar. Completion destinations follow each
+    # shell's convention — bash-completion's per-command dir (file renamed to
+    # the bare command name), zsh's site-functions ($fpath), fish's
+    # vendor_completions.d.
+    install(FILES man/mos.1
+            DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+    install(FILES completions/mos.bash
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions
+            RENAME mos)
+    install(FILES completions/_mos
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/zsh/site-functions)
+    install(FILES completions/mos.fish
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/fish/vendor_completions.d)
 endif()

@@ -521,6 +521,15 @@ jobs:
       - name: Grep live docs for known-stale markers
         run: sh scripts/doc-staleness.sh
 
+      - name: Shell completions track the CLI dispatch
+        # completions/{mos.bash,_mos,mos.fish} are generated from the CLI
+        # source of truth (subcommands in cli/main.c, tray actions in
+        # cli/tray.c). Regenerate and diff against the committed files so a
+        # new verb/flag can't ship with stale completions. Same
+        # regenerate-and-diff shape as the amalgamate --check gate; pure
+        # stdlib, no pip. Run `make completions` and commit to fix drift.
+        run: python3 scripts/gen-completions.py --check
+
   lint-scripts:
     # Lint the shell scripts and workflow YAML — the build-system surface
     # that has no compiler to catch its mistakes. shellcheck guards the
