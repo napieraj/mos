@@ -171,6 +171,34 @@ intake) filed this as an O-4 violation before finding the call-site
 comment; this entry exists so the next one doesn't, and so nobody
 "fixes" it into breaking the bridges it accommodates.
 
+**O-4 canonical-data corollary (recorded 2026-06-18): under-delivery of
+a value cached or preferred as authoritative is REFUSED, not trusted-as-
+short.** O-4 guarantees no OOB read — the device claim only shrinks the
+trusted bound. It does NOT, by itself, decide what to DO when the claim
+exceeds the delivered bytes (`claimed > transferred`, an under-delivering
+bridge). For most parsers the answer is "decode what arrived": a bounded
+partial read whose downstream effect is benign (the GESN waiver above —
+a false decoder return becomes "no authoritative bit"; the config walk —
+a short feature reads as absent). But two reads feed values the system
+treats as AUTHORITATIVE and STICKY: the drive serial (VPD 0x80,
+`mos_vpd80.c` — a durable inventory key cached once per watch session)
+and the standard-INQUIRY identity (`mos_inqdata.c` — the canonical
+vendor/product/revision `mos drive` prefers OVER the DiscRecording
+cache). For those, "decode what arrived" silently manufactures a
+partial-but-trusted value: a serial prefix that collides with another
+drive, or a half-arrived `product="BD"` that masks the full cached
+model. So those two parsers add a COMPLETENESS gate on top of O-4's
+no-OOB floor — serial refuses when PAGE LENGTH > delivered; identity
+refuses when the trusted region stops short of the 36-byte standard
+header — and the caller falls back (DR cache) or reports null. The test
+is not "is the read safe" (O-4 already answers yes) but "is an incomplete
+value here worse than none" — yes exactly when the value is cached or
+preferred as truth. A parser whose output is recomputed every query
+(state, profiles) does NOT need this gate; one whose output is persisted
+or wins a preference contest does. Don't "simplify" these refusals back
+to truncate-and-return: the bounded prefix is safe but the cached
+identity is wrong.
+
 ---
 
 ## 4. Value domains

@@ -49,22 +49,46 @@ TEST(inqdata_identity_trim_and_length_bound)
     memcpy(&buf[16], "                ", 16);     /* all spaces → ""           */
     memcpy(&buf[32], "ABCD", 4);
 
-    /* Additional Length covers only through byte 15 (add=11 → total 16):
-       vendor (8-15) is present, product (16-31) and revision (32-35) are
-       beyond the trusted region and must come back empty. */
+    /* Additional Length covers only through byte 15 (add=11 → total 16): the
+       trusted region stops short of the 36-byte standard header, so revision
+       (and most of product) never arrived. A partial identity from this would
+       be surfaced as canonical truth, so the parse REFUSES → the caller falls
+       back to the DR cache. */
     buf[4] = 11;
     mos_drive_inquiry s;
-    EXPECT(mos_internal_inqdata_parse(buf, sizeof buf, &s));
-    EXPECT_STREQ(s.vendor, "VENDOR");
-    EXPECT(s.product[0] == 0);
-    EXPECT(s.revision[0] == 0);
+    EXPECT(!mos_internal_inqdata_parse(buf, sizeof buf, &s));
 
-    /* Full length: all-spaces product trims to "", revision present. */
+    /* Full length: the standard header is complete, so trimming applies —
+       all-spaces product trims to "", revision present. */
     buf[4] = 91;
     EXPECT(mos_internal_inqdata_parse(buf, sizeof buf, &s));
     EXPECT_STREQ(s.vendor, "VENDOR");
     EXPECT(s.product[0] == 0);
     EXPECT_STREQ(s.revision, "ABCD");
+    return 0;
+}
+
+TEST(inqdata_refuses_truncated_standard_header)
+{
+    /* A USB-SATA bridge cuts the transfer mid-PRODUCT: the drive declared a
+       full 96-byte reply (Additional Length 91) but only 18 bytes arrived —
+       vendor + the first two product chars ("BD"). Surfacing product="BD"
+       would mask the full DiscRecording model, so the parse refuses (the
+       trusted region 18 < 36). This is the canonical-data corollary of the
+       dual-length rule (AGENTS.md). */
+    uint8_t buf[96] = {0};
+    buf[2] = 0x06;
+    buf[4] = 91;                                  /* declares total 96 */
+    memcpy(&buf[8],  "HL-DT-ST", 8);
+    memcpy(&buf[16], "BD", 2);                    /* only 2 product bytes arrived */
+
+    mos_drive_inquiry s;
+    EXPECT(!mos_internal_inqdata_parse(buf, 18, &s));   /* only 18 delivered */
+
+    /* Exactly the 36-byte standard header arrives → accepted, identity whole. */
+    EXPECT(mos_internal_inqdata_parse(buf, 36, &s));
+    EXPECT_STREQ(s.vendor, "HL-DT-ST");
+    EXPECT_STREQ(s.product, "BD");
     return 0;
 }
 
@@ -122,6 +146,7 @@ void register_inqdata_tests(void)
 {
     RUN(inqdata_identity_version_and_descriptors);
     RUN(inqdata_identity_trim_and_length_bound);
+    RUN(inqdata_refuses_truncated_standard_header);
     RUN(inqdata_additional_length_and_len_both_bound);
     RUN(inqdata_skips_empty_slots_short_and_null);
 }
