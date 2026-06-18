@@ -1211,93 +1211,1453 @@ static inline void mos_internal_cleanup_io_object(io_object_t *p)
 #define MOS_IO_AUTO __attribute__((cleanup(mos_internal_cleanup_io_object)))
 
 
-/* ==== src/mos_sense.c ==== */
+/* ==== src/mos_cdtext.c ==== */
 /*
- * mos_sense.c — SCSI sense-data parsing and state mapping. No IOKit;
- * unit-testable with fixture bytes.
+ * mos_cdtext.c — pure, bounds-safe decode of the disc-level (album) Title
+ * and Performer from a READ TOC/PMA/ATIP format 0101b (CD-TEXT) reply. No
+ * IOKit: the shell hands us a fixed zero-init buffer (filled via the
+ * non-exclusive ReadTableOfContents) and its size. Every text byte is
+ * disc-reported, hence hostile — the declared CD-TEXT Data Length must
+ * never steer a read outside [buf, buf+len), and text is copied verbatim
+ * (the CLI escapes at emit, like the volume name and INQUIRY identity).
+ * No payload byte is ever used as an offset or length.
  *
- * Fixed-format (response code 0x70 / 0x71): SPC-4 §4.5.3
- *   byte 0:  response code + valid bit
- *   byte 2:  bits 3:0 = sense key
- *   byte 12: ASC      byte 13: ASCQ
+ * SCOPE — the album Title/Performer (the "which album is in the drive"
+ * disambiguator, parallel to the mounted volume name) plus the per-track
+ * TITLES and PERFORMERS, all from the FIRST language block (block 0) in
+ * single-byte charset. Field types and language blocks NOT decoded are in
+ * SPEC.md; a double-byte (DBCC) field reads as absent, never mis-decoded
+ * as Latin-1. This is BEST-EFFORT DISPLAY TEXT, not a fail-closed
+ * fingerprint: audio-CD dedup keys ride on the TOC (mos_internal_toc_parse).
  *
- * Descriptor-format (response code 0x72 / 0x73): SPC-4 §4.5.2
- *   byte 0: response code   byte 1: bits 3:0 = sense key
- *   byte 2: ASC             byte 3: ASCQ
+ * Stream model (MMC / Red Book): within one (pack-type, block) the
+ * per-track strings are NUL-separated and chopped across the 12-byte pack
+ * payloads; the first pack's Track Number seeds the running index, so the
+ * stream is [track S, track S+1, ...] (S = 0 is album-level). We walk the
+ * block-0 packs in buffer order and dispatch each string by track number.
  *
- * Optical drives return fixed format in practice; the descriptor path is
- * here for correctness.
+ * Pack layout (READ TOC format 0101b, MMC-3 §6.27 / Red Book CD-TEXT;
+ * libcdio cross-check in SPEC.md):
+ *   [0..1] CD-TEXT Data Length (BE) — bytes available AFTER this field;
+ *          the reply occupies 2 + value bytes.
+ *   [2..3] reserved
+ *   [4..]  a sequence of 18-byte CD-TEXT packs:
+ *            [0]      Pack Type (0x80 Title, 0x81 Performer, ...)
+ *            [1]      Track Number (bits 6:0; bit 7 reserved/extension)
+ *            [2]      Sequence Number
+ *            [3]      bit7 = double-byte (DBCC); bits 6:4 = Block Number
+ *                     (language, 0..7); bits 3:0 = Character Position
+ *            [4..15]  12 text bytes (NUL separates per-track strings)
+ *            [16..17] CRC (present; not verified here, as in libcdio)
+ *
+ * No-OOB / termination gated under ASan/UBSan by tests/test_cdtext.c and
+ * the fuzz_pure CD-TEXT phase.
  */
+
 
 #include <string.h>
 
-void mos_internal_parse_sense(const uint8_t sense[18],
-                              uint8_t *sk, uint8_t *asc, uint8_t *ascq)
+#define CDTEXT_HDR        4u    /* 2-byte data length + 2 reserved        */
+#define CDTEXT_PACK_LEN  18u
+#define CDTEXT_TEXT_OFF   4u    /* text bytes within a pack: [4..15]      */
+#define CDTEXT_TEXT_LEN  12u
+
+#define CDTEXT_PACK_TITLE     0x80u
+#define CDTEXT_PACK_PERFORMER 0x81u
+
+/* Bounded NUL-terminated copy into a fixed buffer (truncates past cap-1). */
+static void cdtext_copy(char *dst, size_t cap, const char *src)
 {
-    if (sk)   *sk   = 0;
-    if (asc)  *asc  = 0;
-    if (ascq) *ascq = 0;
-    if (!sense) return;
+    size_t i = 0;
+    for (; src[i] && i + 1 < cap; i++) dst[i] = src[i];
+    dst[i] = '\0';
+}
 
-    uint8_t rc = sense[0] & 0x7F;
-
-    if (rc == 0x70 || rc == 0x71) {
-        /* Fixed format */
-        if (sk)   *sk   = sense[2] & 0x0F;
-        if (asc)  *asc  = sense[12];
-        if (ascq) *ascq = sense[13];
-    } else if (rc == 0x72 || rc == 0x73) {
-        /* Descriptor format */
-        if (sk)   *sk   = sense[1] & 0x0F;
-        if (asc)  *asc  = sense[2];
-        if (ascq) *ascq = sense[3];
+/* Dispatch reconstructed string `s` by track number: track 0 → the album
+   field (`album_dst`); tracks 1..MAX → `tracks[track-1]` when `tracks` is
+   non-NULL, bumping *max_track to the highest track with a NON-EMPTY string. */
+static void cdtext_store(const char *s, uint32_t track,
+                         char *album_dst, size_t album_cap,
+                         char tracks[][MOS_CDTEXT_TRACK_TITLE_CAP],
+                         uint8_t *max_track)
+{
+    if (track == 0) {
+        cdtext_copy(album_dst, album_cap, s);
+        return;
+    }
+    if (tracks && track >= 1 && track <= MOS_CDTEXT_MAX_TRACKS) {
+        cdtext_copy(tracks[track - 1], MOS_CDTEXT_TRACK_TITLE_CAP, s);
+        if (s[0] && (uint8_t)track > *max_track) *max_track = (uint8_t)track;
     }
 }
 
-/*
- * Map (sense_key, asc, ascq) → state, GIVEN THE TRAY IS CLOSED.
- *
- * Enrichment, not tray detection: open/closed is already settled (GESN
- * door bit, or the sense fork in mos_state_core.c), so this never returns
- * OPEN/EMPTY_OR_OPEN — it names the *reason* a closed tray isn't ready. A
- * 3A/02 ("medium not present, tray open") reaching here has its tray hint
- * discarded (enrich, don't invalidate): 0x3A means EMPTY, any other
- * not-ready sense means a disc is engaged, unrecognized → UNKNOWN.
- *
- * T10 ASC/ASCQ list: https://www.t10.org/lists/asc-num.htm
- */
-mos_state mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uint8_t ascq)
+/* Walk the block-0 packs of `want_type` in buffer order, reconstruct the
+   NUL-separated per-track stream, and store each string by track number
+   (the first qualifying pack's Track Number seeds the running index).
+   Track 0 → `album_dst`; tracks 1.. → `tracks` when non-NULL. Single-byte
+   only: a DBCC STARTING pack decodes nothing (album left ""); a mid-stream
+   DBCC stops the walk, keeping the prefix already stored. */
+static void cdtext_decode_type(const uint8_t *buf, size_t span,
+                               uint8_t want_type,
+                               char *album_dst, size_t album_cap,
+                               char tracks[][MOS_CDTEXT_TRACK_TITLE_CAP],
+                               uint8_t *max_track)
 {
-    /* HARDWARE ERROR (key 0x04): the drive faulted — outranks any
-       medium/not-ready detail also set. */
-    if (sk == 0x04) return MOS_STATE_DEVICE_FAULT;
+    album_dst[0] = '\0';
 
-    /* MEDIUM ERROR (key 0x03), or 57/00 UNABLE TO RECOVER TOC: disc loaded
-       but unreadable. Not self-resolving, so not loading. */
-    if (sk == 0x03 || (asc == 0x57 && ascq == 0x00))
-        return MOS_STATE_MEDIA_UNREADABLE;
+    char     cur[MOS_CDTEXT_STR_CAP];   /* current-string accumulator */
+    size_t   n       = 0;
+    uint32_t track   = 0;               /* track number of the current string */
+    bool     started = false;
 
-    /* 3A/xx MEDIUM NOT PRESENT: no medium (the ASCQ tray flavor is GESN's). */
-    if (asc == 0x3A) return MOS_STATE_EMPTY;
+    for (size_t p = CDTEXT_HDR; p + CDTEXT_PACK_LEN <= span;
+         p += CDTEXT_PACK_LEN) {
+        if (buf[p] != want_type) continue;            /* wrong pack type   */
+        uint8_t b3 = buf[p + 3];
+        if (((b3 >> 4) & 0x07) != 0) continue;        /* first block only  */
+        bool dbcc = (b3 & 0x80) != 0;
 
-    /* 04/xx LOGICAL UNIT NOT READY: a disc is engaged; the qualifier says
-       why it isn't ready yet. */
-    if (asc == 0x04) {
-        switch (ascq) {
-            case 0x01:  /* becoming ready                 */
-            case 0x02:  /* initialize command required    */
-            case 0x07:  /* operation in progress          */
-                return MOS_STATE_LOADING;   /* self-resolving by waiting */
-            case 0x04:  /* format in progress             */
-                return MOS_STATE_FORMATTING;
-            case 0x08:  /* long write in progress         */
-                return MOS_STATE_BUSY;      /* actively writing; back off */
-            default:
-                return MOS_STATE_UNKNOWN;
+        if (!started) {
+            if (dbcc) return;                          /* double-byte: skip */
+            track   = (uint32_t)(buf[p + 1] & 0x7Fu);  /* starting track #  */
+            started = true;
+        } else if (dbcc) {
+            break;            /* charset flip mid-stream: keep what we have */
+        }
+
+        for (size_t j = 0; j < CDTEXT_TEXT_LEN; j++) {
+            uint8_t c = buf[p + CDTEXT_TEXT_OFF + j];
+            if (c == 0x00) {                           /* end of one string */
+                cur[n] = '\0';
+                cdtext_store(cur, track, album_dst, album_cap,
+                             tracks, max_track);
+                n = 0;
+                track++;
+                continue;
+            }
+            if (n + 1 < sizeof cur) cur[n++] = (char)c; /* else truncate    */
         }
     }
+    /* Trailing unterminated string (data clamped mid-string): keep it. */
+    if (started && n > 0) {
+        cur[n] = '\0';
+        cdtext_store(cur, track, album_dst, album_cap, tracks, max_track);
+    }
+}
 
-    return MOS_STATE_UNKNOWN;
+bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
+                               struct mos_cdtext *out)
+{
+    if (!out) return false;
+    memset(out, 0, sizeof *out);
+    if (!buf || len < CDTEXT_HDR) return false;
+
+    /* CD-TEXT Data Length counts bytes AFTER its own two. 64-bit total,
+       clamped by the trusted length (O-4): a lying length can only shrink
+       the span, never extend a read. */
+    uint64_t claimed = 2u + (uint64_t)(((uint32_t)buf[0] << 8) | buf[1]);
+    size_t   span    = mos_internal_trusted_len(len, len, claimed);
+    if (span < CDTEXT_HDR + CDTEXT_PACK_LEN) return false;  /* no whole pack */
+
+    cdtext_decode_type(buf, span, CDTEXT_PACK_TITLE,
+                       out->title, sizeof out->title,
+                       out->track_titles, &out->track_count);
+    cdtext_decode_type(buf, span, CDTEXT_PACK_PERFORMER,
+                       out->performer, sizeof out->performer,
+                       out->track_performers, &out->track_count);
+
+    /* "have" gates useful identity: an empty result (no album field, no
+       per-track title) isn't identity. False → the adapter reports no
+       CD-TEXT (null), like the other media reads. */
+    out->have = out->title[0] || out->performer[0] || out->track_count > 0;
+    return out->have;
+}
+
+/* ==== src/mos_config.c ==== */
+/*
+ * mos_config.c — pure, bounds-safe iteration over a GET CONFIGURATION
+ * (MMC) response buffer. No IOKit: the shell hands us a fixed zero-init
+ * buffer plus the byte count it trusts (sizeof the buffer — the MMC
+ * GetConfiguration reports no realized-transfer count). Every payload
+ * length is device-reported, hence hostile; this file is the choke point
+ * keeping those lengths from steering a read outside [buf, buf+len).
+ *
+ * Layout (MMC-6 §5.2, GET CONFIGURATION response):
+ *
+ *   Feature header (8 bytes):
+ *     [0..3] Data Length      (BE) — bytes of data available AFTER this
+ *                                    field; total response = 4 + value.
+ *     [4..5] Reserved
+ *     [6..7] Current Profile  (BE)
+ *   Feature descriptors, each:
+ *     [0..1] Feature Code     (BE)
+ *     [2]    (Version<<2) | (Persistent<<1) | Current
+ *     [3]    Additional Length — feature bytes that follow; the
+ *            descriptor spans 4 + Additional Length bytes total.
+ *
+ * Safety contract (the device controls every length here):
+ *   - `len` is the only trusted ceiling. The header Data Length can only
+ *     SHRINK the walked region (clamped under `len`), never extend it.
+ *   - A descriptor is decoded only if its 4-byte header AND its
+ *     Additional-Length payload fit within the trusted region.
+ *   - A malformed Additional Length (not a multiple of 4, per MMC) ends
+ *     the walk rather than desyncing it onto misaligned bytes.
+ *   - The cursor advances by span >= 4 on every yield, so the walk makes
+ *     forward progress and terminates in <= len/4 steps; a single-byte
+ *     Additional Length cannot wrap the cursor.
+ *   - The bool return is intentionally undifferentiated: false means
+ *     "stop" — end of list OR a malformed/over-long descriptor, alike.
+ *     Callers walk this as a plain `while (next(...))`; the malformed
+ *     branch is unreachable on conformant hardware.
+ */
+
+
+bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
+                                      size_t *cursor, mos_config_feature *out)
+{
+    if (!buf || !cursor || !out) return false;
+
+    /* Trusted end. Start at the buffer ceiling, then let the device's Data
+       Length pull it IN iff it claims less. 64-bit so the +4 cannot wrap
+       before the compare; a wrapped or oversized claim fails to shrink, so
+       `len` stands — device length only ever shortens the walk. */
+    size_t end = len;
+    if (len >= 4) {
+        uint64_t dlen = ((uint64_t)buf[0] << 24) | ((uint64_t)buf[1] << 16)
+                      | ((uint64_t)buf[2] << 8)  |  (uint64_t)buf[3];
+        uint64_t declared = dlen + 4u;            /* total incl. length field */
+        if (declared < (uint64_t)end) end = (size_t)declared;
+    }
+
+    size_t c = *cursor;
+
+    /* Descriptor header must fit. `c > end` also catches a cursor past the
+       trusted region; `end - c` is computed only when c <= end, no wrap. */
+    if (c > end || end - c < 4) return false;
+
+    uint8_t add  = buf[c + 3];                    /* Additional Length, 0..255 */
+
+    /* MMC requires Additional Length to be a multiple of 4. Tolerating a
+       non-multiple would let a hostile device desync the walk so later
+       descriptors decode from misaligned (in-bounds but attacker-chosen)
+       bytes. Fail closed at the first malformed descriptor. */
+    if (add & 3u) return false;
+
+    size_t  span = (size_t)4 + add;               /* >= 4, cannot wrap        */
+
+    /* Whole descriptor (header + feature payload) must fit. */
+    if (end - c < span) return false;
+
+    uint8_t b2        = buf[c + 2];
+    out->feature_code = (uint16_t)(((uint16_t)buf[c] << 8) | buf[c + 1]);
+    out->current      = (b2 & 0x01u) != 0;
+    out->persistent   = (b2 & 0x02u) != 0;
+    out->version      = (uint8_t)((b2 >> 2) & 0x0Fu);
+    out->data         = add ? &buf[c + 4] : NULL;
+    out->data_len     = add;
+
+    *cursor = c + span;                           /* strict forward progress */
+    return true;
+}
+
+/* Find one feature by code: walk until a match. Same trust bounds; first
+   match wins (MMC lists each feature once — a hostile duplicate yields the
+   earlier copy, never a re-scan). */
+bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
+                                      uint16_t feature_code,
+                                      mos_config_feature *out)
+{
+    if (!out) return false;
+    size_t cursor = 8;                            /* skip the feature header */
+    mos_config_feature f;
+    while (mos_internal_config_next_feature(buf, len, &cursor, &f)) {
+        if (f.feature_code == feature_code) { *out = f; return true; }
+    }
+    return false;
+}
+
+/* Current Profile = feature-header bytes 6-7, gated on the header's Data
+   Length (bytes 0-3, counting bytes that FOLLOW it): the field exists only
+   when the drive claims >= 4 following bytes. The gate keeps a truncated
+   reply from reading as profile 0x0000 (= "no media"). Contract in mos_pure.h. */
+bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
+                                         uint16_t *profile)
+{
+    if (!buf || !profile) return false;
+    if (len < 8) return false;                       /* need through byte 7 */
+
+    uint32_t data_len = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) |
+                        ((uint32_t)buf[2] <<  8) |  (uint32_t)buf[3];
+    if (data_len < 4) return false;                  /* truncated: profile not returned */
+
+    *profile = (uint16_t)(((uint16_t)buf[6] << 8) | buf[7]);
+    return true;
+}
+
+/* Contract in mos_pure.h. The content-protection features all live in the same
+   RT=0 walk. Version-carrying schemes (CSS/CPRM/AACS) put their version at
+   payload byte 3 (Additional Length 4); a present-but-truncated payload reads
+   as absent (fail closed, like the walker). SecurDisc/VCPS are presence-only
+   (Additional Length 0 ⇒ no payload), so the find alone is the signal. AACS
+   byte 0 carries BEC (bit 1, bus encryption) and WBE (bit 2, write bus
+   encryption) — MMC-6 §5.3.44 Table 198. */
+void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
+                                         mos_drive_caps *out)
+{
+    if (!out) return;
+    *out = (mos_drive_caps){0};
+
+    mos_drive_protection *p = &out->protection;
+    mos_config_feature f;
+
+    /* DVD CSS (0106h): CSS Version at payload byte 3. */
+    if (mos_internal_config_find_feature(buf, len, 0x0106, &f) &&
+        f.data && f.data_len >= 4) {
+        p->css         = true;
+        p->css_version = f.data[3];
+    }
+    /* DVD CPRM (010Bh): CPRM version at payload byte 3. */
+    if (mos_internal_config_find_feature(buf, len, 0x010B, &f) &&
+        f.data && f.data_len >= 4) {
+        p->cprm         = true;
+        p->cprm_version = f.data[3];
+    }
+    /* AACS (010Dh): BEC/WBE in byte 0, AACS Version in byte 3. */
+    if (mos_internal_config_find_feature(buf, len, 0x010D, &f) &&
+        f.data && f.data_len >= 4) {
+        p->aacs                 = true;
+        p->bus_encryption       = (f.data[0] & 0x02u) != 0;
+        p->write_bus_encryption = (f.data[0] & 0x04u) != 0;
+        p->aacs_version         = f.data[3];
+    }
+    /* SecurDisc (0113h): presence only (Additional Length 0). */
+    if (mos_internal_config_find_feature(buf, len, 0x0113, &f))
+        p->securdisc = true;
+    /* VCPS (0110h): legacy (MMC-5), presence only. */
+    if (mos_internal_config_find_feature(buf, len, 0x0110, &f))
+        p->vcps = true;
+}
+
+/* Contract in mos_pure.h. The Profile List feature (0x0000) payload is a
+   sequence of 4-byte Profile Descriptors; we keep the drive-static set of
+   Profile Numbers and ignore the per-descriptor CurrentP bit (which reflects
+   the loaded medium, not the drive). Bounded by the feature's data_len and
+   cap; the feature walk already proved f.data spans data_len bytes in-bounds. */
+void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
+                                           uint16_t *out_codes, uint8_t cap,
+                                           uint8_t *out_count)
+{
+    if (out_count) *out_count = 0;
+    if (!out_codes || cap == 0 || !out_count) return;
+
+    mos_config_feature f;
+    if (!mos_internal_config_find_feature(buf, len, 0x0000, &f)) return;
+    if (!f.data || f.data_len < 4) return;       /* no descriptors */
+
+    uint8_t n = 0;
+    for (size_t i = 0; i + 4u <= f.data_len && n < cap; i += 4u) {
+        out_codes[n++] = (uint16_t)(((uint16_t)f.data[i] << 8) | f.data[i + 1]);
+    }
+    *out_count = n;
+}
+
+/* Contract in mos_pure.h. Firmware Information feature (010Ch), MMC-6 r02g
+   §5.3.43 Table 197: the feature payload (f.data, after the 4-byte header)
+   is Century[2] Year[2] Month[2] Day[2] Hour[2] Minute[2] Second[2]
+   Reserved[2], all decimal ASCII (GMT). We emit RFC 3339 UTC
+   "YYYY-MM-DDTHH:MM:SSZ" — the SAME form mos.event.v1's `ts` uses
+   (mos_watch_core.c::format_rfc3339), integer seconds + trailing Z.
+   The 14 date/time bytes must all be decimal ASCII or the reply is refused
+   (empty out) — fail closed on a malformed descriptor. */
+void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
+                                            char *out, size_t out_cap)
+{
+    if (out && out_cap) out[0] = 0;
+    if (!out || out_cap < 21u) return;           /* "....-..-..T..:..:..Z"+NUL */
+
+    mos_config_feature f;
+    if (!mos_internal_config_find_feature(buf, len, 0x010C, &f)) return;
+    if (!f.data || f.data_len < 14u) return;     /* need Century..Second */
+
+    for (size_t i = 0; i < 14u; i++)
+        if (f.data[i] < '0' || f.data[i] > '9') return;   /* must be ASCII digits */
+
+    const uint8_t *d = f.data;
+    /* d[0..1] Century, [2..3] Year, [4..5] Month, [6..7] Day,
+       [8..9] Hour, [10..11] Minute, [12..13] Second. */
+    out[0]=(char)d[0];  out[1]=(char)d[1];  out[2]=(char)d[2];  out[3]=(char)d[3];
+    out[4]='-';  out[5]=(char)d[4];  out[6]=(char)d[5];
+    out[7]='-';  out[8]=(char)d[6];  out[9]=(char)d[7];
+    out[10]='T'; out[11]=(char)d[8]; out[12]=(char)d[9];
+    out[13]=':'; out[14]=(char)d[10]; out[15]=(char)d[11];
+    out[16]=':'; out[17]=(char)d[12]; out[18]=(char)d[13];
+    out[19]='Z'; out[20]='\0';
+}
+
+/* ==== src/mos_da.c ==== */
+/*
+ * mos_da.c — one-shot DiskArbitration volume lookup.
+ *
+ * One modality only: a synchronous DADiskCopyDescription read of what the
+ * mounted-volume layer already knows — no session scheduling, no run loop,
+ * no callbacks, no commands to the drive (AGENTS.md scope doctrine). Callers
+ * gate on the media nub (bsd_unit present); with no IOMedia node nothing is
+ * mounted and DA is never consulted.
+ *
+ * Trust terms: the description dictionary is system-supplied but its values
+ * are volume-controlled (a hostile disc names its volume), so extraction
+ * goes through the same bounded, type-checked, fail-to-empty seam as the DR
+ * identity copies. The CLI's output escaping guards terminal/JSON regardless.
+ */
+
+
+/* DiskArbitration is an OPTIONAL link dependency. Build with
+   -DMOS_USE_DISKARBITRATION=0 (and drop -framework DiskArbitration) and
+   mos_query_volume always reports unmounted (volume name/path null) — which
+   the CLI and JSON schemas already permit, so no shape changes. Default on. */
+#ifndef MOS_USE_DISKARBITRATION
+#define MOS_USE_DISKARBITRATION 1
+#endif
+
+#if MOS_USE_DISKARBITRATION
+#include <DiskArbitration/DiskArbitration.h>
+
+/* Mounted-volume name and mount path for a whole-disk "diskN". True only
+   when DA has a description AND the volume is mounted (VolumePath present);
+   name may still be "" if the key is absent or hostile — the caller maps ""
+   to null. Both buffers are always NUL-terminated. */
+bool mos_internal_da_volume(const char *bsd_name,
+                            char *name_buf, size_t name_cap,
+                            char *path_buf, size_t path_cap)
+{
+    if (name_buf && name_cap) name_buf[0] = 0;
+    if (path_buf && path_cap) path_buf[0] = 0;
+    if (!bsd_name || !bsd_name[0]) return false;
+
+    DASessionRef session = DASessionCreate(kCFAllocatorDefault);
+    if (!session) return false;
+
+    bool      mounted = false;
+    DADiskRef disk    = DADiskCreateFromBSDName(kCFAllocatorDefault,
+                                                session, bsd_name);
+    CFDictionaryRef desc = disk ? DADiskCopyDescription(disk) : NULL;
+
+    if (desc) {
+        /* VolumePath is the mount proof: DA also describes unmounted media,
+           so an absent/non-URL path means "not mounted", not an error.
+           CFURLGetFileSystemRepresentation returns false when the path
+           exceeds the buffer, yielding not-mounted rather than a truncated
+           path a consumer might chdir into. */
+        CFTypeRef path = CFDictionaryGetValue(
+            desc, kDADiskDescriptionVolumePathKey);
+        bool is_url = path && CFGetTypeID(path) == CFURLGetTypeID();
+        if (is_url && path_buf && path_cap) {
+            if (CFURLGetFileSystemRepresentation((CFURLRef)path, true,
+                                                 (UInt8 *)path_buf,
+                                                 (CFIndex)path_cap)) {
+                mounted = true;
+            } else {
+                path_buf[0] = 0;
+            }
+        } else if (is_url) {
+            /* No path buffer: VolumePath presence alone is the mount proof,
+               so a name-only caller (e.g. `mos state`) still sees mounted. */
+            mounted = true;
+        }
+        if (mounted)
+            mos_internal_dr_copy_string(
+                CFDictionaryGetValue(desc, kDADiskDescriptionVolumeNameKey),
+                name_buf, name_cap);
+        CFRelease(desc);
+    }
+
+    if (disk)    CFRelease(disk);
+    CFRelease(session);
+    return mounted;
+}
+
+#else  /* !MOS_USE_DISKARBITRATION */
+
+/* No DiskArbitration linked: the mount layer is never consulted, so every
+   disc reports unmounted — same contract as a disk DA cannot describe.
+   Buffers cleared, false returned. */
+bool mos_internal_da_volume(const char *bsd_name,
+                            char *name_buf, size_t name_cap,
+                            char *path_buf, size_t path_cap)
+{
+    (void)bsd_name;
+    if (name_buf && name_cap) name_buf[0] = 0;
+    if (path_buf && path_cap) path_buf[0] = 0;
+    return false;
+}
+
+#endif /* MOS_USE_DISKARBITRATION */
+
+/* Public wrapper (contract in mos.h): the nub gate lives here, so no caller
+   consults DA for a drive the kernel says holds no media. */
+mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
+                           char *name_buf, size_t name_cap,
+                           char *path_buf, size_t path_cap)
+{
+    if (mounted) *mounted = false;
+    if (name_buf && name_cap) name_buf[0] = 0;
+    if (path_buf && path_cap) path_buf[0] = 0;
+    if (!h) return MOS_ERR_INVALID_ARG;
+
+    /* Held-handle freshness: re-resolve so a handle held across an insert
+       sees the current disc's whole-disk node
+       (mos_internal_refresh_media_identity). */
+    mos_internal_refresh_media_identity(h);
+
+    if (h->bsd_unit < 0) return MOS_OK;     /* no IOMedia node: unmounted */
+
+    char bsd[24];
+    if (!mos_bsd_name_format(h->bsd_unit, bsd, sizeof bsd)) return MOS_OK;
+
+    bool m = mos_internal_da_volume(bsd, name_buf, name_cap,
+                                    path_buf, path_cap);
+    if (mounted) *mounted = m;
+    return MOS_OK;
+}
+
+/* ==== src/mos_discinfo.c ==== */
+/*
+ * mos_discinfo.c — pure, bounds-safe decode of a READ DISC INFORMATION
+ * (MMC 0x51, standard data type 000b) response. No IOKit: the shell hands
+ * us a fixed zero-init buffer and its size. The Disc Information Length is
+ * device-reported, hence hostile — it must never steer a read outside
+ * [buf, buf+len).
+ *
+ * Layout (MMC-6, READ DISC INFORMATION standard response, first 12 bytes):
+ *
+ *   [0..1] Disc Information Length (BE) — bytes available AFTER this field;
+ *          the response occupies 2 + value bytes.
+ *   [2]    reserved | Erasable(bit4) | State of Last Session(bits 3:2)
+ *                                     | Disc Status(bits 1:0)
+ *   [3]    Number of First Track on Disc
+ *   [4]    Number of Sessions (LSB)
+ *   [5]    First Track Number in Last Session (LSB)
+ *   [6]    Last Track Number in Last Session (LSB)
+ *   [7]    DID_V DBC_V URU DAC_V .. BG Format Status
+ *   [8]    Disc Type
+ *   [9]    Number of Sessions (MSB)
+ *   [10]   First Track Number in Last Session (MSB)
+ *   [11]   Last Track Number in Last Session (MSB)
+ *   (bytes 12+ : undecoded — see SPEC.md.)
+ *
+ * Safety contract (the device controls the length): `len` is the only
+ * trusted ceiling; the Disc Information Length can only shrink the trusted
+ * region, never extend it. The fixed numeric region (through byte 11) must
+ * be present per both `len` and the declared length; a shorter response is
+ * refused.
+ */
+
+
+bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
+                                  mos_disc_info *out)
+{
+    if (!buf || !out) return false;
+
+    /* Fixed numeric fields run through byte 11; trusted region must reach 12. */
+    if (len < 12) return false;
+
+    /* Disc Information Length (bytes 0-1) counts bytes AFTER itself; clamp the
+       trusted region to the smaller of declared+2 and len. */
+    size_t declared_end = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    size_t end = (len < declared_end) ? len : declared_end;
+    if (end < 12) return false;        /* device declares fewer bytes than the fields */
+
+    uint8_t b2 = buf[2];
+    out->status             = (mos_disc_status)(b2 & 0x03u);
+    out->last_session_state = (uint8_t)((b2 >> 2) & 0x03u);
+    out->erasable           = (b2 & 0x10u) != 0;
+
+    out->first_track_on_disc      = buf[3];
+    out->number_of_sessions       = (uint16_t)(((uint16_t)buf[9]  << 8) | buf[4]);
+    out->first_track_last_session = (uint16_t)(((uint16_t)buf[10] << 8) | buf[5]);
+    out->last_track_last_session  = (uint16_t)(((uint16_t)buf[11] << 8) | buf[6]);
+
+    /* BG Format Status (byte 7 bits 1:0): background-format state of
+       DVD+RW / BD-RE / Mount Rainier media. Values match Linux CDM_MRW_*. */
+    out->bg_format_status = (uint8_t)(buf[7] & 0x03u);
+    return true;
+}
+
+/* ==== src/mos_discstruct.c ==== */
+/*
+ * mos_discstruct.c — pure, bounds-safe decode of a READ DISC STRUCTURE
+ * (MMC-5 0xAD) Blu-ray Disc Information (DI) reply: the disc's registered
+ * Disc Manufacturer ID + Media Type ID. No IOKit: the shell hands us a
+ * fixed zero-init buffer (filled via ReadDiscStructure) and its size.
+ * Every length and string byte is disc-reported, hence hostile — the
+ * declared length must never steer a read outside [buf, buf+len), and ID
+ * bytes are copied verbatim (the CLI escapes them at emit, like INQUIRY).
+ *
+ * Layout (response buffer):
+ *   [0..1] Disc Structure Data Length (BE) — bytes available AFTER this
+ *          field; the response occupies 2 + value bytes.
+ *   [2..3] reserved
+ *   [4..]  the Disc Information (DI), a sequence of 112-byte DI units.
+ *          The first unit carries the identity:
+ *            [4+0..1]   "DI" signature
+ *            [4+8..10]  Disc Type Identifier (3 bytes) "BDR"/"BDW"/"BDO"
+ *            [4+100..105] Disc Manufacturer ID (6 bytes)  e.g. "MILLEN"
+ *            [4+106..108] Media Type ID        (3 bytes)  e.g. "MR1"
+ *            [4+111]      Product Revision Number (1 byte) e.g. '0'
+ *
+ * The DI offsets (8 / 100 / 106 / 111) are MMC-5 / BDA-registered; the
+ * undecoded write-parameter region is in SPEC.md. Classification (e.g.
+ * "MILLEN" => M-DISC) is the consumer's: this surfaces the registered ID
+ * bytes faithfully and stops there (scope doctrine).
+ */
+
+
+#define DI_HDR       4u                  /* 2-byte length + 2 reserved   */
+#define DI_SIG_HI    (DI_HDR + 0u)       /* 'D'                          */
+#define DI_SIG_LO    (DI_HDR + 1u)       /* 'I'                          */
+#define DI_DISCTYPE  (DI_HDR + 8u)       /* 3 bytes: BDR/BDW/BDO         */
+#define DI_MANUF     (DI_HDR + 100u)     /* 6 bytes                      */
+#define DI_MEDIA     (DI_HDR + 106u)     /* 3 bytes                      */
+#define DI_REVISION  (DI_HDR + 111u)     /* 1 byte                       */
+#define DI_MIN_LEN   (DI_REVISION + 1u)  /* must reach the revision byte */
+
+/* Copy a fixed-width DI field verbatim, NUL-terminate, strip trailing
+   spaces (space-padded, like the INQUIRY identity copies). dst holds n+1. */
+static void mos_internal_di_copy(const uint8_t *src, size_t n, char *dst)
+{
+    size_t i;
+    for (i = 0; i < n; i++) dst[i] = (char)src[i];
+    dst[i] = '\0';
+    while (i > 0 && dst[i - 1] == ' ') dst[--i] = '\0';
+}
+
+bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
+                                   struct mos_disc_id *out)
+{
+    if (!out) return false;
+    *out = (struct mos_disc_id){0};
+    if (!buf) return false;
+
+    /* Identity region must be present per BOTH the buffer and the reply's
+       declared length; the declared length can only shrink the trusted
+       region (computed wide so the +2 cannot wrap). */
+    if (len < DI_MIN_LEN) return false;
+    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    size_t end = (len < declared) ? len : declared;
+    if (end < DI_MIN_LEN) return false;
+
+    /* The DI signature gates the whole decode: a non-DI reply (wrong media
+       type, drive returned something else) is refused, not read as identity. */
+    if (buf[DI_SIG_HI] != 'D' || buf[DI_SIG_LO] != 'I') return false;
+
+    mos_internal_di_copy(&buf[DI_DISCTYPE], 3, out->disc_type);
+    mos_internal_di_copy(&buf[DI_MANUF],    6, out->manufacturer);
+    mos_internal_di_copy(&buf[DI_MEDIA],    3, out->media_type);
+    mos_internal_di_copy(&buf[DI_REVISION], 1, out->revision);
+    return true;
+}
+
+/* ==== src/mos_dr.c ==== */
+/*
+ * mos_dr.c — DiscRecording-side adapter: the directory.
+ *
+ * Supplies discovery, identity, and addressing from the DiscRecording C API;
+ * it never decides drive STATE — the TUR⊕GESN core in mos_state_core.c is the
+ * sole authority (the §5.5 nub gate runs on TUR sense bytes DR does not
+ * expose). DR is not a SCSI command author (AGENTS.md scope doctrine): it is
+ * a substrate above the same kext the MMC path uses, and DR authors no raw
+ * CDB itself — every raw verb (GESN, the tray opcodes, INQUIRY) lives in the
+ * MMC path via mos_raw_cdb (AGENTS.md tracks the running count).
+ *
+ * Identity resolution: DR exposes a device's IORegistry *path*
+ * (kDRDeviceIORegistryEntryPathKey), not its entry ID. mos's identity
+ * currency — registry_id, the reopen authority, the media-swap fingerprint —
+ * is the uint64 entry ID, so each path resolves path → entry → ID here. An
+ * unresolvable node is skipped, preserving the index ↔ open-by-index
+ * correspondence the public API documents.
+ */
+
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE 1
+#endif
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
+
+#include <CoreFoundation/CoreFoundation.h>
+#include <DiscRecording/DRCoreDevice.h>
+#include <IOKit/IOKitLib.h>
+
+#include <string.h>
+
+/* Bounded CFString → C-buffer copy. CFStringGetCString fails outright (no
+   usable partial-write contract) on too-small buffers, so conversion goes
+   through a 256-byte temp: values up to 255 bytes convert then strlcpy to
+   the SPC-4 field width; longer values fail conversion and yield "" — for
+   identity fields whose real domain is ≤16 bytes, an absurdly long value is
+   hostile and empty is correct. Non-string values also yield "". dst is
+   always NUL-terminated. Shared with the DA volume lookup (mos_da.c), which
+   reads volume-controlled strings under the same trust terms. */
+void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap)
+{
+    if (!dst || cap == 0) return;
+    dst[0] = 0;
+    if (!value || CFGetTypeID(value) != CFStringGetTypeID()) return;
+
+    char tmp[256];
+    if (!CFStringGetCString((CFStringRef)value, tmp, sizeof tmp,
+                            kCFStringEncodingUTF8)) {
+        return;
+    }
+    strlcpy(dst, tmp, cap);
+}
+
+/* path → IORegistry entry → uint64 entry ID; 0 on any failure (the
+   documented "unavailable" sentinel, never a fabricated ID). Also used by
+   the watch adapter's DR-doorbell per-device filter. */
+uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path)
+{
+    io_string_t p;
+    if (!path || CFGetTypeID(path) != CFStringGetTypeID()) return 0;
+    if (!CFStringGetCString((CFStringRef)path, p, sizeof(io_string_t),
+                            kCFStringEncodingUTF8)) {
+        return 0;
+    }
+
+    io_registry_entry_t e MOS_IO_AUTO =
+        IORegistryEntryFromPath(kIOMainPortDefault, p);
+    if (e == IO_OBJECT_NULL) return 0;
+
+    uint64_t id = 0;
+    if (IORegistryEntryGetRegistryEntryID(e, &id) != KERN_SUCCESS) id = 0;
+    return id;
+}
+
+/* Strip trailing spaces (SPC wire padding DR may or may not have trimmed).
+   Leading/interior spaces are data and stay. */
+static void mos_internal_dr_strip_trailing_spaces(char *s)
+{
+    size_t n = strlen(s);
+    while (n > 0 && s[n - 1] == ' ') s[--n] = 0;
+}
+
+/* The single extraction of the three identity strings; every reader funnels
+   through here. Buffers keep the SPC-4 field widths. */
+static void mos_internal_dr_copy_identity_from_info(CFDictionaryRef info,
+                                                    char *vendor, size_t vcap,
+                                                    char *product, size_t pcap,
+                                                    char *revision, size_t rcap)
+{
+    mos_internal_dr_copy_string(
+        CFDictionaryGetValue(info, kDRDeviceVendorNameKey), vendor, vcap);
+    mos_internal_dr_copy_string(
+        CFDictionaryGetValue(info, kDRDeviceProductNameKey), product, pcap);
+    mos_internal_dr_copy_string(
+        CFDictionaryGetValue(info, kDRDeviceFirmwareRevisionKey),
+        revision, rcap);
+    if (vendor && vcap) mos_internal_dr_strip_trailing_spaces(vendor);
+    if (product && pcap) mos_internal_dr_strip_trailing_spaces(product);
+    if (revision && rcap) mos_internal_dr_strip_trailing_spaces(revision);
+}
+
+/* Fill identity + registry id from one device's Info dictionary. */
+static void mos_internal_dr_fill_from_info(CFDictionaryRef info,
+                                           mos_internal_dr_snapshot *s)
+{
+    s->registry_id = mos_internal_dr_id_for_path_value(
+        CFDictionaryGetValue(info, kDRDeviceIORegistryEntryPathKey));
+    mos_internal_dr_copy_identity_from_info(info,
+                                            s->vendor,   sizeof s->vendor,
+                                            s->product,  sizeof s->product,
+                                            s->revision, sizeof s->revision);
+}
+
+/* The media BSD name lives in the Status dict's media-info sub-dictionary
+   (kDRDeviceMediaInfoKey → kDRDeviceMediaBSDNameKey), media-scoped: absent
+   with no media loaded, hence unit -1. */
+static int64_t mos_internal_dr_bsd_unit_from_status(CFDictionaryRef status)
+{
+    CFTypeRef mi = CFDictionaryGetValue(status, kDRDeviceMediaInfoKey);
+    if (!mi || CFGetTypeID(mi) != CFDictionaryGetTypeID()) return -1;
+
+    char name[MOS_BSD_NAME_CAP];
+    mos_internal_dr_copy_string(
+        CFDictionaryGetValue((CFDictionaryRef)mi, kDRDeviceMediaBSDNameKey),
+        name, sizeof name);
+    if (name[0] == 0) return -1;
+    /* Normalizes rdisk//dev/ forms and rejects partition shapes — same
+       authority as everywhere else. */
+    return mos_internal_parse_bsd_unit(name);
+}
+
+bool mos_internal_dr_device_snapshot(CFTypeRef device_ref,
+                                     mos_internal_dr_snapshot *s)
+{
+    if (!device_ref || !s) return false;
+    DRDeviceRef dev = (DRDeviceRef)device_ref;
+
+    memset(s, 0, sizeof *s);
+    s->bsd_unit = -1;
+
+    CFDictionaryRef info = DRDeviceCopyInfo(dev);
+    if (info) {
+        mos_internal_dr_fill_from_info(info, s);
+        CFRelease(info);
+    }
+    /* No reopenable identity ⇒ not usable (header). */
+    if (s->registry_id == 0) return false;
+
+    CFDictionaryRef status = DRDeviceCopyStatus(dev);
+    if (status) {
+        s->bsd_unit = mos_internal_dr_bsd_unit_from_status(status);
+        CFRelease(status);
+    }
+    return true;
+}
+
+size_t mos_internal_dr_copy_snapshot(mos_internal_dr_snapshot *slots,
+                                     size_t cap)
+{
+    if (!slots || cap == 0) return 0;
+
+    CFArrayRef arr = DRCopyDeviceArray();
+    if (!arr) return 0;
+
+    CFIndex n = CFArrayGetCount(arr);
+    size_t out = 0;
+    for (CFIndex i = 0; i < n && out < cap; ++i) {
+        CFTypeRef dev = CFArrayGetValueAtIndex(arr, i);
+        /* Skip-not-fail: an unresolvable entry must not hide its siblings.
+           The index is the position among reopenable devices — DR array
+           order when every device resolves, the expected case. */
+        if (mos_internal_dr_device_snapshot(dev, &slots[out])) out++;
+    }
+    CFRelease(arr);
+    return out;
+}
+
+uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name)
+{
+    if (!disk_name || !disk_name[0]) return 0;
+
+    CFStringRef s = CFStringCreateWithCString(kCFAllocatorDefault,
+                                              disk_name,
+                                              kCFStringEncodingUTF8);
+    if (!s) return 0;
+    /* Callers pass the canonical "diskN" form (mos_bsd_name_format). */
+    DRDeviceRef dev = DRDeviceCopyDeviceForBSDName(s);
+    CFRelease(s);
+    if (!dev) return 0;
+
+    uint64_t id = 0;
+    CFDictionaryRef info = DRDeviceCopyInfo(dev);
+    if (info) {
+        id = mos_internal_dr_id_for_path_value(
+            CFDictionaryGetValue(info, kDRDeviceIORegistryEntryPathKey));
+        CFRelease(info);
+    }
+    CFRelease(dev);
+    return id;
+}
+
+bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
+                                               char *vendor, size_t vcap,
+                                               char *product, size_t pcap,
+                                               char *revision, size_t rcap)
+{
+    if (vendor && vcap) vendor[0] = 0;
+    if (product && pcap) product[0] = 0;
+    if (revision && rcap) revision[0] = 0;
+    if (svc == IO_OBJECT_NULL) return false;
+
+    io_string_t path;
+    if (IORegistryEntryGetPath(svc, kIOServicePlane, path) != KERN_SUCCESS) {
+        return false;
+    }
+    CFStringRef cfpath = CFStringCreateWithCString(kCFAllocatorDefault, path,
+                                                   kCFStringEncodingUTF8);
+    if (!cfpath) return false;
+
+    DRDeviceRef dev = DRDeviceCopyDeviceForIORegistryEntryPath(cfpath);
+    CFRelease(cfpath);
+    if (!dev) return false; /* identity stays empty, non-fatal */
+
+    bool ok = false;
+    CFDictionaryRef info = DRDeviceCopyInfo(dev);
+    if (info) {
+        mos_internal_dr_copy_identity_from_info(info, vendor, vcap,
+                                                product, pcap,
+                                                revision, rcap);
+        CFRelease(info);
+        ok = true;
+    }
+    CFRelease(dev);
+    return ok;
+}
+
+/* ==== src/mos_drive_inquiry.c ==== */
+/*
+ * mos_drive_inquiry.c — the drive-identity query (mos_query_drive_inquiry):
+ * one raw STANDARD INQUIRY (EVPD=0, allocation length >= 74) on the
+ * mos_raw_cdb path, decoded by the pure parser in mos_inqdata.c. Surfaces the
+ * drive's self-reported identity (vendor/product/revision) AND the VERSION
+ * byte (SPC compliance level) + version-descriptor list — the canonical truth
+ * `mos drive` prefers over the DiscRecording cache. Named for the datum (the
+ * drive's INQUIRY self-report), not the generic INQUIRY command.
+ *
+ * Authored raw, not via the convenience Inquiry, because that method returns
+ * only the 36-byte standard header (SCSICmd_INQUIRY_StandardData), so the
+ * version descriptors at bytes 58-73 are structurally unreachable through it
+ * — the same layer-1 raw-verb showing as the serial, the same INQUIRY opcode
+ * (0x12) in a different mode: EVPD=0 here vs EVPD=1/page-0x80 in mos_serial.c
+ * (AGENTS.md scope-doctrine ADR; design:
+ * doc/research/2026-06-16-drive-identity-enrichment-survey.md).
+ *
+ * mos_raw_cdb is the SINGLE ObtainExclusiveAccess call site; this file adds
+ * none. Exclusive access is the gate: a mounted volume / other holder makes
+ * the open fail BUSY and the CDB never issues, so the read backs off rather
+ * than disturb a live nub — the same benign degradation as the serial (a
+ * static drive fact, read with the tray empty). INQUIRY changes no state.
+ */
+
+
+/* 96-byte reply: covers the version descriptors (bytes 58-73) with margin;
+   the parser bounds the decode by both this and the reply's Additional Length. */
+#define MOS_INQUIRY_REPLY_BUF 96u
+
+mos_error mos_query_drive_inquiry(mos_handle_t *h,
+                                    const mos_drive_inquiry **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* STANDARD INQUIRY (SPC-4 0x12), 6-byte CDB:
+         byte0   opcode 0x12
+         byte1   EVPD = 0                  — standard data (not a VPD page)
+         byte2   PAGE CODE = 0x00          — must be 0 when EVPD=0
+         byte3-4 ALLOCATION LENGTH (BE)    — MOS_INQUIRY_REPLY_BUF (>= 74)
+         byte5   CONTROL = 0 */
+    const uint8_t cdb[6] = {
+        0x12, 0x00, 0x00,
+        (uint8_t)(MOS_INQUIRY_REPLY_BUF >> 8),
+        (uint8_t)(MOS_INQUIRY_REPLY_BUF & 0xFF),
+        0x00,
+    };
+
+    uint8_t  buf[MOS_INQUIRY_REPLY_BUF] = {0};
+    uint32_t task_status               = 0;
+    uint8_t  sense[18]                 = {0};
+    uint64_t xferred                   = 0;
+
+    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
+                              MOS_XFER_FROM_TARGET, 2000,
+                              &task_status, sense, &xferred);
+    if (e != MOS_OK) return e;
+    if (task_status != MOS_SCSI_STATUS_GOOD)
+        return MOS_ERR_IO;
+
+    /* Dual-length rule (O-4): bound the parse to the realized transfer count,
+       not the full buffer — the parser further bounds by the reply's own
+       Additional Length. */
+    size_t trusted = (xferred < sizeof buf) ? (size_t)xferred : sizeof buf;
+    if (!mos_internal_inqdata_parse(buf, trusted, &h->drive_inquiry))
+        return MOS_ERR_IO;   /* truncated below the 5-byte fixed header */
+
+    *out = &h->drive_inquiry;
+    return MOS_OK;
+}
+
+/* ==== src/mos_formatcap.c ==== */
+/*
+ * mos_formatcap.c — pure, bounds-safe decode of READ FORMAT CAPACITIES (MMC
+ * 0x23). The formattable view of the loaded medium: how big it is now, whether
+ * it is unformatted, and the capacities the drive could format it to. This is
+ * what mos_query_capacity's other two sources cannot report on a blank
+ * REWRITABLE disc (DVD±RW, DVD-RAM, BD-RE): the kernel's cached READ CAPACITY
+ * is 0 (nothing formatted) and there is no track for READ TRACK INFORMATION.
+ *
+ * No IOKit: the shell (src/mos_query.c) hands us a fixed zero-init buffer
+ * filled via mos_raw_cdb — no convenience method carries 0x23, so it is a raw
+ * verb (the fifth; layer-1 showings + design in
+ * doc/research/2026-06-18-read-format-capacities-feasibility.md). Read-only:
+ * mos reports formattable capacities and never issues FORMAT UNIT (0x04).
+ *
+ * Reply layout (MMC-6 §6.24, Format Capacities):
+ *   Capacity List Header (4 bytes)
+ *     [0..2]  reserved
+ *     [3]     CAPACITY LIST LENGTH  — bytes that follow (= 8 + 8*N)
+ *   Current/Maximum Capacity Descriptor (8 bytes) at [4..11]
+ *     [4..7]  NUMBER OF BLOCKS (BE u32)
+ *     [8]     bits 1:0 DESCRIPTOR TYPE (1 unformatted, 2 formatted, 3 no media)
+ *     [9..11] BLOCK LENGTH (BE u24)
+ *   Formattable Capacity Descriptors (8 bytes each) from [12]
+ *     [0..3]  NUMBER OF BLOCKS (BE u32)
+ *     [4]     bits 7:2 FORMAT TYPE
+ *     [5..7]  TYPE DEPENDENT PARAMETER (BE u24) — block length for most types
+ *
+ * Dual-length rule (O-4): the CAPACITY LIST LENGTH is trusted only up to the
+ * bytes the transport actually delivered, then floored to whole 8-byte
+ * descriptors — a non-conformant USB-SATA bridge that over-claims the length
+ * cannot make us read past the realized span. A capture is a falsifier per the
+ * hardware ADR, not a design input.
+ */
+
+
+#define FC_HDR  4u   /* Capacity List Header bytes 0..3 */
+#define FC_DESC 8u   /* every capacity descriptor is 8 bytes */
+
+static uint32_t fc_be32(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8)  |  (uint32_t)p[3];
+}
+
+static uint32_t fc_be24(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | (uint32_t)p[2];
+}
+
+bool mos_internal_format_caps_parse(const uint8_t *buf, size_t len,
+                                    struct mos_format_caps *out)
+{
+    if (out) *out = (struct mos_format_caps){0};
+    if (!buf || !out) return false;
+    /* Need the 4-byte header plus the Current/Maximum Capacity Descriptor —
+       a reply too short to carry even that is not a usable answer. */
+    if (len < FC_HDR + FC_DESC) return false;
+
+    /* CAPACITY LIST LENGTH (byte 3) counts the bytes after the header. Clamp to
+       what was actually delivered (O-4), then floor to whole descriptors: the
+       list is one Current/Max descriptor plus zero or more Formattable ones,
+       so a coherent length is a positive multiple of 8. */
+    size_t list_len = buf[3];
+    size_t avail    = len - FC_HDR;
+    if (list_len > avail) list_len = avail;
+    list_len -= list_len % FC_DESC;
+    if (list_len < FC_DESC) return false;   /* no Current/Max descriptor */
+
+    /* Current/Maximum Capacity Descriptor at [4..11]. */
+    const uint8_t *cur = buf + FC_HDR;
+    out->cur_blocks      = fc_be32(cur);
+    out->cur_type        = (uint8_t)(cur[4] & 0x03);
+    out->cur_block_bytes = fc_be24(cur + 5);
+
+    /* Formattable Capacity Descriptors follow, capped at MOS_FORMATTABLE_MAX.
+       n is bounded by list_len/8 - 1, and list_len <= avail = len - FC_HDR, so
+       the deepest read below — buf[FC_HDR + (1+n)*FC_DESC - 1] — stays < len. */
+    size_t n = (list_len / FC_DESC) - 1u;
+    if (n > MOS_FORMATTABLE_MAX) n = MOS_FORMATTABLE_MAX;
+    for (size_t i = 0; i < n; i++) {
+        const uint8_t *d = buf + FC_HDR + FC_DESC + i * FC_DESC;
+        out->d[i].blocks      = fc_be32(d);
+        out->d[i].format_type = (uint8_t)(d[4] >> 2);
+        out->d[i].param       = fc_be24(d + 5);
+    }
+    out->count = (uint8_t)n;
+    return true;
+}
+
+/* ==== src/mos_inqdata.c ==== */
+/*
+ * mos_inqdata.c — pure decode of STANDARD INQUIRY data (EVPD=0): the drive's
+ * self-reported identity (vendor/product/revision) AND the SPC version byte +
+ * version-descriptor list (the T10/ISO standards the drive claims). `mos drive`
+ * issues this raw read for the canonical truth and prefers it over the
+ * DiscRecording cache; the descriptors at bytes 58-73 are unreachable through
+ * macOS's convenience Inquiry (a 36-byte header read), so the read is raw
+ * (mos_drive_inquiry.c; AGENTS.md scope-doctrine ADR for the EVPD=0 mode).
+ * Identity strings are trailing-trimmed here; non-ASCII is copied verbatim and
+ * escaped at the output sink (mos_safe_ascii / mos_cli_json_str), like every
+ * other identity string. Standard token naming is applied at the sink too
+ * (mos_spc_version_name / mos_version_descriptor_name).
+ *
+ * No IOKit: the shell hands us a fixed zero-init buffer bounded to the bytes
+ * the transport actually returned. Every length here is device-reported,
+ * hence hostile; each field is bounded by BOTH the passed len and the reply's
+ * own Additional Length (byte 4) — the dual-length rule (O-4). A reply whose
+ * trusted region does not reach the 36-byte standard header (an under-
+ * delivered transfer that cut the identity short) is REFUSED, not surfaced as
+ * a partial identity: this is canonical drive truth the CLI prefers over the
+ * DR cache, so an incomplete read must defer to it (see the parser body).
+ *
+ * Standard INQUIRY layout (SPC-4 §6.4.2):
+ *   [2]      VERSION              — SPC compliance level
+ *   [4]      ADDITIONAL LENGTH (n-4) — bytes that follow; total = 5 + this
+ *   [8..15]  VENDOR IDENTIFICATION  (8 ASCII, space-padded)
+ *   [16..31] PRODUCT IDENTIFICATION (16 ASCII)
+ *   [32..35] PRODUCT REVISION LEVEL (4 ASCII)
+ *   [58..73] VERSION DESCRIPTORS — up to eight 2-byte BE codes (0 = none)
+ */
+
+
+#define VD_HDR      5u   /* through ADDITIONAL LENGTH (byte 4)            */
+#define INQ_STD_HDR 36u  /* the standard 36-byte header (vendor..revision) */
+#define VD_OFFSET  58u   /* first version descriptor                      */
+#define VD_MAX      8u   /* eight descriptor slots, bytes 58-73           */
+
+/* Copy the ASCII field at [start, start+width) into out[0..out_cap), bounded
+   by the trusted `end`, trailing spaces/NULs trimmed. out is "" when the
+   field lies (even partly) outside the trusted region's start. */
+static void copy_field(const uint8_t *buf, size_t end, size_t start,
+                       size_t width, char *out, size_t out_cap)
+{
+    out[0] = 0;
+    if (out_cap < 2u || start >= end) return;
+    size_t avail = end - start;
+    size_t n = (width < avail) ? width : avail;
+    while (n > 0 && (buf[start + n - 1] == ' ' || buf[start + n - 1] == 0))
+        n--;
+    size_t copy = (n < out_cap - 1u) ? n : out_cap - 1u;
+    for (size_t i = 0; i < copy; i++) out[i] = (char)buf[start + i];
+    out[copy] = 0;
+}
+
+bool mos_internal_inqdata_parse(const uint8_t *buf, size_t len,
+                               mos_drive_inquiry *out)
+{
+    if (!out) return false;
+    *out = (mos_drive_inquiry){0};
+    if (!buf || len < VD_HDR) return false;   /* need the fixed header */
+
+    /* Trusted end: the smaller of the buffer span and the reply's own
+       declared total (5 + Additional Length). A lying-long Additional Length
+       cannot extend past `len`; an honest-short one shrinks the region. */
+    size_t declared = VD_HDR + (size_t)buf[4];
+    size_t end = (declared < len) ? declared : len;
+
+    /* A conformant STANDARD INQUIRY always returns at least the 36-byte
+       standard header (Additional Length >= 31), so vendor (8-15), product
+       (16-31), and revision (32-35) are wholly present. If the trusted region
+       stops short of byte 36 — the device declared a sub-header total OR the
+       transport under-delivered (declared > delivered, so the dual-length
+       floor caps `end` at the bytes that actually arrived) — at least one
+       identity field is cut or absent. REFUSE the whole reply rather than
+       surface a partial identity: `mos drive` treats this read as the
+       drive's CANONICAL truth and prefers it over the DiscRecording cache
+       (cli/drive.c), so a half-arrived "BD" (a USB-SATA bridge that cut the
+       transfer mid-PRODUCT) would mask the full cached model. Returning false
+       makes mos_query_drive_inquiry fail → the caller falls back to DR and the
+       COMPLETE identity wins. Bounds stay safe: the gate precedes every field
+       read, so a truncated reply is rejected before a byte is copied. This is
+       the dual-length rule's canonical-data corollary — under-delivery of a
+       value the caller trusts as authoritative is refused, not trusted-as-
+       short (AGENTS.md; contrast a genuinely short reply, declared <= len,
+       which reaches byte 36 and parses). */
+    if (end < INQ_STD_HDR) return false;
+
+    out->spc_version = buf[2];
+
+    copy_field(buf, end,  8u,  8u, out->vendor,   sizeof out->vendor);
+    copy_field(buf, end, 16u, 16u, out->product,  sizeof out->product);
+    copy_field(buf, end, 32u,  4u, out->revision, sizeof out->revision);
+
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < VD_MAX; i++) {
+        size_t off = VD_OFFSET + (size_t)i * 2u;
+        if (off + 2u > end) break;                /* descriptor not present */
+        uint16_t code = (uint16_t)(((uint16_t)buf[off] << 8) | buf[off + 1]);
+        if (code != 0) out->descriptors[n++] = code;   /* 0x0000 = empty slot */
+    }
+    out->descriptor_count = n;
+    return true;
+}
+
+/* ==== src/mos_modepage.c ==== */
+/*
+ * mos_modepage.c — pure, bounds-safe decode of MODE SENSE(10) replies for
+ * the two optical-specific pages the scope doctrine admits (read-only):
+ * page 0x2A (CD/DVD Capabilities & Mechanical Status — loading mechanism,
+ * eject/lock, buffer size) and page 0x01 (Read/Write Error Recovery —
+ * AWRE/ARRE/PER/DCR + read-retry count). NO MODE SELECT: mos reports
+ * configuration, never tunes it.
+ *
+ * No IOKit: the shell hands us a fixed zero-init buffer (filled via
+ * ModeSense10) and its size. Every length is device-reported, hence
+ * hostile — the shared page walker keeps the declared lengths from
+ * steering a read outside [buf, buf+len) and cannot loop (each step
+ * strictly advances).
+ *
+ * MODE SENSE(10) mode parameter header:
+ *   [0..1] Mode Data Length (BE) — bytes AFTER this field
+ *   [2]    Medium Type   [3] Device-Specific Parameter
+ *   [4..5] reserved      [6..7] Block Descriptor Length (BE)
+ *   [8 + block_descriptor_length ..] the mode pages, each:
+ *     page[0] PS(7) SPF(6) Page Code(5:0); page[1] Page Length (n)
+ *     page[2..] page data (n bytes). (Sub-page format SPF=1 has a 4-byte
+ *     header with a BE16 length; pages 0x2A/0x01 are page_0 format.)
+ *
+ * Page 0x2A offsets (relative to page start): loading mechanism page[6]>>5
+ * and eject page[6]&0x08 (sr.c cross-check in SPEC.md), buffer size
+ * page[12..13] BE KB and lock bits page[6] bit1 supported / bit2 state
+ * (MMC-3 page-2A). Page 0x01 is the canonical SPC Read/Write Error
+ * Recovery page. A real MODE SENSE capture is a falsifier per the hardware
+ * ADR, not a design input. No payload byte is ever used as an offset.
+ */
+
+
+#define MP_HDR  8u   /* MODE SENSE(10) parameter header */
+
+/* Locate a page_0-format mode page by code. On success sets *poff (page
+   start) and *plen (data bytes after the 2-byte page header) and returns
+   true. Bounded: every iteration advances off by at least the page header,
+   so a hostile page-length field cannot loop or read out of bounds. */
+static bool mos_internal_mode_page_find(const uint8_t *buf, size_t len,
+                                        uint8_t want,
+                                        size_t *poff, size_t *plen)
+{
+    if (!buf || len < MP_HDR) return false;
+
+    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    size_t end = (len < declared) ? len : declared;
+    if (end < MP_HDR) return false;
+
+    size_t bdl = (size_t)(((uint16_t)buf[6] << 8) | buf[7]);
+    size_t off = MP_HDR + bdl;
+
+    while (off + 2u <= end) {
+        uint8_t  code = buf[off] & 0x3f;
+        int      spf  = (buf[off] & 0x40) != 0;
+        size_t   hdr, page_len;
+
+        if (spf) {
+            if (off + 4u > end) break;
+            hdr = 4u;
+            page_len = (size_t)(((uint16_t)buf[off + 2] << 8) | buf[off + 3]);
+        } else {
+            hdr = 2u;
+            page_len = buf[off + 1];
+        }
+
+        size_t page_total = hdr + page_len;
+        if (off + page_total > end) break;   /* page claims past trusted end */
+
+        if (!spf && code == want) {
+            *poff = off;
+            *plen = page_len;
+            return true;
+        }
+        /* off strictly advances: page_total = hdr + page_len and hdr is 2
+           (page_0) or 4 (SPF), so page_total >= 2 — the loop always makes
+           progress and terminates when off + page_total exceeds end. */
+        off += page_total;
+    }
+    return false;
+}
+
+bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
+                                  struct mos_mode_caps *out)
+{
+    if (!out) return false;
+    *out = (struct mos_mode_caps){0};
+
+    size_t poff, plen;
+    if (!mos_internal_mode_page_find(buf, len, 0x2A, &poff, &plen))
+        return false;
+    /* Need page bytes through 13 (buffer size at page[12..13]); the walker
+       already bounded poff + 2 + plen to the trusted end. */
+    if (plen < 12u) return false;
+
+    const uint8_t *p = &buf[poff];
+    out->loading_mechanism = (uint8_t)(p[6] >> 5);
+    out->can_eject         = (p[6] & 0x08) != 0;
+    out->lock_supported    = (p[6] & 0x02) != 0;
+    out->locked            = (p[6] & 0x04) != 0;
+    out->buffer_kb         = (uint16_t)((p[12] << 8) | p[13]);
+    out->have              = true;
+    return true;
+}
+
+bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
+                                       struct mos_error_recovery *out)
+{
+    if (!out) return false;
+    *out = (struct mos_error_recovery){0};
+
+    size_t poff, plen;
+    if (!mos_internal_mode_page_find(buf, len, 0x01, &poff, &plen))
+        return false;
+    if (plen < 2u) return false;             /* need page bytes 2 and 3 */
+
+    const uint8_t *p = &buf[poff];
+    out->awre             = (p[2] & 0x80) != 0;
+    out->arre             = (p[2] & 0x40) != 0;
+    out->per              = (p[2] & 0x04) != 0;
+    out->dcr              = (p[2] & 0x01) != 0;
+    out->read_retry_count = p[3];
+    out->have             = true;
+    return true;
+}
+
+/* ==== src/mos_perf.c ==== */
+/*
+ * mos_perf.c — pure, bounds-safe decode of a GET PERFORMANCE (MMC 0xAC)
+ * Performance Data response, TYPE 00h — the type Apple's GetPerformance
+ * retrieves (the TYPE 03h write-speed carve-out is in SPEC.md). Direction
+ * is the CDB WRITE bit, so the adapter issues this twice (WRITE=0/1); this
+ * decode returns the max performance found in one reply.
+ *
+ * No IOKit: the shell hands us a fixed zero-init buffer (filled via
+ * GetPerformance) and its size. Every length is device-reported, hence
+ * hostile — the declared length must never steer a read outside
+ * [buf, buf+len); only fixed offsets within each descriptor are read.
+ *
+ * Wire layout (MMC GET PERFORMANCE, Performance Data, TYPE 00h):
+ *   [0..3]  Performance Data Length (BE) — bytes AFTER byte 3
+ *   [4]     bit1 Write, bit0 Except (echo)   [5..7] reserved
+ *   [8..]   Nominal Performance Descriptors, 16 bytes each:
+ *     desc[0..3]   Start LBA
+ *     desc[4..7]   Start Performance (kB/s, BE)
+ *     desc[8..11]  End LBA
+ *     desc[12..15] End Performance (kB/s, BE)
+ *
+ * Layout is the MMC-6 Nominal Performance Descriptor, built to spec (per
+ * the hardware ADR a capture falsifies, it does not steer offsets). An
+ * empty list (drive declines the direction) is data (count 0), not an
+ * error. No payload byte is ever used as an offset.
+ */
+
+
+#define GP_HDR        8u     /* 4-byte data length + 4 reserved/echo */
+#define GP_DESC       16u    /* one Nominal Performance Descriptor */
+#define GP_DESC_CAP   256u   /* clamp: no real drive lists this many */
+
+static uint32_t mos_internal_gp_be32(const uint8_t *p)
+{
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+           (uint32_t)p[2] << 8  | p[3];
+}
+
+/* Decode one Performance Data reply: max performance (kB/s) across its
+   descriptors and the count. True when the 8-byte header is present and
+   coherent (the descriptor list may be empty). */
+bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
+                                  uint32_t *max_kbps, uint16_t *count)
+{
+    if (max_kbps) *max_kbps = 0;
+    if (count)    *count = 0;
+    if (!buf || len < GP_HDR) return false;
+
+    /* Performance Data Length counts bytes AFTER byte 3 (response = 4 +
+       value). Declared can only shrink the trusted region; computed wide
+       so the +4 cannot wrap. */
+    size_t declared = (size_t)mos_internal_gp_be32(&buf[0]) + 4u;
+    size_t end = (len < declared) ? len : declared;
+    if (end < GP_HDR) return false;
+
+    size_t n = (end - GP_HDR) / GP_DESC;
+    if (n > GP_DESC_CAP) n = GP_DESC_CAP;
+
+    uint32_t mx = 0;
+    for (size_t i = 0; i < n; i++) {
+        const uint8_t *d = &buf[GP_HDR + i * GP_DESC];
+        uint32_t sp = mos_internal_gp_be32(&d[4]);    /* Start Performance */
+        uint32_t ep = mos_internal_gp_be32(&d[12]);   /* End Performance   */
+        if (sp > mx) mx = sp;
+        if (ep > mx) mx = ep;
+    }
+
+    if (max_kbps) *max_kbps = mx;
+    if (count)    *count = (uint16_t)n;
+    return true;
+}
+
+/* ==== src/mos_physstruct.c ==== */
+/*
+ * mos_physstruct.c — pure, bounds-safe decode of READ DISC STRUCTURE
+ * (MMC-5 0xAD) replies for the DVD / HD-DVD media-type family
+ * (MEDIA_TYPE = 0): Physical Format Information (format 0x00) and
+ * Copyright Management Information (format 0x01).
+ *
+ * "Physical structure", not "DVD": the same media-type-0 reply carries
+ * HD-DVD book types (0x4..0x6) alongside DVD, so this is not DVD-specific.
+ * The BD half (DI) is a different media type — mos_discstruct.c.
+ *
+ * No IOKit: the shell hands us a fixed zero-init buffer (filled via
+ * ReadDiscStructure) and its size. Every length is device-reported, hence
+ * hostile — the declared length must never steer a read outside
+ * [buf, buf+len); only fixed offsets are read.
+ *
+ * Wire layout (both formats share the READ DISC STRUCTURE 4-byte header):
+ *   [0..1] Disc Structure Data Length (BE) — bytes AFTER this field;
+ *          the response occupies 2 + value bytes. Only ever SHRINKS the
+ *          trusted region.
+ *   [2..3] reserved
+ *   [4..]  the format payload. With `base = &buf[4]`:
+ *
+ *   Format 0x00 (Physical Format Information):
+ *     base[0]  book_type (7:4) | part_version (3:0)
+ *     base[1]  disc_size (7:4) | maximum_rate (3:0)
+ *     base[2]  (rsv 7) | num_layers (6:5) | track_path (4) | layer_type (3:0)
+ *     base[3]  linear_density (7:4) | track_density (3:0)
+ *     base[5..7]   Starting PSN of Data Area (24-bit BE)
+ *     base[9..11]  End PSN of Data Area (24-bit BE)
+ *     base[13..15] End PSN in Layer 0 (24-bit BE) — the layer break
+ *     base[16] bca (bit 7)
+ *
+ *   Format 0x01 (Copyright Management Information):
+ *     buf[4] Copyright Protection System Type (CPST)
+ *     buf[5] Region Management Information (RMI)
+ *
+ * The Linux cdrom.c cross-check is in SPEC.md. Classification (book_type
+ * => media name, cpst => "CSS-protected") is the consumer's; this surfaces
+ * the registered values faithfully and stops there (scope doctrine).
+ */
+
+
+#define PS_HDR        4u                 /* 2-byte length + 2 reserved   */
+/* Physical (0x00): must reach base[16] = buf[PS_HDR+16] = buf[20]. */
+#define PHYS_MIN_LEN  (PS_HDR + 16u + 1u)
+/* Copyright (0x01): must reach the RMI byte, buf[5]. */
+#define COPY_MIN_LEN  6u
+
+/* Trusted end: the smaller of the buffer and the reply's declared length
+   (+2 for the length field). Computed wide so the +2 cannot wrap. */
+static size_t mos_internal_ps_trusted_end(const uint8_t *buf, size_t len)
+{
+    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    return (len < declared) ? len : declared;
+}
+
+bool mos_internal_physical_format_parse(const uint8_t *buf, size_t len,
+                                        struct mos_physical_structure *out)
+{
+    if (!out) return false;
+    out->have_physical = false;
+    if (!buf || len < PHYS_MIN_LEN) return false;
+    if (mos_internal_ps_trusted_end(buf, len) < PHYS_MIN_LEN) return false;
+
+    const uint8_t *b = &buf[PS_HDR];
+    out->book_type      = (uint8_t)(b[0] >> 4);
+    out->part_version   = (uint8_t)(b[0] & 0x0f);
+    out->disc_size      = (uint8_t)(b[1] >> 4);
+    out->max_rate       = (uint8_t)(b[1] & 0x0f);
+    out->layer_type     = (uint8_t)(b[2] & 0x0f);
+    out->track_path     = (uint8_t)((b[2] >> 4) & 0x01);
+    /* MMC "Number of Layers" code 0/1 => human count 1/2. */
+    out->num_layers     = (uint8_t)(((b[2] >> 5) & 0x03) + 1u);
+    out->linear_density = (uint8_t)(b[3] >> 4);
+    out->track_density  = (uint8_t)(b[3] & 0x0f);
+    out->start_sector   = (uint32_t)b[5] << 16 | (uint32_t)b[6] << 8 | b[7];
+    out->end_sector     = (uint32_t)b[9] << 16 | (uint32_t)b[10] << 8 | b[11];
+    out->end_sector_l0  = (uint32_t)b[13] << 16 | (uint32_t)b[14] << 8 | b[15];
+    out->bca            = (b[16] >> 7) & 0x01;
+    out->have_physical  = true;
+    return true;
+}
+
+bool mos_internal_copyright_mgmt_parse(const uint8_t *buf, size_t len,
+                                       struct mos_physical_structure *out)
+{
+    if (!out) return false;
+    out->have_copyright = false;
+    if (!buf || len < COPY_MIN_LEN) return false;
+    if (mos_internal_ps_trusted_end(buf, len) < COPY_MIN_LEN) return false;
+
+    out->protection     = buf[4];   /* CPST */
+    out->region         = buf[5];   /* RMI region mask */
+    out->have_copyright = true;
+    return true;
 }
 
 /* ==== src/mos_pure.c ==== */
@@ -1560,1109 +2920,549 @@ bool mos_internal_value_is_registry_id(uint64_t v)
     return v >= MOS_REGISTRY_ID_FLOOR;
 }
 
-/* ==== src/mos_config.c ==== */
+/* ==== src/mos_query.c ==== */
 /*
- * mos_config.c — pure, bounds-safe iteration over a GET CONFIGURATION
- * (MMC) response buffer. No IOKit: the shell hands us a fixed zero-init
- * buffer plus the byte count it trusts (sizeof the buffer — the MMC
- * GetConfiguration reports no realized-transfer count). Every payload
- * length is device-reported, hence hostile; this file is the choke point
- * keeping those lengths from steering a read outside [buf, buf+len).
+ * mos_query.c — the typed MMC query surface. Each mos_query_* verb issues one
+ * MMCDeviceInterface convenience command, hands the reply to a pure decoder,
+ * caches the result on the handle, and returns a borrowed pointer.
  *
- * Layout (MMC-6 §5.2, GET CONFIGURATION response):
- *
- *   Feature header (8 bytes):
- *     [0..3] Data Length      (BE) — bytes of data available AFTER this
- *                                    field; total response = 4 + value.
- *     [4..5] Reserved
- *     [6..7] Current Profile  (BE)
- *   Feature descriptors, each:
- *     [0..1] Feature Code     (BE)
- *     [2]    (Version<<2) | (Persistent<<1) | Current
- *     [3]    Additional Length — feature bytes that follow; the
- *            descriptor spans 4 + Additional Length bytes total.
- *
- * Safety contract (the device controls every length here):
- *   - `len` is the only trusted ceiling. The header Data Length can only
- *     SHRINK the walked region (clamped under `len`), never extend it.
- *   - A descriptor is decoded only if its 4-byte header AND its
- *     Additional-Length payload fit within the trusted region.
- *   - A malformed Additional Length (not a multiple of 4, per MMC) ends
- *     the walk rather than desyncing it onto misaligned bytes.
- *   - The cursor advances by span >= 4 on every yield, so the walk makes
- *     forward progress and terminates in <= len/4 steps; a single-byte
- *     Additional Length cannot wrap the cursor.
- *   - The bool return is intentionally undifferentiated: false means
- *     "stop" — end of list OR a malformed/over-long descriptor, alike.
- *     Callers walk this as a plain `while (next(...))`; the malformed
- *     branch is unreachable on conformant hardware.
- */
-
-
-bool mos_internal_config_next_feature(const uint8_t *buf, size_t len,
-                                      size_t *cursor, mos_config_feature *out)
-{
-    if (!buf || !cursor || !out) return false;
-
-    /* Trusted end. Start at the buffer ceiling, then let the device's Data
-       Length pull it IN iff it claims less. 64-bit so the +4 cannot wrap
-       before the compare; a wrapped or oversized claim fails to shrink, so
-       `len` stands — device length only ever shortens the walk. */
-    size_t end = len;
-    if (len >= 4) {
-        uint64_t dlen = ((uint64_t)buf[0] << 24) | ((uint64_t)buf[1] << 16)
-                      | ((uint64_t)buf[2] << 8)  |  (uint64_t)buf[3];
-        uint64_t declared = dlen + 4u;            /* total incl. length field */
-        if (declared < (uint64_t)end) end = (size_t)declared;
-    }
-
-    size_t c = *cursor;
-
-    /* Descriptor header must fit. `c > end` also catches a cursor past the
-       trusted region; `end - c` is computed only when c <= end, no wrap. */
-    if (c > end || end - c < 4) return false;
-
-    uint8_t add  = buf[c + 3];                    /* Additional Length, 0..255 */
-
-    /* MMC requires Additional Length to be a multiple of 4. Tolerating a
-       non-multiple would let a hostile device desync the walk so later
-       descriptors decode from misaligned (in-bounds but attacker-chosen)
-       bytes. Fail closed at the first malformed descriptor. */
-    if (add & 3u) return false;
-
-    size_t  span = (size_t)4 + add;               /* >= 4, cannot wrap        */
-
-    /* Whole descriptor (header + feature payload) must fit. */
-    if (end - c < span) return false;
-
-    uint8_t b2        = buf[c + 2];
-    out->feature_code = (uint16_t)(((uint16_t)buf[c] << 8) | buf[c + 1]);
-    out->current      = (b2 & 0x01u) != 0;
-    out->persistent   = (b2 & 0x02u) != 0;
-    out->version      = (uint8_t)((b2 >> 2) & 0x0Fu);
-    out->data         = add ? &buf[c + 4] : NULL;
-    out->data_len     = add;
-
-    *cursor = c + span;                           /* strict forward progress */
-    return true;
-}
-
-/* Find one feature by code: walk until a match. Same trust bounds; first
-   match wins (MMC lists each feature once — a hostile duplicate yields the
-   earlier copy, never a re-scan). */
-bool mos_internal_config_find_feature(const uint8_t *buf, size_t len,
-                                      uint16_t feature_code,
-                                      mos_config_feature *out)
-{
-    if (!out) return false;
-    size_t cursor = 8;                            /* skip the feature header */
-    mos_config_feature f;
-    while (mos_internal_config_next_feature(buf, len, &cursor, &f)) {
-        if (f.feature_code == feature_code) { *out = f; return true; }
-    }
-    return false;
-}
-
-/* Current Profile = feature-header bytes 6-7, gated on the header's Data
-   Length (bytes 0-3, counting bytes that FOLLOW it): the field exists only
-   when the drive claims >= 4 following bytes. The gate keeps a truncated
-   reply from reading as profile 0x0000 (= "no media"). Contract in mos_pure.h. */
-bool mos_internal_config_current_profile(const uint8_t *buf, size_t len,
-                                         uint16_t *profile)
-{
-    if (!buf || !profile) return false;
-    if (len < 8) return false;                       /* need through byte 7 */
-
-    uint32_t data_len = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) |
-                        ((uint32_t)buf[2] <<  8) |  (uint32_t)buf[3];
-    if (data_len < 4) return false;                  /* truncated: profile not returned */
-
-    *profile = (uint16_t)(((uint16_t)buf[6] << 8) | buf[7]);
-    return true;
-}
-
-/* Contract in mos_pure.h. The content-protection features all live in the same
-   RT=0 walk. Version-carrying schemes (CSS/CPRM/AACS) put their version at
-   payload byte 3 (Additional Length 4); a present-but-truncated payload reads
-   as absent (fail closed, like the walker). SecurDisc/VCPS are presence-only
-   (Additional Length 0 ⇒ no payload), so the find alone is the signal. AACS
-   byte 0 carries BEC (bit 1, bus encryption) and WBE (bit 2, write bus
-   encryption) — MMC-6 §5.3.44 Table 198. */
-void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
-                                         mos_drive_caps *out)
-{
-    if (!out) return;
-    *out = (mos_drive_caps){0};
-
-    mos_drive_protection *p = &out->protection;
-    mos_config_feature f;
-
-    /* DVD CSS (0106h): CSS Version at payload byte 3. */
-    if (mos_internal_config_find_feature(buf, len, 0x0106, &f) &&
-        f.data && f.data_len >= 4) {
-        p->css         = true;
-        p->css_version = f.data[3];
-    }
-    /* DVD CPRM (010Bh): CPRM version at payload byte 3. */
-    if (mos_internal_config_find_feature(buf, len, 0x010B, &f) &&
-        f.data && f.data_len >= 4) {
-        p->cprm         = true;
-        p->cprm_version = f.data[3];
-    }
-    /* AACS (010Dh): BEC/WBE in byte 0, AACS Version in byte 3. */
-    if (mos_internal_config_find_feature(buf, len, 0x010D, &f) &&
-        f.data && f.data_len >= 4) {
-        p->aacs                 = true;
-        p->bus_encryption       = (f.data[0] & 0x02u) != 0;
-        p->write_bus_encryption = (f.data[0] & 0x04u) != 0;
-        p->aacs_version         = f.data[3];
-    }
-    /* SecurDisc (0113h): presence only (Additional Length 0). */
-    if (mos_internal_config_find_feature(buf, len, 0x0113, &f))
-        p->securdisc = true;
-    /* VCPS (0110h): legacy (MMC-5), presence only. */
-    if (mos_internal_config_find_feature(buf, len, 0x0110, &f))
-        p->vcps = true;
-}
-
-/* Contract in mos_pure.h. The Profile List feature (0x0000) payload is a
-   sequence of 4-byte Profile Descriptors; we keep the drive-static set of
-   Profile Numbers and ignore the per-descriptor CurrentP bit (which reflects
-   the loaded medium, not the drive). Bounded by the feature's data_len and
-   cap; the feature walk already proved f.data spans data_len bytes in-bounds. */
-void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
-                                           uint16_t *out_codes, uint8_t cap,
-                                           uint8_t *out_count)
-{
-    if (out_count) *out_count = 0;
-    if (!out_codes || cap == 0 || !out_count) return;
-
-    mos_config_feature f;
-    if (!mos_internal_config_find_feature(buf, len, 0x0000, &f)) return;
-    if (!f.data || f.data_len < 4) return;       /* no descriptors */
-
-    uint8_t n = 0;
-    for (size_t i = 0; i + 4u <= f.data_len && n < cap; i += 4u) {
-        out_codes[n++] = (uint16_t)(((uint16_t)f.data[i] << 8) | f.data[i + 1]);
-    }
-    *out_count = n;
-}
-
-/* Contract in mos_pure.h. Firmware Information feature (010Ch), MMC-6 r02g
-   §5.3.43 Table 197: the feature payload (f.data, after the 4-byte header)
-   is Century[2] Year[2] Month[2] Day[2] Hour[2] Minute[2] Second[2]
-   Reserved[2], all decimal ASCII (GMT). We emit RFC 3339 UTC
-   "YYYY-MM-DDTHH:MM:SSZ" — the SAME form mos.event.v1's `ts` uses
-   (mos_watch_core.c::format_rfc3339), integer seconds + trailing Z.
-   The 14 date/time bytes must all be decimal ASCII or the reply is refused
-   (empty out) — fail closed on a malformed descriptor. */
-void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
-                                            char *out, size_t out_cap)
-{
-    if (out && out_cap) out[0] = 0;
-    if (!out || out_cap < 21u) return;           /* "....-..-..T..:..:..Z"+NUL */
-
-    mos_config_feature f;
-    if (!mos_internal_config_find_feature(buf, len, 0x010C, &f)) return;
-    if (!f.data || f.data_len < 14u) return;     /* need Century..Second */
-
-    for (size_t i = 0; i < 14u; i++)
-        if (f.data[i] < '0' || f.data[i] > '9') return;   /* must be ASCII digits */
-
-    const uint8_t *d = f.data;
-    /* d[0..1] Century, [2..3] Year, [4..5] Month, [6..7] Day,
-       [8..9] Hour, [10..11] Minute, [12..13] Second. */
-    out[0]=(char)d[0];  out[1]=(char)d[1];  out[2]=(char)d[2];  out[3]=(char)d[3];
-    out[4]='-';  out[5]=(char)d[4];  out[6]=(char)d[5];
-    out[7]='-';  out[8]=(char)d[6];  out[9]=(char)d[7];
-    out[10]='T'; out[11]=(char)d[8]; out[12]=(char)d[9];
-    out[13]=':'; out[14]=(char)d[10]; out[15]=(char)d[11];
-    out[16]=':'; out[17]=(char)d[12]; out[18]=(char)d[13];
-    out[19]='Z'; out[20]='\0';
-}
-
-/* ==== src/mos_discinfo.c ==== */
-/*
- * mos_discinfo.c — pure, bounds-safe decode of a READ DISC INFORMATION
- * (MMC 0x51, standard data type 000b) response. No IOKit: the shell hands
- * us a fixed zero-init buffer and its size. The Disc Information Length is
- * device-reported, hence hostile — it must never steer a read outside
- * [buf, buf+len).
- *
- * Layout (MMC-6, READ DISC INFORMATION standard response, first 12 bytes):
- *
- *   [0..1] Disc Information Length (BE) — bytes available AFTER this field;
- *          the response occupies 2 + value bytes.
- *   [2]    reserved | Erasable(bit4) | State of Last Session(bits 3:2)
- *                                     | Disc Status(bits 1:0)
- *   [3]    Number of First Track on Disc
- *   [4]    Number of Sessions (LSB)
- *   [5]    First Track Number in Last Session (LSB)
- *   [6]    Last Track Number in Last Session (LSB)
- *   [7]    DID_V DBC_V URU DAC_V .. BG Format Status
- *   [8]    Disc Type
- *   [9]    Number of Sessions (MSB)
- *   [10]   First Track Number in Last Session (MSB)
- *   [11]   Last Track Number in Last Session (MSB)
- *   (bytes 12+ : undecoded — see SPEC.md.)
- *
- * Safety contract (the device controls the length): `len` is the only
- * trusted ceiling; the Disc Information Length can only shrink the trusted
- * region, never extend it. The fixed numeric region (through byte 11) must
- * be present per both `len` and the declared length; a shorter response is
- * refused.
- */
-
-
-bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
-                                  mos_disc_info *out)
-{
-    if (!buf || !out) return false;
-
-    /* Fixed numeric fields run through byte 11; trusted region must reach 12. */
-    if (len < 12) return false;
-
-    /* Disc Information Length (bytes 0-1) counts bytes AFTER itself; clamp the
-       trusted region to the smaller of declared+2 and len. */
-    size_t declared_end = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
-    size_t end = (len < declared_end) ? len : declared_end;
-    if (end < 12) return false;        /* device declares fewer bytes than the fields */
-
-    uint8_t b2 = buf[2];
-    out->status             = (mos_disc_status)(b2 & 0x03u);
-    out->last_session_state = (uint8_t)((b2 >> 2) & 0x03u);
-    out->erasable           = (b2 & 0x10u) != 0;
-
-    out->first_track_on_disc      = buf[3];
-    out->number_of_sessions       = (uint16_t)(((uint16_t)buf[9]  << 8) | buf[4]);
-    out->first_track_last_session = (uint16_t)(((uint16_t)buf[10] << 8) | buf[5]);
-    out->last_track_last_session  = (uint16_t)(((uint16_t)buf[11] << 8) | buf[6]);
-
-    /* BG Format Status (byte 7 bits 1:0): background-format state of
-       DVD+RW / BD-RE / Mount Rainier media. Values match Linux CDM_MRW_*. */
-    out->bg_format_status = (uint8_t)(buf[7] & 0x03u);
-    return true;
-}
-/* ==== src/mos_discstruct.c ==== */
-/*
- * mos_discstruct.c — pure, bounds-safe decode of a READ DISC STRUCTURE
- * (MMC-5 0xAD) Blu-ray Disc Information (DI) reply: the disc's registered
- * Disc Manufacturer ID + Media Type ID. No IOKit: the shell hands us a
- * fixed zero-init buffer (filled via ReadDiscStructure) and its size.
- * Every length and string byte is disc-reported, hence hostile — the
- * declared length must never steer a read outside [buf, buf+len), and ID
- * bytes are copied verbatim (the CLI escapes them at emit, like INQUIRY).
- *
- * Layout (response buffer):
- *   [0..1] Disc Structure Data Length (BE) — bytes available AFTER this
- *          field; the response occupies 2 + value bytes.
- *   [2..3] reserved
- *   [4..]  the Disc Information (DI), a sequence of 112-byte DI units.
- *          The first unit carries the identity:
- *            [4+0..1]   "DI" signature
- *            [4+8..10]  Disc Type Identifier (3 bytes) "BDR"/"BDW"/"BDO"
- *            [4+100..105] Disc Manufacturer ID (6 bytes)  e.g. "MILLEN"
- *            [4+106..108] Media Type ID        (3 bytes)  e.g. "MR1"
- *            [4+111]      Product Revision Number (1 byte) e.g. '0'
- *
- * The DI offsets (8 / 100 / 106 / 111) are MMC-5 / BDA-registered; the
- * undecoded write-parameter region is in SPEC.md. Classification (e.g.
- * "MILLEN" => M-DISC) is the consumer's: this surfaces the registered ID
- * bytes faithfully and stops there (scope doctrine).
- */
-
-
-#define DI_HDR       4u                  /* 2-byte length + 2 reserved   */
-#define DI_SIG_HI    (DI_HDR + 0u)       /* 'D'                          */
-#define DI_SIG_LO    (DI_HDR + 1u)       /* 'I'                          */
-#define DI_DISCTYPE  (DI_HDR + 8u)       /* 3 bytes: BDR/BDW/BDO         */
-#define DI_MANUF     (DI_HDR + 100u)     /* 6 bytes                      */
-#define DI_MEDIA     (DI_HDR + 106u)     /* 3 bytes                      */
-#define DI_REVISION  (DI_HDR + 111u)     /* 1 byte                       */
-#define DI_MIN_LEN   (DI_REVISION + 1u)  /* must reach the revision byte */
-
-/* Copy a fixed-width DI field verbatim, NUL-terminate, strip trailing
-   spaces (space-padded, like the INQUIRY identity copies). dst holds n+1. */
-static void mos_internal_di_copy(const uint8_t *src, size_t n, char *dst)
-{
-    size_t i;
-    for (i = 0; i < n; i++) dst[i] = (char)src[i];
-    dst[i] = '\0';
-    while (i > 0 && dst[i - 1] == ' ') dst[--i] = '\0';
-}
-
-bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
-                                   struct mos_disc_id *out)
-{
-    if (!out) return false;
-    *out = (struct mos_disc_id){0};
-    if (!buf) return false;
-
-    /* Identity region must be present per BOTH the buffer and the reply's
-       declared length; the declared length can only shrink the trusted
-       region (computed wide so the +2 cannot wrap). */
-    if (len < DI_MIN_LEN) return false;
-    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
-    size_t end = (len < declared) ? len : declared;
-    if (end < DI_MIN_LEN) return false;
-
-    /* The DI signature gates the whole decode: a non-DI reply (wrong media
-       type, drive returned something else) is refused, not read as identity. */
-    if (buf[DI_SIG_HI] != 'D' || buf[DI_SIG_LO] != 'I') return false;
-
-    mos_internal_di_copy(&buf[DI_DISCTYPE], 3, out->disc_type);
-    mos_internal_di_copy(&buf[DI_MANUF],    6, out->manufacturer);
-    mos_internal_di_copy(&buf[DI_MEDIA],    3, out->media_type);
-    mos_internal_di_copy(&buf[DI_REVISION], 1, out->revision);
-    return true;
-}
-
-/* ==== src/mos_cdtext.c ==== */
-/*
- * mos_cdtext.c — pure, bounds-safe decode of the disc-level (album) Title
- * and Performer from a READ TOC/PMA/ATIP format 0101b (CD-TEXT) reply. No
- * IOKit: the shell hands us a fixed zero-init buffer (filled via the
- * non-exclusive ReadTableOfContents) and its size. Every text byte is
- * disc-reported, hence hostile — the declared CD-TEXT Data Length must
- * never steer a read outside [buf, buf+len), and text is copied verbatim
- * (the CLI escapes at emit, like the volume name and INQUIRY identity).
- * No payload byte is ever used as an offset or length.
- *
- * SCOPE — the album Title/Performer (the "which album is in the drive"
- * disambiguator, parallel to the mounted volume name) plus the per-track
- * TITLES and PERFORMERS, all from the FIRST language block (block 0) in
- * single-byte charset. Field types and language blocks NOT decoded are in
- * SPEC.md; a double-byte (DBCC) field reads as absent, never mis-decoded
- * as Latin-1. This is BEST-EFFORT DISPLAY TEXT, not a fail-closed
- * fingerprint: audio-CD dedup keys ride on the TOC (mos_internal_toc_parse).
- *
- * Stream model (MMC / Red Book): within one (pack-type, block) the
- * per-track strings are NUL-separated and chopped across the 12-byte pack
- * payloads; the first pack's Track Number seeds the running index, so the
- * stream is [track S, track S+1, ...] (S = 0 is album-level). We walk the
- * block-0 packs in buffer order and dispatch each string by track number.
- *
- * Pack layout (READ TOC format 0101b, MMC-3 §6.27 / Red Book CD-TEXT;
- * libcdio cross-check in SPEC.md):
- *   [0..1] CD-TEXT Data Length (BE) — bytes available AFTER this field;
- *          the reply occupies 2 + value bytes.
- *   [2..3] reserved
- *   [4..]  a sequence of 18-byte CD-TEXT packs:
- *            [0]      Pack Type (0x80 Title, 0x81 Performer, ...)
- *            [1]      Track Number (bits 6:0; bit 7 reserved/extension)
- *            [2]      Sequence Number
- *            [3]      bit7 = double-byte (DBCC); bits 6:4 = Block Number
- *                     (language, 0..7); bits 3:0 = Character Position
- *            [4..15]  12 text bytes (NUL separates per-track strings)
- *            [16..17] CRC (present; not verified here, as in libcdio)
- *
- * No-OOB / termination gated under ASan/UBSan by tests/test_cdtext.c and
- * the fuzz_pure CD-TEXT phase.
+ * Every command here is a NON-EXCLUSIVE convenience method, with ONE
+ * documented exception: mos_query_capacity composes a formattable view from a
+ * raw READ FORMAT CAPACITIES (0x23) — no convenience method carries 0x23, so
+ * it is the fifth raw verb (layer-1 showings:
+ * doc/research/2026-06-18-read-format-capacities-feasibility.md). It goes
+ * through mos_scsi.c's mos_raw_cdb (still the SINGLE ObtainExclusiveAccess
+ * call site, AGENTS scope-doctrine §3 — this file calls it, never takes the
+ * lock itself). It is doubly gated: first on the current PROFILE (a cheap
+ * non-exclusive GET CONFIGURATION) — only formattable media (rewritable +
+ * BD-R) has a formattable view, so pressed / write-once CD-R,DVD±R / empty
+ * media reach no raw read and no lock attempt at all — then, for formattable
+ * profiles, on exclusive access (mos_raw_cdb fails BUSY without issuing the CDB
+ * when anything holds the drive). So the formattable view stays unset on
+ * non-formattable or mounted/contended media and never disturbs a nub.
  */
 
 
 #include <string.h>
 
-#define CDTEXT_HDR        4u    /* 2-byte data length + 2 reserved        */
-#define CDTEXT_PACK_LEN  18u
-#define CDTEXT_TEXT_OFF   4u    /* text bytes within a pack: [4..15]      */
-#define CDTEXT_TEXT_LEN  12u
-
-#define CDTEXT_PACK_TITLE     0x80u
-#define CDTEXT_PACK_PERFORMER 0x81u
-
-/* Bounded NUL-terminated copy into a fixed buffer (truncates past cap-1). */
-static void cdtext_copy(char *dst, size_t cap, const char *src)
+mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out)
 {
-    size_t i = 0;
-    for (; src[i] && i + 1 < cap; i++) dst[i] = src[i];
-    dst[i] = '\0';
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* 34 bytes: the fixed numeric region plus lead-in/lead-out addresses,
+       matching the readdiscinfo_*.bin fixtures. The convenience method
+       reports no realized count, so sizeof buf is the trusted length
+       (dual-length rule O-4); the reply's own Disc Information Length can
+       only shrink the decode, never extend it. */
+    uint8_t         buf[34] = {0};
+    SCSITaskStatus  st      = 0;
+    SCSI_Sense_Data sd      = {0};
+
+    IOReturn rc = (*h->mmc)->ReadDiscInformation(
+        h->mmc, buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        /* Transport failure maps its IOReturn; a command that reached the
+           drive but gave no usable data (no medium, a unit that rejects
+           0x51) is MOS_ERR_IO — out-of-band, never mistakable for a real
+           all-zero answer. This convention repeats across the verbs below. */
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_disc_info_parse(buf, sizeof(buf), &h->disc_info)) {
+        return MOS_ERR_IO;   /* short reply — refused whole */
+    }
+    *out = &h->disc_info;
+    return MOS_OK;
 }
 
-/* Dispatch reconstructed string `s` by track number: track 0 → the album
-   field (`album_dst`); tracks 1..MAX → `tracks[track-1]` when `tracks` is
-   non-NULL, bumping *max_track to the highest track with a NON-EMPTY string. */
-static void cdtext_store(const char *s, uint32_t track,
-                         char *album_dst, size_t album_cap,
-                         char tracks[][MOS_CDTEXT_TRACK_TITLE_CAP],
-                         uint8_t *max_track)
+mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
 {
-    if (track == 0) {
-        cdtext_copy(album_dst, album_cap, s);
-        return;
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Format 0000b worst case: 4-byte header + 100 descriptors
+       (99 tracks + lead-out) x 8. sizeof buf is the trusted length (O-4);
+       the reply's own TOC Data Length only shrinks the parse. MSF=0 (LBA),
+       starting track 0 (= from first). */
+    uint8_t         buf[4 + 100 * 8] = {0};
+    SCSITaskStatus  st               = 0;
+    SCSI_Sense_Data sd               = {0};
+
+    IOReturn rc = (*h->mmc)->ReadTableOfContents(
+        h->mmc, 0 /*LBA*/, 0x00 /*format*/, 0 /*from first track*/,
+        buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
     }
-    if (tracks && track >= 1 && track <= MOS_CDTEXT_MAX_TRACKS) {
-        cdtext_copy(tracks[track - 1], MOS_CDTEXT_TRACK_TITLE_CAP, s);
-        if (s[0] && (uint8_t)track > *max_track) *max_track = (uint8_t)track;
+
+    if (!mos_internal_toc_parse(buf, sizeof(buf), &h->toc)) {
+        return MOS_ERR_IO;   /* incoherent TOC — refused whole */
     }
+    *out = &h->toc;
+    return MOS_OK;
 }
 
-/* Walk the block-0 packs of `want_type` in buffer order, reconstruct the
-   NUL-separated per-track stream, and store each string by track number
-   (the first qualifying pack's Track Number seeds the running index).
-   Track 0 → `album_dst`; tracks 1.. → `tracks` when non-NULL. Single-byte
-   only: a DBCC STARTING pack decodes nothing (album left ""); a mid-stream
-   DBCC stops the walk, keeping the prefix already stored. */
-static void cdtext_decode_type(const uint8_t *buf, size_t span,
-                               uint8_t want_type,
-                               char *album_dst, size_t album_cap,
-                               char tracks[][MOS_CDTEXT_TRACK_TITLE_CAP],
-                               uint8_t *max_track)
+mos_error mos_query_cdtext(mos_handle_t *h, const mos_cdtext **out)
 {
-    album_dst[0] = '\0';
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
-    char     cur[MOS_CDTEXT_STR_CAP];   /* current-string accumulator */
-    size_t   n       = 0;
-    uint32_t track   = 0;               /* track number of the current string */
-    bool     started = false;
+    /* READ TOC/PMA/ATIP format 0101b (CD-TEXT). 256 packs (4612 bytes)
+       holds any real disc's album-level blocks several times over; a longer
+       reply is clamped to sizeof buf (the trusted length, O-4) and the
+       reply's own CD-TEXT Data Length only shrinks the parse. The
+       track/session parameter is reserved here — passed 0. */
+    uint8_t         buf[4 + 256 * 18] = {0};
+    SCSITaskStatus  st                = 0;
+    SCSI_Sense_Data sd                = {0};
 
-    for (size_t p = CDTEXT_HDR; p + CDTEXT_PACK_LEN <= span;
-         p += CDTEXT_PACK_LEN) {
-        if (buf[p] != want_type) continue;            /* wrong pack type   */
-        uint8_t b3 = buf[p + 3];
-        if (((b3 >> 4) & 0x07) != 0) continue;        /* first block only  */
-        bool dbcc = (b3 & 0x80) != 0;
+    IOReturn rc = (*h->mmc)->ReadTableOfContents(
+        h->mmc, 0 /*LBA*/, 0x05 /*CD-TEXT*/, 0 /*reserved*/,
+        buf, (UInt16)sizeof(buf), &st, &sd);
 
-        if (!started) {
-            if (dbcc) return;                          /* double-byte: skip */
-            track   = (uint32_t)(buf[p + 1] & 0x7Fu);  /* starting track #  */
-            started = true;
-        } else if (dbcc) {
-            break;            /* charset flip mid-stream: keep what we have */
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_cdtext_parse(buf, sizeof(buf), &h->cdtext)) {
+        return MOS_ERR_IO;   /* no CD-TEXT / no usable album field */
+    }
+    *out = &h->cdtext;
+    return MOS_OK;
+}
+
+mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* RT=0: header + every feature the drive implements. 1024 bytes holds
+       real feature lists several times over (a loaded BD-RE runs ~400
+       bytes); a longer claim is clamped to sizeof buf, and the reply's own
+       lengths only shrink the walk (O-4). Feature absent (every non-BD
+       drive) decodes to aacs=false — data, not an error. */
+    uint8_t         buf[1024] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->GetConfiguration(
+        h->mmc,
+        (UInt8)0x00,             /* RT = 00b, all features              */
+        (UInt16)0x0000,          /* starting feature number             */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    mos_internal_protection_from_config(buf, sizeof(buf), &h->caps);
+    /* Same RT=0 reply carries the Profile List feature (0x0000); decode the
+       drive-static supported-profile set from it (protection_from_config zeroed
+       the struct first, so profile_count stays 0 if the feature is absent). */
+    mos_internal_profile_list_from_config(buf, sizeof(buf), h->caps.profiles,
+                                          MOS_DRIVE_PROFILE_CAP,
+                                          &h->caps.profile_count);
+    /* Firmware creation timestamp (feature 010Ch) from the same RT=0 reply. */
+    mos_internal_firmware_date_from_config(buf, sizeof(buf),
+                                           h->caps.firmware_date,
+                                           sizeof h->caps.firmware_date);
+    /* Current Profile (loaded medium) from the same RT=0 header — 0 when the
+       field is absent/truncated or the tray is empty. Media-dependent; used
+       only to name the loaded disc's class (e.g. speed 1x scaling). */
+    if (!mos_internal_config_current_profile(buf, sizeof(buf),
+                                             &h->caps.current_profile))
+        h->caps.current_profile = 0;
+    *out = &h->caps;
+    return MOS_OK;
+}
+
+mos_error mos_enumerate_features(mos_handle_t *h,
+                                 bool (*cb)(const mos_feature_info_t *f,
+                                            void *ctx),
+                                 void *ctx)
+{
+    if (!h || !h->mmc || !cb) return MOS_ERR_INVALID_ARG;
+
+    /* Same issuance and trust terms as mos_query_drive_caps: RT=0 into a
+       1024-byte buffer, sizeof buf trusted, reply lengths shrink-only (O-4). */
+    uint8_t         buf[1024] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->GetConfiguration(
+        h->mmc, (UInt8)0x00, (UInt16)0x0000,
+        buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    size_t             cursor = 8;
+    mos_config_feature feat;
+    while (mos_internal_config_next_feature(buf, sizeof buf, &cursor, &feat)) {
+        mos_feature_info_t info = {
+            .code       = feat.feature_code,
+            .current    = feat.current,
+            .persistent = feat.persistent,
+            .version    = feat.version,
+        };
+        if (!cb(&info, ctx)) break;     /* caller-requested stop, not an error */
+    }
+    return MOS_OK;
+}
+
+mos_error mos_query_disc_id(mos_handle_t *h, const mos_disc_id **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* One-shot read of the full BD Disc Information into a fixed buffer
+       (BD DI maxes ~3588 bytes; 4096 covers it). Deliberately not
+       dvd+rw-mediainfo's two-phase read-length-then-realloc: a single
+       fixed buffer means no device-reported length ever drives an
+       allocation or second transfer. sizeof buf is the trusted length
+       (O-4); the reply's own Disc Structure Data Length only shrinks the
+       parse, and an under-filled reply leaves zeros that fail the 'DI'
+       gate. MEDIA_TYPE=1 (BD), FORMAT=0x00 (DI), ADDRESS/LAYER 0. */
+    uint8_t         buf[4096] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x01,             /* MEDIA_TYPE = Blu-ray            */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x00,             /* FORMAT = Disc Information (DI)    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_bd_disc_id_parse(buf, sizeof(buf), &h->disc_id)) {
+        return MOS_ERR_IO;   /* not a DI reply (non-BD, or refused) */
+    }
+    *out = &h->disc_id;
+    return MOS_OK;
+}
+
+mos_error mos_query_physical_structure(mos_handle_t *h,
+                                       const mos_physical_structure **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Two READ DISC STRUCTURE reads for DVD/HD-DVD (MEDIA_TYPE=0):
+       FORMAT 0x00 (Physical Format Info) and 0x01 (Copyright Management).
+       sizeof buf is the trusted length (O-4); the reply's own length only
+       shrinks the parse, and an under-filled reply fails the per-format
+       min-length gate. The two reads are independent (partial-readability
+       ladder), so a drive that answers one format but not the other still
+       yields the half it gave; both merge into one handle-owned struct. */
+    struct mos_physical_structure *d = &h->physical_structure;
+    *d = (struct mos_physical_structure){0};
+
+    uint8_t         buf[2048] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
+
+    IOReturn rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x00,             /* FORMAT = Physical Format Info    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
+        (void)mos_internal_physical_format_parse(buf, sizeof(buf), d);
+
+    memset(buf, 0, sizeof buf);
+    st = 0;
+    sd = (SCSI_Sense_Data){0};
+    rc = (*h->mmc)->ReadDiscStructure(
+        h->mmc,
+        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
+        (UInt32)0,               /* ADDRESS                          */
+        (UInt8)0,                /* LAYER_NUMBER                     */
+        (UInt8)0x01,             /* FORMAT = Copyright Management    */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
+        (void)mos_internal_copyright_mgmt_parse(buf, sizeof(buf), d);
+
+    if (!d->have_physical && !d->have_copyright) {
+        return MOS_ERR_IO;   /* neither format answered (non-DVD or refused) */
+    }
+    *out = d;
+    return MOS_OK;
+}
+
+mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* READ TRACK INFORMATION (0x52), first track. ADDRESS_TYPE = 01b
+       (logical track number), ADDRESS = 1 — well-defined on any media with
+       a track. 64 bytes covers the Track Information Block (core 36 bytes;
+       MMC-6 extends it slightly). sizeof buf is the trusted length (O-4);
+       the reply's Track Information Length only shrinks the parse.
+       Signature confirmed against SCSITaskLib.h (ADDRESS_NUMBER_TYPE,
+       LBA/track/session, buffer, bufferSize, taskStatus, senseData). */
+    uint8_t         buf[64] = {0};
+    SCSITaskStatus  st      = 0;
+    SCSI_Sense_Data sd      = {0};
+
+    IOReturn rc = (*h->mmc)->ReadTrackInformation(
+        h->mmc,
+        (UInt8)0x01,             /* ADDRESS_TYPE = logical track number */
+        (UInt32)1,               /* ADDRESS = first track               */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_track_info_parse(buf, sizeof(buf), &h->track_info)) {
+        return MOS_ERR_IO;   /* short reply — refused whole */
+    }
+    *out = &h->track_info;
+    return MOS_OK;
+}
+
+/* READ FORMAT CAPACITIES (0x23) — the one raw CDB this file composes (header
+   note). Fills the formattable view: how big the medium is now, whether it is
+   unformatted, and the capacities it could be formatted to (the blank-
+   rewritable gap the other two capacity sources can't reach). Raw because no
+   convenience method carries 0x23; mos_raw_cdb takes the exclusive lock and
+   FAILS BUSY without issuing the CDB if anything holds the drive, so this backs
+   off cleanly (returns false → formattable stays unset) on mounted/contended
+   media and never disturbs a mounted nub. Read-only: never FORMAT UNIT. */
+#define MOS_FORMATCAP_REPLY_BUF 260u   /* 4-byte header + up to 32 * 8 desc */
+
+static bool mos_internal_read_format_caps(mos_handle_t *h,
+                                          struct mos_format_caps *out)
+{
+    if (out) *out = (struct mos_format_caps){0};
+    if (!h || !h->mmc || !out) return false;
+
+    /* READ FORMAT CAPACITIES (MMC 0x23), 10-byte CDB:
+         byte0   opcode 0x23
+         byte7-8 ALLOCATION LENGTH (BE)
+         else    0   */
+    const uint8_t cdb[10] = {
+        0x23, 0, 0, 0, 0, 0, 0,
+        (uint8_t)(MOS_FORMATCAP_REPLY_BUF >> 8),
+        (uint8_t)(MOS_FORMATCAP_REPLY_BUF & 0xFF),
+        0,
+    };
+
+    uint8_t  buf[MOS_FORMATCAP_REPLY_BUF] = {0};
+    uint32_t task_status                  = 0;
+    uint8_t  sense[18]                    = {0};
+    uint64_t xferred                      = 0;
+
+    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
+                              MOS_XFER_FROM_TARGET, 2000,
+                              &task_status, sense, &xferred);
+    if (e != MOS_OK) return false;                  /* BUSY/contended → no view */
+    if (task_status != MOS_SCSI_STATUS_GOOD) return false;
+
+    /* Dual-length rule (O-4): trust only the bytes actually delivered. */
+    size_t trusted = (xferred < sizeof buf) ? (size_t)xferred : sizeof buf;
+    return mos_internal_format_caps_parse(buf, trusted, out);
+}
+
+mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out)
+{
+    if (out) *out = NULL;
+    if (!h || !out) return MOS_ERR_INVALID_ARG;
+
+    struct mos_capacity *c = &h->capacity;
+    *c = (struct mos_capacity){0};
+
+    /* Held-handle freshness: re-resolve so the size reflects the current
+       disc, not the open-time one (mos_internal_refresh_media_identity). */
+    mos_internal_refresh_media_identity(h);
+
+    /* (a) Whole-disk byte capacity from the kernel's attach-time READ
+       CAPACITY, cached on the IOMedia node (no command, works on mounted
+       media). 0 == absent: a blank/absent disc has no whole-disk node. */
+    c->media_bytes = h->media_bytes;
+    c->block_bytes = h->media_block_bytes;
+
+    /* (b) Recordable / append-state via a fresh READ TRACK INFORMATION.
+       Best-effort and independent of (a): a drive that rejects 0x52 just
+       leaves have_recordable false. Guard on the MMC interface so a handle
+       lacking it still returns the media-size half. */
+    if (h->mmc) {
+        const mos_track_info *t = NULL;
+        if (mos_query_track_info(h, &t) == MOS_OK && t) {
+            c->have_recordable = true;
+            c->nwa_valid     = mos_track_info_nwa_valid(t);
+            c->free_blocks   = mos_track_info_free_blocks(t);
+            c->next_writable = mos_track_info_next_writable(t);
+            c->track_size    = mos_track_info_track_size(t);
         }
 
-        for (size_t j = 0; j < CDTEXT_TEXT_LEN; j++) {
-            uint8_t c = buf[p + CDTEXT_TEXT_OFF + j];
-            if (c == 0x00) {                           /* end of one string */
-                cur[n] = '\0';
-                cdtext_store(cur, track, album_dst, album_cap,
-                             tracks, max_track);
-                n = 0;
-                track++;
-                continue;
-            }
-            if (n + 1 < sizeof cur) cur[n++] = (char)c; /* else truncate    */
-        }
-    }
-    /* Trailing unterminated string (data clamped mid-string): keep it. */
-    if (started && n > 0) {
-        cur[n] = '\0';
-        cdtext_store(cur, track, album_dst, album_cap, tracks, max_track);
-    }
-}
-
-bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
-                               struct mos_cdtext *out)
-{
-    if (!out) return false;
-    memset(out, 0, sizeof *out);
-    if (!buf || len < CDTEXT_HDR) return false;
-
-    /* CD-TEXT Data Length counts bytes AFTER its own two. 64-bit total,
-       clamped by the trusted length (O-4): a lying length can only shrink
-       the span, never extend a read. */
-    uint64_t claimed = 2u + (uint64_t)(((uint32_t)buf[0] << 8) | buf[1]);
-    size_t   span    = mos_internal_trusted_len(len, len, claimed);
-    if (span < CDTEXT_HDR + CDTEXT_PACK_LEN) return false;  /* no whole pack */
-
-    cdtext_decode_type(buf, span, CDTEXT_PACK_TITLE,
-                       out->title, sizeof out->title,
-                       out->track_titles, &out->track_count);
-    cdtext_decode_type(buf, span, CDTEXT_PACK_PERFORMER,
-                       out->performer, sizeof out->performer,
-                       out->track_performers, &out->track_count);
-
-    /* "have" gates useful identity: an empty result (no album field, no
-       per-track title) isn't identity. False → the adapter reports no
-       CD-TEXT (null), like the other media reads. */
-    out->have = out->title[0] || out->performer[0] || out->track_count > 0;
-    return out->have;
-}
-
-/* ==== src/mos_physstruct.c ==== */
-/*
- * mos_physstruct.c — pure, bounds-safe decode of READ DISC STRUCTURE
- * (MMC-5 0xAD) replies for the DVD / HD-DVD media-type family
- * (MEDIA_TYPE = 0): Physical Format Information (format 0x00) and
- * Copyright Management Information (format 0x01).
- *
- * "Physical structure", not "DVD": the same media-type-0 reply carries
- * HD-DVD book types (0x4..0x6) alongside DVD, so this is not DVD-specific.
- * The BD half (DI) is a different media type — mos_discstruct.c.
- *
- * No IOKit: the shell hands us a fixed zero-init buffer (filled via
- * ReadDiscStructure) and its size. Every length is device-reported, hence
- * hostile — the declared length must never steer a read outside
- * [buf, buf+len); only fixed offsets are read.
- *
- * Wire layout (both formats share the READ DISC STRUCTURE 4-byte header):
- *   [0..1] Disc Structure Data Length (BE) — bytes AFTER this field;
- *          the response occupies 2 + value bytes. Only ever SHRINKS the
- *          trusted region.
- *   [2..3] reserved
- *   [4..]  the format payload. With `base = &buf[4]`:
- *
- *   Format 0x00 (Physical Format Information):
- *     base[0]  book_type (7:4) | part_version (3:0)
- *     base[1]  disc_size (7:4) | maximum_rate (3:0)
- *     base[2]  (rsv 7) | num_layers (6:5) | track_path (4) | layer_type (3:0)
- *     base[3]  linear_density (7:4) | track_density (3:0)
- *     base[5..7]   Starting PSN of Data Area (24-bit BE)
- *     base[9..11]  End PSN of Data Area (24-bit BE)
- *     base[13..15] End PSN in Layer 0 (24-bit BE) — the layer break
- *     base[16] bca (bit 7)
- *
- *   Format 0x01 (Copyright Management Information):
- *     buf[4] Copyright Protection System Type (CPST)
- *     buf[5] Region Management Information (RMI)
- *
- * The Linux cdrom.c cross-check is in SPEC.md. Classification (book_type
- * => media name, cpst => "CSS-protected") is the consumer's; this surfaces
- * the registered values faithfully and stops there (scope doctrine).
- */
-
-
-#define PS_HDR        4u                 /* 2-byte length + 2 reserved   */
-/* Physical (0x00): must reach base[16] = buf[PS_HDR+16] = buf[20]. */
-#define PHYS_MIN_LEN  (PS_HDR + 16u + 1u)
-/* Copyright (0x01): must reach the RMI byte, buf[5]. */
-#define COPY_MIN_LEN  6u
-
-/* Trusted end: the smaller of the buffer and the reply's declared length
-   (+2 for the length field). Computed wide so the +2 cannot wrap. */
-static size_t mos_internal_ps_trusted_end(const uint8_t *buf, size_t len)
-{
-    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
-    return (len < declared) ? len : declared;
-}
-
-bool mos_internal_physical_format_parse(const uint8_t *buf, size_t len,
-                                        struct mos_physical_structure *out)
-{
-    if (!out) return false;
-    out->have_physical = false;
-    if (!buf || len < PHYS_MIN_LEN) return false;
-    if (mos_internal_ps_trusted_end(buf, len) < PHYS_MIN_LEN) return false;
-
-    const uint8_t *b = &buf[PS_HDR];
-    out->book_type      = (uint8_t)(b[0] >> 4);
-    out->part_version   = (uint8_t)(b[0] & 0x0f);
-    out->disc_size      = (uint8_t)(b[1] >> 4);
-    out->max_rate       = (uint8_t)(b[1] & 0x0f);
-    out->layer_type     = (uint8_t)(b[2] & 0x0f);
-    out->track_path     = (uint8_t)((b[2] >> 4) & 0x01);
-    /* MMC "Number of Layers" code 0/1 => human count 1/2. */
-    out->num_layers     = (uint8_t)(((b[2] >> 5) & 0x03) + 1u);
-    out->linear_density = (uint8_t)(b[3] >> 4);
-    out->track_density  = (uint8_t)(b[3] & 0x0f);
-    out->start_sector   = (uint32_t)b[5] << 16 | (uint32_t)b[6] << 8 | b[7];
-    out->end_sector     = (uint32_t)b[9] << 16 | (uint32_t)b[10] << 8 | b[11];
-    out->end_sector_l0  = (uint32_t)b[13] << 16 | (uint32_t)b[14] << 8 | b[15];
-    out->bca            = (b[16] >> 7) & 0x01;
-    out->have_physical  = true;
-    return true;
-}
-
-bool mos_internal_copyright_mgmt_parse(const uint8_t *buf, size_t len,
-                                       struct mos_physical_structure *out)
-{
-    if (!out) return false;
-    out->have_copyright = false;
-    if (!buf || len < COPY_MIN_LEN) return false;
-    if (mos_internal_ps_trusted_end(buf, len) < COPY_MIN_LEN) return false;
-
-    out->protection     = buf[4];   /* CPST */
-    out->region         = buf[5];   /* RMI region mask */
-    out->have_copyright = true;
-    return true;
-}
-
-/* ==== src/mos_trackinfo.c ==== */
-/*
- * mos_trackinfo.c — pure, bounds-safe decode of a READ TRACK INFORMATION
- * (MMC 0x52) Track Information Block: the capacity / append-state surface
- * (track start, next writable address, free blocks, track size, last
- * recorded address) plus track/data mode and blank/damage bits. No IOKit:
- * the shell hands us a fixed zero-init buffer (filled via
- * ReadTrackInformation) and its size. Every length is device-reported,
- * hence hostile — the declared length must never steer a read outside
- * [buf, buf+len); only fixed offsets are read.
- *
- * Wire layout (the MMC Track Information Block; cdrom.h cross-check in
- * SPEC.md):
- *   [0..1]  Track Information Length (BE) — bytes AFTER this field
- *   [2]     Track Number (LSB)
- *   [3]     Session Number (LSB)
- *   [4]     reserved
- *   [5]     reserved(7:6) | damage(5) | copy(4) | track_mode(3:0)
- *   [6]     rt(7) | blank(6) | packet(5) | fp(4) | data_mode(3:0)
- *   [7]     reserved(7:2) | lra_v(1) | nwa_v(0)
- *   [8..11]  Track Start Address (BE)
- *   [12..15] Next Writable Address (BE)   — valid iff nwa_v
- *   [16..19] Free Blocks (BE)
- *   [20..23] Fixed Packet Size (BE)
- *   [24..27] Track Size (BE)
- *   [28..31] Last Recorded Address (BE)   — valid iff lra_v
- *   [32..33] Track / Session Number MSB   — MMC-6 longer reply, optional
- *
- * NWA and LRA are meaningful only when their *_v validity bit is set; the
- * consumer must check the *_valid accessor. No payload byte is ever used
- * as an offset.
- */
-
-
-#define TI_MIN_LEN  32u   /* through Last Recorded Address (byte 31) */
-#define TI_MSB_LEN  34u   /* track/session MSB present (byte 33) */
-
-static uint32_t mos_internal_ti_be32(const uint8_t *p)
-{
-    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
-           (uint32_t)p[2] << 8  | p[3];
-}
-
-bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
-                                   struct mos_track_info *out)
-{
-    if (!out) return false;
-    *out = (struct mos_track_info){0};
-    if (!buf || len < TI_MIN_LEN) return false;
-
-    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
-    size_t end = (len < declared) ? len : declared;
-    if (end < TI_MIN_LEN) return false;
-
-    out->track_number   = buf[2];
-    out->session_number = buf[3];
-    out->track_mode     = (uint8_t)(buf[5] & 0x0f);
-    out->damage         = (buf[5] >> 5) & 0x01;
-    out->data_mode      = (uint8_t)(buf[6] & 0x0f);
-    out->blank          = (buf[6] >> 6) & 0x01;
-    out->lra_valid      = (buf[7] >> 1) & 0x01;
-    out->nwa_valid      = buf[7] & 0x01;
-    out->track_start    = mos_internal_ti_be32(&buf[8]);
-    out->next_writable  = mos_internal_ti_be32(&buf[12]);
-    out->free_blocks    = mos_internal_ti_be32(&buf[16]);
-    out->track_size     = mos_internal_ti_be32(&buf[24]);
-    out->last_recorded  = mos_internal_ti_be32(&buf[28]);
-
-    /* MMC-6 longer reply carries the track/session high byte at 32/33;
-       only when the trusted region reaches them. */
-    if (end >= TI_MSB_LEN) {
-        out->track_number   = (uint16_t)(out->track_number   | (buf[32] << 8));
-        out->session_number = (uint16_t)(out->session_number | (buf[33] << 8));
-    }
-    return true;
-}
-
-/* ==== src/mos_perf.c ==== */
-/*
- * mos_perf.c — pure, bounds-safe decode of a GET PERFORMANCE (MMC 0xAC)
- * Performance Data response, TYPE 00h — the type Apple's GetPerformance
- * retrieves (the TYPE 03h write-speed carve-out is in SPEC.md). Direction
- * is the CDB WRITE bit, so the adapter issues this twice (WRITE=0/1); this
- * decode returns the max performance found in one reply.
- *
- * No IOKit: the shell hands us a fixed zero-init buffer (filled via
- * GetPerformance) and its size. Every length is device-reported, hence
- * hostile — the declared length must never steer a read outside
- * [buf, buf+len); only fixed offsets within each descriptor are read.
- *
- * Wire layout (MMC GET PERFORMANCE, Performance Data, TYPE 00h):
- *   [0..3]  Performance Data Length (BE) — bytes AFTER byte 3
- *   [4]     bit1 Write, bit0 Except (echo)   [5..7] reserved
- *   [8..]   Nominal Performance Descriptors, 16 bytes each:
- *     desc[0..3]   Start LBA
- *     desc[4..7]   Start Performance (kB/s, BE)
- *     desc[8..11]  End LBA
- *     desc[12..15] End Performance (kB/s, BE)
- *
- * Layout is the MMC-6 Nominal Performance Descriptor, built to spec (per
- * the hardware ADR a capture falsifies, it does not steer offsets). An
- * empty list (drive declines the direction) is data (count 0), not an
- * error. No payload byte is ever used as an offset.
- */
-
-
-#define GP_HDR        8u     /* 4-byte data length + 4 reserved/echo */
-#define GP_DESC       16u    /* one Nominal Performance Descriptor */
-#define GP_DESC_CAP   256u   /* clamp: no real drive lists this many */
-
-static uint32_t mos_internal_gp_be32(const uint8_t *p)
-{
-    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
-           (uint32_t)p[2] << 8  | p[3];
-}
-
-/* Decode one Performance Data reply: max performance (kB/s) across its
-   descriptors and the count. True when the 8-byte header is present and
-   coherent (the descriptor list may be empty). */
-bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
-                                  uint32_t *max_kbps, uint16_t *count)
-{
-    if (max_kbps) *max_kbps = 0;
-    if (count)    *count = 0;
-    if (!buf || len < GP_HDR) return false;
-
-    /* Performance Data Length counts bytes AFTER byte 3 (response = 4 +
-       value). Declared can only shrink the trusted region; computed wide
-       so the +4 cannot wrap. */
-    size_t declared = (size_t)mos_internal_gp_be32(&buf[0]) + 4u;
-    size_t end = (len < declared) ? len : declared;
-    if (end < GP_HDR) return false;
-
-    size_t n = (end - GP_HDR) / GP_DESC;
-    if (n > GP_DESC_CAP) n = GP_DESC_CAP;
-
-    uint32_t mx = 0;
-    for (size_t i = 0; i < n; i++) {
-        const uint8_t *d = &buf[GP_HDR + i * GP_DESC];
-        uint32_t sp = mos_internal_gp_be32(&d[4]);    /* Start Performance */
-        uint32_t ep = mos_internal_gp_be32(&d[12]);   /* End Performance   */
-        if (sp > mx) mx = sp;
-        if (ep > mx) mx = ep;
+        /* (c) Formattable view via raw READ FORMAT CAPACITIES (0x23) — the
+           blank-rewritable gap (a)/(b) can't fill (no whole-disk node, no
+           track). TWO gates: first the current profile (a cheap, non-exclusive
+           GET CONFIGURATION) — only formattable media (rewritable + BD-R) has
+           a formattable view, so for pressed / write-once CD-R,DVD±R / empty
+           media we issue NO raw read and make NO exclusive-access attempt at
+           all; then, for formattable profiles, the raw read self-gates on
+           exclusive access (unset on BUSY/contended). */
+        uint16_t profile = 0;
+        if (mos_internal_mmc_get_current_profile(h, &profile) == MOS_OK &&
+            mos_internal_profile_is_formattable(profile))
+            c->have_formattable =
+                mos_internal_read_format_caps(h, &c->formattable);
     }
 
-    if (max_kbps) *max_kbps = mx;
-    if (count)    *count = (uint16_t)n;
-    return true;
+    *out = c;
+    return MOS_OK;
 }
 
-/* ==== src/mos_modepage.c ==== */
-/*
- * mos_modepage.c — pure, bounds-safe decode of MODE SENSE(10) replies for
- * the two optical-specific pages the scope doctrine admits (read-only):
- * page 0x2A (CD/DVD Capabilities & Mechanical Status — loading mechanism,
- * eject/lock, buffer size) and page 0x01 (Read/Write Error Recovery —
- * AWRE/ARRE/PER/DCR + read-retry count). NO MODE SELECT: mos reports
- * configuration, never tunes it.
- *
- * No IOKit: the shell hands us a fixed zero-init buffer (filled via
- * ModeSense10) and its size. Every length is device-reported, hence
- * hostile — the shared page walker keeps the declared lengths from
- * steering a read outside [buf, buf+len) and cannot loop (each step
- * strictly advances).
- *
- * MODE SENSE(10) mode parameter header:
- *   [0..1] Mode Data Length (BE) — bytes AFTER this field
- *   [2]    Medium Type   [3] Device-Specific Parameter
- *   [4..5] reserved      [6..7] Block Descriptor Length (BE)
- *   [8 + block_descriptor_length ..] the mode pages, each:
- *     page[0] PS(7) SPF(6) Page Code(5:0); page[1] Page Length (n)
- *     page[2..] page data (n bytes). (Sub-page format SPF=1 has a 4-byte
- *     header with a BE16 length; pages 0x2A/0x01 are page_0 format.)
- *
- * Page 0x2A offsets (relative to page start): loading mechanism page[6]>>5
- * and eject page[6]&0x08 (sr.c cross-check in SPEC.md), buffer size
- * page[12..13] BE KB and lock bits page[6] bit1 supported / bit2 state
- * (MMC-3 page-2A). Page 0x01 is the canonical SPC Read/Write Error
- * Recovery page. A real MODE SENSE capture is a falsifier per the hardware
- * ADR, not a design input. No payload byte is ever used as an offset.
- */
-
-
-#define MP_HDR  8u   /* MODE SENSE(10) parameter header */
-
-/* Locate a page_0-format mode page by code. On success sets *poff (page
-   start) and *plen (data bytes after the 2-byte page header) and returns
-   true. Bounded: every iteration advances off by at least the page header,
-   so a hostile page-length field cannot loop or read out of bounds. */
-static bool mos_internal_mode_page_find(const uint8_t *buf, size_t len,
-                                        uint8_t want,
-                                        size_t *poff, size_t *plen)
+/* One GET PERFORMANCE (0xAC) Performance Data read in the given direction
+   (WRITE=0 read, WRITE=1 write). TOLERANCE=10b nominal, EXCEPT=0,
+   STARTING_LBA=0. Returns the decoded max kB/s + descriptor count. */
+static mos_error mos_internal_get_perf(mos_handle_t *h, uint8_t write,
+                                       uint32_t *max_kbps, uint16_t *count)
 {
-    if (!buf || len < MP_HDR) return false;
+    uint8_t         buf[2048] = {0};
+    SCSITaskStatus  st        = 0;
+    SCSI_Sense_Data sd        = {0};
 
-    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
-    size_t end = (len < declared) ? len : declared;
-    if (end < MP_HDR) return false;
+    IOReturn rc = (*h->mmc)->GetPerformance(
+        h->mmc,
+        (UInt8)0x02,             /* TOLERANCE = 10b (nominal)      */
+        (UInt8)write,            /* WRITE                          */
+        (UInt8)0x00,             /* EXCEPT = 0 (nominal perf)      */
+        (UInt32)0,               /* STARTING_LBA                   */
+        (UInt16)64,              /* MAXIMUM_NUMBER_OF_DESCRIPTORS  */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
 
-    size_t bdl = (size_t)(((uint16_t)buf[6] << 8) | buf[7]);
-    size_t off = MP_HDR + bdl;
-
-    while (off + 2u <= end) {
-        uint8_t  code = buf[off] & 0x3f;
-        int      spf  = (buf[off] & 0x40) != 0;
-        size_t   hdr, page_len;
-
-        if (spf) {
-            if (off + 4u > end) break;
-            hdr = 4u;
-            page_len = (size_t)(((uint16_t)buf[off + 2] << 8) | buf[off + 3]);
-        } else {
-            hdr = 2u;
-            page_len = buf[off + 1];
-        }
-
-        size_t page_total = hdr + page_len;
-        if (off + page_total > end) break;   /* page claims past trusted end */
-
-        if (!spf && code == want) {
-            *poff = off;
-            *plen = page_len;
-            return true;
-        }
-        /* off strictly advances: page_total = hdr + page_len and hdr is 2
-           (page_0) or 4 (SPF), so page_total >= 2 — the loop always makes
-           progress and terminates when off + page_total exceeds end. */
-        off += page_total;
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
     }
-    return false;
-}
-
-bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
-                                  struct mos_mode_caps *out)
-{
-    if (!out) return false;
-    *out = (struct mos_mode_caps){0};
-
-    size_t poff, plen;
-    if (!mos_internal_mode_page_find(buf, len, 0x2A, &poff, &plen))
-        return false;
-    /* Need page bytes through 13 (buffer size at page[12..13]); the walker
-       already bounded poff + 2 + plen to the trusted end. */
-    if (plen < 12u) return false;
-
-    const uint8_t *p = &buf[poff];
-    out->loading_mechanism = (uint8_t)(p[6] >> 5);
-    out->can_eject         = (p[6] & 0x08) != 0;
-    out->lock_supported    = (p[6] & 0x02) != 0;
-    out->locked            = (p[6] & 0x04) != 0;
-    out->buffer_kb         = (uint16_t)((p[12] << 8) | p[13]);
-    out->have              = true;
-    return true;
-}
-
-bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
-                                       struct mos_error_recovery *out)
-{
-    if (!out) return false;
-    *out = (struct mos_error_recovery){0};
-
-    size_t poff, plen;
-    if (!mos_internal_mode_page_find(buf, len, 0x01, &poff, &plen))
-        return false;
-    if (plen < 2u) return false;             /* need page bytes 2 and 3 */
-
-    const uint8_t *p = &buf[poff];
-    out->awre             = (p[2] & 0x80) != 0;
-    out->arre             = (p[2] & 0x40) != 0;
-    out->per              = (p[2] & 0x04) != 0;
-    out->dcr              = (p[2] & 0x01) != 0;
-    out->read_retry_count = p[3];
-    out->have             = true;
-    return true;
-}
-
-/* ==== src/mos_vpd80.c ==== */
-/*
- * mos_vpd80.c — pure, bounds-safe decode of INQUIRY VPD page 0x80 (Unit
- * Serial Number). The one identity field DiscRecording's directory does not
- * cache and no convenience method can carry: MMCDeviceInterface's Inquiry
- * issues only a standard INQUIRY (no EVPD / PAGE CODE), so page 0x80 needs a
- * raw INQUIRY (mos_serial.c). Design + layer-1 raw-verb showing:
- * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md.
- *
- * No IOKit: the shell hands us a fixed zero-init buffer (filled via
- * mos_raw_cdb) bounded to the bytes the transport actually returned
- * (dual-length rule O-4 — the realized count, not the device-claimed
- * length, is the trusted span). The page's own PAGE LENGTH never extends
- * past that span; if it exceeds it (the transport under-delivered) the
- * reply is refused rather than emitted as a prefix — a durable identity key
- * is complete or nothing (the canonical-data corollary of O-4).
- *
- * Page 0x80 layout (SPC-4 §7.7.13, Unit Serial Number VPD page):
- *   [0]      PERIPHERAL QUALIFIER (7:5) | PERIPHERAL DEVICE TYPE (4:0)
- *   [1]      PAGE CODE = 80h        — the drive echoes the page we asked for
- *   [2]      reserved
- *   [3]      PAGE LENGTH (n-3)      — serial byte count
- *   [4..n]   PRODUCT SERIAL NUMBER  — ASCII, left-justified, space-padded
- * Byte 2 stays reserved for this page (it is NOT the high byte of a 2-byte
- * length — that generalization is page 0x83's, not 0x80's). A real page-0x80
- * capture is a falsifier per the hardware ADR, not a design input.
- */
-
-
-#define VPD_HDR 4u   /* bytes 0..3 before the serial */
-
-/* Decode page 0x80 into out[0..out_cap). True only when the reply echoes
-   page code 0x80 and carries a complete, non-empty serial (trailing spaces /
-   NULs trimmed). out is always NUL-terminated. A drive that does not implement
-   the page (it is optional), has none programmed (all-spaces), or under-
-   delivers the reply (PAGE LENGTH > bytes received) returns false → the caller
-   leaves serial null, never an empty or truncated string. A serial that is
-   complete on the wire but longer than out_cap is truncated with a visible
-   "..." marker (never a silent prefix — see the copy step). Non-ASCII bytes
-   are copied verbatim and escaped at the output sink (mos_cli_json_str /
-   mos_safe_ascii), as with vendor/product/revision. */
-bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
-                                     char *out, size_t out_cap)
-{
-    if (out && out_cap) out[0] = 0;
-    if (!buf || !out || out_cap == 0) return false;
-    if (len < VPD_HDR) return false;          /* no room for the VPD header */
-    if (buf[1] != 0x80) return false;         /* wrong page echoed — refuse */
-
-    /* PAGE LENGTH (byte 3) is the serial byte count the drive CLAIMS. The
-       reply must actually carry all of it. If PAGE LENGTH exceeds the bytes
-       delivered (avail — the realized-transfer span, O-4), the transport
-       under-filled (a non-conformant USB-SATA bridge, a short transfer) and we
-       hold only a PREFIX of the serial. REFUSE rather than emit it: this value
-       is a DURABLE IDENTITY KEY the caller caches sticky (mos watch grabs it
-       once per session), and a silent prefix can collide with another drive or
-       misidentify this one — an incomplete key is worse than none. Complete or
-       nothing. (A conforming drive, given mos_serial.c's ample 252-byte
-       allocation, returns the whole serial, so page_len <= avail holds.) This
-       still bounds the read: refusing happens before any serial byte is read,
-       so a hostile over-long PAGE LENGTH cannot read past the trusted span. */
-    size_t page_len = buf[3];
-    size_t avail    = len - VPD_HDR;
-    if (page_len > avail) return false;
-    size_t serial_len = page_len;
-
-    /* Trim trailing wire padding — spaces (SPC pad) and NULs. Leading and
-       interior bytes are data and stay (mirrors mos_dr.c identity trim). */
-    while (serial_len > 0) {
-        uint8_t c = buf[VPD_HDR + serial_len - 1];
-        if (c != ' ' && c != 0x00) break;
-        serial_len--;
+    if (!mos_internal_perf_data_parse(buf, sizeof(buf), max_kbps, count)) {
+        return MOS_ERR_IO;   /* short/incoherent header */
     }
-    if (serial_len == 0) return false;        /* page present, no serial */
-
-    /* Copy into out, reserving the NUL. A serial that fits is copied whole.
-       One that exceeds the buffer is truncated WITH A VISIBLE TRAILING MARKER
-       ("…" as ASCII "..."), never silently: this value can be cached as a
-       durable identity key, and a silent prefix is indistinguishable from a
-       complete serial — a different-but-equally-wrong key. The marker signals
-       "incomplete" so the consumer never mistakes the prefix for the whole
-       serial. ASCII so it survives both sinks unescaped (mos_safe_ascii /
-       mos_cli_json_str). Real serials sit far below the buffer (mos_serial.c
-       sinks 64 bytes), so this fires only on a pathological/hostile over-long
-       serial; it never overflows. (Distinct from the transport-under-delivery
-       refusal above: there we hold only a prefix of UNKNOWN length and refuse;
-       here we hold the WHOLE serial and our sink is merely too small, so the
-       marked prefix is honest about exactly what it is.) */
-    static const char MARK[] = "...";
-    const size_t mark_len = sizeof MARK - 1u;       /* 3 */
-    if (serial_len <= out_cap - 1u) {
-        for (size_t i = 0; i < serial_len; i++) out[i] = (char)buf[VPD_HDR + i];
-        out[serial_len] = 0;
-    } else if (out_cap > mark_len + 1u) {
-        size_t copy = out_cap - 1u - mark_len;
-        for (size_t i = 0; i < copy; i++) out[i] = (char)buf[VPD_HDR + i];
-        for (size_t i = 0; i < mark_len; i++) out[copy + i] = MARK[i];
-        out[copy + mark_len] = 0;
-    } else {
-        /* out_cap too small even to hold the marker — plain bounded copy. */
-        size_t copy = out_cap - 1u;
-        for (size_t i = 0; i < copy; i++) out[i] = (char)buf[VPD_HDR + i];
-        out[copy] = 0;
-    }
-    return true;
+    return MOS_OK;
 }
 
-/* ==== src/mos_inqdata.c ==== */
-/*
- * mos_inqdata.c — pure decode of STANDARD INQUIRY data (EVPD=0): the drive's
- * self-reported identity (vendor/product/revision) AND the SPC version byte +
- * version-descriptor list (the T10/ISO standards the drive claims). `mos drive`
- * issues this raw read for the canonical truth and prefers it over the
- * DiscRecording cache; the descriptors at bytes 58-73 are unreachable through
- * macOS's convenience Inquiry (a 36-byte header read), so the read is raw
- * (mos_drive_inquiry.c; AGENTS.md scope-doctrine ADR for the EVPD=0 mode).
- * Identity strings are trailing-trimmed here; non-ASCII is copied verbatim and
- * escaped at the output sink (mos_safe_ascii / mos_cli_json_str), like every
- * other identity string. Standard token naming is applied at the sink too
- * (mos_spc_version_name / mos_version_descriptor_name).
- *
- * No IOKit: the shell hands us a fixed zero-init buffer bounded to the bytes
- * the transport actually returned. Every length here is device-reported,
- * hence hostile; each field is bounded by BOTH the passed len and the reply's
- * own Additional Length (byte 4) — the dual-length rule (O-4). A reply whose
- * trusted region does not reach the 36-byte standard header (an under-
- * delivered transfer that cut the identity short) is REFUSED, not surfaced as
- * a partial identity: this is canonical drive truth the CLI prefers over the
- * DR cache, so an incomplete read must defer to it (see the parser body).
- *
- * Standard INQUIRY layout (SPC-4 §6.4.2):
- *   [2]      VERSION              — SPC compliance level
- *   [4]      ADDITIONAL LENGTH (n-4) — bytes that follow; total = 5 + this
- *   [8..15]  VENDOR IDENTIFICATION  (8 ASCII, space-padded)
- *   [16..31] PRODUCT IDENTIFICATION (16 ASCII)
- *   [32..35] PRODUCT REVISION LEVEL (4 ASCII)
- *   [58..73] VERSION DESCRIPTORS — up to eight 2-byte BE codes (0 = none)
- */
-
-
-#define VD_HDR      5u   /* through ADDITIONAL LENGTH (byte 4)            */
-#define INQ_STD_HDR 36u  /* the standard 36-byte header (vendor..revision) */
-#define VD_OFFSET  58u   /* first version descriptor                      */
-#define VD_MAX      8u   /* eight descriptor slots, bytes 58-73           */
-
-/* Copy the ASCII field at [start, start+width) into out[0..out_cap), bounded
-   by the trusted `end`, trailing spaces/NULs trimmed. out is "" when the
-   field lies (even partly) outside the trusted region's start. */
-static void copy_field(const uint8_t *buf, size_t end, size_t start,
-                       size_t width, char *out, size_t out_cap)
+mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
 {
-    out[0] = 0;
-    if (out_cap < 2u || start >= end) return;
-    size_t avail = end - start;
-    size_t n = (width < avail) ? width : avail;
-    while (n > 0 && (buf[start + n - 1] == ' ' || buf[start + n - 1] == 0))
-        n--;
-    size_t copy = (n < out_cap - 1u) ? n : out_cap - 1u;
-    for (size_t i = 0; i < copy; i++) out[i] = (char)buf[start + i];
-    out[copy] = 0;
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Two Performance Data reads assembled into one result. The read
+       direction is the gate (defines `have`); the write direction is
+       best-effort (read-only drive or non-writable medium leaves
+       max_write_kbps 0). */
+    struct mos_drive_perf *p = &h->drive_perf;
+    *p = (struct mos_drive_perf){0};
+
+    uint32_t rd_max = 0, wr_max = 0;
+    uint16_t rd_cnt = 0, wr_cnt = 0;
+
+    mos_error e = mos_internal_get_perf(h, 0, &rd_max, &rd_cnt);
+    if (e != MOS_OK) return e;
+
+    (void)mos_internal_get_perf(h, 1, &wr_max, &wr_cnt);  /* best-effort */
+
+    p->descriptor_count = rd_cnt;
+    p->max_read_kbps    = rd_max;
+    p->max_write_kbps   = wr_max;
+    p->have             = (rd_cnt > 0);   /* read direction is the gate */
+    *out = p;
+    return MOS_OK;
 }
 
-bool mos_internal_inqdata_parse(const uint8_t *buf, size_t len,
-                               mos_drive_inquiry *out)
+/* Shared MODE SENSE(10) issuance for the two read-only optical pages
+   (AGENTS.md scope doctrine, layer 2). Signature confirmed against
+   SCSITaskLib.h (LLBAA, DBD, PC, PAGE_CODE, buffer, bufferSize, taskStatus,
+   senseData). PC = 00b (current values); DBD=1 (no block descriptor) keeps
+   the reply compact, though the walker tolerates a descriptor either way. */
+static mos_error mos_internal_mode_sense10(mos_handle_t *h, uint8_t page,
+                                           uint8_t *buf, size_t buf_len)
 {
-    if (!out) return false;
-    *out = (mos_drive_inquiry){0};
-    if (!buf || len < VD_HDR) return false;   /* need the fixed header */
-
-    /* Trusted end: the smaller of the buffer span and the reply's own
-       declared total (5 + Additional Length). A lying-long Additional Length
-       cannot extend past `len`; an honest-short one shrinks the region. */
-    size_t declared = VD_HDR + (size_t)buf[4];
-    size_t end = (declared < len) ? declared : len;
-
-    /* A conformant STANDARD INQUIRY always returns at least the 36-byte
-       standard header (Additional Length >= 31), so vendor (8-15), product
-       (16-31), and revision (32-35) are wholly present. If the trusted region
-       stops short of byte 36 — the device declared a sub-header total OR the
-       transport under-delivered (declared > delivered, so the dual-length
-       floor caps `end` at the bytes that actually arrived) — at least one
-       identity field is cut or absent. REFUSE the whole reply rather than
-       surface a partial identity: `mos drive` treats this read as the
-       drive's CANONICAL truth and prefers it over the DiscRecording cache
-       (cli/drive.c), so a half-arrived "BD" (a USB-SATA bridge that cut the
-       transfer mid-PRODUCT) would mask the full cached model. Returning false
-       makes mos_query_drive_inquiry fail → the caller falls back to DR and the
-       COMPLETE identity wins. Bounds stay safe: the gate precedes every field
-       read, so a truncated reply is rejected before a byte is copied. This is
-       the dual-length rule's canonical-data corollary — under-delivery of a
-       value the caller trusts as authoritative is refused, not trusted-as-
-       short (AGENTS.md; contrast a genuinely short reply, declared <= len,
-       which reaches byte 36 and parses). */
-    if (end < INQ_STD_HDR) return false;
-
-    out->spc_version = buf[2];
-
-    copy_field(buf, end,  8u,  8u, out->vendor,   sizeof out->vendor);
-    copy_field(buf, end, 16u, 16u, out->product,  sizeof out->product);
-    copy_field(buf, end, 32u,  4u, out->revision, sizeof out->revision);
-
-    uint8_t n = 0;
-    for (uint8_t i = 0; i < VD_MAX; i++) {
-        size_t off = VD_OFFSET + (size_t)i * 2u;
-        if (off + 2u > end) break;                /* descriptor not present */
-        uint16_t code = (uint16_t)(((uint16_t)buf[off] << 8) | buf[off + 1]);
-        if (code != 0) out->descriptors[n++] = code;   /* 0x0000 = empty slot */
+    SCSITaskStatus  st = 0;
+    SCSI_Sense_Data sd = {0};
+    IOReturn rc = (*h->mmc)->ModeSense10(
+        h->mmc,
+        (UInt8)0,                /* LLBAA = 0                           */
+        (UInt8)1,                /* DBD = 1 (disable block descriptor)  */
+        (UInt8)0x00,             /* PC = current values                 */
+        (UInt8)page,             /* PAGE_CODE                           */
+        buf, (UInt16)buf_len,
+        &st, &sd);
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
     }
-    out->descriptor_count = n;
-    return true;
+    return MOS_OK;
+}
+
+mos_error mos_query_mode_caps(mos_handle_t *h, const mos_mode_caps **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    uint8_t   buf[96] = {0};
+    mos_error e = mos_internal_mode_sense10(h, 0x2A, buf, sizeof buf);
+    if (e != MOS_OK) return e;
+
+    if (!mos_internal_mode_caps_parse(buf, sizeof(buf), &h->mode_caps)) {
+        return MOS_ERR_IO;   /* page 0x2A absent or short — refused whole */
+    }
+    *out = &h->mode_caps;
+    return MOS_OK;
+}
+
+mos_error mos_query_error_recovery(mos_handle_t *h,
+                                   const mos_error_recovery **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    uint8_t   buf[64] = {0};
+    mos_error e = mos_internal_mode_sense10(h, 0x01, buf, sizeof buf);
+    if (e != MOS_OK) return e;
+
+    if (!mos_internal_error_recovery_parse(buf, sizeof(buf),
+                                           &h->error_recovery)) {
+        return MOS_ERR_IO;   /* page 0x01 absent or short — refused whole */
+    }
+    *out = &h->error_recovery;
+    return MOS_OK;
 }
 
 /* ==== src/mos_result.c ==== */
@@ -3409,6 +4209,1002 @@ uint8_t mos_error_recovery_read_retry_count(const mos_error_recovery *e)
     return e ? e->read_retry_count : 0;
 }
 
+/* ==== src/mos_scsi.c ==== */
+/*
+ * mos_scsi.c — IOKit lifecycle, enumeration, the MMC convenience
+ * primitives the state core uses (TUR / current-profile / tray-state),
+ * and the one raw-CDB path (mos_raw_cdb — the sole ObtainExclusiveAccess
+ * site). The typed mos_query_* verb surface lives in mos_query.c.
+ *
+ * All internal functions must be `static` or `mos_internal_`-prefixed;
+ * this library is statically linked into downstream projects (HandBrake
+ * etc.) and cannot collide on generic names.
+ */
+
+
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
+#include <IOKit/IOCFPlugIn.h>
+#include <IOKit/IOBSD.h>
+#include <IOKit/scsi/SCSITaskLib.h>
+#include <IOKit/scsi/SCSICommandOperationCodes.h>
+#include <IOKit/scsi/SCSICmds_REQUEST_SENSE_Defs.h>
+#include <IOKit/storage/IOStorageProtocolCharacteristics.h>
+#include <IOKit/storage/IOMedia.h>   /* kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey */
+
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+
+/* ---- Wire-format compile-time invariants -------------------------- */
+/* Pin the 18-byte sense assumption two ways: (1) Apple's struct matches
+   their own kSenseDefaultSize; (2) that constant is 18, the literal baked
+   into the sense[18] signatures in mos.h / mos_internal.h. A (1) failure
+   means Apple broke an internal contract; (2) means the public API literal
+   needs updating. */
+_Static_assert(sizeof(SCSI_Sense_Data) == kSenseDefaultSize,
+               "SCSI_Sense_Data size no longer matches kSenseDefaultSize");
+_Static_assert(kSenseDefaultSize == 18,
+               "kSenseDefaultSize changed — update sense[18] in mos.h and mos_internal.h");
+
+/* ---- Registry helpers --------------------------------------------- */
+
+/* The pure BSD-name helpers live in src/mos_pure.c (declared in mos_pure.h,
+   re-included via mos_internal.h) so they link into the pure-only tests. */
+
+/* Read an OSNumber registry property as uint64, or 0 (the "absent"
+   sentinel) when missing, non-numeric, or non-positive. Used for the
+   whole-disk IOMedia size/block-size — the kernel's cached READ CAPACITY,
+   no command. */
+static uint64_t mos_internal_cf_number_u64(io_registry_entry_t node,
+                                           CFStringRef key)
+{
+    CFTypeRef v MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
+            node, key, kCFAllocatorDefault, 0);
+    if (!v || CFGetTypeID(v) != CFNumberGetTypeID()) return 0;
+    long long out = 0;
+    if (!CFNumberGetValue((CFNumberRef)v, kCFNumberLongLongType, &out) ||
+        out <= 0) {
+        return 0;
+    }
+    return (uint64_t)out;
+}
+
+/* Resolve the whole-disk BSD unit (N in "diskN") for an IOKit service, or
+   -1 if none (empty/open-tray drive, no IOMedia child). Captures the
+   whole-disk IOMedia registry entry ID into *media_id_out (0 if none), and,
+   when non-NULL, the node's kernel-cached size/block-size into
+   *media_bytes_out / *block_bytes_out (kIOMediaSizeKey /
+   kIOMediaPreferredBlockSizeKey — the kernel's attach-time READ CAPACITY;
+   0 if absent). The transient "diskN" name buffers never escape — only the
+   parsed integer identity does. */
+static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
+                                     uint64_t *media_bytes_out,
+                                     uint32_t *block_bytes_out)
+{
+    if (media_id_out)    *media_id_out = 0;
+    if (media_bytes_out) *media_bytes_out = 0;
+    if (block_bytes_out) *block_bytes_out = 0;
+    io_iterator_t it MOS_IO_AUTO = IO_OBJECT_NULL;
+    if (IORegistryEntryCreateIterator(svc, kIOServicePlane,
+            kIORegistryIterateRecursively, &it) != KERN_SUCCESS) {
+        return -1;
+    }
+
+    /* Two-pass selection:
+       1. Prefer a whole-disk IOMedia child — the "Whole" property cleanly
+          separates "disk4" from partitions ("disk4s1").
+       2. Fallback: some USB bridges expose a BSD name on a node with no
+          "Whole" property. Accept any whole-disk-shaped name (disk\d+ /
+          rdisk\d+, no partition suffix).
+       A Whole node is authoritative and wins. Refcounts auto-release via
+       MOS_IO_AUTO / MOS_CF_AUTO. */
+    char whole_name[MOS_BSD_NAME_CAP] = {0};
+    char fallback_name[MOS_BSD_NAME_CAP] = {0};
+    uint64_t whole_id = 0;
+    uint64_t whole_bytes = 0;   /* kIOMediaSizeKey off the Whole node */
+    uint32_t whole_block = 0;   /* kIOMediaPreferredBlockSizeKey */
+
+    for (;;) {
+        io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
+        if (child == IO_OBJECT_NULL) break;
+
+        char this_name[MOS_BSD_NAME_CAP] = {0};
+
+        CFTypeRef bsd MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
+                child, CFSTR(kIOBSDNameKey), kCFAllocatorDefault, 0);
+        if (bsd && CFGetTypeID(bsd) == CFStringGetTypeID()) {
+            /* CFStringGetCString may write partial bytes before failing
+               (Apple spec); clear so the empty check below stays valid. */
+            if (!CFStringGetCString((CFStringRef)bsd, this_name,
+                                    sizeof(this_name),
+                                    kCFStringEncodingUTF8)) {
+                this_name[0] = 0;
+            }
+        }
+
+        if (this_name[0] == 0) continue;
+
+        /* Pass 1: the authoritative Whole node. Require IOMedia conformance
+           — some descendants carry a "Whole" boolean without being media.
+           (String-name IOObjectConformsTo avoids including IOMedia.h.) The
+           fallback still takes whole-disk-shaped names on non-IOMedia
+           bridge nodes. */
+        CFTypeRef whole MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
+                child, CFSTR("Whole"), kCFAllocatorDefault, 0);
+        bool is_whole = (whole &&
+                         CFGetTypeID(whole) == CFBooleanGetTypeID() &&
+                         CFBooleanGetValue((CFBooleanRef)whole) &&
+                         IOObjectConformsTo(child, "IOMedia"));
+
+        if (is_whole && whole_name[0] == 0) {
+            strlcpy(whole_name, this_name, sizeof(whole_name));
+            /* Capture the IOMedia registry entry ID — the media-swap
+               fingerprint — while we hold the node. On failure it stays 0
+               (the "unavailable" sentinel; the watch core won't infer a
+               swap from it). */
+            if (IORegistryEntryGetRegistryEntryID(child, &whole_id) != KERN_SUCCESS) {
+                whole_id = 0;
+            }
+            /* Kernel-cached capacity off the same node, captured now rather
+               than re-resolved by media_id later. */
+            whole_bytes = mos_internal_cf_number_u64(child,
+                              CFSTR(kIOMediaSizeKey));
+            whole_block = (uint32_t)mos_internal_cf_number_u64(child,
+                              CFSTR(kIOMediaPreferredBlockSizeKey));
+        } else if (!is_whole && fallback_name[0] == 0 &&
+                   mos_internal_bsd_name_is_whole_shape(this_name)) {
+            strlcpy(fallback_name, this_name, sizeof(fallback_name));
+            /* No id capture here. media_id must be the whole-disk IOMedia
+               entry ID (mos_pure.h), re-minted on a swap; a bridge node's
+               ID identifies the BRIDGE and may survive a swap, so a stale
+               non-zero value would disarm both swap detectors at once
+               (mos_watch_core.c). Leaving it 0 keeps the no-id fallback
+               armed. Whether real bridges hit this branch is a rig
+               question. */
+        }
+
+        if (whole_name[0] != 0) break; /* Whole found, done */
+    }
+
+    const char *chosen = whole_name[0] ? whole_name
+                       : fallback_name[0] ? fallback_name
+                       : NULL;
+    if (!chosen) return -1;
+    if (media_id_out) *media_id_out = whole_name[0] ? whole_id : 0;
+    /* Size and id ride the Whole node only — the fallback bridge node's are
+       not the medium's (see the no-id reasoning above). */
+    if (media_bytes_out) *media_bytes_out = whole_name[0] ? whole_bytes : 0;
+    if (block_bytes_out) *block_bytes_out = whole_name[0] ? whole_block : 0;
+    /* parse_bsd_unit normalizes any rdisk/ /dev/ prefix, rejects
+       partition/non-whole shapes, and returns the unit or -1. Identity is
+       an integer from here; "diskN" is reconstructed only at output. */
+    return mos_internal_parse_bsd_unit(chosen);
+}
+
+/* Re-resolve the handle's media-scoped identity (bsd_unit, media_id swap
+   fingerprint, cached size/block bytes) off its stable drive service.
+   h->svc is fixed for the handle's life; the IOMedia child under it is not
+   — it appears on insert, vanishes on eject — so a single open-time capture
+   goes stale across a media change. Media-scoped queries call this first to
+   report CURRENT media: a local IORegistry walk, no SCSI command, no
+   exclusive access. Single-threaded like every handle mutation. */
+void mos_internal_refresh_media_identity(mos_handle_t *h)
+{
+    if (!h) return;
+    h->bsd_unit = mos_internal_bsd_unit(h->svc, &h->media_id,
+                                        &h->media_bytes,
+                                        &h->media_block_bytes);  /* -1 if no media */
+}
+
+/* ---- Enumeration ---------------------------------------------------- */
+
+#define MOS_ENUM_CAP 64
+
+void mos_enumerate_devices(mos_enumerate_cb cb, void *ctx)
+{
+    if (!cb) return;
+
+    /* DR-backed (mos_dr.c): the snapshot arrives in DR device-array order,
+       the public ordering contract (same array drutil enumerates), already
+       deduped to one DRDevice per drive. Identity strings ride the snapshot
+       but mos_device_info_t doesn't surface them — identity is handle data,
+       not enumeration data. */
+    mos_internal_dr_snapshot snap[MOS_ENUM_CAP];
+    size_t n = mos_internal_dr_copy_snapshot(snap, MOS_ENUM_CAP);
+
+    for (size_t i = 0; i < n; ++i) {
+        struct mos_device_info info = {
+            .bsd_unit    = snap[i].bsd_unit,
+            .registry_id = snap[i].registry_id,
+        };
+        if (!cb(&info, ctx)) break;
+    }
+}
+
+/* Enumeration yields bsd_unit + registry_id only; -1 for an empty drive. */
+int64_t mos_device_info_bsd_unit(const mos_device_info_t *i) { return i ? i->bsd_unit : -1; }
+uint64_t mos_device_info_registry_id(const mos_device_info_t *i) { return i ? i->registry_id : 0; }
+
+/* The bsd_unit a handle was opened against, for partial-failure paths where
+   open succeeded but a later call errored. -1 for an empty drive. */
+int64_t mos_handle_bsd_unit(const mos_handle_t *h)
+{
+    return h ? h->bsd_unit : -1;
+}
+
+io_service_t mos_internal_handle_get_service(mos_handle_t *h) {
+    /* No retain taken — caller must IOObjectRetain before mos_close(h)
+       (contract in mos_internal.h). */
+    return h ? h->svc : IO_OBJECT_NULL;
+}
+
+/* ---- Open / close --------------------------------------------------- */
+
+static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
+{
+    mos_handle_t *h = calloc(1, sizeof(*h));
+    if (!h) { IOObjectRelease(svc); if (err) *err = MOS_ERR_OOM; return NULL; }
+    h->svc = svc;
+    /* Attachment identity, captured once. Best-effort: a failed call leaves
+       the calloc'd 0, documented as "unavailable", never fabricated. */
+    if (IORegistryEntryGetRegistryEntryID(svc, &h->drive_registry_id)
+            != KERN_SUCCESS) {
+        h->drive_registry_id = 0;
+    }
+    /* Best-effort, not a gate: a nameless empty drive opens fine (plug-in
+       and queries run off svc). Media-scoped queries re-run this per call
+       so a handle held across insert/eject stays current. */
+    mos_internal_refresh_media_identity(h);   /* sets bsd_unit/-1, media_id, size */
+
+    SInt32 score = 0;
+    kern_return_t kr = IOCreatePlugInInterfaceForService(
+        svc,
+        kIOMMCDeviceUserClientTypeID,
+        kIOCFPlugInInterfaceID,
+        &h->plugin, &score);
+    if (kr != KERN_SUCCESS || !h->plugin) {
+        /* Apple's kext declined to attach SCSITaskUserClient (match
+           behavior has shifted across macOS releases — see KNOWN UNKNOWNS). */
+        if (err) *err = MOS_ERR_DRIVER_REJECTED;
+        mos_close(h);
+        return NULL;
+    }
+
+    HRESULT hr = (*h->plugin)->QueryInterface(
+        h->plugin,
+        CFUUIDGetUUIDBytes(kIOMMCDeviceInterfaceID),
+        (LPVOID *)&h->mmc);
+    if (hr != S_OK || !h->mmc) {
+        /* COM leaves the out pointer untouched on failure (calloc-NULL
+           here); NULL it anyway so mos_close never Releases garbage if a
+           plug-in violates that. */
+        h->mmc = NULL;
+        if (err) *err = MOS_ERR_DRIVER_REJECTED;
+        mos_close(h);
+        return NULL;
+    }
+
+    /* Identity from the DR directory (device-static). Non-fatal on
+       failure — empty strings. */
+    (void)mos_internal_dr_copy_identity_for_service(
+        h->svc,
+        h->vendor_str,   sizeof h->vendor_str,
+        h->product_str,  sizeof h->product_str,
+        h->revision_str, sizeof h->revision_str);
+
+    if (err) *err = MOS_OK;
+    return h;
+}
+
+mos_handle_t *mos_open_by_bsd_name(const char *want, mos_error *err_out)
+{
+    if (err_out) *err_out = MOS_ERR_INVALID_ARG;
+    if (!want) return NULL;
+
+    /* parse_bsd_unit accepts disk4 / rdisk4 / /dev/ forms, -1 otherwise.
+       Empty drives have no unit, so this never resolves a nameless drive —
+       they're index/enumeration-only. Preserves the CLI contract: malformed
+       name = invalid_arg/64, well-formed-but-absent = no_device/66. */
+    int64_t want_unit = mos_internal_parse_bsd_unit(want);
+    if (want_unit < 0) return NULL;
+
+    /* Reconstruct canonical "diskN" before asking DR — it documents the
+       plain /dev entry name, and normalization stays with parse_bsd_unit,
+       not the caller's prefix. The resulting registry ID reopens atomically
+       below (same TOCTOU posture as open-by-index): a name DR resolved but
+       whose entry then terminated returns NO_DEVICE, never another drive. */
+    char disk_name[MOS_BSD_NAME_CAP];
+    if (!mos_bsd_name_format(want_unit, disk_name, sizeof disk_name)) {
+        return NULL;
+    }
+    uint64_t id = mos_internal_dr_registry_id_for_bsd_name(disk_name);
+    if (id == 0) {
+        if (err_out) *err_out = MOS_ERR_NO_DEVICE;
+        return NULL;
+    }
+    return mos_internal_open_by_registry_id(id, err_out);
+}
+
+mos_handle_t *mos_open_by_registry_id(uint64_t registry_id,
+                                      mos_error *err_out)
+{
+    if (registry_id == 0) {
+        if (err_out) *err_out = MOS_ERR_INVALID_ARG;
+        return NULL;
+    }
+    return mos_internal_open_by_registry_id(registry_id, err_out);
+}
+
+/* Collects registry IDs (not BSD names) for by-index reopen: names can
+   shift on hot-plug between enumerate and reopen (TOCTOU), while a registry
+   entry ID is stable and reopens atomically via IORegistryEntryIDMatching. */
+typedef struct {
+    uint64_t ids[MOS_ENUM_CAP];
+    size_t   count;
+} mos_internal_id_collect;
+
+static bool mos_internal_collect_cb(const mos_device_info_t *info, void *ctx)
+{
+    mos_internal_id_collect *c = (mos_internal_id_collect *)ctx;
+    if (c->count >= MOS_ENUM_CAP) return false;
+    uint64_t id = mos_device_info_registry_id(info);
+    if (id != 0) {
+        c->ids[c->count++] = id;
+    }
+    return true;
+}
+
+/* Reopen by registry entry ID — race-free (kernel resolves the match
+   atomically). Used by mos_open_by_index; non-static for the watch
+   adapter's per-probe reopen. Contract in mos_internal.h. */
+mos_handle_t *mos_internal_open_by_registry_id(uint64_t id,
+                                               mos_error *err_out)
+{
+    if (err_out) *err_out = MOS_ERR_INVALID_ARG;
+    if (id == 0) return NULL;
+
+    CFMutableDictionaryRef m = IORegistryEntryIDMatching(id);
+    if (!m) {
+        if (err_out) *err_out = MOS_ERR_IO;
+        return NULL;
+    }
+
+    /* IOServiceGetMatchingService consumes the dictionary reference
+       (IOKit ownership rule) whether or not it matches — no CFRelease here. */
+    io_service_t svc = IOServiceGetMatchingService(kIOMainPortDefault, m);
+    if (svc == IO_OBJECT_NULL) {
+        /* Enumerated earlier but gone now — hot-unplugged between
+           enumeration and open. NO_DEVICE distinguishes this from a bad
+           index. */
+        if (err_out) *err_out = MOS_ERR_NO_DEVICE;
+        return NULL;
+    }
+
+    return mos_internal_open_service(svc, err_out);
+}
+
+mos_handle_t *mos_open_by_index(int one_based, mos_error *err_out)
+{
+    if (err_out) *err_out = MOS_ERR_INVALID_ARG;
+    if (one_based < 1) return NULL;
+
+    /* Two-stage but race-free: enumerate to collect registry IDs in DR
+       order (the index contract), then reopen the captured ID atomically.
+       A hot-plug between passes either succeeds or returns NO_DEVICE, never
+       opens a different drive that inherited the BSD name. */
+
+    mos_internal_id_collect c = { {0}, 0 };
+    mos_enumerate_devices(mos_internal_collect_cb, &c);
+    if ((size_t)one_based > c.count) {
+        if (err_out) *err_out = MOS_ERR_NO_DEVICE;
+        return NULL;
+    }
+    return mos_internal_open_by_registry_id(c.ids[one_based - 1], err_out);
+}
+
+mos_handle_t *mos_open_device(const mos_device_info_t *info,
+                              mos_error *err_out)
+{
+    if (err_out) *err_out = MOS_ERR_INVALID_ARG;
+    if (!info || info->registry_id == 0) return NULL;
+
+    /* The registry ID reopens atomically, so opening from inside the
+       enumeration callback has no TOCTOU window and no re-enumeration —
+       the one-snapshot path CLI list/status use. */
+    return mos_internal_open_by_registry_id(info->registry_id, err_out);
+}
+
+void mos_close(mos_handle_t *h)
+{
+    if (!h) return;
+    if (h->std) {
+        if (h->have_exclusive) (*h->std)->ReleaseExclusiveAccess(h->std);
+        (*h->std)->Release(h->std);
+    }
+    if (h->mmc)    (*h->mmc)->Release(h->mmc);
+    if (h->plugin) IODestroyPlugInInterface(h->plugin);
+    if (h->svc)    IOObjectRelease(h->svc);
+    free(h);
+}
+
+/* ---- MMC convenience wrappers ------------------------------------- *
+ *
+ * No exclusive access required (the point of MMC vs raw
+ * SCSITaskDeviceInterface). Can still return kIOReturnExclusiveAccess when
+ * another client holds the drive — that's a caller-sees-BUSY.
+ *
+ * Signatures verified against the macOS 26.5 SDK SCSITaskLib.h.
+ */
+
+/* Pin the IOKit constants to the literals the pure mapping expects, so an
+   SDK renumbering breaks the build loudly instead of miscategorizing
+   IOReturn codes. */
+_Static_assert((uint32_t)kIOReturnSuccess         == 0x00000000u,
+               "kIOReturnSuccess mapping in mos_pure.c is out of date");
+_Static_assert((uint32_t)kIOReturnNoMemory        == 0xE00002BDu,
+               "kIOReturnNoMemory mapping in mos_pure.c is out of date");
+_Static_assert((uint32_t)kIOReturnNoResources     == 0xE00002BEu,
+               "kIOReturnNoResources mapping in mos_pure.c is out of date");
+_Static_assert((uint32_t)kIOReturnNoDevice        == 0xE00002C0u,
+               "kIOReturnNoDevice mapping in mos_pure.c is out of date — "
+               "the watch core's terminal-removal path depends on this");
+_Static_assert((uint32_t)kIOReturnBadArgument     == 0xE00002C2u,
+               "kIOReturnBadArgument mapping in mos_pure.c is out of date");
+_Static_assert((uint32_t)kIOReturnExclusiveAccess == 0xE00002C5u,
+               "kIOReturnExclusiveAccess mapping in mos_pure.c is out of date");
+_Static_assert((uint32_t)kIOReturnUnsupported     == 0xE00002C7u,
+               "kIOReturnUnsupported mapping in mos_pure.c is out of date");
+_Static_assert((uint32_t)kIOReturnBusy            == 0xE00002D5u,
+               "kIOReturnBusy mapping in mos_pure.c is out of date");
+_Static_assert((uint32_t)kIOReturnTimeout         == 0xE00002D6u,
+               "kIOReturnTimeout mapping in mos_pure.c is out of date");
+_Static_assert((uint32_t)kIOReturnNotAttached     == 0xE00002D9u,
+               "kIOReturnNotAttached mapping in mos_pure.c is out of date");
+
+/* mos_raw_cdb passes mos_xfer_dir straight to SetScatterGatherEntries, so
+   the public values MUST equal the SDK's kSCSIDataTransfer_* enumerators —
+   a renumbering would send CDBs in the wrong direction. Pin them. */
+_Static_assert((int)MOS_XFER_NONE        == (int)kSCSIDataTransfer_NoDataTransfer,
+               "MOS_XFER_NONE no longer matches kSCSIDataTransfer_NoDataTransfer "
+               "— mos_raw_cdb passes mos_xfer_dir directly to "
+               "SetScatterGatherEntries; the values MUST be identical.");
+_Static_assert((int)MOS_XFER_TO_TARGET   == (int)kSCSIDataTransfer_FromInitiatorToTarget,
+               "MOS_XFER_TO_TARGET no longer matches "
+               "kSCSIDataTransfer_FromInitiatorToTarget — see MOS_XFER_NONE "
+               "assertion above for the rationale.");
+_Static_assert((int)MOS_XFER_FROM_TARGET == (int)kSCSIDataTransfer_FromTargetToInitiator,
+               "MOS_XFER_FROM_TARGET no longer matches "
+               "kSCSIDataTransfer_FromTargetToInitiator — see MOS_XFER_NONE "
+               "assertion above for the rationale.");
+
+/* The pure tray classifier (mos_pure.c) compares mos_raw_cdb's task status
+   against MOS_SCSI_STATUS_GOOD but can't include the SDK to check they
+   agree — pin it here, the one TU that sees both names. */
+_Static_assert((int)MOS_SCSI_STATUS_GOOD == (int)kSCSITaskStatus_GOOD,
+               "MOS_SCSI_STATUS_GOOD no longer matches kSCSITaskStatus_GOOD "
+               "— the pure tray classifier would misclassify GOOD status.");
+
+/* Thin shim over the pure mapping in mos_pure.c (int32_t in, fixture-tested
+   without IOKit). Maps transport-layer failures only — CHECK CONDITION
+   rides taskStatus/sense, not IOReturn. */
+mos_error mos_internal_ioreturn_to_mos_error(IOReturn rc)
+{
+    return mos_internal_ioreturn_to_error((int32_t)rc);
+}
+
+mos_error mos_internal_mmc_get_tray_state(mos_handle_t *h, bool *tray_open)
+{
+    if (!h || !tray_open) return MOS_ERR_INVALID_ARG;
+
+    /* Raw GET EVENT STATUS NOTIFICATION (0x4A), Media class, Polled. We do
+       NOT use the GetTrayState convenience method: on a GESN failure it
+       hard-codes (closed, success) (ARCHITECTURE.md §4.2, §9.7), masking the
+       failure. Issuing the CDB ourselves keeps a failure a failure so the
+       state core can fork on the TUR sense.
+
+       Reached only on the not-ready path (TUR already proved reachable and
+       not mounted), so exclusive access is free of mount conflict.
+       mos_raw_cdb acquires and releases the lock per call — single-shot,
+       never held.
+
+       CDB and response byte map: ARCHITECTURE.md §4.2. */
+    const uint8_t cdb[10] = {
+        0x4A,        /* GET EVENT STATUS NOTIFICATION              */
+        0x01,        /* byte1 bit0 IMMED = 1 → Polled mode         */
+        0x00, 0x00,
+        0x10,        /* byte4 Notification Class Request = Media   */
+        0x00, 0x00,
+        0x00, 0x08,  /* bytes7-8 Allocation Length = 8 (BE)        */
+        0x00,        /* control                                    */
+    };
+
+    uint8_t  resp[8]     = {0};
+    uint32_t task_status = 0;
+    uint8_t  sense[18]   = {0};
+
+    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb,
+                              resp, sizeof resp,
+                              MOS_XFER_FROM_TARGET,
+                              2000,                 /* ms, ARCHITECTURE.md §4.2 */
+                              &task_status, sense, NULL);
+    if (e != MOS_OK) return e;                      /* transport/lock: honest fail */
+    if (task_status != kSCSITaskStatus_GOOD)        /* CHECK CONDITION etc.        */
+        return MOS_ERR_IO;
+
+    /* Validity gates (NEA, Media class, full span) live in the pure decoder
+       so they're fuzz/ASan-checked headless. The buffer span is the bound;
+       the decoder trusts the reply's own Event Data Length, not the
+       transport's realized count (some USB bridges under-report it). A false
+       return means "no authoritative bit" — fork on the TUR sense. */
+    if (!mos_internal_gesn_media_door_open(resp, sizeof resp, tray_open))
+        return MOS_ERR_IO;
+
+    return MOS_OK;
+}
+
+mos_error mos_internal_mmc_test_unit_ready(mos_handle_t *h,
+                                           uint32_t *status,
+                                           uint8_t sense[18])
+{
+    if (!h || !h->mmc || !status || !sense) return MOS_ERR_INVALID_ARG;
+
+    /* A non-IOKit failure surfaces as outTaskStatus == CHECK CONDITION with
+       valid sense; IOReturn covers only transport errors. */
+    SCSITaskStatus  task_status  = 0;
+    SCSI_Sense_Data sense_struct = {0};
+
+    IOReturn rc = (*h->mmc)->TestUnitReady(h->mmc, &task_status, &sense_struct);
+    if (rc != kIOReturnSuccess) {
+        /* Transport failure: zero outputs, return the mapped error.
+           *status is meaningful only on MOS_OK. */
+        *status = 0;
+        memset(sense, 0, 18);
+        return mos_internal_ioreturn_to_mos_error(rc);
+    }
+
+    *status = (uint32_t)task_status;
+    memcpy(sense, &sense_struct, 18);
+    return MOS_OK;
+}
+
+/* RETURN-CONVENTION: returns MOS_ERR_IO for reached-but-unusable replies
+   (non-GOOD status, truncated GOOD) rather than clearing the out-param.
+   Load-bearing: 0x0000 is a REAL answer ("no current profile"), so a
+   malformed reply must be distinguishable out-of-band or it masquerades as
+   no-media. (Identity strings have no such collision, so that seam clears
+   in-band.) The caller treats both shapes as non-fatal enrichment skips. */
+mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile)
+{
+    if (!h || !h->mmc || !profile) return MOS_ERR_INVALID_ARG;
+
+    /* RT=2 ("only this feature") with starting feature 0x0000 returns just
+       the 8-byte feature header. */
+    uint8_t          buf[16] = {0};
+    SCSITaskStatus   st      = 0;
+    SCSI_Sense_Data  sd      = {0};
+
+    IOReturn rc = (*h->mmc)->GetConfiguration(
+        h->mmc,
+        (UInt8)0x02,             /* RT = 10b, only the feature we asked for */
+        (UInt16)0x0000,          /* starting feature: Profile List           */
+        buf, (UInt16)sizeof(buf),
+        &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        *profile = 0x0000;
+        /* Distinguish transport failure (map the IOReturn) from non-GOOD
+           status (reached the drive, no usable data) — report I/O failure,
+           not a misleading "no profile". */
+        return (rc != kIOReturnSuccess) ? mos_internal_ioreturn_to_mos_error(rc)
+                                        : MOS_ERR_IO;
+    }
+
+    /* Gate extraction on the reply's Feature Header Data Length (pure
+       decoder, fuzz-checked): a GOOD-but-short transfer must surface as "no
+       profile", not a silent 0x0000 that reads like no-media. Buffer is the
+       bound; the reply's own Data Length is the validity check (convenience
+       GetConfiguration reports no realized count). */
+    uint16_t parsed = 0x0000;
+    if (!mos_internal_config_current_profile(buf, sizeof(buf), &parsed)) {
+        *profile = 0x0000;
+        return MOS_ERR_IO;          /* truncated/short reply — enrichment skips it */
+    }
+    *profile = parsed;
+    return MOS_OK;
+}
+
+/* Open-time directory identity for the drive verb: zero commands, borrowed
+   strings pointing into the handle's buffers (same as the state result). */
+const char *mos_handle_vendor(const mos_handle_t *h)
+{
+    return (h && h->vendor_str[0]) ? h->vendor_str : NULL;
+}
+
+const char *mos_handle_product(const mos_handle_t *h)
+{
+    return (h && h->product_str[0]) ? h->product_str : NULL;
+}
+
+const char *mos_handle_revision(const mos_handle_t *h)
+{
+    return (h && h->revision_str[0]) ? h->revision_str : NULL;
+}
+
+uint64_t mos_handle_registry_id(const mos_handle_t *h)
+{
+    return h ? h->drive_registry_id : 0;
+}
+
+/* Identity is directory data from DRDeviceCopyInfo (framework-parsed
+   INQUIRY bytes), copied through the bounded truncating seam in mos_dr.c.
+   Hostile bytes are escaped at the output layer (mos_cli_json_str /
+   mos_cli_safe_ascii). */
+
+/* ---- Raw CDB (diagnostic only) ------------------------------------- */
+
+mos_error mos_raw_cdb(mos_handle_t *h,
+                      const uint8_t *cdb, size_t cdb_len,
+                      void *data_buf, size_t data_len,
+                      mos_xfer_dir direction,
+                      uint32_t timeout_ms,
+                      uint32_t *scsi_task_status,
+                      uint8_t   sense[18],
+                      uint64_t *bytes_transferred)
+{
+    /* SetCommandDescriptorBlock accepts only 6/10/12/16 (kSCSICDBSize_*).
+       Reject other lengths here so callers get MOS_ERR_INVALID_ARG, not an
+       opaque execute-time failure. */
+    if (!h || !h->mmc || !cdb || !scsi_task_status || !sense)
+        return MOS_ERR_INVALID_ARG;
+    if (cdb_len != 6 && cdb_len != 10 && cdb_len != 12 && cdb_len != 16)
+        return MOS_ERR_INVALID_ARG;
+    if (direction != MOS_XFER_NONE &&
+        direction != MOS_XFER_FROM_TARGET &&
+        direction != MOS_XFER_TO_TARGET)
+        return MOS_ERR_INVALID_ARG;
+    if (direction == MOS_XFER_NONE) {
+        if (data_len != 0) return MOS_ERR_INVALID_ARG;
+    } else {
+        if (data_len == 0 || data_buf == NULL) return MOS_ERR_INVALID_ARG;
+    }
+    /* Timeout 0 means "Wait Forever" to SetTimeoutDuration — reject it so a
+       non-responsive command can't hang. */
+    if (timeout_ms == 0)
+        return MOS_ERR_INVALID_ARG;
+
+    /* Zero outputs after arg validation so error paths leave a deterministic
+       zero state for consumers who skip the return check. Validation
+       failures above leave outputs untouched ("never started"). */
+    *scsi_task_status = 0;
+    memset(sense, 0, 18);
+    if (bytes_transferred) *bytes_transferred = 0;
+
+    /* Lazily acquire the SCSITaskDeviceInterface. */
+    if (!h->std) {
+        h->std = (*h->mmc)->GetSCSITaskDeviceInterface(h->mmc);
+        if (!h->std) return MOS_ERR_DRIVER_REJECTED;
+    }
+
+    /* Invariant pin (debug): every raw_cdb call releases exclusive access on
+       every exit path, so the lock is never held across calls — it must be
+       free on entry. A future early return that forgot to clear
+       have_exclusive would otherwise skip the acquire below and run the CDB
+       believing it holds a lock it doesn't; assert catches that in debug. */
+    assert(!h->have_exclusive);
+
+    /* Raw CDB requires exclusive access. */
+    if (!h->have_exclusive) {
+        IOReturn rx = (*h->std)->ObtainExclusiveAccess(h->std);
+        if (rx != kIOReturnSuccess)
+            return mos_internal_ioreturn_to_mos_error(rx);
+        h->have_exclusive = true;
+    }
+
+    SCSITaskInterface **t = (*h->std)->CreateSCSITask(h->std);
+    if (!t) {
+        /* Release the lock acquired above (every exit clears
+           have_exclusive, so it's always false on entry) — holding it is
+           pointless without a task. */
+        (*h->std)->ReleaseExclusiveAccess(h->std);
+        h->have_exclusive = false;
+        return MOS_ERR_IO;
+    }
+
+    /* Check each Set* IOReturn — ignoring one ships a malformed task and a
+       baffling execute-time error. Identical cleanup, so all converge on
+       one label. */
+    IOReturn sr;
+    sr = (*t)->SetCommandDescriptorBlock(t, (UInt8 *)cdb, (UInt8)cdb_len);
+    if (sr != kIOReturnSuccess) goto setup_failed;
+
+    IOVirtualRange sg = { (IOVirtualAddress)data_buf, (IOByteCount)data_len };
+    sr = (*t)->SetScatterGatherEntries(t,
+        data_len ? &sg : NULL,
+        (UInt8)(data_len ? 1 : 0),
+        (UInt64)data_len,
+        (UInt8)direction);
+    if (sr != kIOReturnSuccess) goto setup_failed;
+
+    sr = (*t)->SetTimeoutDuration(t, timeout_ms);
+    if (sr != kIOReturnSuccess) goto setup_failed;
+
+    /* sense was zeroed in the zero-outputs block; nothing writes it since. */
+    SCSI_Sense_Data sense_struct = {0};
+    SCSITaskStatus   st           = 0;
+    UInt64           xferred      = 0;
+
+    IOReturn er = (*t)->ExecuteTaskSync(t, &sense_struct, &st, &xferred);
+    (*t)->Release(t);
+
+    /* Release before returning: a diagnostic command must not hold the lock
+       for the handle's lifetime (would block Finder / MakeMKV / DA mounts).
+       Released on success and IO-failure; only the InvalidArg exits skip it,
+       never having acquired. */
+    (*h->std)->ReleaseExclusiveAccess(h->std);
+    h->have_exclusive = false;
+
+    /* Transport failure: outputs stay at the zeros above (defined, not
+       garbage); st/sense/xferred aren't copied. */
+    if (er != kIOReturnSuccess) {
+        return mos_internal_ioreturn_to_mos_error(er);
+    }
+
+    *scsi_task_status = (uint32_t)st;
+    memcpy(sense, &sense_struct, 18);
+    if (bytes_transferred) *bytes_transferred = (uint64_t)xferred;
+
+    return MOS_OK;
+
+setup_failed:
+    (*t)->Release(t);
+    (*h->std)->ReleaseExclusiveAccess(h->std);
+    h->have_exclusive = false;
+    return mos_internal_ioreturn_to_mos_error(sr);
+}
+
+/* ==== src/mos_sense.c ==== */
+/*
+ * mos_sense.c — SCSI sense-data parsing and state mapping. No IOKit;
+ * unit-testable with fixture bytes.
+ *
+ * Fixed-format (response code 0x70 / 0x71): SPC-4 §4.5.3
+ *   byte 0:  response code + valid bit
+ *   byte 2:  bits 3:0 = sense key
+ *   byte 12: ASC      byte 13: ASCQ
+ *
+ * Descriptor-format (response code 0x72 / 0x73): SPC-4 §4.5.2
+ *   byte 0: response code   byte 1: bits 3:0 = sense key
+ *   byte 2: ASC             byte 3: ASCQ
+ *
+ * Optical drives return fixed format in practice; the descriptor path is
+ * here for correctness.
+ */
+
+#include <string.h>
+
+void mos_internal_parse_sense(const uint8_t sense[18],
+                              uint8_t *sk, uint8_t *asc, uint8_t *ascq)
+{
+    if (sk)   *sk   = 0;
+    if (asc)  *asc  = 0;
+    if (ascq) *ascq = 0;
+    if (!sense) return;
+
+    uint8_t rc = sense[0] & 0x7F;
+
+    if (rc == 0x70 || rc == 0x71) {
+        /* Fixed format */
+        if (sk)   *sk   = sense[2] & 0x0F;
+        if (asc)  *asc  = sense[12];
+        if (ascq) *ascq = sense[13];
+    } else if (rc == 0x72 || rc == 0x73) {
+        /* Descriptor format */
+        if (sk)   *sk   = sense[1] & 0x0F;
+        if (asc)  *asc  = sense[2];
+        if (ascq) *ascq = sense[3];
+    }
+}
+
+/*
+ * Map (sense_key, asc, ascq) → state, GIVEN THE TRAY IS CLOSED.
+ *
+ * Enrichment, not tray detection: open/closed is already settled (GESN
+ * door bit, or the sense fork in mos_state_core.c), so this never returns
+ * OPEN/EMPTY_OR_OPEN — it names the *reason* a closed tray isn't ready. A
+ * 3A/02 ("medium not present, tray open") reaching here has its tray hint
+ * discarded (enrich, don't invalidate): 0x3A means EMPTY, any other
+ * not-ready sense means a disc is engaged, unrecognized → UNKNOWN.
+ *
+ * T10 ASC/ASCQ list: https://www.t10.org/lists/asc-num.htm
+ */
+mos_state mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uint8_t ascq)
+{
+    /* HARDWARE ERROR (key 0x04): the drive faulted — outranks any
+       medium/not-ready detail also set. */
+    if (sk == 0x04) return MOS_STATE_DEVICE_FAULT;
+
+    /* MEDIUM ERROR (key 0x03), or 57/00 UNABLE TO RECOVER TOC: disc loaded
+       but unreadable. Not self-resolving, so not loading. */
+    if (sk == 0x03 || (asc == 0x57 && ascq == 0x00))
+        return MOS_STATE_MEDIA_UNREADABLE;
+
+    /* 3A/xx MEDIUM NOT PRESENT: no medium (the ASCQ tray flavor is GESN's). */
+    if (asc == 0x3A) return MOS_STATE_EMPTY;
+
+    /* 04/xx LOGICAL UNIT NOT READY: a disc is engaged; the qualifier says
+       why it isn't ready yet. */
+    if (asc == 0x04) {
+        switch (ascq) {
+            case 0x01:  /* becoming ready                 */
+            case 0x02:  /* initialize command required    */
+            case 0x07:  /* operation in progress          */
+                return MOS_STATE_LOADING;   /* self-resolving by waiting */
+            case 0x04:  /* format in progress             */
+                return MOS_STATE_FORMATTING;
+            case 0x08:  /* long write in progress         */
+                return MOS_STATE_BUSY;      /* actively writing; back off */
+            default:
+                return MOS_STATE_UNKNOWN;
+        }
+    }
+
+    return MOS_STATE_UNKNOWN;
+}
+
+/* ==== src/mos_serial.c ==== */
+/*
+ * mos_serial.c — the drive-serial query (mos_query_serial): one raw INQUIRY
+ * (EVPD=1, PAGE CODE=0x80, Unit Serial Number) on the mos_raw_cdb path,
+ * decoded by the pure parser in mos_vpd80.c. The serial is the durable
+ * drive-inventory key that survives replug and machine moves (registry_id is
+ * attachment-scoped). Named for the datum it produces, not the generic
+ * INQUIRY command set: this file owns the serial verb only — any future VPD
+ * page is its own argument, not a fold into "the inquiry file".
+ *
+ * Authored raw, not via the convenience Inquiry, because MMCDeviceInterface's
+ * Inquiry takes only SCSICmd_INQUIRY_StandardData* — no EVPD / PAGE CODE
+ * parameter — so VPD page 0x80 is structurally unreachable through it
+ * (contrast ModeSense10's PC/PAGE_CODE, GetConfiguration's RT). That is the
+ * layer-1 "no convenience method carries the information" showing (AGENTS.md
+ * scope doctrine; design + full derivation:
+ * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md).
+ *
+ * Never disturbs another consumer. mos_raw_cdb is the SINGLE
+ * ObtainExclusiveAccess call site (ARCHITECTURE.md §3); this file adds none.
+ * Exclusive access is the gate: if anyone else holds the drive — a mounted
+ * IOMedia nub, Finder, MakeMKV, another initiator — ObtainExclusiveAccess
+ * fails (kIOReturnBusy / kIOReturnExclusiveAccess) and mos_raw_cdb returns
+ * the mapped error WITHOUT issuing the CDB, so the serial read backs off
+ * cleanly rather than contending. On success the lock is held only for the
+ * single INQUIRY and released immediately (mos_raw_cdb releases per call —
+ * never held across the handle's life). This is the same BUSY-on-mounted
+ * guard the §5.5 nub invariant relies on. The degradation is benign: the
+ * serial is a static drive fact, equally readable with the tray empty (the
+ * natural time to inventory a drive), and any non-OK leaves serial null —
+ * the field's existing default. INQUIRY changes no drive state, so there is
+ * no lock-lifetime question (unlike the tray PREVENT verbs).
+ */
+
+
+/* 252-byte reply buffer: the serial fits in serial_str (64) many times over;
+   the SPC PAGE LENGTH is a single byte (max 255), so this receives any
+   conforming page and the parser truncates into serial_str. */
+#define MOS_SERIAL_REPLY_BUF 252u
+
+mos_error mos_query_serial(mos_handle_t *h, const char **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* INQUIRY (SPC-4 0x12), 6-byte CDB:
+         byte0   opcode 0x12
+         byte1   bit0 EVPD = 1            — request a vital-product-data page
+         byte2   PAGE CODE = 0x80         — Unit Serial Number
+         byte3-4 ALLOCATION LENGTH (BE)   — MOS_SERIAL_REPLY_BUF
+         byte5   CONTROL = 0
+       IMMED has no meaning for INQUIRY; the call waits for final status. */
+    const uint8_t cdb[6] = {
+        0x12, 0x01, 0x80,
+        (uint8_t)(MOS_SERIAL_REPLY_BUF >> 8),
+        (uint8_t)(MOS_SERIAL_REPLY_BUF & 0xFF),
+        0x00,
+    };
+
+    uint8_t  buf[MOS_SERIAL_REPLY_BUF] = {0};
+    uint32_t task_status               = 0;
+    uint8_t  sense[18]                 = {0};
+    uint64_t xferred                   = 0;
+
+    /* Exclusive access unavailable (mounted media, another holder) →
+       kIOReturnBusy/ExclusiveAccess → MOS_ERR_BUSY, the CDB never issues;
+       any transport error surfaces honestly. The caller treats every non-OK
+       as "serial stays null". */
+    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
+                              MOS_XFER_FROM_TARGET, 2000,
+                              &task_status, sense, &xferred);
+    if (e != MOS_OK) return e;
+    if (task_status != MOS_SCSI_STATUS_GOOD)   /* CHECK CONDITION etc. */
+        return MOS_ERR_IO;
+
+    /* Dual-length rule (O-4): bound the parse to the bytes the transport
+       actually delivered, not the full buffer — some USB bridges under-fill.
+       The page's own PAGE LENGTH only shrinks the serial within that span. */
+    size_t trusted = (xferred < sizeof buf) ? (size_t)xferred : sizeof buf;
+    if (!mos_internal_vpd80_serial_parse(buf, trusted,
+                                         h->serial_str, sizeof h->serial_str))
+        return MOS_ERR_IO;   /* page absent / wrong page / no serial → null */
+
+    *out = h->serial_str;
+    return MOS_OK;
+}
+
+/* ==== src/mos_state.c ==== */
+/*
+ * mos_state.c — Apple-side adapter for the pure decision-tree core.
+ *
+ * Fills mos_state_env_t from a mos_handle_t and calls the pure core. The
+ * split lets tests/test_state_core.c drive the tree with scripted MMC
+ * responses. Contract: mos_internal_query_state_core in mos_pure.h.
+ */
+
+
+/* vtable trampolines; static so only this file binds the Apple ops table. */
+
+static mos_error adapter_get_tray_state(void *ctx, bool *tray_open)
+{
+    return mos_internal_mmc_get_tray_state((mos_handle_t *)ctx, tray_open);
+}
+
+static mos_error adapter_test_unit_ready(void *ctx,
+                                         uint32_t *status,
+                                         uint8_t sense[18])
+{
+    return mos_internal_mmc_test_unit_ready((mos_handle_t *)ctx, status, sense);
+}
+
+static mos_error adapter_get_current_profile(void *ctx, uint16_t *profile)
+{
+    return mos_internal_mmc_get_current_profile((mos_handle_t *)ctx, profile);
+}
+
+static const mos_mmc_ops_t apple_mmc_ops = {
+    .get_tray_state      = adapter_get_tray_state,
+    .test_unit_ready     = adapter_test_unit_ready,
+    .get_current_profile = adapter_get_current_profile,
+};
+
+mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
+{
+    if (out) *out = NULL;
+    if (!h || !out) return MOS_ERR_INVALID_ARG;
+
+    /* Re-resolve whole-disk identity off the pinned drive service before
+       querying, so a handle opened on an empty drive reports an inserted
+       disc's bsd_unit/media_id rather than the open-time -1. Only the
+       IOMedia child changes with the media. */
+    mos_internal_refresh_media_identity(h);
+
+    mos_state_env_t env = {
+        .ops                 = &apple_mmc_ops,
+        .ctx                 = h,
+        .bsd_unit            = h->bsd_unit,
+        .registry_id         = h->drive_registry_id,
+        .media_id            = h->media_id,
+        .vendor              = h->vendor_str[0]  ? h->vendor_str  : NULL,
+        .product             = h->product_str[0] ? h->product_str : NULL,
+        .revision            = h->revision_str[0] ? h->revision_str : NULL,
+    };
+
+    /* Disc-completion (blank vs finalized) is not enriched here — no state
+       decision needs it; it ships as an on-demand typed query
+       (mos_query_disc_info; ARCHITECTURE.md §4.4). */
+
+    mos_error rc = mos_internal_query_state_core(&env, &h->result);
+    if (rc == MOS_OK) *out = &h->result;
+    return rc;
+}
+
 /* ==== src/mos_state_core.c ==== */
 /*
  * mos_state_core.c — pure decision tree for mos_query_state().
@@ -3573,623 +5369,761 @@ enrich:
     return MOS_OK;
 }
 
-/* ==== src/mos_watch_core.c ==== */
+/* ==== src/mos_strings.c ==== */
 /*
- * mos_watch_core.c — pure watch state machine.
- *
- * Drives the poll loop:
- *
- *   - When to probe (next_poll_at_mono_ms, two backoff rates by whether the
- *     last state was transitional or stable).
- *   - What to emit (snapshot on first probe; state_changed on a state
- *     delta; media_changed on a same-state READY disc swap; error on
- *     transient probe failure; device_removed on notify_removed or a probe
- *     returning MOS_ERR_NO_DEVICE).
- *   - How to label it (monotonic seq; RFC 3339 ts from ops->wall_ms;
- *     registry_id + stream_open_wall_ms; bsd_unit).
- *   - When to stop (terminated flag, set by notify_removed or probe →
- *     NO_DEVICE).
- *
- * Two time domains, distinct at the type level so a mixup can't slip in:
- *   - ops->mono_ms() — MONOTONIC. Scheduling/latency only.
- *   - ops->wall_ms() — WALL-CLOCK ms since epoch. stream_open_wall_ms and
- *     event ts only; can jump backward, never used for scheduling.
- *
- * The caller's pump owns blocking — this core never sleeps. It returns a
- * decision: EMIT_EVENT (write and re-pump), SLEEP_UNTIL (block then
- * re-pump), TERMINAL (close). mos_watch.c maps SLEEP_UNTIL to
- * CFRunLoopRunInMode; the test driver advances a fake clock. Every
- * transition is testable without IOKit.
+ * mos_strings.c — pure string tables, escapers, and version. Separate TU so
+ * mos_scsi.c stays exclusively IOKit-linked. No IOKit.
  */
 
-/* Mirrors mos_watch.c: no BSD-only helper here yet, but the define keeps
-   the amalgamated feature-macro environment consistent. */
-#ifndef _DARWIN_C_SOURCE
-#define _DARWIN_C_SOURCE 1
-#endif
+#include <stdio.h>   /* snprintf for hex escapes */
+#include <stddef.h>
+#include <stdint.h>
 
-/* gmtime_r needs POSIX.1-2008 on glibc (Apple exposes it unconditionally).
-   Define before any header. */
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 200809L
-#endif
-
-
-#include <stdio.h>
-#include <string.h>
-#include <time.h>
-
-/* ---- Defaults ----------------------------------------------------- */
-
-/* Two backoff rates. "stable" (open/empty/ready) isn't a transition window
-   — changes arrive via OS notifications. "transition" (loading/busy/
-   unknown) polls fast to catch the resolution. Defaults (2s / 200ms) are
-   conservative: stable still notices an insert within a couple seconds
-   without notifications. Both configurable per watch. */
-#define MOS_WATCH_DEFAULT_STABLE_MS     2000U
-#define MOS_WATCH_DEFAULT_TRANSITION_MS  200U
-
-/* ---- Time formatting --------------------------------------------- */
-
-/* Format wall-clock ms-since-epoch as RFC 3339 UTC (YYYY-MM-DDTHH:MM:SSZ),
-   21 bytes incl NUL (cap must be >= 21). Integer seconds; no sub-second
-   precision. Feeding monotonic ms produces nonsense like
-   1970-01-01T00:00:12Z.
-
-   SATURATING: the clock is hostile INPUT to this pure layer, so an insane
-   host clock, NTP step, or fuzzed ops table must not emit a schema-invalid
-   line (the schema requires a 4-digit year). Values past
-   9999-12-31T23:59:59Z clamp to that instant; post-clamp gmtime_r/strftime
-   cannot fail, and the fallback writes the clamp constant anyway, so the
-   contract holds unconditionally. */
-#define MOS_TS_MAX_SECS 253402300799ULL   /* 9999-12-31T23:59:59Z */
-static void format_rfc3339(uint64_t wall_ms, char *out, size_t cap)
-{
-    if (cap < 21) {
-        if (cap > 0) out[0] = 0;
-        return;
-    }
-    uint64_t s64 = wall_ms / 1000U;
-    if (s64 > MOS_TS_MAX_SECS) s64 = MOS_TS_MAX_SECS;
-    time_t secs = (time_t)s64;
-    struct tm tm;
-    /* gmtime_r: POSIX.1-2008, present on every platform we build/test on.
-       No _WIN32/gmtime_s branch — Windows isn't a target. */
-    if (gmtime_r(&secs, &tm) != NULL) {
-        /* The numeric strftime specifiers used here are POSIX locale-
-           independent. strftime also sidesteps a -Wformat-truncation false
-           positive a hand-rolled snprintf hits under -O2 (GCC sees tm_year
-           as unbounded). */
-        if (strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &tm) == 20) {
-            return;
-        }
-    }
-    /* Unreachable post-clamp on a conforming libc; holds the contract if
-       one misbehaves. */
-    memcpy(out, "9999-12-31T23:59:59Z", 21);
-}
-/* ---- Public-via-mos_pure.h init / pump --------------------------- */
-
-void mos_internal_watch_init(mos_watch_state *w,
-                             const mos_watch_ops_t *ops, void *ctx,
-                             int64_t bsd_unit,
-                             uint64_t registry_id,
-                             uint64_t start_mono_ms,
-                             uint64_t start_wall_ms,
-                             uint32_t stable_poll_ms,
-                             uint32_t transition_poll_ms)
-{
-    memset(w, 0, sizeof(*w));
-    w->ops                    = ops;
-    w->ctx                    = ctx;
-    w->stable_poll_ms         = stable_poll_ms     ? stable_poll_ms
-                                                   : MOS_WATCH_DEFAULT_STABLE_MS;
-    w->transition_poll_ms     = transition_poll_ms ? transition_poll_ms
-                                                   : MOS_WATCH_DEFAULT_TRANSITION_MS;
-    w->last_state             = MOS_STATE_UNKNOWN;
-    w->have_last_state        = false;
-    w->last_media_id          = 0;
-    w->last_profile           = 0;
-    w->next_seq               = 1;
-    /* First probe at start_mono_ms (immediately). Monotonic value. */
-    w->next_poll_at_mono_ms   = start_mono_ms;
-    w->terminated             = false;
-    w->removed_event_emitted  = false;
-    w->bsd_unit               = bsd_unit;   /* -1 == no media */
-
-    /* Session identity: two plain values. registry_id is the attachment
-       identity (xnu mints non-reused IDs >= 2^32+256; 0 only from direct
-       pure-layer callers). start_wall_ms rides every event as
-       stream_open_wall_ms; the adapter monotonicizes it per process so
-       (registry_id, stream_open_wall_ms) is unique per session even for
-       same-ms reopens of the same drive. */
-    w->registry_id         = registry_id;
-    w->stream_open_wall_ms = start_wall_ms;
-}
-
-void mos_internal_watch_notify_removed(mos_watch_state *w)
-{
-    if (!w) return;
-    w->terminated = true;
-}
-
-void mos_internal_watch_notify_wake(mos_watch_state *w)
-{
-    if (!w) return;
-    /* Pull the next poll to "now" without reading the clock here: setting
-       0 guarantees now >= next_poll_at_mono_ms on the next pump, whatever
-       the monotonic clock's origin. */
-    w->next_poll_at_mono_ms = 0;
-}
-
-/* Transition vs stable, for backoff selection. */
-static bool watch_state_is_transitional(mos_state s)
+const char *mos_state_description(mos_state s)
 {
     switch (s) {
-        /* In-progress or degraded — poll fast to converge. */
-        case MOS_STATE_LOADING:
-        case MOS_STATE_BUSY:
-        case MOS_STATE_FORMATTING:      /* long op, still progressing to ready/empty */
-        case MOS_STATE_EMPTY_OR_OPEN:   /* degraded: GESN was unavailable; re-probe to resolve */
-        case MOS_STATE_UNKNOWN:
+        case MOS_STATE_OPEN:    return "open";
+        case MOS_STATE_EMPTY:   return "empty";
+        case MOS_STATE_LOADING: return "loading";
+        case MOS_STATE_READY:   return "ready";
+        case MOS_STATE_BUSY:    return "busy";
+        case MOS_STATE_FORMATTING:       return "formatting";
+        case MOS_STATE_MEDIA_UNREADABLE: return "media_unreadable";
+        case MOS_STATE_DEVICE_FAULT:     return "device_fault";
+        case MOS_STATE_EMPTY_OR_OPEN:    return "empty_or_open";
+        case MOS_STATE_UNKNOWN: default: return "unknown";
+    }
+}
+
+const char *mos_disc_status_description(mos_disc_status s)
+{
+    switch (s) {
+        case MOS_DISC_BLANK:          return "blank";
+        case MOS_DISC_APPENDABLE:     return "appendable";
+        case MOS_DISC_COMPLETE:       return "complete";
+        /* OTHER also the default; -Wswitch still fires on a new enumerator. */
+        case MOS_DISC_OTHER: default: return "other";
+    }
+}
+
+const char *mos_tray_outcome_description(mos_tray_outcome o)
+{
+    switch (o) {
+        case MOS_TRAY_DONE:           return "done";
+        case MOS_TRAY_REFUSED_LOCKED: return "refused_locked";
+        /* REFUSED_OTHER also the default; -Wswitch still fires on a new one. */
+        case MOS_TRAY_REFUSED_OTHER: default: return "refused_other";
+    }
+}
+
+const char *mos_error_description(mos_error e)
+{
+    switch (e) {
+        case MOS_OK:                    return "ok";
+        case MOS_ERR_INVALID_ARG:       return "invalid argument";
+        case MOS_ERR_NO_DEVICE:         return "no matching optical drive";
+        case MOS_ERR_DRIVER_REJECTED:   return "IOKit did not attach a SCSITaskUserClient to this drive";
+        case MOS_ERR_EXCLUSIVE_ACCESS:  return "another process holds the drive";
+        case MOS_ERR_BUSY:              return "drive reports busy";
+        case MOS_ERR_TIMEOUT:           return "timed out";
+        case MOS_ERR_IO:                return "IOKit error";
+        case MOS_ERR_UNSUPPORTED:       return "operation unsupported by this drive, driver, or build";
+        case MOS_ERR_OOM:               return "out of memory";
+        default:                        return "unknown error";
+    }
+}
+
+/* MMC-6 §5.4 Feature Header Profile Codes. Names follow cdrom_id/udev
+   lower_snake_case (cdrom_id's ID_CDROM_MEDIA_BD_R becomes "bd_r"). Unknown
+   codes return NULL so the consumer falls back to hex. Ordered by numeric
+   value for grep-against-spec. */
+const char *mos_profile_name(uint16_t profile_code)
+{
+    switch (profile_code) {
+        case 0x0000: return "no_current_profile";
+        case 0x0001: return "non_removable_disk"; /* legacy / rare */
+        case 0x0002: return "removable_disk";     /* legacy / rare */
+        case 0x0003: return "mo_erasable";        /* magneto-optical */
+        case 0x0008: return "cd_rom";
+        case 0x0009: return "cd_r";
+        case 0x000A: return "cd_rw";
+        case 0x0010: return "dvd_rom";
+        case 0x0011: return "dvd_minus_r";
+        case 0x0012: return "dvd_ram";
+        case 0x0013: return "dvd_minus_rw_restricted";
+        case 0x0014: return "dvd_minus_rw_sequential";
+        case 0x0015: return "dvd_minus_r_dl_sequential";
+        case 0x0016: return "dvd_minus_r_dl_jump";
+        case 0x0017: return "dvd_minus_rw_dl";
+        case 0x001A: return "dvd_plus_rw";
+        case 0x001B: return "dvd_plus_r";
+        case 0x002A: return "dvd_plus_rw_dl";
+        case 0x002B: return "dvd_plus_r_dl";
+        case 0x0040: return "bd_rom";
+        case 0x0041: return "bd_r";              /* SRM */
+        case 0x0042: return "bd_r_rrm";          /* random recording */
+        case 0x0043: return "bd_re";
+        case 0x0050: return "hd_dvd_rom";
+        case 0x0051: return "hd_dvd_r";
+        case 0x0052: return "hd_dvd_ram";
+        case 0x0053: return "hd_dvd_rw";
+        case 0x0058: return "hd_dvd_r_dl";
+        case 0x005A: return "hd_dvd_rw_dl";
+        default:     return NULL;
+    }
+}
+
+const char *mos_profile_class(uint16_t profile_code)
+{
+    /* MMC-6 Annex profile ranges. Mirrors the name table above: a profile
+       named there without a class here is named-but-classless, which the
+       profile_class_total_over_name_table test forbids. */
+    switch (profile_code) {
+        case 0x0008: case 0x0009: case 0x000A:
+            return "cd";
+        case 0x0010: case 0x0011: case 0x0012: case 0x0013:
+        case 0x0014: case 0x0015: case 0x0016: case 0x0017:
+        case 0x001A: case 0x001B: case 0x002A: case 0x002B:
+            return "dvd";
+        case 0x0040: case 0x0041: case 0x0042: case 0x0043:
+            return "bd";
+        case 0x0050: case 0x0051: case 0x0052: case 0x0053:
+        case 0x0058: case 0x005A:
+            return "hd_dvd";
+        default:
+            return NULL;   /* no-profile, MO, legacy removable, or unknown */
+    }
+}
+
+/* True for current profiles whose media supports FORMAT UNIT — i.e. where READ
+   FORMAT CAPACITIES (0x23) returns a meaningful formattable view: the
+   rewritable optical profiles (CD-RW; DVD-RAM, DVD-RW RO/sequential, DVD+RW
+   and +RW DL; HD DVD-RAM, HD DVD-RW and -RW DL; BD-RE) plus BD-R (formattable
+   to pseudo-overwrite). Pressed (ROM), write-once sequential CD-R / DVD±R /
+   HD DVD-R, and the no-media case report nothing to format, so
+   mos_query_capacity gates the raw 0x23 on this — for those profiles it issues
+   no raw read and makes no exclusive-access attempt. MMC-6 profile codes
+   (§5.4); the formattable subset of mos_profile_class above. */
+bool mos_internal_profile_is_formattable(uint16_t profile)
+{
+    switch (profile) {
+        case 0x000A:  /* CD-RW                       */
+        case 0x0012:  /* DVD-RAM                     */
+        case 0x0013:  /* DVD-RW Restricted Overwrite */
+        case 0x0014:  /* DVD-RW Sequential Recording */
+        case 0x001A:  /* DVD+RW                      */
+        case 0x002A:  /* DVD+RW Dual Layer           */
+        case 0x0052:  /* HD DVD-RAM                  */
+        case 0x0053:  /* HD DVD-RW                   */
+        case 0x005A:  /* HD DVD-RW Dual Layer        */
+        case 0x0041:  /* BD-R SRM                    */
+        case 0x0042:  /* BD-R RRM (random recording) */
+        case 0x0043:  /* BD-RE                       */
             return true;
-        /* Settled physical states and stable error conditions. */
-        case MOS_STATE_OPEN:
-        case MOS_STATE_EMPTY:
-        case MOS_STATE_READY:
-        case MOS_STATE_MEDIA_UNREADABLE:  /* bad disc; not self-resolving */
-        case MOS_STATE_DEVICE_FAULT:      /* drive fault; not self-resolving */
+        default:
             return false;
     }
-    /* No default: a new mos_state value must trip -Wswitch so its poll
-       class is chosen deliberately. This trailing return only covers an
-       out-of-range value (the enum is int32-wide). */
-    return false;
 }
 
-/* Build a base event: session identity, seq, ts (read fresh from
-   ops->wall_ms, not the scheduling clock), bsd_unit. Caller fills the
-   kind-specific fields. */
-static void fill_event_base(mos_watch_state *w, mos_watch_event *e)
+/* Standard INQUIRY VERSION byte (byte 2) → SPC compliance token. Values from
+   the Linux kernel scsi.h table (SCSI_SPC_* are resp[2]+1; the wire byte is
+   one less). Unknown / legacy SCSI-1/2 values return NULL (numeric fallback). */
+const char *mos_spc_version_name(uint8_t version)
 {
-    memset(e, 0, sizeof(*e));
-    e->seq                 = w->next_seq++;
-    e->registry_id         = w->registry_id;
-    e->stream_open_wall_ms = w->stream_open_wall_ms;
-    e->bsd_unit            = w->bsd_unit; /* -1 == no media; copied verbatim */
-
-    uint64_t wall = w->ops->wall_ms ? w->ops->wall_ms(w->ctx) : 0;
-    format_rfc3339(wall, e->ts, sizeof(e->ts));
-
-    e->error     = MOS_OK;
+    switch (version) {
+        case 0x03: return "spc";
+        case 0x04: return "spc_2";
+        case 0x05: return "spc_3";
+        case 0x06: return "spc_4";
+        case 0x07: return "spc_5";
+        default:   return NULL;   /* 0x00 none, legacy SCSI-1/2, or unknown */
+    }
 }
 
-/* Copy probe-result fields (all but prev_state) into an event. Shared by
-   snapshot/state_changed/media_changed so a new field has one assignment
-   site, not three. */
-static void fill_event_state_fields(mos_watch_event *e,
-                                    const mos_state_result *r,
-                                    uint32_t latency_ms)
+/* Version-descriptor code (INQUIRY bytes 58-73) → standard token. The
+   "no version claimed" family codes from sg3_utils sg_version_descriptor_arr
+   (the ones drives actually emit). A specific-revision or non-listed code
+   returns NULL and is surfaced as hex (the unknown-code rule). Lower_snake. */
+const char *mos_version_descriptor_name(uint16_t code)
 {
-    e->state           = r->state;
-    /* BSD unit from THIS probe, not the open-time value, so a disc in a
-       drive empty at open (or a unit changed across eject/reinsert) shows
-       in the event. fill_event_base seeds w->bsd_unit for events with no
-       fresh probe (error / device_removed). */
-    e->bsd_unit        = r->bsd_unit;
-    e->current_profile = r->current_profile;
-    e->vendor          = r->vendor;
-    e->product         = r->product;
-    e->revision        = r->revision;
-    e->serial          = r->serial;   /* NULL until a free poll grabs it (mos_watch.c) */
-    e->sense_key       = r->sense_key;
-    e->asc             = r->asc;
-    e->ascq            = r->ascq;
-    e->latency_ms      = latency_ms;
+    switch (code) {
+        case 0x0020: return "sam";
+        case 0x0040: return "sam_2";
+        case 0x0060: return "sam_3";
+        case 0x0080: return "sam_4";
+        case 0x00A0: return "sam_5";
+        case 0x00C0: return "sam_6";
+        case 0x0120: return "spc";
+        case 0x0140: return "mmc";
+        case 0x0180: return "sbc";
+        case 0x0240: return "mmc_2";
+        case 0x0260: return "spc_2";
+        case 0x02A0: return "mmc_3";
+        case 0x0300: return "spc_3";
+        case 0x0320: return "sbc_2";
+        case 0x03A0: return "mmc_4";
+        case 0x0420: return "mmc_5";
+        case 0x0460: return "spc_4";
+        case 0x04C0: return "sbc_3";
+        case 0x04E0: return "mmc_6";
+        case 0x05C0: return "spc_5";
+        case 0x0600: return "sbc_4";
+        case 0x1EA0: return "sat";
+        case 0x1EC0: return "sat_2";
+        case 0x1EE0: return "sat_3";
+        case 0x1F00: return "sat_4";
+        default:     return NULL;   /* per-revision / non-listed → hex fallback */
+    }
 }
 
-/* Saturating monotonic delta in ms: clamps end < start to 0 and a >49.7-day
-   span to UINT32_MAX, either of which would otherwise underflow/truncate. */
-static uint32_t mos_watch_latency_ms(uint64_t start, uint64_t end)
+/* Physical Format Information book-type codes (MMC-5 / Linux uapi dvd_layer
+   values), shared by DVD and HD-DVD. Lower_snake_case; unknown codes return
+   NULL for numeric fallback. The schema's book-type enum tracks this table
+   (validate.py drift guard). */
+const char *mos_book_type_name(uint8_t book_type)
 {
-    uint64_t delta = end >= start ? end - start : 0;
-    return delta > UINT32_MAX ? UINT32_MAX : (uint32_t)delta;
+    switch (book_type) {
+        case 0x0: return "dvd_rom";
+        case 0x1: return "dvd_ram";
+        case 0x2: return "dvd_r";
+        case 0x3: return "dvd_rw";
+        case 0x4: return "hd_dvd_rom";
+        case 0x5: return "hd_dvd_ram";
+        case 0x6: return "hd_dvd_r";
+        case 0x9: return "dvd_plus_rw";
+        case 0xA: return "dvd_plus_r";
+        case 0xD: return "dvd_plus_rw_dl";
+        case 0xE: return "dvd_plus_r_dl";
+        default:  return NULL;
+    }
 }
 
-/* Per-state poll interval: transition_poll_ms for transitional states,
-   stable_poll_ms otherwise. One site for the policy. */
-static uint32_t poll_ms_for_state(const mos_watch_state *w,
-                                  mos_state state)
+/* Track path: parallel (single-layer/sequential) vs opposite. Explicit
+   returns, not a ternary, so the validate.py drift guard can harvest the
+   token set. */
+const char *mos_track_path_name(uint8_t track_path)
 {
-    return watch_state_is_transitional(state)
-        ? w->transition_poll_ms
-        : w->stable_poll_ms;
+    switch (track_path & 0x01) {
+        case 0:  return "ptp";
+        default: return "otp";
+    }
 }
 
-mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
+/* Copyright Protection System Type (READ DISC STRUCTURE format 0x01, CPST
+   byte). Unknown/reserved codes return NULL. */
+const char *mos_protection_name(uint8_t protection)
 {
-    mos_watch_decision d;
-    memset(&d, 0, sizeof(d));
-
-    if (!w || !w->ops) {
-        d.kind = MOS_WATCH_DECIDE_TERMINAL;
-        return d;
+    switch (protection) {
+        case 0x00: return "none";
+        case 0x01: return "css_cppm";
+        case 0x02: return "cprm";
+        case 0x03: return "aacs";
+        default:   return NULL;
     }
-
-    /* Terminal (notify_removed or a probe → NO_DEVICE): emit one final
-       device_removed, then refuse further pumps. The removed_event_emitted
-       sentinel guarantees exactly once, even if termination precedes any
-       observation (prev_state then unknown). */
-    if (w->terminated) {
-        if (!w->removed_event_emitted) {
-            fill_event_base(w, &d.event);
-            d.event.kind       = MOS_EVENT_DEVICE_REMOVED;
-            d.event.state      = MOS_STATE_UNKNOWN;
-            d.event.prev_state = w->have_last_state ? w->last_state
-                                                    : MOS_STATE_UNKNOWN;
-            w->removed_event_emitted = true;
-            d.kind = MOS_WATCH_DECIDE_EMIT_EVENT;
-            return d;
-        }
-        d.kind = MOS_WATCH_DECIDE_TERMINAL;
-        return d;
-    }
-
-    if (!w->ops->probe || !w->ops->mono_ms) {
-        d.kind = MOS_WATCH_DECIDE_TERMINAL;
-        return d;
-    }
-
-    uint64_t now_mono = w->ops->mono_ms(w->ctx);
-
-    /* Not yet time to probe → sleep. */
-    if (now_mono < w->next_poll_at_mono_ms) {
-        d.kind                 = MOS_WATCH_DECIDE_SLEEP_UNTIL;
-        d.next_poll_at_mono_ms = w->next_poll_at_mono_ms;
-        return d;
-    }
-
-    mos_state_result r;
-    memset(&r, 0, sizeof(r));
-    uint64_t  probe_start_mono = now_mono;
-    mos_error perr             = w->ops->probe(w->ctx, &r);
-    uint64_t  probe_end_mono   = w->ops->mono_ms(w->ctx);
-
-    /* NO_DEVICE means the drive went away under the watch: terminal
-       removal. Set the flag and let the terminated path above emit
-       device_removed. Without this, poll-only mode (no notifications) would
-       spin emitting error events forever for an unplugged drive. */
-    if (perr == MOS_ERR_NO_DEVICE) {
-        w->terminated = true;
-        fill_event_base(w, &d.event);
-        d.event.kind       = MOS_EVENT_DEVICE_REMOVED;
-        d.event.state      = MOS_STATE_UNKNOWN;
-        d.event.prev_state = w->have_last_state ? w->last_state
-                                                : MOS_STATE_UNKNOWN;
-        d.event.latency_ms = mos_watch_latency_ms(probe_start_mono, probe_end_mono);
-        w->removed_event_emitted = true;
-        d.kind = MOS_WATCH_DECIDE_EMIT_EVENT;
-        return d;
-    }
-
-    if (perr != MOS_OK) {
-        /* Other error: no observation this round. Non-terminal — emit error
-           and reschedule. */
-        fill_event_base(w, &d.event);
-        d.event.kind       = MOS_EVENT_ERROR;
-        d.event.error      = perr;
-        d.event.state      = MOS_STATE_UNKNOWN;
-        d.event.prev_state = w->have_last_state ? w->last_state : MOS_STATE_UNKNOWN;
-        d.event.latency_ms = mos_watch_latency_ms(probe_start_mono, probe_end_mono);
-
-        /* Don't update last_state — there's no observation, just its
-           absence.
-
-           Retry cadence: a first (or changed) error retries at transition
-           rate; each further identical error doubles the interval, capped
-           at stable_poll_ms. A persistent failure converges to the stable
-           cadence instead of flooding; a notify_wake still pulls the next
-           poll forward on a real event. */
-        if (perr == (mos_error)w->last_probe_err && w->consec_probe_errs > 0) {
-            if (w->consec_probe_errs < UINT32_MAX) w->consec_probe_errs++;
-        } else {
-            w->last_probe_err    = (int32_t)perr;
-            w->consec_probe_errs = 1;
-        }
-        {
-            uint64_t interval = w->transition_poll_ms;
-            uint32_t doublings = w->consec_probe_errs - 1u;
-            while (doublings-- > 0u && interval < w->stable_poll_ms) {
-                interval <<= 1;
-            }
-            if (interval > w->stable_poll_ms) interval = w->stable_poll_ms;
-            w->next_poll_at_mono_ms = probe_end_mono + interval;
-        }
-        d.kind = MOS_WATCH_DECIDE_EMIT_EVENT;
-        return d;
-    }
-
-    /* Successful observation: any error streak is over. */
-    w->last_probe_err    = (int32_t)MOS_OK;
-    w->consec_probe_errs = 0;
-    /* Adopt the probe's unit. Fresh-probe events carry r.bsd_unit directly,
-       but the error/device_removed fallback reads w->bsd_unit, which must
-       track the last OBSERVED unit (not open-time). The core owns this so
-       pure-only behavior is correct without each adapter rediscovering it. */
-    w->bsd_unit = r.bsd_unit;
-
-
-    /* First successful probe → snapshot. */
-    if (!w->have_last_state) {
-        fill_event_base(w, &d.event);
-        d.event.kind       = MOS_EVENT_SNAPSHOT;
-        d.event.prev_state = MOS_STATE_UNKNOWN;
-        fill_event_state_fields(&d.event, &r,
-            mos_watch_latency_ms(probe_start_mono, probe_end_mono));
-
-        w->last_state           = r.state;
-        w->have_last_state      = true;
-        w->last_media_id        = r.media_id;
-        w->last_profile         = r.current_profile;
-        w->next_poll_at_mono_ms = probe_end_mono + poll_ms_for_state(w, r.state);
-        d.kind = MOS_WATCH_DECIDE_EMIT_EVENT;
-        return d;
-    }
-
-    /* State change → emit delta. */
-    if (r.state != w->last_state) {
-        fill_event_base(w, &d.event);
-        d.event.kind       = MOS_EVENT_STATE_CHANGED;
-        d.event.prev_state = w->last_state;
-        fill_event_state_fields(&d.event, &r,
-            mos_watch_latency_ms(probe_start_mono, probe_end_mono));
-
-        w->last_state           = r.state;
-        w->last_media_id        = r.media_id;
-        w->last_profile         = r.current_profile;
-        w->next_poll_at_mono_ms = probe_end_mono + poll_ms_for_state(w, r.state);
-        d.kind = MOS_WATCH_DECIDE_EMIT_EVENT;
-        return d;
-    }
-
-    /* Same-state media swap → media_changed while the drive stays READY
-       across two probes (a fast slot-load swap, or eject/reinsert between
-       polls). Two independent signals:
-
-       1. Registry-identity change — the whole-disk IOMedia entry ID re-mints
-          on a physical swap even when the profile is unchanged (the
-          same-profile DVD→DVD case). Strong signal; both ids must be
-          non-zero (0 = unavailable, never inferred from).
-
-       2. Profile change with NO usable identity — some USB-ATAPI bridges
-          never expose a media_id (both 0). Any non-zero profile change
-          fires: a different profile with no identity means a different disc.
-          A same-PROFILE swap (DVD-R → DVD-R) is invisible here. */
-    bool id_changed =
-        r.media_id != 0 && w->last_media_id != 0 &&
-        r.media_id != w->last_media_id;
-    bool profile_changed_without_id =
-        r.media_id == 0 && w->last_media_id == 0 &&
-        r.current_profile != 0 && w->last_profile != 0 &&
-        r.current_profile != w->last_profile;
-
-    if (r.state == MOS_STATE_READY && w->last_state == MOS_STATE_READY &&
-        (id_changed || profile_changed_without_id)) {
-        fill_event_base(w, &d.event);
-        d.event.kind       = MOS_EVENT_MEDIA_CHANGED;
-        d.event.prev_state = w->last_state;   /* READY → READY */
-        fill_event_state_fields(&d.event, &r,
-            mos_watch_latency_ms(probe_start_mono, probe_end_mono));
-
-        w->last_media_id        = r.media_id;
-        w->last_profile         = r.current_profile;
-        w->next_poll_at_mono_ms = probe_end_mono + poll_ms_for_state(w, r.state);
-        d.kind = MOS_WATCH_DECIDE_EMIT_EVENT;
-        return d;
-    }
-
-    /* No change → reschedule and sleep, no event.
-
-       Adopt any *informative* identity first. media_id / current_profile
-       unavailable (0) at the last event often arrive a probe later (the
-       IOMedia child registers a beat after TUR goes GOOD; profile
-       enrichment can fail transiently). A non-zero value is adopted, a zero
-       never overwrites one, so the fingerprint survives the gap and a swap
-       across it is still detected. Without this, a 0→non-zero arrival would
-       pin the snapshot fingerprint and disarm swap detection for the
-       session. */
-    if (r.media_id != 0)        w->last_media_id = r.media_id;
-    if (r.current_profile != 0) w->last_profile  = r.current_profile;
-    w->next_poll_at_mono_ms = probe_end_mono + poll_ms_for_state(w, r.state);
-    d.kind                 = MOS_WATCH_DECIDE_SLEEP_UNTIL;
-    d.next_poll_at_mono_ms = w->next_poll_at_mono_ms;
-    return d;
 }
 
-/* ---- Watch-all multiplexer ----------------------------------------- *
+/* BG Format Status (READ DISC INFORMATION byte 7 bits 1:0). The 2-bit field
+   is total, so the default is unreachable from mos_disc_info_bg_format_status
+   (masked 0-3) but kept NULL for an out-of-range public-accessor call. Names
+   track the Linux CDM_MRW_* macros (cdrom.h); explicit returns feed the
+   validate.py drift guard. */
+const char *mos_bg_format_status_name(uint8_t status)
+{
+    switch (status) {
+        case 0:  return "none";       /* CDM_MRW_NOTMRW            */
+        case 1:  return "inactive";   /* CDM_MRW_BGFORMAT_INACTIVE */
+        case 2:  return "active";     /* CDM_MRW_BGFORMAT_ACTIVE   */
+        case 3:  return "complete";   /* CDM_MRW_BGFORMAT_COMPLETE */
+        default: return NULL;
+    }
+}
+
+/* Current/Maximum Capacity Descriptor type (READ FORMAT CAPACITIES, byte 8
+   bits 1:0). 0 is reserved → NULL (consumer falls back to the numeric code). */
+const char *mos_format_capacity_type_name(uint8_t type)
+{
+    switch (type) {
+        case 1:  return "unformatted";
+        case 2:  return "formatted";
+        case 3:  return "no_media";
+        default: return NULL;
+    }
+}
+
+/* Loading-mechanism type (MODE SENSE page 0x2A byte 6 bits 7:5). Explicit
+   returns feed the validate.py drift guard; unknown/reserved codes NULL. */
+const char *mos_loading_mechanism_name(uint8_t code)
+{
+    switch (code) {
+        case 0:  return "caddy";
+        case 1:  return "tray";
+        case 2:  return "popup";
+        case 4:  return "changer_disc";
+        case 5:  return "changer_cartridge";
+        default: return NULL;
+    }
+}
+
+/* sysexits.h class for a mos_error. Kept in sync with the table in
+   include/mos.h's mos_error_sysexit() doc-comment. */
+int mos_error_sysexit(mos_error e)
+{
+    switch (e) {
+        case MOS_OK:                    return 0;  /* EX_OK */
+        case MOS_ERR_INVALID_ARG:       return 64; /* EX_USAGE */
+        case MOS_ERR_NO_DEVICE:         return 66; /* EX_NOINPUT */
+        case MOS_ERR_DRIVER_REJECTED:   return 69; /* EX_UNAVAILABLE */
+        case MOS_ERR_EXCLUSIVE_ACCESS:  return 75; /* EX_TEMPFAIL */
+        case MOS_ERR_BUSY:              return 75; /* EX_TEMPFAIL */
+        case MOS_ERR_TIMEOUT:           return 75; /* EX_TEMPFAIL */
+        case MOS_ERR_IO:                return 74; /* EX_IOERR */
+        case MOS_ERR_UNSUPPORTED:       return 69; /* EX_UNAVAILABLE */
+        case MOS_ERR_OOM:               return 71; /* EX_OSERR */
+        default:                        return 70; /* EX_SOFTWARE: unknown enum value */
+    }
+}
+
+bool mos_error_is_recoverable(mos_error e)
+{
+    switch (e) {
+        case MOS_ERR_EXCLUSIVE_ACCESS:
+        case MOS_ERR_BUSY:
+        case MOS_ERR_TIMEOUT:
+            return true;
+        case MOS_OK:
+        case MOS_ERR_INVALID_ARG:
+        case MOS_ERR_NO_DEVICE:
+        case MOS_ERR_DRIVER_REJECTED:
+        case MOS_ERR_IO:
+        case MOS_ERR_UNSUPPORTED:
+        case MOS_ERR_OOM:
+        default:
+            return false;
+    }
+}
+
+const char *mos_version_string(void) { return MOS_VERSION_STRING; }
+
+/* ---- Pure string escapers ---------------------------------------------
  *
- * Contract in mos_pure.h. Slots are visited in ascending registry_id on
- * every entry, so same-tick interleave is deterministic and independent of
- * slot-assignment history. */
+ * `total` is the count we'd write with infinite cap; `pos` the count
+ * actually written (bounded by cap-1 to leave room for NUL). Returning
+ * `total` lets callers detect truncation via `return >= out_cap`. */
 
-void mos_internal_watch_all_init(mos_watch_all_state *a)
+static inline void write_byte(char *out, size_t out_cap, size_t *pos,
+                              size_t *total, char c)
 {
-    if (!a) return;
-    memset(a, 0, sizeof *a);
-}
-
-int mos_internal_watch_all_free_slot(const mos_watch_all_state *a)
-{
-    if (!a) return -1;
-    for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
-        if (!a->active[i]) return i;
+    if (*pos + 1 < out_cap) {
+        out[(*pos)++] = c;
     }
-    return -1;
+    (*total)++;
 }
 
-int mos_internal_watch_all_find(const mos_watch_all_state *a,
-                                uint64_t registry_id)
+static inline void write_str(char *out, size_t out_cap, size_t *pos,
+                             size_t *total, const char *s)
 {
-    if (!a || registry_id == 0) return -1;
-    for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
-        if (a->active[i] && a->cores[i].registry_id == registry_id) return i;
-    }
-    return -1;
+    for (; *s; ++s) write_byte(out, out_cap, pos, total, *s);
 }
 
-int mos_internal_watch_all_add(mos_watch_all_state *a,
-                               const mos_watch_ops_t *ops, void *ctx,
-                               int64_t bsd_unit, uint64_t registry_id,
-                               uint64_t start_mono_ms,
-                               uint64_t start_wall_ms,
-                               uint32_t stable_poll_ms,
-                               uint32_t transition_poll_ms,
-                               bool mid_stream)
+size_t mos_json_escape(const char *in, char *out, size_t out_cap)
 {
-    if (!a || registry_id == 0) return -1;
+    size_t pos = 0;
+    size_t total = 0;
 
-    /* Dedupe by attachment identity: DR Appeared can re-announce a device
-       the snapshot already had (or fire twice on a bus rescan). Same id ⇒
-       same slot; a replug gets a fresh id and a new slot. */
-    int existing = mos_internal_watch_all_find(a, registry_id);
-    if (existing >= 0) return existing;
-
-    int i = mos_internal_watch_all_free_slot(a);
-    if (i < 0) return -1;
-
-    mos_internal_watch_init(&a->cores[i], ops, ctx, bsd_unit, registry_id,
-                            start_mono_ms, start_wall_ms,
-                            stable_poll_ms, transition_poll_ms);
-    a->active[i]       = true;
-    a->join_pending[i] = mid_stream;
-    return i;
-}
-
-mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
-{
-    mos_watch_decision out;
-    memset(&out, 0, sizeof out);
-    out.kind                 = MOS_WATCH_DECIDE_SLEEP_UNTIL;
-    out.next_poll_at_mono_ms = UINT64_MAX;
-    if (!a) return out;
-
-    /* Visit active slots in ascending registry_id (selection scan; CAP 16,
-       a sort would be ceremony). Returning on the first EMIT bounds per-call
-       work; the next call re-enters at the lowest id, draining same-tick
-       events in id order. */
-    _Static_assert(MOS_WATCH_ALL_CAP <= 64, "visited bitmask is 64-wide");
-    uint64_t visited = 0; /* bitmask of slots already pumped this call */
-    for (;;) {
-        int best = -1;
-        for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
-            if (!a->active[i] || (visited & (1ull << i))) continue;
-            if (best < 0 ||
-                a->cores[i].registry_id < a->cores[best].registry_id) {
-                best = i;
+    if (in) {
+        for (const unsigned char *p = (const unsigned char *)in; *p; ++p) {
+            switch (*p) {
+                case '"':  write_str(out, out_cap, &pos, &total, "\\\""); break;
+                case '\\': write_str(out, out_cap, &pos, &total, "\\\\"); break;
+                case '\b': write_str(out, out_cap, &pos, &total, "\\b");  break;
+                case '\f': write_str(out, out_cap, &pos, &total, "\\f");  break;
+                case '\n': write_str(out, out_cap, &pos, &total, "\\n");  break;
+                case '\r': write_str(out, out_cap, &pos, &total, "\\r");  break;
+                case '\t': write_str(out, out_cap, &pos, &total, "\\t");  break;
+                default:
+                    /* RFC 8259 requires escaping < 0x20. We also escape
+                       0x7F (DEL) and bytes >= 0x80: INQUIRY fields aren't
+                       guaranteed UTF-8, and escaping high bytes keeps the
+                       output valid JSON in any encoding the consumer uses. */
+                    if (*p < 0x20 || *p >= 0x7f) {
+                        char buf[8];
+                        int n = snprintf(buf, sizeof(buf), "\\u%04x", *p);
+                        if (n > 0) write_str(out, out_cap, &pos, &total, buf);
+                    } else {
+                        write_byte(out, out_cap, &pos, &total, (char)*p);
+                    }
             }
         }
-        if (best < 0) break;
-        visited |= (1ull << best);
-
-        mos_watch_decision d = mos_internal_watch_pump(&a->cores[best]);
-
-        if (d.kind == MOS_WATCH_DECIDE_EMIT_EVENT) {
-            d.event.seq = ++a->seq;            /* stream-global numbering */
-            /* Relabel only the join's SNAPSHOT. A mid-stream device whose
-               first pumps yield ERROR keeps its pending join, so its first
-               successful probe still announces device_appeared; clearing on
-               any first event would demote it (contract: every joining
-               drive emits device_appeared). */
-            if (a->join_pending[best] &&
-                d.event.kind == MOS_EVENT_SNAPSHOT) {
-                d.event.kind = MOS_EVENT_DEVICE_APPEARED;
-                a->join_pending[best] = false;
-            }
-            if (d.event.kind == MOS_EVENT_DEVICE_REMOVED) {
-                /* Per-slot, not stream-terminal: free after taking the
-                   event. A replug arrives as a new id. */
-                a->active[best] = false;
-            }
-            return d;
-        }
-        if (d.kind == MOS_WATCH_DECIDE_TERMINAL) {
-            /* device_removed already emitted on an earlier call; this slot
-               pumped again (external notify after emission). Just free it. */
-            a->active[best] = false;
-            continue;
-        }
-        /* SLEEP_UNTIL: fold the earliest deadline. */
-        if (d.next_poll_at_mono_ms < out.next_poll_at_mono_ms) {
-            out.next_poll_at_mono_ms = d.next_poll_at_mono_ms;
-        }
     }
-    return out;
+
+    if (out_cap > 0) out[pos] = 0;
+    return total;
 }
 
-/* ==== src/mos_state.c ==== */
+size_t mos_safe_ascii(const char *in, char *out, size_t out_cap)
+{
+    size_t pos = 0;
+    size_t total = 0;
+
+    if (in) {
+        for (const unsigned char *p = (const unsigned char *)in; *p; ++p) {
+            /* Printable ASCII only; everything else (control bytes, 0x7F,
+               0x80+) renders as \xNN. Blocks terminal-control-sequence
+               injection (ANSI escape, OSC 52 clipboard, cursor reports,
+               title-bar manipulation) from drive-controlled bytes. */
+            if (*p >= 0x20 && *p < 0x7f) {
+                write_byte(out, out_cap, &pos, &total, (char)*p);
+            } else {
+                char buf[8];
+                int n = snprintf(buf, sizeof(buf), "\\x%02x", *p);
+                if (n > 0) write_str(out, out_cap, &pos, &total, buf);
+            }
+        }
+    }
+
+    if (out_cap > 0) out[pos] = 0;
+    return total;
+}
+
+/* Render a whole-disk unit to its canonical "diskN" name (see mos.h).
+   16 bytes always suffices ("disk" + 32-bit unit + NUL = 15 max). Returns
+   false (and "" when cap > 0) for a no-media unit (< 0) or a buffer too
+   small. */
+bool mos_bsd_name_format(int64_t unit, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return false;
+    /* The upper bound is correctness, not just truncation: a value in
+       (UINT32_MAX, ~1e11) still fits 16 bytes and would emit a different,
+       valid-looking "diskN". Refuse both < 0 and over-domain with "" + false. */
+    if (unit < 0 || unit > (int64_t)UINT32_MAX) { buf[0] = 0; return false; }
+    int n = snprintf(buf, cap, "disk%llu", (unsigned long long)unit);
+    if (n <= 0 || (size_t)n >= cap) { buf[0] = 0; return false; }
+    return true;
+}
+
+bool mos_bsd_dev_node(int64_t unit, char *out, size_t out_cap)
+{
+    if (!out || out_cap == 0) return false;
+    out[0] = 0;
+    /* Same domain/rationale as mos_bsd_name_format: a unit in
+       (UINT32_MAX, ~1e14) still fits a generous buffer and would render a
+       different, valid-looking node — refuse rather than emit one no real
+       disk can have. */
+    if (unit < 0 || unit > (int64_t)UINT32_MAX) return false;
+    int n = snprintf(out, out_cap, "/dev/disk%lld", (long long)unit);
+    if (n < 0 || (size_t)n >= out_cap) { out[0] = 0; return false; }
+    return true;
+}
+
+/* ==== src/mos_trackinfo.c ==== */
 /*
- * mos_state.c — Apple-side adapter for the pure decision-tree core.
+ * mos_trackinfo.c — pure, bounds-safe decode of a READ TRACK INFORMATION
+ * (MMC 0x52) Track Information Block: the capacity / append-state surface
+ * (track start, next writable address, free blocks, track size, last
+ * recorded address) plus track/data mode and blank/damage bits. No IOKit:
+ * the shell hands us a fixed zero-init buffer (filled via
+ * ReadTrackInformation) and its size. Every length is device-reported,
+ * hence hostile — the declared length must never steer a read outside
+ * [buf, buf+len); only fixed offsets are read.
  *
- * Fills mos_state_env_t from a mos_handle_t and calls the pure core. The
- * split lets tests/test_state_core.c drive the tree with scripted MMC
- * responses. Contract: mos_internal_query_state_core in mos_pure.h.
+ * Wire layout (the MMC Track Information Block; cdrom.h cross-check in
+ * SPEC.md):
+ *   [0..1]  Track Information Length (BE) — bytes AFTER this field
+ *   [2]     Track Number (LSB)
+ *   [3]     Session Number (LSB)
+ *   [4]     reserved
+ *   [5]     reserved(7:6) | damage(5) | copy(4) | track_mode(3:0)
+ *   [6]     rt(7) | blank(6) | packet(5) | fp(4) | data_mode(3:0)
+ *   [7]     reserved(7:2) | lra_v(1) | nwa_v(0)
+ *   [8..11]  Track Start Address (BE)
+ *   [12..15] Next Writable Address (BE)   — valid iff nwa_v
+ *   [16..19] Free Blocks (BE)
+ *   [20..23] Fixed Packet Size (BE)
+ *   [24..27] Track Size (BE)
+ *   [28..31] Last Recorded Address (BE)   — valid iff lra_v
+ *   [32..33] Track / Session Number MSB   — MMC-6 longer reply, optional
+ *
+ * NWA and LRA are meaningful only when their *_v validity bit is set; the
+ * consumer must check the *_valid accessor. No payload byte is ever used
+ * as an offset.
  */
 
 
-/* vtable trampolines; static so only this file binds the Apple ops table. */
+#define TI_MIN_LEN  32u   /* through Last Recorded Address (byte 31) */
+#define TI_MSB_LEN  34u   /* track/session MSB present (byte 33) */
 
-static mos_error adapter_get_tray_state(void *ctx, bool *tray_open)
+static uint32_t mos_internal_ti_be32(const uint8_t *p)
 {
-    return mos_internal_mmc_get_tray_state((mos_handle_t *)ctx, tray_open);
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+           (uint32_t)p[2] << 8  | p[3];
 }
 
-static mos_error adapter_test_unit_ready(void *ctx,
-                                         uint32_t *status,
-                                         uint8_t sense[18])
+bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
+                                   struct mos_track_info *out)
 {
-    return mos_internal_mmc_test_unit_ready((mos_handle_t *)ctx, status, sense);
+    if (!out) return false;
+    *out = (struct mos_track_info){0};
+    if (!buf || len < TI_MIN_LEN) return false;
+
+    size_t declared = (size_t)(((uint16_t)buf[0] << 8) | buf[1]) + 2u;
+    size_t end = (len < declared) ? len : declared;
+    if (end < TI_MIN_LEN) return false;
+
+    out->track_number   = buf[2];
+    out->session_number = buf[3];
+    out->track_mode     = (uint8_t)(buf[5] & 0x0f);
+    out->damage         = (buf[5] >> 5) & 0x01;
+    out->data_mode      = (uint8_t)(buf[6] & 0x0f);
+    out->blank          = (buf[6] >> 6) & 0x01;
+    out->lra_valid      = (buf[7] >> 1) & 0x01;
+    out->nwa_valid      = buf[7] & 0x01;
+    out->track_start    = mos_internal_ti_be32(&buf[8]);
+    out->next_writable  = mos_internal_ti_be32(&buf[12]);
+    out->free_blocks    = mos_internal_ti_be32(&buf[16]);
+    out->track_size     = mos_internal_ti_be32(&buf[24]);
+    out->last_recorded  = mos_internal_ti_be32(&buf[28]);
+
+    /* MMC-6 longer reply carries the track/session high byte at 32/33;
+       only when the trusted region reaches them. */
+    if (end >= TI_MSB_LEN) {
+        out->track_number   = (uint16_t)(out->track_number   | (buf[32] << 8));
+        out->session_number = (uint16_t)(out->session_number | (buf[33] << 8));
+    }
+    return true;
 }
 
-static mos_error adapter_get_current_profile(void *ctx, uint16_t *profile)
+/* ==== src/mos_tray.c ==== */
+/*
+ * mos_tray.c — tray-control verbs that CHANGE drive state: eject/close
+ * (START STOP UNIT 0x1B) and lock/unlock (PREVENT ALLOW MEDIUM REMOVAL
+ * 0x1E). Each verb is one raw 6-byte CDB on the mos_raw_cdb path, with a
+ * sense check in place of a payload decode.
+ *
+ * mos_raw_cdb is the SINGLE ObtainExclusiveAccess call site
+ * (ARCHITECTURE.md §3); this file adds none, so the BUSY-on-mounted guard the
+ * §5.5 nub invariant relies on also covers the tray verbs: a user-initiated
+ * lock/eject on a MOUNTED volume returns MOS_ERR_BUSY rather than disturbing
+ * a live IOMedia nub.
+ *
+ * Authored raw, not via convenience methods, because MMCDeviceInterface's
+ * SetTrayState cannot surface a 5/53/02 locked-eject refusal (ARCHITECTURE.md
+ * §9.7/§9.9) — the layer-1 "no convenience method carries the information"
+ * showing (AGENTS.md scope doctrine).
+ *
+ * Lock lifetime: the PREVENT state is per-I_T-nexus and survives a handle
+ * close / process exit (T10 04-349r1 §6.18; the SCSITaskUserClient close is
+ * none of the SPC-4 clearing events, and Apple's
+ * IOSCSIMultimediaCommandsDevice issues no voluntary ALLOW on exclusive-
+ * access release). mos holds nothing for the lock window — the verbs are
+ * fire-and-forget, recovery is a later mos_tray_unlock on the same single
+ * initiator. No atexit ALLOW on the lock path: a single-shot lock that
+ * released itself on return would be a no-op, and a persistent lock is
+ * exactly what a ripping-robot orchestrator wants to outlive the process.
+ */
+
+
+/* The CDBs as fixed 6-byte arrays. IMMED (byte1 bit0) is 0 on all, so the
+   call WAITS for the honest final status instead of an immediate "accepted"
+   — a locked eject's 5/53/02 must arrive on the sense channel.
+
+   START STOP UNIT (SPC-4 0x1B): byte4 = PWRCND(7:4) 0 | NO_FLUSH(bit2) 0 |
+   LoEj(bit1) | START(bit0). eject = LoEj 1, START 0 -> 0x02;
+   close/load = LoEj 1, START 1 -> 0x03.
+
+   PREVENT ALLOW MEDIUM REMOVAL (SPC-4 0x1E): byte4 PREVENT field
+   {PERSISTENT(bit1), PREVENT(bit0)} (T10 04-349r1 Table 8):
+     0x00 clear basic Prevent (unlock)        0x01 set basic Prevent (lock)
+     0x02 clear Persistent Prevent (p-allow)  0x03 set Persistent Prevent (p-lock)
+   The two states are INDEPENDENT — 0x00 does not clear a 0x03 lock, 0x02 does
+   (04-349r1 §6.18.2 / §6.18.3.2). */
+static const uint8_t cdb_eject [6] = { 0x1B, 0x00, 0x00, 0x00, 0x02, 0x00 };
+static const uint8_t cdb_close [6] = { 0x1B, 0x00, 0x00, 0x00, 0x03, 0x00 };
+static const uint8_t cdb_unlock        [6] = { 0x1E, 0x00, 0x00, 0x00, 0x00, 0x00 };
+static const uint8_t cdb_lock          [6] = { 0x1E, 0x00, 0x00, 0x00, 0x01, 0x00 };
+static const uint8_t cdb_unlock_persist[6] = { 0x1E, 0x00, 0x00, 0x00, 0x02, 0x00 };
+static const uint8_t cdb_lock_persist  [6] = { 0x1E, 0x00, 0x00, 0x00, 0x03, 0x00 };
+
+/* Prevent/allow is electronic (instant); eject/close drives the tray motor
+   and needs time for mechanical travel. GESN uses 2000 ms; eject/close start
+   at 5000 ms (a fixture refines it if a slow loader appears). */
+#define MOS_TRAY_PREVENT_TIMEOUT_MS 2000u
+#define MOS_TRAY_MOTION_TIMEOUT_MS  5000u
+
+mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
+                                mos_tray_outcome *outcome, uint8_t sense_out[3])
 {
-    return mos_internal_mmc_get_current_profile((mos_handle_t *)ctx, profile);
+    if (!h || !cdb || !outcome) return MOS_ERR_INVALID_ARG;
+    if (sense_out) { sense_out[0] = sense_out[1] = sense_out[2] = 0; }
+
+    /* 0x1B gets the mechanical timeout, 0x1E the short one — opcode is the
+       only discriminator the wrapper needs. */
+    uint32_t timeout = (cdb[0] == 0x1B) ? MOS_TRAY_MOTION_TIMEOUT_MS
+                                        : MOS_TRAY_PREVENT_TIMEOUT_MS;
+
+    uint32_t task_status = 0;
+    uint8_t  sense[18]   = {0};
+    mos_error e = mos_raw_cdb(h, cdb, 6, NULL, 0, MOS_XFER_NONE,
+                              timeout, &task_status, sense, NULL);
+    if (e != MOS_OK) return e;          /* transport/lock: honest failure */
+
+    uint8_t sk = 0, asc = 0, ascq = 0;
+    mos_internal_parse_sense(sense, &sk, &asc, &ascq);
+    *outcome = mos_internal_tray_classify(task_status, sk, asc, ascq);
+    if (sense_out) { sense_out[0] = sk; sense_out[1] = asc; sense_out[2] = ascq; }
+    return MOS_OK;
 }
 
-static const mos_mmc_ops_t apple_mmc_ops = {
-    .get_tray_state      = adapter_get_tray_state,
-    .test_unit_ready     = adapter_test_unit_ready,
-    .get_current_profile = adapter_get_current_profile,
-};
-
-mos_error mos_query_state(mos_handle_t *h, const mos_state_result **out)
+mos_error mos_tray_eject(mos_handle_t *h, bool force,
+                         mos_tray_outcome *out, uint8_t sense[3])
 {
-    if (out) *out = NULL;
     if (!h || !out) return MOS_ERR_INVALID_ARG;
 
-    /* Re-resolve whole-disk identity off the pinned drive service before
-       querying, so a handle opened on an empty drive reports an inserted
-       disc's bsd_unit/media_id rather than the open-time -1. Only the
-       IOMedia child changes with the media. */
-    mos_internal_refresh_media_identity(h);
+    /* force = unlock-then-eject (the kernel EjectTheMedia sequence), saving
+       the caller the detect-5/53/02 -> unlock -> retry round trip. The basic
+       ALLOW is best-effort: an unlocked drive answers GOOD anyway, and a
+       transport/lock failure surfaces on the eject below. Each CDB releases
+       exclusive access on return, so there is a brief inter-CDB
+       unlocked-but-not-ejected window — benign for the dedicated robot.
+       Folding both under one hold would need a second ObtainExclusiveAccess
+       call site (§3), out of scope. force does not (and need not) clear a
+       Persistent Prevent lock: an initiator eject succeeds under it by spec
+       (04-349r1 §6.18.3.2). The ALLOW's sense is discarded (NULL); the
+       returned sense reflects the eject. */
+    if (force) {
+        mos_tray_outcome ignored = MOS_TRAY_DONE;
+        (void)mos_internal_tray_cmd(h, cdb_unlock, &ignored, NULL);
+    }
+    return mos_internal_tray_cmd(h, cdb_eject, out, sense);
+}
 
-    mos_state_env_t env = {
-        .ops                 = &apple_mmc_ops,
-        .ctx                 = h,
-        .bsd_unit            = h->bsd_unit,
-        .registry_id         = h->drive_registry_id,
-        .media_id            = h->media_id,
-        .vendor              = h->vendor_str[0]  ? h->vendor_str  : NULL,
-        .product             = h->product_str[0] ? h->product_str : NULL,
-        .revision            = h->revision_str[0] ? h->revision_str : NULL,
-    };
+mos_error mos_tray_close(mos_handle_t *h, mos_tray_outcome *out, uint8_t sense[3])
+{
+    if (!h || !out) return MOS_ERR_INVALID_ARG;
+    return mos_internal_tray_cmd(h, cdb_close, out, sense);
+}
 
-    /* Disc-completion (blank vs finalized) is not enriched here — no state
-       decision needs it; it ships as an on-demand typed query
-       (mos_query_disc_info; ARCHITECTURE.md §4.4). */
+mos_error mos_tray_lock(mos_handle_t *h, bool persistent,
+                        mos_tray_outcome *out, uint8_t sense[3])
+{
+    if (!h || !out) return MOS_ERR_INVALID_ARG;
+    return mos_internal_tray_cmd(h, persistent ? cdb_lock_persist : cdb_lock,
+                                 out, sense);
+}
 
-    mos_error rc = mos_internal_query_state_core(&env, &h->result);
-    if (rc == MOS_OK) *out = &h->result;
-    return rc;
+mos_error mos_tray_unlock(mos_handle_t *h, bool persistent,
+                          mos_tray_outcome *out, uint8_t sense[3])
+{
+    if (!h || !out) return MOS_ERR_INVALID_ARG;
+    return mos_internal_tray_cmd(h,
+                                 persistent ? cdb_unlock_persist : cdb_unlock,
+                                 out, sense);
+}
+
+/* ==== src/mos_vpd80.c ==== */
+/*
+ * mos_vpd80.c — pure, bounds-safe decode of INQUIRY VPD page 0x80 (Unit
+ * Serial Number). The one identity field DiscRecording's directory does not
+ * cache and no convenience method can carry: MMCDeviceInterface's Inquiry
+ * issues only a standard INQUIRY (no EVPD / PAGE CODE), so page 0x80 needs a
+ * raw INQUIRY (mos_serial.c). Design + layer-1 raw-verb showing:
+ * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md.
+ *
+ * No IOKit: the shell hands us a fixed zero-init buffer (filled via
+ * mos_raw_cdb) bounded to the bytes the transport actually returned
+ * (dual-length rule O-4 — the realized count, not the device-claimed
+ * length, is the trusted span). The page's own PAGE LENGTH never extends
+ * past that span; if it exceeds it (the transport under-delivered) the
+ * reply is refused rather than emitted as a prefix — a durable identity key
+ * is complete or nothing (the canonical-data corollary of O-4).
+ *
+ * Page 0x80 layout (SPC-4 §7.7.13, Unit Serial Number VPD page):
+ *   [0]      PERIPHERAL QUALIFIER (7:5) | PERIPHERAL DEVICE TYPE (4:0)
+ *   [1]      PAGE CODE = 80h        — the drive echoes the page we asked for
+ *   [2]      reserved
+ *   [3]      PAGE LENGTH (n-3)      — serial byte count
+ *   [4..n]   PRODUCT SERIAL NUMBER  — ASCII, left-justified, space-padded
+ * Byte 2 stays reserved for this page (it is NOT the high byte of a 2-byte
+ * length — that generalization is page 0x83's, not 0x80's). A real page-0x80
+ * capture is a falsifier per the hardware ADR, not a design input.
+ */
+
+
+#define VPD_HDR 4u   /* bytes 0..3 before the serial */
+
+/* Decode page 0x80 into out[0..out_cap). True only when the reply echoes
+   page code 0x80 and carries a complete, non-empty serial (trailing spaces /
+   NULs trimmed). out is always NUL-terminated. A drive that does not implement
+   the page (it is optional), has none programmed (all-spaces), or under-
+   delivers the reply (PAGE LENGTH > bytes received) returns false → the caller
+   leaves serial null, never an empty or truncated string. A serial that is
+   complete on the wire but longer than out_cap is truncated with a visible
+   "..." marker (never a silent prefix — see the copy step). Non-ASCII bytes
+   are copied verbatim and escaped at the output sink (mos_cli_json_str /
+   mos_safe_ascii), as with vendor/product/revision. */
+bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
+                                     char *out, size_t out_cap)
+{
+    if (out && out_cap) out[0] = 0;
+    if (!buf || !out || out_cap == 0) return false;
+    if (len < VPD_HDR) return false;          /* no room for the VPD header */
+    if (buf[1] != 0x80) return false;         /* wrong page echoed — refuse */
+
+    /* PAGE LENGTH (byte 3) is the serial byte count the drive CLAIMS. The
+       reply must actually carry all of it. If PAGE LENGTH exceeds the bytes
+       delivered (avail — the realized-transfer span, O-4), the transport
+       under-filled (a non-conformant USB-SATA bridge, a short transfer) and we
+       hold only a PREFIX of the serial. REFUSE rather than emit it: this value
+       is a DURABLE IDENTITY KEY the caller caches sticky (mos watch grabs it
+       once per session), and a silent prefix can collide with another drive or
+       misidentify this one — an incomplete key is worse than none. Complete or
+       nothing. (A conforming drive, given mos_serial.c's ample 252-byte
+       allocation, returns the whole serial, so page_len <= avail holds.) This
+       still bounds the read: refusing happens before any serial byte is read,
+       so a hostile over-long PAGE LENGTH cannot read past the trusted span. */
+    size_t page_len = buf[3];
+    size_t avail    = len - VPD_HDR;
+    if (page_len > avail) return false;
+    size_t serial_len = page_len;
+
+    /* Trim trailing wire padding — spaces (SPC pad) and NULs. Leading and
+       interior bytes are data and stay (mirrors mos_dr.c identity trim). */
+    while (serial_len > 0) {
+        uint8_t c = buf[VPD_HDR + serial_len - 1];
+        if (c != ' ' && c != 0x00) break;
+        serial_len--;
+    }
+    if (serial_len == 0) return false;        /* page present, no serial */
+
+    /* Copy into out, reserving the NUL. A serial that fits is copied whole.
+       One that exceeds the buffer is truncated WITH A VISIBLE TRAILING MARKER
+       ("…" as ASCII "..."), never silently: this value can be cached as a
+       durable identity key, and a silent prefix is indistinguishable from a
+       complete serial — a different-but-equally-wrong key. The marker signals
+       "incomplete" so the consumer never mistakes the prefix for the whole
+       serial. ASCII so it survives both sinks unescaped (mos_safe_ascii /
+       mos_cli_json_str). Real serials sit far below the buffer (mos_serial.c
+       sinks 64 bytes), so this fires only on a pathological/hostile over-long
+       serial; it never overflows. (Distinct from the transport-under-delivery
+       refusal above: there we hold only a prefix of UNKNOWN length and refuse;
+       here we hold the WHOLE serial and our sink is merely too small, so the
+       marked prefix is honest about exactly what it is.) */
+    static const char MARK[] = "...";
+    const size_t mark_len = sizeof MARK - 1u;       /* 3 */
+    if (serial_len <= out_cap - 1u) {
+        for (size_t i = 0; i < serial_len; i++) out[i] = (char)buf[VPD_HDR + i];
+        out[serial_len] = 0;
+    } else if (out_cap > mark_len + 1u) {
+        size_t copy = out_cap - 1u - mark_len;
+        for (size_t i = 0; i < copy; i++) out[i] = (char)buf[VPD_HDR + i];
+        for (size_t i = 0; i < mark_len; i++) out[copy + i] = MARK[i];
+        out[copy + mark_len] = 0;
+    } else {
+        /* out_cap too small even to hold the marker — plain bounded copy. */
+        size_t copy = out_cap - 1u;
+        for (size_t i = 0; i < copy; i++) out[i] = (char)buf[VPD_HDR + i];
+        out[copy] = 0;
+    }
+    return true;
 }
 
 /* ==== src/mos_watch.c ==== */
@@ -5220,2398 +7154,556 @@ mos_error mos_watch_next_event(mos_watch_t *w, const mos_watch_event **out,
     }
 }
 
-/* ==== src/mos_strings.c ==== */
+/* ==== src/mos_watch_core.c ==== */
 /*
- * mos_strings.c — pure string tables, escapers, and version. Separate TU so
- * mos_scsi.c stays exclusively IOKit-linked. No IOKit.
+ * mos_watch_core.c — pure watch state machine.
+ *
+ * Drives the poll loop:
+ *
+ *   - When to probe (next_poll_at_mono_ms, two backoff rates by whether the
+ *     last state was transitional or stable).
+ *   - What to emit (snapshot on first probe; state_changed on a state
+ *     delta; media_changed on a same-state READY disc swap; error on
+ *     transient probe failure; device_removed on notify_removed or a probe
+ *     returning MOS_ERR_NO_DEVICE).
+ *   - How to label it (monotonic seq; RFC 3339 ts from ops->wall_ms;
+ *     registry_id + stream_open_wall_ms; bsd_unit).
+ *   - When to stop (terminated flag, set by notify_removed or probe →
+ *     NO_DEVICE).
+ *
+ * Two time domains, distinct at the type level so a mixup can't slip in:
+ *   - ops->mono_ms() — MONOTONIC. Scheduling/latency only.
+ *   - ops->wall_ms() — WALL-CLOCK ms since epoch. stream_open_wall_ms and
+ *     event ts only; can jump backward, never used for scheduling.
+ *
+ * The caller's pump owns blocking — this core never sleeps. It returns a
+ * decision: EMIT_EVENT (write and re-pump), SLEEP_UNTIL (block then
+ * re-pump), TERMINAL (close). mos_watch.c maps SLEEP_UNTIL to
+ * CFRunLoopRunInMode; the test driver advances a fake clock. Every
+ * transition is testable without IOKit.
  */
 
-#include <stdio.h>   /* snprintf for hex escapes */
-#include <stddef.h>
-#include <stdint.h>
-
-const char *mos_state_description(mos_state s)
-{
-    switch (s) {
-        case MOS_STATE_OPEN:    return "open";
-        case MOS_STATE_EMPTY:   return "empty";
-        case MOS_STATE_LOADING: return "loading";
-        case MOS_STATE_READY:   return "ready";
-        case MOS_STATE_BUSY:    return "busy";
-        case MOS_STATE_FORMATTING:       return "formatting";
-        case MOS_STATE_MEDIA_UNREADABLE: return "media_unreadable";
-        case MOS_STATE_DEVICE_FAULT:     return "device_fault";
-        case MOS_STATE_EMPTY_OR_OPEN:    return "empty_or_open";
-        case MOS_STATE_UNKNOWN: default: return "unknown";
-    }
-}
-
-const char *mos_disc_status_description(mos_disc_status s)
-{
-    switch (s) {
-        case MOS_DISC_BLANK:          return "blank";
-        case MOS_DISC_APPENDABLE:     return "appendable";
-        case MOS_DISC_COMPLETE:       return "complete";
-        /* OTHER also the default; -Wswitch still fires on a new enumerator. */
-        case MOS_DISC_OTHER: default: return "other";
-    }
-}
-
-const char *mos_tray_outcome_description(mos_tray_outcome o)
-{
-    switch (o) {
-        case MOS_TRAY_DONE:           return "done";
-        case MOS_TRAY_REFUSED_LOCKED: return "refused_locked";
-        /* REFUSED_OTHER also the default; -Wswitch still fires on a new one. */
-        case MOS_TRAY_REFUSED_OTHER: default: return "refused_other";
-    }
-}
-
-const char *mos_error_description(mos_error e)
-{
-    switch (e) {
-        case MOS_OK:                    return "ok";
-        case MOS_ERR_INVALID_ARG:       return "invalid argument";
-        case MOS_ERR_NO_DEVICE:         return "no matching optical drive";
-        case MOS_ERR_DRIVER_REJECTED:   return "IOKit did not attach a SCSITaskUserClient to this drive";
-        case MOS_ERR_EXCLUSIVE_ACCESS:  return "another process holds the drive";
-        case MOS_ERR_BUSY:              return "drive reports busy";
-        case MOS_ERR_TIMEOUT:           return "timed out";
-        case MOS_ERR_IO:                return "IOKit error";
-        case MOS_ERR_UNSUPPORTED:       return "operation unsupported by this drive, driver, or build";
-        case MOS_ERR_OOM:               return "out of memory";
-        default:                        return "unknown error";
-    }
-}
-
-/* MMC-6 §5.4 Feature Header Profile Codes. Names follow cdrom_id/udev
-   lower_snake_case (cdrom_id's ID_CDROM_MEDIA_BD_R becomes "bd_r"). Unknown
-   codes return NULL so the consumer falls back to hex. Ordered by numeric
-   value for grep-against-spec. */
-const char *mos_profile_name(uint16_t profile_code)
-{
-    switch (profile_code) {
-        case 0x0000: return "no_current_profile";
-        case 0x0001: return "non_removable_disk"; /* legacy / rare */
-        case 0x0002: return "removable_disk";     /* legacy / rare */
-        case 0x0003: return "mo_erasable";        /* magneto-optical */
-        case 0x0008: return "cd_rom";
-        case 0x0009: return "cd_r";
-        case 0x000A: return "cd_rw";
-        case 0x0010: return "dvd_rom";
-        case 0x0011: return "dvd_minus_r";
-        case 0x0012: return "dvd_ram";
-        case 0x0013: return "dvd_minus_rw_restricted";
-        case 0x0014: return "dvd_minus_rw_sequential";
-        case 0x0015: return "dvd_minus_r_dl_sequential";
-        case 0x0016: return "dvd_minus_r_dl_jump";
-        case 0x0017: return "dvd_minus_rw_dl";
-        case 0x001A: return "dvd_plus_rw";
-        case 0x001B: return "dvd_plus_r";
-        case 0x002A: return "dvd_plus_rw_dl";
-        case 0x002B: return "dvd_plus_r_dl";
-        case 0x0040: return "bd_rom";
-        case 0x0041: return "bd_r";              /* SRM */
-        case 0x0042: return "bd_r_rrm";          /* random recording */
-        case 0x0043: return "bd_re";
-        case 0x0050: return "hd_dvd_rom";
-        case 0x0051: return "hd_dvd_r";
-        case 0x0052: return "hd_dvd_ram";
-        case 0x0053: return "hd_dvd_rw";
-        case 0x0058: return "hd_dvd_r_dl";
-        case 0x005A: return "hd_dvd_rw_dl";
-        default:     return NULL;
-    }
-}
-
-const char *mos_profile_class(uint16_t profile_code)
-{
-    /* MMC-6 Annex profile ranges. Mirrors the name table above: a profile
-       named there without a class here is named-but-classless, which the
-       profile_class_total_over_name_table test forbids. */
-    switch (profile_code) {
-        case 0x0008: case 0x0009: case 0x000A:
-            return "cd";
-        case 0x0010: case 0x0011: case 0x0012: case 0x0013:
-        case 0x0014: case 0x0015: case 0x0016: case 0x0017:
-        case 0x001A: case 0x001B: case 0x002A: case 0x002B:
-            return "dvd";
-        case 0x0040: case 0x0041: case 0x0042: case 0x0043:
-            return "bd";
-        case 0x0050: case 0x0051: case 0x0052: case 0x0053:
-        case 0x0058: case 0x005A:
-            return "hd_dvd";
-        default:
-            return NULL;   /* no-profile, MO, legacy removable, or unknown */
-    }
-}
-
-/* True for current profiles whose media supports FORMAT UNIT — i.e. where READ
-   FORMAT CAPACITIES (0x23) returns a meaningful formattable view: the
-   rewritable optical profiles (CD-RW; DVD-RAM, DVD-RW RO/sequential, DVD+RW
-   and +RW DL; HD DVD-RAM, HD DVD-RW and -RW DL; BD-RE) plus BD-R (formattable
-   to pseudo-overwrite). Pressed (ROM), write-once sequential CD-R / DVD±R /
-   HD DVD-R, and the no-media case report nothing to format, so
-   mos_query_capacity gates the raw 0x23 on this — for those profiles it issues
-   no raw read and makes no exclusive-access attempt. MMC-6 profile codes
-   (§5.4); the formattable subset of mos_profile_class above. */
-bool mos_internal_profile_is_formattable(uint16_t profile)
-{
-    switch (profile) {
-        case 0x000A:  /* CD-RW                       */
-        case 0x0012:  /* DVD-RAM                     */
-        case 0x0013:  /* DVD-RW Restricted Overwrite */
-        case 0x0014:  /* DVD-RW Sequential Recording */
-        case 0x001A:  /* DVD+RW                      */
-        case 0x002A:  /* DVD+RW Dual Layer           */
-        case 0x0052:  /* HD DVD-RAM                  */
-        case 0x0053:  /* HD DVD-RW                   */
-        case 0x005A:  /* HD DVD-RW Dual Layer        */
-        case 0x0041:  /* BD-R SRM                    */
-        case 0x0042:  /* BD-R RRM (random recording) */
-        case 0x0043:  /* BD-RE                       */
-            return true;
-        default:
-            return false;
-    }
-}
-
-/* Standard INQUIRY VERSION byte (byte 2) → SPC compliance token. Values from
-   the Linux kernel scsi.h table (SCSI_SPC_* are resp[2]+1; the wire byte is
-   one less). Unknown / legacy SCSI-1/2 values return NULL (numeric fallback). */
-const char *mos_spc_version_name(uint8_t version)
-{
-    switch (version) {
-        case 0x03: return "spc";
-        case 0x04: return "spc_2";
-        case 0x05: return "spc_3";
-        case 0x06: return "spc_4";
-        case 0x07: return "spc_5";
-        default:   return NULL;   /* 0x00 none, legacy SCSI-1/2, or unknown */
-    }
-}
-
-/* Version-descriptor code (INQUIRY bytes 58-73) → standard token. The
-   "no version claimed" family codes from sg3_utils sg_version_descriptor_arr
-   (the ones drives actually emit). A specific-revision or non-listed code
-   returns NULL and is surfaced as hex (the unknown-code rule). Lower_snake. */
-const char *mos_version_descriptor_name(uint16_t code)
-{
-    switch (code) {
-        case 0x0020: return "sam";
-        case 0x0040: return "sam_2";
-        case 0x0060: return "sam_3";
-        case 0x0080: return "sam_4";
-        case 0x00A0: return "sam_5";
-        case 0x00C0: return "sam_6";
-        case 0x0120: return "spc";
-        case 0x0140: return "mmc";
-        case 0x0180: return "sbc";
-        case 0x0240: return "mmc_2";
-        case 0x0260: return "spc_2";
-        case 0x02A0: return "mmc_3";
-        case 0x0300: return "spc_3";
-        case 0x0320: return "sbc_2";
-        case 0x03A0: return "mmc_4";
-        case 0x0420: return "mmc_5";
-        case 0x0460: return "spc_4";
-        case 0x04C0: return "sbc_3";
-        case 0x04E0: return "mmc_6";
-        case 0x05C0: return "spc_5";
-        case 0x0600: return "sbc_4";
-        case 0x1EA0: return "sat";
-        case 0x1EC0: return "sat_2";
-        case 0x1EE0: return "sat_3";
-        case 0x1F00: return "sat_4";
-        default:     return NULL;   /* per-revision / non-listed → hex fallback */
-    }
-}
-
-/* Physical Format Information book-type codes (MMC-5 / Linux uapi dvd_layer
-   values), shared by DVD and HD-DVD. Lower_snake_case; unknown codes return
-   NULL for numeric fallback. The schema's book-type enum tracks this table
-   (validate.py drift guard). */
-const char *mos_book_type_name(uint8_t book_type)
-{
-    switch (book_type) {
-        case 0x0: return "dvd_rom";
-        case 0x1: return "dvd_ram";
-        case 0x2: return "dvd_r";
-        case 0x3: return "dvd_rw";
-        case 0x4: return "hd_dvd_rom";
-        case 0x5: return "hd_dvd_ram";
-        case 0x6: return "hd_dvd_r";
-        case 0x9: return "dvd_plus_rw";
-        case 0xA: return "dvd_plus_r";
-        case 0xD: return "dvd_plus_rw_dl";
-        case 0xE: return "dvd_plus_r_dl";
-        default:  return NULL;
-    }
-}
-
-/* Track path: parallel (single-layer/sequential) vs opposite. Explicit
-   returns, not a ternary, so the validate.py drift guard can harvest the
-   token set. */
-const char *mos_track_path_name(uint8_t track_path)
-{
-    switch (track_path & 0x01) {
-        case 0:  return "ptp";
-        default: return "otp";
-    }
-}
-
-/* Copyright Protection System Type (READ DISC STRUCTURE format 0x01, CPST
-   byte). Unknown/reserved codes return NULL. */
-const char *mos_protection_name(uint8_t protection)
-{
-    switch (protection) {
-        case 0x00: return "none";
-        case 0x01: return "css_cppm";
-        case 0x02: return "cprm";
-        case 0x03: return "aacs";
-        default:   return NULL;
-    }
-}
-
-/* BG Format Status (READ DISC INFORMATION byte 7 bits 1:0). The 2-bit field
-   is total, so the default is unreachable from mos_disc_info_bg_format_status
-   (masked 0-3) but kept NULL for an out-of-range public-accessor call. Names
-   track the Linux CDM_MRW_* macros (cdrom.h); explicit returns feed the
-   validate.py drift guard. */
-const char *mos_bg_format_status_name(uint8_t status)
-{
-    switch (status) {
-        case 0:  return "none";       /* CDM_MRW_NOTMRW            */
-        case 1:  return "inactive";   /* CDM_MRW_BGFORMAT_INACTIVE */
-        case 2:  return "active";     /* CDM_MRW_BGFORMAT_ACTIVE   */
-        case 3:  return "complete";   /* CDM_MRW_BGFORMAT_COMPLETE */
-        default: return NULL;
-    }
-}
-
-/* Current/Maximum Capacity Descriptor type (READ FORMAT CAPACITIES, byte 8
-   bits 1:0). 0 is reserved → NULL (consumer falls back to the numeric code). */
-const char *mos_format_capacity_type_name(uint8_t type)
-{
-    switch (type) {
-        case 1:  return "unformatted";
-        case 2:  return "formatted";
-        case 3:  return "no_media";
-        default: return NULL;
-    }
-}
-
-/* Loading-mechanism type (MODE SENSE page 0x2A byte 6 bits 7:5). Explicit
-   returns feed the validate.py drift guard; unknown/reserved codes NULL. */
-const char *mos_loading_mechanism_name(uint8_t code)
-{
-    switch (code) {
-        case 0:  return "caddy";
-        case 1:  return "tray";
-        case 2:  return "popup";
-        case 4:  return "changer_disc";
-        case 5:  return "changer_cartridge";
-        default: return NULL;
-    }
-}
-
-/* sysexits.h class for a mos_error. Kept in sync with the table in
-   include/mos.h's mos_error_sysexit() doc-comment. */
-int mos_error_sysexit(mos_error e)
-{
-    switch (e) {
-        case MOS_OK:                    return 0;  /* EX_OK */
-        case MOS_ERR_INVALID_ARG:       return 64; /* EX_USAGE */
-        case MOS_ERR_NO_DEVICE:         return 66; /* EX_NOINPUT */
-        case MOS_ERR_DRIVER_REJECTED:   return 69; /* EX_UNAVAILABLE */
-        case MOS_ERR_EXCLUSIVE_ACCESS:  return 75; /* EX_TEMPFAIL */
-        case MOS_ERR_BUSY:              return 75; /* EX_TEMPFAIL */
-        case MOS_ERR_TIMEOUT:           return 75; /* EX_TEMPFAIL */
-        case MOS_ERR_IO:                return 74; /* EX_IOERR */
-        case MOS_ERR_UNSUPPORTED:       return 69; /* EX_UNAVAILABLE */
-        case MOS_ERR_OOM:               return 71; /* EX_OSERR */
-        default:                        return 70; /* EX_SOFTWARE: unknown enum value */
-    }
-}
-
-bool mos_error_is_recoverable(mos_error e)
-{
-    switch (e) {
-        case MOS_ERR_EXCLUSIVE_ACCESS:
-        case MOS_ERR_BUSY:
-        case MOS_ERR_TIMEOUT:
-            return true;
-        case MOS_OK:
-        case MOS_ERR_INVALID_ARG:
-        case MOS_ERR_NO_DEVICE:
-        case MOS_ERR_DRIVER_REJECTED:
-        case MOS_ERR_IO:
-        case MOS_ERR_UNSUPPORTED:
-        case MOS_ERR_OOM:
-        default:
-            return false;
-    }
-}
-
-const char *mos_version_string(void) { return MOS_VERSION_STRING; }
-
-/* ---- Pure string escapers ---------------------------------------------
- *
- * `total` is the count we'd write with infinite cap; `pos` the count
- * actually written (bounded by cap-1 to leave room for NUL). Returning
- * `total` lets callers detect truncation via `return >= out_cap`. */
-
-static inline void write_byte(char *out, size_t out_cap, size_t *pos,
-                              size_t *total, char c)
-{
-    if (*pos + 1 < out_cap) {
-        out[(*pos)++] = c;
-    }
-    (*total)++;
-}
-
-static inline void write_str(char *out, size_t out_cap, size_t *pos,
-                             size_t *total, const char *s)
-{
-    for (; *s; ++s) write_byte(out, out_cap, pos, total, *s);
-}
-
-size_t mos_json_escape(const char *in, char *out, size_t out_cap)
-{
-    size_t pos = 0;
-    size_t total = 0;
-
-    if (in) {
-        for (const unsigned char *p = (const unsigned char *)in; *p; ++p) {
-            switch (*p) {
-                case '"':  write_str(out, out_cap, &pos, &total, "\\\""); break;
-                case '\\': write_str(out, out_cap, &pos, &total, "\\\\"); break;
-                case '\b': write_str(out, out_cap, &pos, &total, "\\b");  break;
-                case '\f': write_str(out, out_cap, &pos, &total, "\\f");  break;
-                case '\n': write_str(out, out_cap, &pos, &total, "\\n");  break;
-                case '\r': write_str(out, out_cap, &pos, &total, "\\r");  break;
-                case '\t': write_str(out, out_cap, &pos, &total, "\\t");  break;
-                default:
-                    /* RFC 8259 requires escaping < 0x20. We also escape
-                       0x7F (DEL) and bytes >= 0x80: INQUIRY fields aren't
-                       guaranteed UTF-8, and escaping high bytes keeps the
-                       output valid JSON in any encoding the consumer uses. */
-                    if (*p < 0x20 || *p >= 0x7f) {
-                        char buf[8];
-                        int n = snprintf(buf, sizeof(buf), "\\u%04x", *p);
-                        if (n > 0) write_str(out, out_cap, &pos, &total, buf);
-                    } else {
-                        write_byte(out, out_cap, &pos, &total, (char)*p);
-                    }
-            }
-        }
-    }
-
-    if (out_cap > 0) out[pos] = 0;
-    return total;
-}
-
-size_t mos_safe_ascii(const char *in, char *out, size_t out_cap)
-{
-    size_t pos = 0;
-    size_t total = 0;
-
-    if (in) {
-        for (const unsigned char *p = (const unsigned char *)in; *p; ++p) {
-            /* Printable ASCII only; everything else (control bytes, 0x7F,
-               0x80+) renders as \xNN. Blocks terminal-control-sequence
-               injection (ANSI escape, OSC 52 clipboard, cursor reports,
-               title-bar manipulation) from drive-controlled bytes. */
-            if (*p >= 0x20 && *p < 0x7f) {
-                write_byte(out, out_cap, &pos, &total, (char)*p);
-            } else {
-                char buf[8];
-                int n = snprintf(buf, sizeof(buf), "\\x%02x", *p);
-                if (n > 0) write_str(out, out_cap, &pos, &total, buf);
-            }
-        }
-    }
-
-    if (out_cap > 0) out[pos] = 0;
-    return total;
-}
-
-/* Render a whole-disk unit to its canonical "diskN" name (see mos.h).
-   16 bytes always suffices ("disk" + 32-bit unit + NUL = 15 max). Returns
-   false (and "" when cap > 0) for a no-media unit (< 0) or a buffer too
-   small. */
-bool mos_bsd_name_format(int64_t unit, char *buf, size_t cap)
-{
-    if (!buf || cap == 0) return false;
-    /* The upper bound is correctness, not just truncation: a value in
-       (UINT32_MAX, ~1e11) still fits 16 bytes and would emit a different,
-       valid-looking "diskN". Refuse both < 0 and over-domain with "" + false. */
-    if (unit < 0 || unit > (int64_t)UINT32_MAX) { buf[0] = 0; return false; }
-    int n = snprintf(buf, cap, "disk%llu", (unsigned long long)unit);
-    if (n <= 0 || (size_t)n >= cap) { buf[0] = 0; return false; }
-    return true;
-}
-
-bool mos_bsd_dev_node(int64_t unit, char *out, size_t out_cap)
-{
-    if (!out || out_cap == 0) return false;
-    out[0] = 0;
-    /* Same domain/rationale as mos_bsd_name_format: a unit in
-       (UINT32_MAX, ~1e14) still fits a generous buffer and would render a
-       different, valid-looking node — refuse rather than emit one no real
-       disk can have. */
-    if (unit < 0 || unit > (int64_t)UINT32_MAX) return false;
-    int n = snprintf(out, out_cap, "/dev/disk%lld", (long long)unit);
-    if (n < 0 || (size_t)n >= out_cap) { out[0] = 0; return false; }
-    return true;
-}
-
-/* ==== src/mos_dr.c ==== */
-/*
- * mos_dr.c — DiscRecording-side adapter: the directory.
- *
- * Supplies discovery, identity, and addressing from the DiscRecording C API;
- * it never decides drive STATE — the TUR⊕GESN core in mos_state_core.c is the
- * sole authority (the §5.5 nub gate runs on TUR sense bytes DR does not
- * expose). DR is not a SCSI command author (AGENTS.md scope doctrine): it is
- * a substrate above the same kext the MMC path uses, and DR authors no raw
- * CDB itself — every raw verb (GESN, the tray opcodes, INQUIRY) lives in the
- * MMC path via mos_raw_cdb (AGENTS.md tracks the running count).
- *
- * Identity resolution: DR exposes a device's IORegistry *path*
- * (kDRDeviceIORegistryEntryPathKey), not its entry ID. mos's identity
- * currency — registry_id, the reopen authority, the media-swap fingerprint —
- * is the uint64 entry ID, so each path resolves path → entry → ID here. An
- * unresolvable node is skipped, preserving the index ↔ open-by-index
- * correspondence the public API documents.
- */
-
+/* Mirrors mos_watch.c: no BSD-only helper here yet, but the define keeps
+   the amalgamated feature-macro environment consistent. */
 #ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE 1
 #endif
+
+/* gmtime_r needs POSIX.1-2008 on glibc (Apple exposes it unconditionally).
+   Define before any header. */
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
 
 
-#include <CoreFoundation/CoreFoundation.h>
-#include <DiscRecording/DRCoreDevice.h>
-#include <IOKit/IOKitLib.h>
-
+#include <stdio.h>
 #include <string.h>
+#include <time.h>
 
-/* Bounded CFString → C-buffer copy. CFStringGetCString fails outright (no
-   usable partial-write contract) on too-small buffers, so conversion goes
-   through a 256-byte temp: values up to 255 bytes convert then strlcpy to
-   the SPC-4 field width; longer values fail conversion and yield "" — for
-   identity fields whose real domain is ≤16 bytes, an absurdly long value is
-   hostile and empty is correct. Non-string values also yield "". dst is
-   always NUL-terminated. Shared with the DA volume lookup (mos_da.c), which
-   reads volume-controlled strings under the same trust terms. */
-void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap)
+/* ---- Defaults ----------------------------------------------------- */
+
+/* Two backoff rates. "stable" (open/empty/ready) isn't a transition window
+   — changes arrive via OS notifications. "transition" (loading/busy/
+   unknown) polls fast to catch the resolution. Defaults (2s / 200ms) are
+   conservative: stable still notices an insert within a couple seconds
+   without notifications. Both configurable per watch. */
+#define MOS_WATCH_DEFAULT_STABLE_MS     2000U
+#define MOS_WATCH_DEFAULT_TRANSITION_MS  200U
+
+/* ---- Time formatting --------------------------------------------- */
+
+/* Format wall-clock ms-since-epoch as RFC 3339 UTC (YYYY-MM-DDTHH:MM:SSZ),
+   21 bytes incl NUL (cap must be >= 21). Integer seconds; no sub-second
+   precision. Feeding monotonic ms produces nonsense like
+   1970-01-01T00:00:12Z.
+
+   SATURATING: the clock is hostile INPUT to this pure layer, so an insane
+   host clock, NTP step, or fuzzed ops table must not emit a schema-invalid
+   line (the schema requires a 4-digit year). Values past
+   9999-12-31T23:59:59Z clamp to that instant; post-clamp gmtime_r/strftime
+   cannot fail, and the fallback writes the clamp constant anyway, so the
+   contract holds unconditionally. */
+#define MOS_TS_MAX_SECS 253402300799ULL   /* 9999-12-31T23:59:59Z */
+static void format_rfc3339(uint64_t wall_ms, char *out, size_t cap)
 {
-    if (!dst || cap == 0) return;
-    dst[0] = 0;
-    if (!value || CFGetTypeID(value) != CFStringGetTypeID()) return;
-
-    char tmp[256];
-    if (!CFStringGetCString((CFStringRef)value, tmp, sizeof tmp,
-                            kCFStringEncodingUTF8)) {
+    if (cap < 21) {
+        if (cap > 0) out[0] = 0;
         return;
     }
-    strlcpy(dst, tmp, cap);
-}
-
-/* path → IORegistry entry → uint64 entry ID; 0 on any failure (the
-   documented "unavailable" sentinel, never a fabricated ID). Also used by
-   the watch adapter's DR-doorbell per-device filter. */
-uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path)
-{
-    io_string_t p;
-    if (!path || CFGetTypeID(path) != CFStringGetTypeID()) return 0;
-    if (!CFStringGetCString((CFStringRef)path, p, sizeof(io_string_t),
-                            kCFStringEncodingUTF8)) {
-        return 0;
-    }
-
-    io_registry_entry_t e MOS_IO_AUTO =
-        IORegistryEntryFromPath(kIOMainPortDefault, p);
-    if (e == IO_OBJECT_NULL) return 0;
-
-    uint64_t id = 0;
-    if (IORegistryEntryGetRegistryEntryID(e, &id) != KERN_SUCCESS) id = 0;
-    return id;
-}
-
-/* Strip trailing spaces (SPC wire padding DR may or may not have trimmed).
-   Leading/interior spaces are data and stay. */
-static void mos_internal_dr_strip_trailing_spaces(char *s)
-{
-    size_t n = strlen(s);
-    while (n > 0 && s[n - 1] == ' ') s[--n] = 0;
-}
-
-/* The single extraction of the three identity strings; every reader funnels
-   through here. Buffers keep the SPC-4 field widths. */
-static void mos_internal_dr_copy_identity_from_info(CFDictionaryRef info,
-                                                    char *vendor, size_t vcap,
-                                                    char *product, size_t pcap,
-                                                    char *revision, size_t rcap)
-{
-    mos_internal_dr_copy_string(
-        CFDictionaryGetValue(info, kDRDeviceVendorNameKey), vendor, vcap);
-    mos_internal_dr_copy_string(
-        CFDictionaryGetValue(info, kDRDeviceProductNameKey), product, pcap);
-    mos_internal_dr_copy_string(
-        CFDictionaryGetValue(info, kDRDeviceFirmwareRevisionKey),
-        revision, rcap);
-    if (vendor && vcap) mos_internal_dr_strip_trailing_spaces(vendor);
-    if (product && pcap) mos_internal_dr_strip_trailing_spaces(product);
-    if (revision && rcap) mos_internal_dr_strip_trailing_spaces(revision);
-}
-
-/* Fill identity + registry id from one device's Info dictionary. */
-static void mos_internal_dr_fill_from_info(CFDictionaryRef info,
-                                           mos_internal_dr_snapshot *s)
-{
-    s->registry_id = mos_internal_dr_id_for_path_value(
-        CFDictionaryGetValue(info, kDRDeviceIORegistryEntryPathKey));
-    mos_internal_dr_copy_identity_from_info(info,
-                                            s->vendor,   sizeof s->vendor,
-                                            s->product,  sizeof s->product,
-                                            s->revision, sizeof s->revision);
-}
-
-/* The media BSD name lives in the Status dict's media-info sub-dictionary
-   (kDRDeviceMediaInfoKey → kDRDeviceMediaBSDNameKey), media-scoped: absent
-   with no media loaded, hence unit -1. */
-static int64_t mos_internal_dr_bsd_unit_from_status(CFDictionaryRef status)
-{
-    CFTypeRef mi = CFDictionaryGetValue(status, kDRDeviceMediaInfoKey);
-    if (!mi || CFGetTypeID(mi) != CFDictionaryGetTypeID()) return -1;
-
-    char name[MOS_BSD_NAME_CAP];
-    mos_internal_dr_copy_string(
-        CFDictionaryGetValue((CFDictionaryRef)mi, kDRDeviceMediaBSDNameKey),
-        name, sizeof name);
-    if (name[0] == 0) return -1;
-    /* Normalizes rdisk//dev/ forms and rejects partition shapes — same
-       authority as everywhere else. */
-    return mos_internal_parse_bsd_unit(name);
-}
-
-bool mos_internal_dr_device_snapshot(CFTypeRef device_ref,
-                                     mos_internal_dr_snapshot *s)
-{
-    if (!device_ref || !s) return false;
-    DRDeviceRef dev = (DRDeviceRef)device_ref;
-
-    memset(s, 0, sizeof *s);
-    s->bsd_unit = -1;
-
-    CFDictionaryRef info = DRDeviceCopyInfo(dev);
-    if (info) {
-        mos_internal_dr_fill_from_info(info, s);
-        CFRelease(info);
-    }
-    /* No reopenable identity ⇒ not usable (header). */
-    if (s->registry_id == 0) return false;
-
-    CFDictionaryRef status = DRDeviceCopyStatus(dev);
-    if (status) {
-        s->bsd_unit = mos_internal_dr_bsd_unit_from_status(status);
-        CFRelease(status);
-    }
-    return true;
-}
-
-size_t mos_internal_dr_copy_snapshot(mos_internal_dr_snapshot *slots,
-                                     size_t cap)
-{
-    if (!slots || cap == 0) return 0;
-
-    CFArrayRef arr = DRCopyDeviceArray();
-    if (!arr) return 0;
-
-    CFIndex n = CFArrayGetCount(arr);
-    size_t out = 0;
-    for (CFIndex i = 0; i < n && out < cap; ++i) {
-        CFTypeRef dev = CFArrayGetValueAtIndex(arr, i);
-        /* Skip-not-fail: an unresolvable entry must not hide its siblings.
-           The index is the position among reopenable devices — DR array
-           order when every device resolves, the expected case. */
-        if (mos_internal_dr_device_snapshot(dev, &slots[out])) out++;
-    }
-    CFRelease(arr);
-    return out;
-}
-
-uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name)
-{
-    if (!disk_name || !disk_name[0]) return 0;
-
-    CFStringRef s = CFStringCreateWithCString(kCFAllocatorDefault,
-                                              disk_name,
-                                              kCFStringEncodingUTF8);
-    if (!s) return 0;
-    /* Callers pass the canonical "diskN" form (mos_bsd_name_format). */
-    DRDeviceRef dev = DRDeviceCopyDeviceForBSDName(s);
-    CFRelease(s);
-    if (!dev) return 0;
-
-    uint64_t id = 0;
-    CFDictionaryRef info = DRDeviceCopyInfo(dev);
-    if (info) {
-        id = mos_internal_dr_id_for_path_value(
-            CFDictionaryGetValue(info, kDRDeviceIORegistryEntryPathKey));
-        CFRelease(info);
-    }
-    CFRelease(dev);
-    return id;
-}
-
-bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
-                                               char *vendor, size_t vcap,
-                                               char *product, size_t pcap,
-                                               char *revision, size_t rcap)
-{
-    if (vendor && vcap) vendor[0] = 0;
-    if (product && pcap) product[0] = 0;
-    if (revision && rcap) revision[0] = 0;
-    if (svc == IO_OBJECT_NULL) return false;
-
-    io_string_t path;
-    if (IORegistryEntryGetPath(svc, kIOServicePlane, path) != KERN_SUCCESS) {
-        return false;
-    }
-    CFStringRef cfpath = CFStringCreateWithCString(kCFAllocatorDefault, path,
-                                                   kCFStringEncodingUTF8);
-    if (!cfpath) return false;
-
-    DRDeviceRef dev = DRDeviceCopyDeviceForIORegistryEntryPath(cfpath);
-    CFRelease(cfpath);
-    if (!dev) return false; /* identity stays empty, non-fatal */
-
-    bool ok = false;
-    CFDictionaryRef info = DRDeviceCopyInfo(dev);
-    if (info) {
-        mos_internal_dr_copy_identity_from_info(info, vendor, vcap,
-                                                product, pcap,
-                                                revision, rcap);
-        CFRelease(info);
-        ok = true;
-    }
-    CFRelease(dev);
-    return ok;
-}
-
-/* ==== src/mos_da.c ==== */
-/*
- * mos_da.c — one-shot DiskArbitration volume lookup.
- *
- * One modality only: a synchronous DADiskCopyDescription read of what the
- * mounted-volume layer already knows — no session scheduling, no run loop,
- * no callbacks, no commands to the drive (AGENTS.md scope doctrine). Callers
- * gate on the media nub (bsd_unit present); with no IOMedia node nothing is
- * mounted and DA is never consulted.
- *
- * Trust terms: the description dictionary is system-supplied but its values
- * are volume-controlled (a hostile disc names its volume), so extraction
- * goes through the same bounded, type-checked, fail-to-empty seam as the DR
- * identity copies. The CLI's output escaping guards terminal/JSON regardless.
- */
-
-
-/* DiskArbitration is an OPTIONAL link dependency. Build with
-   -DMOS_USE_DISKARBITRATION=0 (and drop -framework DiskArbitration) and
-   mos_query_volume always reports unmounted (volume name/path null) — which
-   the CLI and JSON schemas already permit, so no shape changes. Default on. */
-#ifndef MOS_USE_DISKARBITRATION
-#define MOS_USE_DISKARBITRATION 1
-#endif
-
-#if MOS_USE_DISKARBITRATION
-#include <DiskArbitration/DiskArbitration.h>
-
-/* Mounted-volume name and mount path for a whole-disk "diskN". True only
-   when DA has a description AND the volume is mounted (VolumePath present);
-   name may still be "" if the key is absent or hostile — the caller maps ""
-   to null. Both buffers are always NUL-terminated. */
-bool mos_internal_da_volume(const char *bsd_name,
-                            char *name_buf, size_t name_cap,
-                            char *path_buf, size_t path_cap)
-{
-    if (name_buf && name_cap) name_buf[0] = 0;
-    if (path_buf && path_cap) path_buf[0] = 0;
-    if (!bsd_name || !bsd_name[0]) return false;
-
-    DASessionRef session = DASessionCreate(kCFAllocatorDefault);
-    if (!session) return false;
-
-    bool      mounted = false;
-    DADiskRef disk    = DADiskCreateFromBSDName(kCFAllocatorDefault,
-                                                session, bsd_name);
-    CFDictionaryRef desc = disk ? DADiskCopyDescription(disk) : NULL;
-
-    if (desc) {
-        /* VolumePath is the mount proof: DA also describes unmounted media,
-           so an absent/non-URL path means "not mounted", not an error.
-           CFURLGetFileSystemRepresentation returns false when the path
-           exceeds the buffer, yielding not-mounted rather than a truncated
-           path a consumer might chdir into. */
-        CFTypeRef path = CFDictionaryGetValue(
-            desc, kDADiskDescriptionVolumePathKey);
-        bool is_url = path && CFGetTypeID(path) == CFURLGetTypeID();
-        if (is_url && path_buf && path_cap) {
-            if (CFURLGetFileSystemRepresentation((CFURLRef)path, true,
-                                                 (UInt8 *)path_buf,
-                                                 (CFIndex)path_cap)) {
-                mounted = true;
-            } else {
-                path_buf[0] = 0;
-            }
-        } else if (is_url) {
-            /* No path buffer: VolumePath presence alone is the mount proof,
-               so a name-only caller (e.g. `mos state`) still sees mounted. */
-            mounted = true;
+    uint64_t s64 = wall_ms / 1000U;
+    if (s64 > MOS_TS_MAX_SECS) s64 = MOS_TS_MAX_SECS;
+    time_t secs = (time_t)s64;
+    struct tm tm;
+    /* gmtime_r: POSIX.1-2008, present on every platform we build/test on.
+       No _WIN32/gmtime_s branch — Windows isn't a target. */
+    if (gmtime_r(&secs, &tm) != NULL) {
+        /* The numeric strftime specifiers used here are POSIX locale-
+           independent. strftime also sidesteps a -Wformat-truncation false
+           positive a hand-rolled snprintf hits under -O2 (GCC sees tm_year
+           as unbounded). */
+        if (strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &tm) == 20) {
+            return;
         }
-        if (mounted)
-            mos_internal_dr_copy_string(
-                CFDictionaryGetValue(desc, kDADiskDescriptionVolumeNameKey),
-                name_buf, name_cap);
-        CFRelease(desc);
     }
+    /* Unreachable post-clamp on a conforming libc; holds the contract if
+       one misbehaves. */
+    memcpy(out, "9999-12-31T23:59:59Z", 21);
+}
+/* ---- Public-via-mos_pure.h init / pump --------------------------- */
 
-    if (disk)    CFRelease(disk);
-    CFRelease(session);
-    return mounted;
+void mos_internal_watch_init(mos_watch_state *w,
+                             const mos_watch_ops_t *ops, void *ctx,
+                             int64_t bsd_unit,
+                             uint64_t registry_id,
+                             uint64_t start_mono_ms,
+                             uint64_t start_wall_ms,
+                             uint32_t stable_poll_ms,
+                             uint32_t transition_poll_ms)
+{
+    memset(w, 0, sizeof(*w));
+    w->ops                    = ops;
+    w->ctx                    = ctx;
+    w->stable_poll_ms         = stable_poll_ms     ? stable_poll_ms
+                                                   : MOS_WATCH_DEFAULT_STABLE_MS;
+    w->transition_poll_ms     = transition_poll_ms ? transition_poll_ms
+                                                   : MOS_WATCH_DEFAULT_TRANSITION_MS;
+    w->last_state             = MOS_STATE_UNKNOWN;
+    w->have_last_state        = false;
+    w->last_media_id          = 0;
+    w->last_profile           = 0;
+    w->next_seq               = 1;
+    /* First probe at start_mono_ms (immediately). Monotonic value. */
+    w->next_poll_at_mono_ms   = start_mono_ms;
+    w->terminated             = false;
+    w->removed_event_emitted  = false;
+    w->bsd_unit               = bsd_unit;   /* -1 == no media */
+
+    /* Session identity: two plain values. registry_id is the attachment
+       identity (xnu mints non-reused IDs >= 2^32+256; 0 only from direct
+       pure-layer callers). start_wall_ms rides every event as
+       stream_open_wall_ms; the adapter monotonicizes it per process so
+       (registry_id, stream_open_wall_ms) is unique per session even for
+       same-ms reopens of the same drive. */
+    w->registry_id         = registry_id;
+    w->stream_open_wall_ms = start_wall_ms;
 }
 
-#else  /* !MOS_USE_DISKARBITRATION */
-
-/* No DiskArbitration linked: the mount layer is never consulted, so every
-   disc reports unmounted — same contract as a disk DA cannot describe.
-   Buffers cleared, false returned. */
-bool mos_internal_da_volume(const char *bsd_name,
-                            char *name_buf, size_t name_cap,
-                            char *path_buf, size_t path_cap)
+void mos_internal_watch_notify_removed(mos_watch_state *w)
 {
-    (void)bsd_name;
-    if (name_buf && name_cap) name_buf[0] = 0;
-    if (path_buf && path_cap) path_buf[0] = 0;
+    if (!w) return;
+    w->terminated = true;
+}
+
+void mos_internal_watch_notify_wake(mos_watch_state *w)
+{
+    if (!w) return;
+    /* Pull the next poll to "now" without reading the clock here: setting
+       0 guarantees now >= next_poll_at_mono_ms on the next pump, whatever
+       the monotonic clock's origin. */
+    w->next_poll_at_mono_ms = 0;
+}
+
+/* Transition vs stable, for backoff selection. */
+static bool watch_state_is_transitional(mos_state s)
+{
+    switch (s) {
+        /* In-progress or degraded — poll fast to converge. */
+        case MOS_STATE_LOADING:
+        case MOS_STATE_BUSY:
+        case MOS_STATE_FORMATTING:      /* long op, still progressing to ready/empty */
+        case MOS_STATE_EMPTY_OR_OPEN:   /* degraded: GESN was unavailable; re-probe to resolve */
+        case MOS_STATE_UNKNOWN:
+            return true;
+        /* Settled physical states and stable error conditions. */
+        case MOS_STATE_OPEN:
+        case MOS_STATE_EMPTY:
+        case MOS_STATE_READY:
+        case MOS_STATE_MEDIA_UNREADABLE:  /* bad disc; not self-resolving */
+        case MOS_STATE_DEVICE_FAULT:      /* drive fault; not self-resolving */
+            return false;
+    }
+    /* No default: a new mos_state value must trip -Wswitch so its poll
+       class is chosen deliberately. This trailing return only covers an
+       out-of-range value (the enum is int32-wide). */
     return false;
 }
 
-#endif /* MOS_USE_DISKARBITRATION */
-
-/* Public wrapper (contract in mos.h): the nub gate lives here, so no caller
-   consults DA for a drive the kernel says holds no media. */
-mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
-                           char *name_buf, size_t name_cap,
-                           char *path_buf, size_t path_cap)
+/* Build a base event: session identity, seq, ts (read fresh from
+   ops->wall_ms, not the scheduling clock), bsd_unit. Caller fills the
+   kind-specific fields. */
+static void fill_event_base(mos_watch_state *w, mos_watch_event *e)
 {
-    if (mounted) *mounted = false;
-    if (name_buf && name_cap) name_buf[0] = 0;
-    if (path_buf && path_cap) path_buf[0] = 0;
-    if (!h) return MOS_ERR_INVALID_ARG;
+    memset(e, 0, sizeof(*e));
+    e->seq                 = w->next_seq++;
+    e->registry_id         = w->registry_id;
+    e->stream_open_wall_ms = w->stream_open_wall_ms;
+    e->bsd_unit            = w->bsd_unit; /* -1 == no media; copied verbatim */
 
-    /* Held-handle freshness: re-resolve so a handle held across an insert
-       sees the current disc's whole-disk node
-       (mos_internal_refresh_media_identity). */
-    mos_internal_refresh_media_identity(h);
+    uint64_t wall = w->ops->wall_ms ? w->ops->wall_ms(w->ctx) : 0;
+    format_rfc3339(wall, e->ts, sizeof(e->ts));
 
-    if (h->bsd_unit < 0) return MOS_OK;     /* no IOMedia node: unmounted */
-
-    char bsd[24];
-    if (!mos_bsd_name_format(h->bsd_unit, bsd, sizeof bsd)) return MOS_OK;
-
-    bool m = mos_internal_da_volume(bsd, name_buf, name_cap,
-                                    path_buf, path_cap);
-    if (mounted) *mounted = m;
-    return MOS_OK;
+    e->error     = MOS_OK;
 }
 
-/* ==== src/mos_scsi.c ==== */
-/*
- * mos_scsi.c — IOKit lifecycle, enumeration, the MMC convenience
- * primitives the state core uses (TUR / current-profile / tray-state),
- * and the one raw-CDB path (mos_raw_cdb — the sole ObtainExclusiveAccess
- * site). The typed mos_query_* verb surface lives in mos_query.c.
+/* Copy probe-result fields (all but prev_state) into an event. Shared by
+   snapshot/state_changed/media_changed so a new field has one assignment
+   site, not three. */
+static void fill_event_state_fields(mos_watch_event *e,
+                                    const mos_state_result *r,
+                                    uint32_t latency_ms)
+{
+    e->state           = r->state;
+    /* BSD unit from THIS probe, not the open-time value, so a disc in a
+       drive empty at open (or a unit changed across eject/reinsert) shows
+       in the event. fill_event_base seeds w->bsd_unit for events with no
+       fresh probe (error / device_removed). */
+    e->bsd_unit        = r->bsd_unit;
+    e->current_profile = r->current_profile;
+    e->vendor          = r->vendor;
+    e->product         = r->product;
+    e->revision        = r->revision;
+    e->serial          = r->serial;   /* NULL until a free poll grabs it (mos_watch.c) */
+    e->sense_key       = r->sense_key;
+    e->asc             = r->asc;
+    e->ascq            = r->ascq;
+    e->latency_ms      = latency_ms;
+}
+
+/* Saturating monotonic delta in ms: clamps end < start to 0 and a >49.7-day
+   span to UINT32_MAX, either of which would otherwise underflow/truncate. */
+static uint32_t mos_watch_latency_ms(uint64_t start, uint64_t end)
+{
+    uint64_t delta = end >= start ? end - start : 0;
+    return delta > UINT32_MAX ? UINT32_MAX : (uint32_t)delta;
+}
+
+/* Per-state poll interval: transition_poll_ms for transitional states,
+   stable_poll_ms otherwise. One site for the policy. */
+static uint32_t poll_ms_for_state(const mos_watch_state *w,
+                                  mos_state state)
+{
+    return watch_state_is_transitional(state)
+        ? w->transition_poll_ms
+        : w->stable_poll_ms;
+}
+
+mos_watch_decision mos_internal_watch_pump(mos_watch_state *w)
+{
+    mos_watch_decision d;
+    memset(&d, 0, sizeof(d));
+
+    if (!w || !w->ops) {
+        d.kind = MOS_WATCH_DECIDE_TERMINAL;
+        return d;
+    }
+
+    /* Terminal (notify_removed or a probe → NO_DEVICE): emit one final
+       device_removed, then refuse further pumps. The removed_event_emitted
+       sentinel guarantees exactly once, even if termination precedes any
+       observation (prev_state then unknown). */
+    if (w->terminated) {
+        if (!w->removed_event_emitted) {
+            fill_event_base(w, &d.event);
+            d.event.kind       = MOS_EVENT_DEVICE_REMOVED;
+            d.event.state      = MOS_STATE_UNKNOWN;
+            d.event.prev_state = w->have_last_state ? w->last_state
+                                                    : MOS_STATE_UNKNOWN;
+            w->removed_event_emitted = true;
+            d.kind = MOS_WATCH_DECIDE_EMIT_EVENT;
+            return d;
+        }
+        d.kind = MOS_WATCH_DECIDE_TERMINAL;
+        return d;
+    }
+
+    if (!w->ops->probe || !w->ops->mono_ms) {
+        d.kind = MOS_WATCH_DECIDE_TERMINAL;
+        return d;
+    }
+
+    uint64_t now_mono = w->ops->mono_ms(w->ctx);
+
+    /* Not yet time to probe → sleep. */
+    if (now_mono < w->next_poll_at_mono_ms) {
+        d.kind                 = MOS_WATCH_DECIDE_SLEEP_UNTIL;
+        d.next_poll_at_mono_ms = w->next_poll_at_mono_ms;
+        return d;
+    }
+
+    mos_state_result r;
+    memset(&r, 0, sizeof(r));
+    uint64_t  probe_start_mono = now_mono;
+    mos_error perr             = w->ops->probe(w->ctx, &r);
+    uint64_t  probe_end_mono   = w->ops->mono_ms(w->ctx);
+
+    /* NO_DEVICE means the drive went away under the watch: terminal
+       removal. Set the flag and let the terminated path above emit
+       device_removed. Without this, poll-only mode (no notifications) would
+       spin emitting error events forever for an unplugged drive. */
+    if (perr == MOS_ERR_NO_DEVICE) {
+        w->terminated = true;
+        fill_event_base(w, &d.event);
+        d.event.kind       = MOS_EVENT_DEVICE_REMOVED;
+        d.event.state      = MOS_STATE_UNKNOWN;
+        d.event.prev_state = w->have_last_state ? w->last_state
+                                                : MOS_STATE_UNKNOWN;
+        d.event.latency_ms = mos_watch_latency_ms(probe_start_mono, probe_end_mono);
+        w->removed_event_emitted = true;
+        d.kind = MOS_WATCH_DECIDE_EMIT_EVENT;
+        return d;
+    }
+
+    if (perr != MOS_OK) {
+        /* Other error: no observation this round. Non-terminal — emit error
+           and reschedule. */
+        fill_event_base(w, &d.event);
+        d.event.kind       = MOS_EVENT_ERROR;
+        d.event.error      = perr;
+        d.event.state      = MOS_STATE_UNKNOWN;
+        d.event.prev_state = w->have_last_state ? w->last_state : MOS_STATE_UNKNOWN;
+        d.event.latency_ms = mos_watch_latency_ms(probe_start_mono, probe_end_mono);
+
+        /* Don't update last_state — there's no observation, just its
+           absence.
+
+           Retry cadence: a first (or changed) error retries at transition
+           rate; each further identical error doubles the interval, capped
+           at stable_poll_ms. A persistent failure converges to the stable
+           cadence instead of flooding; a notify_wake still pulls the next
+           poll forward on a real event. */
+        if (perr == (mos_error)w->last_probe_err && w->consec_probe_errs > 0) {
+            if (w->consec_probe_errs < UINT32_MAX) w->consec_probe_errs++;
+        } else {
+            w->last_probe_err    = (int32_t)perr;
+            w->consec_probe_errs = 1;
+        }
+        {
+            uint64_t interval = w->transition_poll_ms;
+            uint32_t doublings = w->consec_probe_errs - 1u;
+            while (doublings-- > 0u && interval < w->stable_poll_ms) {
+                interval <<= 1;
+            }
+            if (interval > w->stable_poll_ms) interval = w->stable_poll_ms;
+            w->next_poll_at_mono_ms = probe_end_mono + interval;
+        }
+        d.kind = MOS_WATCH_DECIDE_EMIT_EVENT;
+        return d;
+    }
+
+    /* Successful observation: any error streak is over. */
+    w->last_probe_err    = (int32_t)MOS_OK;
+    w->consec_probe_errs = 0;
+    /* Adopt the probe's unit. Fresh-probe events carry r.bsd_unit directly,
+       but the error/device_removed fallback reads w->bsd_unit, which must
+       track the last OBSERVED unit (not open-time). The core owns this so
+       pure-only behavior is correct without each adapter rediscovering it. */
+    w->bsd_unit = r.bsd_unit;
+
+
+    /* First successful probe → snapshot. */
+    if (!w->have_last_state) {
+        fill_event_base(w, &d.event);
+        d.event.kind       = MOS_EVENT_SNAPSHOT;
+        d.event.prev_state = MOS_STATE_UNKNOWN;
+        fill_event_state_fields(&d.event, &r,
+            mos_watch_latency_ms(probe_start_mono, probe_end_mono));
+
+        w->last_state           = r.state;
+        w->have_last_state      = true;
+        w->last_media_id        = r.media_id;
+        w->last_profile         = r.current_profile;
+        w->next_poll_at_mono_ms = probe_end_mono + poll_ms_for_state(w, r.state);
+        d.kind = MOS_WATCH_DECIDE_EMIT_EVENT;
+        return d;
+    }
+
+    /* State change → emit delta. */
+    if (r.state != w->last_state) {
+        fill_event_base(w, &d.event);
+        d.event.kind       = MOS_EVENT_STATE_CHANGED;
+        d.event.prev_state = w->last_state;
+        fill_event_state_fields(&d.event, &r,
+            mos_watch_latency_ms(probe_start_mono, probe_end_mono));
+
+        w->last_state           = r.state;
+        w->last_media_id        = r.media_id;
+        w->last_profile         = r.current_profile;
+        w->next_poll_at_mono_ms = probe_end_mono + poll_ms_for_state(w, r.state);
+        d.kind = MOS_WATCH_DECIDE_EMIT_EVENT;
+        return d;
+    }
+
+    /* Same-state media swap → media_changed while the drive stays READY
+       across two probes (a fast slot-load swap, or eject/reinsert between
+       polls). Two independent signals:
+
+       1. Registry-identity change — the whole-disk IOMedia entry ID re-mints
+          on a physical swap even when the profile is unchanged (the
+          same-profile DVD→DVD case). Strong signal; both ids must be
+          non-zero (0 = unavailable, never inferred from).
+
+       2. Profile change with NO usable identity — some USB-ATAPI bridges
+          never expose a media_id (both 0). Any non-zero profile change
+          fires: a different profile with no identity means a different disc.
+          A same-PROFILE swap (DVD-R → DVD-R) is invisible here. */
+    bool id_changed =
+        r.media_id != 0 && w->last_media_id != 0 &&
+        r.media_id != w->last_media_id;
+    bool profile_changed_without_id =
+        r.media_id == 0 && w->last_media_id == 0 &&
+        r.current_profile != 0 && w->last_profile != 0 &&
+        r.current_profile != w->last_profile;
+
+    if (r.state == MOS_STATE_READY && w->last_state == MOS_STATE_READY &&
+        (id_changed || profile_changed_without_id)) {
+        fill_event_base(w, &d.event);
+        d.event.kind       = MOS_EVENT_MEDIA_CHANGED;
+        d.event.prev_state = w->last_state;   /* READY → READY */
+        fill_event_state_fields(&d.event, &r,
+            mos_watch_latency_ms(probe_start_mono, probe_end_mono));
+
+        w->last_media_id        = r.media_id;
+        w->last_profile         = r.current_profile;
+        w->next_poll_at_mono_ms = probe_end_mono + poll_ms_for_state(w, r.state);
+        d.kind = MOS_WATCH_DECIDE_EMIT_EVENT;
+        return d;
+    }
+
+    /* No change → reschedule and sleep, no event.
+
+       Adopt any *informative* identity first. media_id / current_profile
+       unavailable (0) at the last event often arrive a probe later (the
+       IOMedia child registers a beat after TUR goes GOOD; profile
+       enrichment can fail transiently). A non-zero value is adopted, a zero
+       never overwrites one, so the fingerprint survives the gap and a swap
+       across it is still detected. Without this, a 0→non-zero arrival would
+       pin the snapshot fingerprint and disarm swap detection for the
+       session. */
+    if (r.media_id != 0)        w->last_media_id = r.media_id;
+    if (r.current_profile != 0) w->last_profile  = r.current_profile;
+    w->next_poll_at_mono_ms = probe_end_mono + poll_ms_for_state(w, r.state);
+    d.kind                 = MOS_WATCH_DECIDE_SLEEP_UNTIL;
+    d.next_poll_at_mono_ms = w->next_poll_at_mono_ms;
+    return d;
+}
+
+/* ---- Watch-all multiplexer ----------------------------------------- *
  *
- * All internal functions must be `static` or `mos_internal_`-prefixed;
- * this library is statically linked into downstream projects (HandBrake
- * etc.) and cannot collide on generic names.
- */
+ * Contract in mos_pure.h. Slots are visited in ascending registry_id on
+ * every entry, so same-tick interleave is deterministic and independent of
+ * slot-assignment history. */
 
-
-#include <CoreFoundation/CoreFoundation.h>
-#include <IOKit/IOKitLib.h>
-#include <IOKit/IOCFPlugIn.h>
-#include <IOKit/IOBSD.h>
-#include <IOKit/scsi/SCSITaskLib.h>
-#include <IOKit/scsi/SCSICommandOperationCodes.h>
-#include <IOKit/scsi/SCSICmds_REQUEST_SENSE_Defs.h>
-#include <IOKit/storage/IOStorageProtocolCharacteristics.h>
-#include <IOKit/storage/IOMedia.h>   /* kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey */
-
-#include <stdlib.h>
-#include <string.h>
-#include <assert.h>
-
-/* ---- Wire-format compile-time invariants -------------------------- */
-/* Pin the 18-byte sense assumption two ways: (1) Apple's struct matches
-   their own kSenseDefaultSize; (2) that constant is 18, the literal baked
-   into the sense[18] signatures in mos.h / mos_internal.h. A (1) failure
-   means Apple broke an internal contract; (2) means the public API literal
-   needs updating. */
-_Static_assert(sizeof(SCSI_Sense_Data) == kSenseDefaultSize,
-               "SCSI_Sense_Data size no longer matches kSenseDefaultSize");
-_Static_assert(kSenseDefaultSize == 18,
-               "kSenseDefaultSize changed — update sense[18] in mos.h and mos_internal.h");
-
-/* ---- Registry helpers --------------------------------------------- */
-
-/* The pure BSD-name helpers live in src/mos_pure.c (declared in mos_pure.h,
-   re-included via mos_internal.h) so they link into the pure-only tests. */
-
-/* Read an OSNumber registry property as uint64, or 0 (the "absent"
-   sentinel) when missing, non-numeric, or non-positive. Used for the
-   whole-disk IOMedia size/block-size — the kernel's cached READ CAPACITY,
-   no command. */
-static uint64_t mos_internal_cf_number_u64(io_registry_entry_t node,
-                                           CFStringRef key)
+void mos_internal_watch_all_init(mos_watch_all_state *a)
 {
-    CFTypeRef v MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
-            node, key, kCFAllocatorDefault, 0);
-    if (!v || CFGetTypeID(v) != CFNumberGetTypeID()) return 0;
-    long long out = 0;
-    if (!CFNumberGetValue((CFNumberRef)v, kCFNumberLongLongType, &out) ||
-        out <= 0) {
-        return 0;
-    }
-    return (uint64_t)out;
+    if (!a) return;
+    memset(a, 0, sizeof *a);
 }
 
-/* Resolve the whole-disk BSD unit (N in "diskN") for an IOKit service, or
-   -1 if none (empty/open-tray drive, no IOMedia child). Captures the
-   whole-disk IOMedia registry entry ID into *media_id_out (0 if none), and,
-   when non-NULL, the node's kernel-cached size/block-size into
-   *media_bytes_out / *block_bytes_out (kIOMediaSizeKey /
-   kIOMediaPreferredBlockSizeKey — the kernel's attach-time READ CAPACITY;
-   0 if absent). The transient "diskN" name buffers never escape — only the
-   parsed integer identity does. */
-static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
-                                     uint64_t *media_bytes_out,
-                                     uint32_t *block_bytes_out)
+int mos_internal_watch_all_free_slot(const mos_watch_all_state *a)
 {
-    if (media_id_out)    *media_id_out = 0;
-    if (media_bytes_out) *media_bytes_out = 0;
-    if (block_bytes_out) *block_bytes_out = 0;
-    io_iterator_t it MOS_IO_AUTO = IO_OBJECT_NULL;
-    if (IORegistryEntryCreateIterator(svc, kIOServicePlane,
-            kIORegistryIterateRecursively, &it) != KERN_SUCCESS) {
-        return -1;
+    if (!a) return -1;
+    for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
+        if (!a->active[i]) return i;
     }
+    return -1;
+}
 
-    /* Two-pass selection:
-       1. Prefer a whole-disk IOMedia child — the "Whole" property cleanly
-          separates "disk4" from partitions ("disk4s1").
-       2. Fallback: some USB bridges expose a BSD name on a node with no
-          "Whole" property. Accept any whole-disk-shaped name (disk\d+ /
-          rdisk\d+, no partition suffix).
-       A Whole node is authoritative and wins. Refcounts auto-release via
-       MOS_IO_AUTO / MOS_CF_AUTO. */
-    char whole_name[MOS_BSD_NAME_CAP] = {0};
-    char fallback_name[MOS_BSD_NAME_CAP] = {0};
-    uint64_t whole_id = 0;
-    uint64_t whole_bytes = 0;   /* kIOMediaSizeKey off the Whole node */
-    uint32_t whole_block = 0;   /* kIOMediaPreferredBlockSizeKey */
+int mos_internal_watch_all_find(const mos_watch_all_state *a,
+                                uint64_t registry_id)
+{
+    if (!a || registry_id == 0) return -1;
+    for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
+        if (a->active[i] && a->cores[i].registry_id == registry_id) return i;
+    }
+    return -1;
+}
 
+int mos_internal_watch_all_add(mos_watch_all_state *a,
+                               const mos_watch_ops_t *ops, void *ctx,
+                               int64_t bsd_unit, uint64_t registry_id,
+                               uint64_t start_mono_ms,
+                               uint64_t start_wall_ms,
+                               uint32_t stable_poll_ms,
+                               uint32_t transition_poll_ms,
+                               bool mid_stream)
+{
+    if (!a || registry_id == 0) return -1;
+
+    /* Dedupe by attachment identity: DR Appeared can re-announce a device
+       the snapshot already had (or fire twice on a bus rescan). Same id ⇒
+       same slot; a replug gets a fresh id and a new slot. */
+    int existing = mos_internal_watch_all_find(a, registry_id);
+    if (existing >= 0) return existing;
+
+    int i = mos_internal_watch_all_free_slot(a);
+    if (i < 0) return -1;
+
+    mos_internal_watch_init(&a->cores[i], ops, ctx, bsd_unit, registry_id,
+                            start_mono_ms, start_wall_ms,
+                            stable_poll_ms, transition_poll_ms);
+    a->active[i]       = true;
+    a->join_pending[i] = mid_stream;
+    return i;
+}
+
+mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
+{
+    mos_watch_decision out;
+    memset(&out, 0, sizeof out);
+    out.kind                 = MOS_WATCH_DECIDE_SLEEP_UNTIL;
+    out.next_poll_at_mono_ms = UINT64_MAX;
+    if (!a) return out;
+
+    /* Visit active slots in ascending registry_id (selection scan; CAP 16,
+       a sort would be ceremony). Returning on the first EMIT bounds per-call
+       work; the next call re-enters at the lowest id, draining same-tick
+       events in id order. */
+    _Static_assert(MOS_WATCH_ALL_CAP <= 64, "visited bitmask is 64-wide");
+    uint64_t visited = 0; /* bitmask of slots already pumped this call */
     for (;;) {
-        io_object_t child MOS_IO_AUTO = IOIteratorNext(it);
-        if (child == IO_OBJECT_NULL) break;
-
-        char this_name[MOS_BSD_NAME_CAP] = {0};
-
-        CFTypeRef bsd MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
-                child, CFSTR(kIOBSDNameKey), kCFAllocatorDefault, 0);
-        if (bsd && CFGetTypeID(bsd) == CFStringGetTypeID()) {
-            /* CFStringGetCString may write partial bytes before failing
-               (Apple spec); clear so the empty check below stays valid. */
-            if (!CFStringGetCString((CFStringRef)bsd, this_name,
-                                    sizeof(this_name),
-                                    kCFStringEncodingUTF8)) {
-                this_name[0] = 0;
+        int best = -1;
+        for (int i = 0; i < MOS_WATCH_ALL_CAP; ++i) {
+            if (!a->active[i] || (visited & (1ull << i))) continue;
+            if (best < 0 ||
+                a->cores[i].registry_id < a->cores[best].registry_id) {
+                best = i;
             }
         }
+        if (best < 0) break;
+        visited |= (1ull << best);
 
-        if (this_name[0] == 0) continue;
+        mos_watch_decision d = mos_internal_watch_pump(&a->cores[best]);
 
-        /* Pass 1: the authoritative Whole node. Require IOMedia conformance
-           — some descendants carry a "Whole" boolean without being media.
-           (String-name IOObjectConformsTo avoids including IOMedia.h.) The
-           fallback still takes whole-disk-shaped names on non-IOMedia
-           bridge nodes. */
-        CFTypeRef whole MOS_CF_AUTO = IORegistryEntryCreateCFProperty(
-                child, CFSTR("Whole"), kCFAllocatorDefault, 0);
-        bool is_whole = (whole &&
-                         CFGetTypeID(whole) == CFBooleanGetTypeID() &&
-                         CFBooleanGetValue((CFBooleanRef)whole) &&
-                         IOObjectConformsTo(child, "IOMedia"));
-
-        if (is_whole && whole_name[0] == 0) {
-            strlcpy(whole_name, this_name, sizeof(whole_name));
-            /* Capture the IOMedia registry entry ID — the media-swap
-               fingerprint — while we hold the node. On failure it stays 0
-               (the "unavailable" sentinel; the watch core won't infer a
-               swap from it). */
-            if (IORegistryEntryGetRegistryEntryID(child, &whole_id) != KERN_SUCCESS) {
-                whole_id = 0;
+        if (d.kind == MOS_WATCH_DECIDE_EMIT_EVENT) {
+            d.event.seq = ++a->seq;            /* stream-global numbering */
+            /* Relabel only the join's SNAPSHOT. A mid-stream device whose
+               first pumps yield ERROR keeps its pending join, so its first
+               successful probe still announces device_appeared; clearing on
+               any first event would demote it (contract: every joining
+               drive emits device_appeared). */
+            if (a->join_pending[best] &&
+                d.event.kind == MOS_EVENT_SNAPSHOT) {
+                d.event.kind = MOS_EVENT_DEVICE_APPEARED;
+                a->join_pending[best] = false;
             }
-            /* Kernel-cached capacity off the same node, captured now rather
-               than re-resolved by media_id later. */
-            whole_bytes = mos_internal_cf_number_u64(child,
-                              CFSTR(kIOMediaSizeKey));
-            whole_block = (uint32_t)mos_internal_cf_number_u64(child,
-                              CFSTR(kIOMediaPreferredBlockSizeKey));
-        } else if (!is_whole && fallback_name[0] == 0 &&
-                   mos_internal_bsd_name_is_whole_shape(this_name)) {
-            strlcpy(fallback_name, this_name, sizeof(fallback_name));
-            /* No id capture here. media_id must be the whole-disk IOMedia
-               entry ID (mos_pure.h), re-minted on a swap; a bridge node's
-               ID identifies the BRIDGE and may survive a swap, so a stale
-               non-zero value would disarm both swap detectors at once
-               (mos_watch_core.c). Leaving it 0 keeps the no-id fallback
-               armed. Whether real bridges hit this branch is a rig
-               question. */
+            if (d.event.kind == MOS_EVENT_DEVICE_REMOVED) {
+                /* Per-slot, not stream-terminal: free after taking the
+                   event. A replug arrives as a new id. */
+                a->active[best] = false;
+            }
+            return d;
         }
-
-        if (whole_name[0] != 0) break; /* Whole found, done */
-    }
-
-    const char *chosen = whole_name[0] ? whole_name
-                       : fallback_name[0] ? fallback_name
-                       : NULL;
-    if (!chosen) return -1;
-    if (media_id_out) *media_id_out = whole_name[0] ? whole_id : 0;
-    /* Size and id ride the Whole node only — the fallback bridge node's are
-       not the medium's (see the no-id reasoning above). */
-    if (media_bytes_out) *media_bytes_out = whole_name[0] ? whole_bytes : 0;
-    if (block_bytes_out) *block_bytes_out = whole_name[0] ? whole_block : 0;
-    /* parse_bsd_unit normalizes any rdisk/ /dev/ prefix, rejects
-       partition/non-whole shapes, and returns the unit or -1. Identity is
-       an integer from here; "diskN" is reconstructed only at output. */
-    return mos_internal_parse_bsd_unit(chosen);
-}
-
-/* Re-resolve the handle's media-scoped identity (bsd_unit, media_id swap
-   fingerprint, cached size/block bytes) off its stable drive service.
-   h->svc is fixed for the handle's life; the IOMedia child under it is not
-   — it appears on insert, vanishes on eject — so a single open-time capture
-   goes stale across a media change. Media-scoped queries call this first to
-   report CURRENT media: a local IORegistry walk, no SCSI command, no
-   exclusive access. Single-threaded like every handle mutation. */
-void mos_internal_refresh_media_identity(mos_handle_t *h)
-{
-    if (!h) return;
-    h->bsd_unit = mos_internal_bsd_unit(h->svc, &h->media_id,
-                                        &h->media_bytes,
-                                        &h->media_block_bytes);  /* -1 if no media */
-}
-
-/* ---- Enumeration ---------------------------------------------------- */
-
-#define MOS_ENUM_CAP 64
-
-void mos_enumerate_devices(mos_enumerate_cb cb, void *ctx)
-{
-    if (!cb) return;
-
-    /* DR-backed (mos_dr.c): the snapshot arrives in DR device-array order,
-       the public ordering contract (same array drutil enumerates), already
-       deduped to one DRDevice per drive. Identity strings ride the snapshot
-       but mos_device_info_t doesn't surface them — identity is handle data,
-       not enumeration data. */
-    mos_internal_dr_snapshot snap[MOS_ENUM_CAP];
-    size_t n = mos_internal_dr_copy_snapshot(snap, MOS_ENUM_CAP);
-
-    for (size_t i = 0; i < n; ++i) {
-        struct mos_device_info info = {
-            .bsd_unit    = snap[i].bsd_unit,
-            .registry_id = snap[i].registry_id,
-        };
-        if (!cb(&info, ctx)) break;
-    }
-}
-
-/* Enumeration yields bsd_unit + registry_id only; -1 for an empty drive. */
-int64_t mos_device_info_bsd_unit(const mos_device_info_t *i) { return i ? i->bsd_unit : -1; }
-uint64_t mos_device_info_registry_id(const mos_device_info_t *i) { return i ? i->registry_id : 0; }
-
-/* The bsd_unit a handle was opened against, for partial-failure paths where
-   open succeeded but a later call errored. -1 for an empty drive. */
-int64_t mos_handle_bsd_unit(const mos_handle_t *h)
-{
-    return h ? h->bsd_unit : -1;
-}
-
-io_service_t mos_internal_handle_get_service(mos_handle_t *h) {
-    /* No retain taken — caller must IOObjectRetain before mos_close(h)
-       (contract in mos_internal.h). */
-    return h ? h->svc : IO_OBJECT_NULL;
-}
-
-/* ---- Open / close --------------------------------------------------- */
-
-static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
-{
-    mos_handle_t *h = calloc(1, sizeof(*h));
-    if (!h) { IOObjectRelease(svc); if (err) *err = MOS_ERR_OOM; return NULL; }
-    h->svc = svc;
-    /* Attachment identity, captured once. Best-effort: a failed call leaves
-       the calloc'd 0, documented as "unavailable", never fabricated. */
-    if (IORegistryEntryGetRegistryEntryID(svc, &h->drive_registry_id)
-            != KERN_SUCCESS) {
-        h->drive_registry_id = 0;
-    }
-    /* Best-effort, not a gate: a nameless empty drive opens fine (plug-in
-       and queries run off svc). Media-scoped queries re-run this per call
-       so a handle held across insert/eject stays current. */
-    mos_internal_refresh_media_identity(h);   /* sets bsd_unit/-1, media_id, size */
-
-    SInt32 score = 0;
-    kern_return_t kr = IOCreatePlugInInterfaceForService(
-        svc,
-        kIOMMCDeviceUserClientTypeID,
-        kIOCFPlugInInterfaceID,
-        &h->plugin, &score);
-    if (kr != KERN_SUCCESS || !h->plugin) {
-        /* Apple's kext declined to attach SCSITaskUserClient (match
-           behavior has shifted across macOS releases — see KNOWN UNKNOWNS). */
-        if (err) *err = MOS_ERR_DRIVER_REJECTED;
-        mos_close(h);
-        return NULL;
-    }
-
-    HRESULT hr = (*h->plugin)->QueryInterface(
-        h->plugin,
-        CFUUIDGetUUIDBytes(kIOMMCDeviceInterfaceID),
-        (LPVOID *)&h->mmc);
-    if (hr != S_OK || !h->mmc) {
-        /* COM leaves the out pointer untouched on failure (calloc-NULL
-           here); NULL it anyway so mos_close never Releases garbage if a
-           plug-in violates that. */
-        h->mmc = NULL;
-        if (err) *err = MOS_ERR_DRIVER_REJECTED;
-        mos_close(h);
-        return NULL;
-    }
-
-    /* Identity from the DR directory (device-static). Non-fatal on
-       failure — empty strings. */
-    (void)mos_internal_dr_copy_identity_for_service(
-        h->svc,
-        h->vendor_str,   sizeof h->vendor_str,
-        h->product_str,  sizeof h->product_str,
-        h->revision_str, sizeof h->revision_str);
-
-    if (err) *err = MOS_OK;
-    return h;
-}
-
-mos_handle_t *mos_open_by_bsd_name(const char *want, mos_error *err_out)
-{
-    if (err_out) *err_out = MOS_ERR_INVALID_ARG;
-    if (!want) return NULL;
-
-    /* parse_bsd_unit accepts disk4 / rdisk4 / /dev/ forms, -1 otherwise.
-       Empty drives have no unit, so this never resolves a nameless drive —
-       they're index/enumeration-only. Preserves the CLI contract: malformed
-       name = invalid_arg/64, well-formed-but-absent = no_device/66. */
-    int64_t want_unit = mos_internal_parse_bsd_unit(want);
-    if (want_unit < 0) return NULL;
-
-    /* Reconstruct canonical "diskN" before asking DR — it documents the
-       plain /dev entry name, and normalization stays with parse_bsd_unit,
-       not the caller's prefix. The resulting registry ID reopens atomically
-       below (same TOCTOU posture as open-by-index): a name DR resolved but
-       whose entry then terminated returns NO_DEVICE, never another drive. */
-    char disk_name[MOS_BSD_NAME_CAP];
-    if (!mos_bsd_name_format(want_unit, disk_name, sizeof disk_name)) {
-        return NULL;
-    }
-    uint64_t id = mos_internal_dr_registry_id_for_bsd_name(disk_name);
-    if (id == 0) {
-        if (err_out) *err_out = MOS_ERR_NO_DEVICE;
-        return NULL;
-    }
-    return mos_internal_open_by_registry_id(id, err_out);
-}
-
-mos_handle_t *mos_open_by_registry_id(uint64_t registry_id,
-                                      mos_error *err_out)
-{
-    if (registry_id == 0) {
-        if (err_out) *err_out = MOS_ERR_INVALID_ARG;
-        return NULL;
-    }
-    return mos_internal_open_by_registry_id(registry_id, err_out);
-}
-
-/* Collects registry IDs (not BSD names) for by-index reopen: names can
-   shift on hot-plug between enumerate and reopen (TOCTOU), while a registry
-   entry ID is stable and reopens atomically via IORegistryEntryIDMatching. */
-typedef struct {
-    uint64_t ids[MOS_ENUM_CAP];
-    size_t   count;
-} mos_internal_id_collect;
-
-static bool mos_internal_collect_cb(const mos_device_info_t *info, void *ctx)
-{
-    mos_internal_id_collect *c = (mos_internal_id_collect *)ctx;
-    if (c->count >= MOS_ENUM_CAP) return false;
-    uint64_t id = mos_device_info_registry_id(info);
-    if (id != 0) {
-        c->ids[c->count++] = id;
-    }
-    return true;
-}
-
-/* Reopen by registry entry ID — race-free (kernel resolves the match
-   atomically). Used by mos_open_by_index; non-static for the watch
-   adapter's per-probe reopen. Contract in mos_internal.h. */
-mos_handle_t *mos_internal_open_by_registry_id(uint64_t id,
-                                               mos_error *err_out)
-{
-    if (err_out) *err_out = MOS_ERR_INVALID_ARG;
-    if (id == 0) return NULL;
-
-    CFMutableDictionaryRef m = IORegistryEntryIDMatching(id);
-    if (!m) {
-        if (err_out) *err_out = MOS_ERR_IO;
-        return NULL;
-    }
-
-    /* IOServiceGetMatchingService consumes the dictionary reference
-       (IOKit ownership rule) whether or not it matches — no CFRelease here. */
-    io_service_t svc = IOServiceGetMatchingService(kIOMainPortDefault, m);
-    if (svc == IO_OBJECT_NULL) {
-        /* Enumerated earlier but gone now — hot-unplugged between
-           enumeration and open. NO_DEVICE distinguishes this from a bad
-           index. */
-        if (err_out) *err_out = MOS_ERR_NO_DEVICE;
-        return NULL;
-    }
-
-    return mos_internal_open_service(svc, err_out);
-}
-
-mos_handle_t *mos_open_by_index(int one_based, mos_error *err_out)
-{
-    if (err_out) *err_out = MOS_ERR_INVALID_ARG;
-    if (one_based < 1) return NULL;
-
-    /* Two-stage but race-free: enumerate to collect registry IDs in DR
-       order (the index contract), then reopen the captured ID atomically.
-       A hot-plug between passes either succeeds or returns NO_DEVICE, never
-       opens a different drive that inherited the BSD name. */
-
-    mos_internal_id_collect c = { {0}, 0 };
-    mos_enumerate_devices(mos_internal_collect_cb, &c);
-    if ((size_t)one_based > c.count) {
-        if (err_out) *err_out = MOS_ERR_NO_DEVICE;
-        return NULL;
-    }
-    return mos_internal_open_by_registry_id(c.ids[one_based - 1], err_out);
-}
-
-mos_handle_t *mos_open_device(const mos_device_info_t *info,
-                              mos_error *err_out)
-{
-    if (err_out) *err_out = MOS_ERR_INVALID_ARG;
-    if (!info || info->registry_id == 0) return NULL;
-
-    /* The registry ID reopens atomically, so opening from inside the
-       enumeration callback has no TOCTOU window and no re-enumeration —
-       the one-snapshot path CLI list/status use. */
-    return mos_internal_open_by_registry_id(info->registry_id, err_out);
-}
-
-void mos_close(mos_handle_t *h)
-{
-    if (!h) return;
-    if (h->std) {
-        if (h->have_exclusive) (*h->std)->ReleaseExclusiveAccess(h->std);
-        (*h->std)->Release(h->std);
-    }
-    if (h->mmc)    (*h->mmc)->Release(h->mmc);
-    if (h->plugin) IODestroyPlugInInterface(h->plugin);
-    if (h->svc)    IOObjectRelease(h->svc);
-    free(h);
-}
-
-/* ---- MMC convenience wrappers ------------------------------------- *
- *
- * No exclusive access required (the point of MMC vs raw
- * SCSITaskDeviceInterface). Can still return kIOReturnExclusiveAccess when
- * another client holds the drive — that's a caller-sees-BUSY.
- *
- * Signatures verified against the macOS 26.5 SDK SCSITaskLib.h.
- */
-
-/* Pin the IOKit constants to the literals the pure mapping expects, so an
-   SDK renumbering breaks the build loudly instead of miscategorizing
-   IOReturn codes. */
-_Static_assert((uint32_t)kIOReturnSuccess         == 0x00000000u,
-               "kIOReturnSuccess mapping in mos_pure.c is out of date");
-_Static_assert((uint32_t)kIOReturnNoMemory        == 0xE00002BDu,
-               "kIOReturnNoMemory mapping in mos_pure.c is out of date");
-_Static_assert((uint32_t)kIOReturnNoResources     == 0xE00002BEu,
-               "kIOReturnNoResources mapping in mos_pure.c is out of date");
-_Static_assert((uint32_t)kIOReturnNoDevice        == 0xE00002C0u,
-               "kIOReturnNoDevice mapping in mos_pure.c is out of date — "
-               "the watch core's terminal-removal path depends on this");
-_Static_assert((uint32_t)kIOReturnBadArgument     == 0xE00002C2u,
-               "kIOReturnBadArgument mapping in mos_pure.c is out of date");
-_Static_assert((uint32_t)kIOReturnExclusiveAccess == 0xE00002C5u,
-               "kIOReturnExclusiveAccess mapping in mos_pure.c is out of date");
-_Static_assert((uint32_t)kIOReturnUnsupported     == 0xE00002C7u,
-               "kIOReturnUnsupported mapping in mos_pure.c is out of date");
-_Static_assert((uint32_t)kIOReturnBusy            == 0xE00002D5u,
-               "kIOReturnBusy mapping in mos_pure.c is out of date");
-_Static_assert((uint32_t)kIOReturnTimeout         == 0xE00002D6u,
-               "kIOReturnTimeout mapping in mos_pure.c is out of date");
-_Static_assert((uint32_t)kIOReturnNotAttached     == 0xE00002D9u,
-               "kIOReturnNotAttached mapping in mos_pure.c is out of date");
-
-/* mos_raw_cdb passes mos_xfer_dir straight to SetScatterGatherEntries, so
-   the public values MUST equal the SDK's kSCSIDataTransfer_* enumerators —
-   a renumbering would send CDBs in the wrong direction. Pin them. */
-_Static_assert((int)MOS_XFER_NONE        == (int)kSCSIDataTransfer_NoDataTransfer,
-               "MOS_XFER_NONE no longer matches kSCSIDataTransfer_NoDataTransfer "
-               "— mos_raw_cdb passes mos_xfer_dir directly to "
-               "SetScatterGatherEntries; the values MUST be identical.");
-_Static_assert((int)MOS_XFER_TO_TARGET   == (int)kSCSIDataTransfer_FromInitiatorToTarget,
-               "MOS_XFER_TO_TARGET no longer matches "
-               "kSCSIDataTransfer_FromInitiatorToTarget — see MOS_XFER_NONE "
-               "assertion above for the rationale.");
-_Static_assert((int)MOS_XFER_FROM_TARGET == (int)kSCSIDataTransfer_FromTargetToInitiator,
-               "MOS_XFER_FROM_TARGET no longer matches "
-               "kSCSIDataTransfer_FromTargetToInitiator — see MOS_XFER_NONE "
-               "assertion above for the rationale.");
-
-/* The pure tray classifier (mos_pure.c) compares mos_raw_cdb's task status
-   against MOS_SCSI_STATUS_GOOD but can't include the SDK to check they
-   agree — pin it here, the one TU that sees both names. */
-_Static_assert((int)MOS_SCSI_STATUS_GOOD == (int)kSCSITaskStatus_GOOD,
-               "MOS_SCSI_STATUS_GOOD no longer matches kSCSITaskStatus_GOOD "
-               "— the pure tray classifier would misclassify GOOD status.");
-
-/* Thin shim over the pure mapping in mos_pure.c (int32_t in, fixture-tested
-   without IOKit). Maps transport-layer failures only — CHECK CONDITION
-   rides taskStatus/sense, not IOReturn. */
-mos_error mos_internal_ioreturn_to_mos_error(IOReturn rc)
-{
-    return mos_internal_ioreturn_to_error((int32_t)rc);
-}
-
-mos_error mos_internal_mmc_get_tray_state(mos_handle_t *h, bool *tray_open)
-{
-    if (!h || !tray_open) return MOS_ERR_INVALID_ARG;
-
-    /* Raw GET EVENT STATUS NOTIFICATION (0x4A), Media class, Polled. We do
-       NOT use the GetTrayState convenience method: on a GESN failure it
-       hard-codes (closed, success) (ARCHITECTURE.md §4.2, §9.7), masking the
-       failure. Issuing the CDB ourselves keeps a failure a failure so the
-       state core can fork on the TUR sense.
-
-       Reached only on the not-ready path (TUR already proved reachable and
-       not mounted), so exclusive access is free of mount conflict.
-       mos_raw_cdb acquires and releases the lock per call — single-shot,
-       never held.
-
-       CDB and response byte map: ARCHITECTURE.md §4.2. */
-    const uint8_t cdb[10] = {
-        0x4A,        /* GET EVENT STATUS NOTIFICATION              */
-        0x01,        /* byte1 bit0 IMMED = 1 → Polled mode         */
-        0x00, 0x00,
-        0x10,        /* byte4 Notification Class Request = Media   */
-        0x00, 0x00,
-        0x00, 0x08,  /* bytes7-8 Allocation Length = 8 (BE)        */
-        0x00,        /* control                                    */
-    };
-
-    uint8_t  resp[8]     = {0};
-    uint32_t task_status = 0;
-    uint8_t  sense[18]   = {0};
-
-    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb,
-                              resp, sizeof resp,
-                              MOS_XFER_FROM_TARGET,
-                              2000,                 /* ms, ARCHITECTURE.md §4.2 */
-                              &task_status, sense, NULL);
-    if (e != MOS_OK) return e;                      /* transport/lock: honest fail */
-    if (task_status != kSCSITaskStatus_GOOD)        /* CHECK CONDITION etc.        */
-        return MOS_ERR_IO;
-
-    /* Validity gates (NEA, Media class, full span) live in the pure decoder
-       so they're fuzz/ASan-checked headless. The buffer span is the bound;
-       the decoder trusts the reply's own Event Data Length, not the
-       transport's realized count (some USB bridges under-report it). A false
-       return means "no authoritative bit" — fork on the TUR sense. */
-    if (!mos_internal_gesn_media_door_open(resp, sizeof resp, tray_open))
-        return MOS_ERR_IO;
-
-    return MOS_OK;
-}
-
-mos_error mos_internal_mmc_test_unit_ready(mos_handle_t *h,
-                                           uint32_t *status,
-                                           uint8_t sense[18])
-{
-    if (!h || !h->mmc || !status || !sense) return MOS_ERR_INVALID_ARG;
-
-    /* A non-IOKit failure surfaces as outTaskStatus == CHECK CONDITION with
-       valid sense; IOReturn covers only transport errors. */
-    SCSITaskStatus  task_status  = 0;
-    SCSI_Sense_Data sense_struct = {0};
-
-    IOReturn rc = (*h->mmc)->TestUnitReady(h->mmc, &task_status, &sense_struct);
-    if (rc != kIOReturnSuccess) {
-        /* Transport failure: zero outputs, return the mapped error.
-           *status is meaningful only on MOS_OK. */
-        *status = 0;
-        memset(sense, 0, 18);
-        return mos_internal_ioreturn_to_mos_error(rc);
-    }
-
-    *status = (uint32_t)task_status;
-    memcpy(sense, &sense_struct, 18);
-    return MOS_OK;
-}
-
-/* RETURN-CONVENTION: returns MOS_ERR_IO for reached-but-unusable replies
-   (non-GOOD status, truncated GOOD) rather than clearing the out-param.
-   Load-bearing: 0x0000 is a REAL answer ("no current profile"), so a
-   malformed reply must be distinguishable out-of-band or it masquerades as
-   no-media. (Identity strings have no such collision, so that seam clears
-   in-band.) The caller treats both shapes as non-fatal enrichment skips. */
-mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profile)
-{
-    if (!h || !h->mmc || !profile) return MOS_ERR_INVALID_ARG;
-
-    /* RT=2 ("only this feature") with starting feature 0x0000 returns just
-       the 8-byte feature header. */
-    uint8_t          buf[16] = {0};
-    SCSITaskStatus   st      = 0;
-    SCSI_Sense_Data  sd      = {0};
-
-    IOReturn rc = (*h->mmc)->GetConfiguration(
-        h->mmc,
-        (UInt8)0x02,             /* RT = 10b, only the feature we asked for */
-        (UInt16)0x0000,          /* starting feature: Profile List           */
-        buf, (UInt16)sizeof(buf),
-        &st, &sd);
-
-    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
-        *profile = 0x0000;
-        /* Distinguish transport failure (map the IOReturn) from non-GOOD
-           status (reached the drive, no usable data) — report I/O failure,
-           not a misleading "no profile". */
-        return (rc != kIOReturnSuccess) ? mos_internal_ioreturn_to_mos_error(rc)
-                                        : MOS_ERR_IO;
-    }
-
-    /* Gate extraction on the reply's Feature Header Data Length (pure
-       decoder, fuzz-checked): a GOOD-but-short transfer must surface as "no
-       profile", not a silent 0x0000 that reads like no-media. Buffer is the
-       bound; the reply's own Data Length is the validity check (convenience
-       GetConfiguration reports no realized count). */
-    uint16_t parsed = 0x0000;
-    if (!mos_internal_config_current_profile(buf, sizeof(buf), &parsed)) {
-        *profile = 0x0000;
-        return MOS_ERR_IO;          /* truncated/short reply — enrichment skips it */
-    }
-    *profile = parsed;
-    return MOS_OK;
-}
-
-/* Open-time directory identity for the drive verb: zero commands, borrowed
-   strings pointing into the handle's buffers (same as the state result). */
-const char *mos_handle_vendor(const mos_handle_t *h)
-{
-    return (h && h->vendor_str[0]) ? h->vendor_str : NULL;
-}
-
-const char *mos_handle_product(const mos_handle_t *h)
-{
-    return (h && h->product_str[0]) ? h->product_str : NULL;
-}
-
-const char *mos_handle_revision(const mos_handle_t *h)
-{
-    return (h && h->revision_str[0]) ? h->revision_str : NULL;
-}
-
-uint64_t mos_handle_registry_id(const mos_handle_t *h)
-{
-    return h ? h->drive_registry_id : 0;
-}
-
-/* Identity is directory data from DRDeviceCopyInfo (framework-parsed
-   INQUIRY bytes), copied through the bounded truncating seam in mos_dr.c.
-   Hostile bytes are escaped at the output layer (mos_cli_json_str /
-   mos_cli_safe_ascii). */
-
-/* ---- Raw CDB (diagnostic only) ------------------------------------- */
-
-mos_error mos_raw_cdb(mos_handle_t *h,
-                      const uint8_t *cdb, size_t cdb_len,
-                      void *data_buf, size_t data_len,
-                      mos_xfer_dir direction,
-                      uint32_t timeout_ms,
-                      uint32_t *scsi_task_status,
-                      uint8_t   sense[18],
-                      uint64_t *bytes_transferred)
-{
-    /* SetCommandDescriptorBlock accepts only 6/10/12/16 (kSCSICDBSize_*).
-       Reject other lengths here so callers get MOS_ERR_INVALID_ARG, not an
-       opaque execute-time failure. */
-    if (!h || !h->mmc || !cdb || !scsi_task_status || !sense)
-        return MOS_ERR_INVALID_ARG;
-    if (cdb_len != 6 && cdb_len != 10 && cdb_len != 12 && cdb_len != 16)
-        return MOS_ERR_INVALID_ARG;
-    if (direction != MOS_XFER_NONE &&
-        direction != MOS_XFER_FROM_TARGET &&
-        direction != MOS_XFER_TO_TARGET)
-        return MOS_ERR_INVALID_ARG;
-    if (direction == MOS_XFER_NONE) {
-        if (data_len != 0) return MOS_ERR_INVALID_ARG;
-    } else {
-        if (data_len == 0 || data_buf == NULL) return MOS_ERR_INVALID_ARG;
-    }
-    /* Timeout 0 means "Wait Forever" to SetTimeoutDuration — reject it so a
-       non-responsive command can't hang. */
-    if (timeout_ms == 0)
-        return MOS_ERR_INVALID_ARG;
-
-    /* Zero outputs after arg validation so error paths leave a deterministic
-       zero state for consumers who skip the return check. Validation
-       failures above leave outputs untouched ("never started"). */
-    *scsi_task_status = 0;
-    memset(sense, 0, 18);
-    if (bytes_transferred) *bytes_transferred = 0;
-
-    /* Lazily acquire the SCSITaskDeviceInterface. */
-    if (!h->std) {
-        h->std = (*h->mmc)->GetSCSITaskDeviceInterface(h->mmc);
-        if (!h->std) return MOS_ERR_DRIVER_REJECTED;
-    }
-
-    /* Invariant pin (debug): every raw_cdb call releases exclusive access on
-       every exit path, so the lock is never held across calls — it must be
-       free on entry. A future early return that forgot to clear
-       have_exclusive would otherwise skip the acquire below and run the CDB
-       believing it holds a lock it doesn't; assert catches that in debug. */
-    assert(!h->have_exclusive);
-
-    /* Raw CDB requires exclusive access. */
-    if (!h->have_exclusive) {
-        IOReturn rx = (*h->std)->ObtainExclusiveAccess(h->std);
-        if (rx != kIOReturnSuccess)
-            return mos_internal_ioreturn_to_mos_error(rx);
-        h->have_exclusive = true;
-    }
-
-    SCSITaskInterface **t = (*h->std)->CreateSCSITask(h->std);
-    if (!t) {
-        /* Release the lock acquired above (every exit clears
-           have_exclusive, so it's always false on entry) — holding it is
-           pointless without a task. */
-        (*h->std)->ReleaseExclusiveAccess(h->std);
-        h->have_exclusive = false;
-        return MOS_ERR_IO;
-    }
-
-    /* Check each Set* IOReturn — ignoring one ships a malformed task and a
-       baffling execute-time error. Identical cleanup, so all converge on
-       one label. */
-    IOReturn sr;
-    sr = (*t)->SetCommandDescriptorBlock(t, (UInt8 *)cdb, (UInt8)cdb_len);
-    if (sr != kIOReturnSuccess) goto setup_failed;
-
-    IOVirtualRange sg = { (IOVirtualAddress)data_buf, (IOByteCount)data_len };
-    sr = (*t)->SetScatterGatherEntries(t,
-        data_len ? &sg : NULL,
-        (UInt8)(data_len ? 1 : 0),
-        (UInt64)data_len,
-        (UInt8)direction);
-    if (sr != kIOReturnSuccess) goto setup_failed;
-
-    sr = (*t)->SetTimeoutDuration(t, timeout_ms);
-    if (sr != kIOReturnSuccess) goto setup_failed;
-
-    /* sense was zeroed in the zero-outputs block; nothing writes it since. */
-    SCSI_Sense_Data sense_struct = {0};
-    SCSITaskStatus   st           = 0;
-    UInt64           xferred      = 0;
-
-    IOReturn er = (*t)->ExecuteTaskSync(t, &sense_struct, &st, &xferred);
-    (*t)->Release(t);
-
-    /* Release before returning: a diagnostic command must not hold the lock
-       for the handle's lifetime (would block Finder / MakeMKV / DA mounts).
-       Released on success and IO-failure; only the InvalidArg exits skip it,
-       never having acquired. */
-    (*h->std)->ReleaseExclusiveAccess(h->std);
-    h->have_exclusive = false;
-
-    /* Transport failure: outputs stay at the zeros above (defined, not
-       garbage); st/sense/xferred aren't copied. */
-    if (er != kIOReturnSuccess) {
-        return mos_internal_ioreturn_to_mos_error(er);
-    }
-
-    *scsi_task_status = (uint32_t)st;
-    memcpy(sense, &sense_struct, 18);
-    if (bytes_transferred) *bytes_transferred = (uint64_t)xferred;
-
-    return MOS_OK;
-
-setup_failed:
-    (*t)->Release(t);
-    (*h->std)->ReleaseExclusiveAccess(h->std);
-    h->have_exclusive = false;
-    return mos_internal_ioreturn_to_mos_error(sr);
-}
-
-/* ==== src/mos_query.c ==== */
-/*
- * mos_query.c — the typed MMC query surface. Each mos_query_* verb issues one
- * MMCDeviceInterface convenience command, hands the reply to a pure decoder,
- * caches the result on the handle, and returns a borrowed pointer.
- *
- * Every command here is a NON-EXCLUSIVE convenience method, with ONE
- * documented exception: mos_query_capacity composes a formattable view from a
- * raw READ FORMAT CAPACITIES (0x23) — no convenience method carries 0x23, so
- * it is the fifth raw verb (layer-1 showings:
- * doc/research/2026-06-18-read-format-capacities-feasibility.md). It goes
- * through mos_scsi.c's mos_raw_cdb (still the SINGLE ObtainExclusiveAccess
- * call site, AGENTS scope-doctrine §3 — this file calls it, never takes the
- * lock itself). It is doubly gated: first on the current PROFILE (a cheap
- * non-exclusive GET CONFIGURATION) — only formattable media (rewritable +
- * BD-R) has a formattable view, so pressed / write-once CD-R,DVD±R / empty
- * media reach no raw read and no lock attempt at all — then, for formattable
- * profiles, on exclusive access (mos_raw_cdb fails BUSY without issuing the CDB
- * when anything holds the drive). So the formattable view stays unset on
- * non-formattable or mounted/contended media and never disturbs a nub.
- */
-
-
-#include <string.h>
-
-mos_error mos_query_disc_info(mos_handle_t *h, const mos_disc_info **out)
-{
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    /* 34 bytes: the fixed numeric region plus lead-in/lead-out addresses,
-       matching the readdiscinfo_*.bin fixtures. The convenience method
-       reports no realized count, so sizeof buf is the trusted length
-       (dual-length rule O-4); the reply's own Disc Information Length can
-       only shrink the decode, never extend it. */
-    uint8_t         buf[34] = {0};
-    SCSITaskStatus  st      = 0;
-    SCSI_Sense_Data sd      = {0};
-
-    IOReturn rc = (*h->mmc)->ReadDiscInformation(
-        h->mmc, buf, (UInt16)sizeof(buf), &st, &sd);
-
-    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
-        /* Transport failure maps its IOReturn; a command that reached the
-           drive but gave no usable data (no medium, a unit that rejects
-           0x51) is MOS_ERR_IO — out-of-band, never mistakable for a real
-           all-zero answer. This convention repeats across the verbs below. */
-        return (rc != kIOReturnSuccess)
-                   ? mos_internal_ioreturn_to_mos_error(rc)
-                   : MOS_ERR_IO;
-    }
-
-    if (!mos_internal_disc_info_parse(buf, sizeof(buf), &h->disc_info)) {
-        return MOS_ERR_IO;   /* short reply — refused whole */
-    }
-    *out = &h->disc_info;
-    return MOS_OK;
-}
-
-mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
-{
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    /* Format 0000b worst case: 4-byte header + 100 descriptors
-       (99 tracks + lead-out) x 8. sizeof buf is the trusted length (O-4);
-       the reply's own TOC Data Length only shrinks the parse. MSF=0 (LBA),
-       starting track 0 (= from first). */
-    uint8_t         buf[4 + 100 * 8] = {0};
-    SCSITaskStatus  st               = 0;
-    SCSI_Sense_Data sd               = {0};
-
-    IOReturn rc = (*h->mmc)->ReadTableOfContents(
-        h->mmc, 0 /*LBA*/, 0x00 /*format*/, 0 /*from first track*/,
-        buf, (UInt16)sizeof(buf), &st, &sd);
-
-    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
-        return (rc != kIOReturnSuccess)
-                   ? mos_internal_ioreturn_to_mos_error(rc)
-                   : MOS_ERR_IO;
-    }
-
-    if (!mos_internal_toc_parse(buf, sizeof(buf), &h->toc)) {
-        return MOS_ERR_IO;   /* incoherent TOC — refused whole */
-    }
-    *out = &h->toc;
-    return MOS_OK;
-}
-
-mos_error mos_query_cdtext(mos_handle_t *h, const mos_cdtext **out)
-{
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    /* READ TOC/PMA/ATIP format 0101b (CD-TEXT). 256 packs (4612 bytes)
-       holds any real disc's album-level blocks several times over; a longer
-       reply is clamped to sizeof buf (the trusted length, O-4) and the
-       reply's own CD-TEXT Data Length only shrinks the parse. The
-       track/session parameter is reserved here — passed 0. */
-    uint8_t         buf[4 + 256 * 18] = {0};
-    SCSITaskStatus  st                = 0;
-    SCSI_Sense_Data sd                = {0};
-
-    IOReturn rc = (*h->mmc)->ReadTableOfContents(
-        h->mmc, 0 /*LBA*/, 0x05 /*CD-TEXT*/, 0 /*reserved*/,
-        buf, (UInt16)sizeof(buf), &st, &sd);
-
-    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
-        return (rc != kIOReturnSuccess)
-                   ? mos_internal_ioreturn_to_mos_error(rc)
-                   : MOS_ERR_IO;
-    }
-
-    if (!mos_internal_cdtext_parse(buf, sizeof(buf), &h->cdtext)) {
-        return MOS_ERR_IO;   /* no CD-TEXT / no usable album field */
-    }
-    *out = &h->cdtext;
-    return MOS_OK;
-}
-
-mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
-{
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    /* RT=0: header + every feature the drive implements. 1024 bytes holds
-       real feature lists several times over (a loaded BD-RE runs ~400
-       bytes); a longer claim is clamped to sizeof buf, and the reply's own
-       lengths only shrink the walk (O-4). Feature absent (every non-BD
-       drive) decodes to aacs=false — data, not an error. */
-    uint8_t         buf[1024] = {0};
-    SCSITaskStatus  st        = 0;
-    SCSI_Sense_Data sd        = {0};
-
-    IOReturn rc = (*h->mmc)->GetConfiguration(
-        h->mmc,
-        (UInt8)0x00,             /* RT = 00b, all features              */
-        (UInt16)0x0000,          /* starting feature number             */
-        buf, (UInt16)sizeof(buf),
-        &st, &sd);
-
-    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
-        return (rc != kIOReturnSuccess)
-                   ? mos_internal_ioreturn_to_mos_error(rc)
-                   : MOS_ERR_IO;
-    }
-
-    mos_internal_protection_from_config(buf, sizeof(buf), &h->caps);
-    /* Same RT=0 reply carries the Profile List feature (0x0000); decode the
-       drive-static supported-profile set from it (protection_from_config zeroed
-       the struct first, so profile_count stays 0 if the feature is absent). */
-    mos_internal_profile_list_from_config(buf, sizeof(buf), h->caps.profiles,
-                                          MOS_DRIVE_PROFILE_CAP,
-                                          &h->caps.profile_count);
-    /* Firmware creation timestamp (feature 010Ch) from the same RT=0 reply. */
-    mos_internal_firmware_date_from_config(buf, sizeof(buf),
-                                           h->caps.firmware_date,
-                                           sizeof h->caps.firmware_date);
-    /* Current Profile (loaded medium) from the same RT=0 header — 0 when the
-       field is absent/truncated or the tray is empty. Media-dependent; used
-       only to name the loaded disc's class (e.g. speed 1x scaling). */
-    if (!mos_internal_config_current_profile(buf, sizeof(buf),
-                                             &h->caps.current_profile))
-        h->caps.current_profile = 0;
-    *out = &h->caps;
-    return MOS_OK;
-}
-
-mos_error mos_enumerate_features(mos_handle_t *h,
-                                 bool (*cb)(const mos_feature_info_t *f,
-                                            void *ctx),
-                                 void *ctx)
-{
-    if (!h || !h->mmc || !cb) return MOS_ERR_INVALID_ARG;
-
-    /* Same issuance and trust terms as mos_query_drive_caps: RT=0 into a
-       1024-byte buffer, sizeof buf trusted, reply lengths shrink-only (O-4). */
-    uint8_t         buf[1024] = {0};
-    SCSITaskStatus  st        = 0;
-    SCSI_Sense_Data sd        = {0};
-
-    IOReturn rc = (*h->mmc)->GetConfiguration(
-        h->mmc, (UInt8)0x00, (UInt16)0x0000,
-        buf, (UInt16)sizeof(buf), &st, &sd);
-
-    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
-        return (rc != kIOReturnSuccess)
-                   ? mos_internal_ioreturn_to_mos_error(rc)
-                   : MOS_ERR_IO;
-    }
-
-    size_t             cursor = 8;
-    mos_config_feature feat;
-    while (mos_internal_config_next_feature(buf, sizeof buf, &cursor, &feat)) {
-        mos_feature_info_t info = {
-            .code       = feat.feature_code,
-            .current    = feat.current,
-            .persistent = feat.persistent,
-            .version    = feat.version,
-        };
-        if (!cb(&info, ctx)) break;     /* caller-requested stop, not an error */
-    }
-    return MOS_OK;
-}
-
-mos_error mos_query_disc_id(mos_handle_t *h, const mos_disc_id **out)
-{
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    /* One-shot read of the full BD Disc Information into a fixed buffer
-       (BD DI maxes ~3588 bytes; 4096 covers it). Deliberately not
-       dvd+rw-mediainfo's two-phase read-length-then-realloc: a single
-       fixed buffer means no device-reported length ever drives an
-       allocation or second transfer. sizeof buf is the trusted length
-       (O-4); the reply's own Disc Structure Data Length only shrinks the
-       parse, and an under-filled reply leaves zeros that fail the 'DI'
-       gate. MEDIA_TYPE=1 (BD), FORMAT=0x00 (DI), ADDRESS/LAYER 0. */
-    uint8_t         buf[4096] = {0};
-    SCSITaskStatus  st        = 0;
-    SCSI_Sense_Data sd        = {0};
-
-    IOReturn rc = (*h->mmc)->ReadDiscStructure(
-        h->mmc,
-        (UInt8)0x01,             /* MEDIA_TYPE = Blu-ray            */
-        (UInt32)0,               /* ADDRESS                          */
-        (UInt8)0,                /* LAYER_NUMBER                     */
-        (UInt8)0x00,             /* FORMAT = Disc Information (DI)    */
-        buf, (UInt16)sizeof(buf),
-        &st, &sd);
-
-    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
-        return (rc != kIOReturnSuccess)
-                   ? mos_internal_ioreturn_to_mos_error(rc)
-                   : MOS_ERR_IO;
-    }
-
-    if (!mos_internal_bd_disc_id_parse(buf, sizeof(buf), &h->disc_id)) {
-        return MOS_ERR_IO;   /* not a DI reply (non-BD, or refused) */
-    }
-    *out = &h->disc_id;
-    return MOS_OK;
-}
-
-mos_error mos_query_physical_structure(mos_handle_t *h,
-                                       const mos_physical_structure **out)
-{
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    /* Two READ DISC STRUCTURE reads for DVD/HD-DVD (MEDIA_TYPE=0):
-       FORMAT 0x00 (Physical Format Info) and 0x01 (Copyright Management).
-       sizeof buf is the trusted length (O-4); the reply's own length only
-       shrinks the parse, and an under-filled reply fails the per-format
-       min-length gate. The two reads are independent (partial-readability
-       ladder), so a drive that answers one format but not the other still
-       yields the half it gave; both merge into one handle-owned struct. */
-    struct mos_physical_structure *d = &h->physical_structure;
-    *d = (struct mos_physical_structure){0};
-
-    uint8_t         buf[2048] = {0};
-    SCSITaskStatus  st        = 0;
-    SCSI_Sense_Data sd        = {0};
-
-    IOReturn rc = (*h->mmc)->ReadDiscStructure(
-        h->mmc,
-        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
-        (UInt32)0,               /* ADDRESS                          */
-        (UInt8)0,                /* LAYER_NUMBER                     */
-        (UInt8)0x00,             /* FORMAT = Physical Format Info    */
-        buf, (UInt16)sizeof(buf),
-        &st, &sd);
-    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
-        (void)mos_internal_physical_format_parse(buf, sizeof(buf), d);
-
-    memset(buf, 0, sizeof buf);
-    st = 0;
-    sd = (SCSI_Sense_Data){0};
-    rc = (*h->mmc)->ReadDiscStructure(
-        h->mmc,
-        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
-        (UInt32)0,               /* ADDRESS                          */
-        (UInt8)0,                /* LAYER_NUMBER                     */
-        (UInt8)0x01,             /* FORMAT = Copyright Management    */
-        buf, (UInt16)sizeof(buf),
-        &st, &sd);
-    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
-        (void)mos_internal_copyright_mgmt_parse(buf, sizeof(buf), d);
-
-    if (!d->have_physical && !d->have_copyright) {
-        return MOS_ERR_IO;   /* neither format answered (non-DVD or refused) */
-    }
-    *out = d;
-    return MOS_OK;
-}
-
-mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
-{
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    /* READ TRACK INFORMATION (0x52), first track. ADDRESS_TYPE = 01b
-       (logical track number), ADDRESS = 1 — well-defined on any media with
-       a track. 64 bytes covers the Track Information Block (core 36 bytes;
-       MMC-6 extends it slightly). sizeof buf is the trusted length (O-4);
-       the reply's Track Information Length only shrinks the parse.
-       Signature confirmed against SCSITaskLib.h (ADDRESS_NUMBER_TYPE,
-       LBA/track/session, buffer, bufferSize, taskStatus, senseData). */
-    uint8_t         buf[64] = {0};
-    SCSITaskStatus  st      = 0;
-    SCSI_Sense_Data sd      = {0};
-
-    IOReturn rc = (*h->mmc)->ReadTrackInformation(
-        h->mmc,
-        (UInt8)0x01,             /* ADDRESS_TYPE = logical track number */
-        (UInt32)1,               /* ADDRESS = first track               */
-        buf, (UInt16)sizeof(buf),
-        &st, &sd);
-
-    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
-        return (rc != kIOReturnSuccess)
-                   ? mos_internal_ioreturn_to_mos_error(rc)
-                   : MOS_ERR_IO;
-    }
-
-    if (!mos_internal_track_info_parse(buf, sizeof(buf), &h->track_info)) {
-        return MOS_ERR_IO;   /* short reply — refused whole */
-    }
-    *out = &h->track_info;
-    return MOS_OK;
-}
-
-/* READ FORMAT CAPACITIES (0x23) — the one raw CDB this file composes (header
-   note). Fills the formattable view: how big the medium is now, whether it is
-   unformatted, and the capacities it could be formatted to (the blank-
-   rewritable gap the other two capacity sources can't reach). Raw because no
-   convenience method carries 0x23; mos_raw_cdb takes the exclusive lock and
-   FAILS BUSY without issuing the CDB if anything holds the drive, so this backs
-   off cleanly (returns false → formattable stays unset) on mounted/contended
-   media and never disturbs a mounted nub. Read-only: never FORMAT UNIT. */
-#define MOS_FORMATCAP_REPLY_BUF 260u   /* 4-byte header + up to 32 * 8 desc */
-
-static bool mos_internal_read_format_caps(mos_handle_t *h,
-                                          struct mos_format_caps *out)
-{
-    if (out) *out = (struct mos_format_caps){0};
-    if (!h || !h->mmc || !out) return false;
-
-    /* READ FORMAT CAPACITIES (MMC 0x23), 10-byte CDB:
-         byte0   opcode 0x23
-         byte7-8 ALLOCATION LENGTH (BE)
-         else    0   */
-    const uint8_t cdb[10] = {
-        0x23, 0, 0, 0, 0, 0, 0,
-        (uint8_t)(MOS_FORMATCAP_REPLY_BUF >> 8),
-        (uint8_t)(MOS_FORMATCAP_REPLY_BUF & 0xFF),
-        0,
-    };
-
-    uint8_t  buf[MOS_FORMATCAP_REPLY_BUF] = {0};
-    uint32_t task_status                  = 0;
-    uint8_t  sense[18]                    = {0};
-    uint64_t xferred                      = 0;
-
-    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
-                              MOS_XFER_FROM_TARGET, 2000,
-                              &task_status, sense, &xferred);
-    if (e != MOS_OK) return false;                  /* BUSY/contended → no view */
-    if (task_status != MOS_SCSI_STATUS_GOOD) return false;
-
-    /* Dual-length rule (O-4): trust only the bytes actually delivered. */
-    size_t trusted = (xferred < sizeof buf) ? (size_t)xferred : sizeof buf;
-    return mos_internal_format_caps_parse(buf, trusted, out);
-}
-
-mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out)
-{
-    if (out) *out = NULL;
-    if (!h || !out) return MOS_ERR_INVALID_ARG;
-
-    struct mos_capacity *c = &h->capacity;
-    *c = (struct mos_capacity){0};
-
-    /* Held-handle freshness: re-resolve so the size reflects the current
-       disc, not the open-time one (mos_internal_refresh_media_identity). */
-    mos_internal_refresh_media_identity(h);
-
-    /* (a) Whole-disk byte capacity from the kernel's attach-time READ
-       CAPACITY, cached on the IOMedia node (no command, works on mounted
-       media). 0 == absent: a blank/absent disc has no whole-disk node. */
-    c->media_bytes = h->media_bytes;
-    c->block_bytes = h->media_block_bytes;
-
-    /* (b) Recordable / append-state via a fresh READ TRACK INFORMATION.
-       Best-effort and independent of (a): a drive that rejects 0x52 just
-       leaves have_recordable false. Guard on the MMC interface so a handle
-       lacking it still returns the media-size half. */
-    if (h->mmc) {
-        const mos_track_info *t = NULL;
-        if (mos_query_track_info(h, &t) == MOS_OK && t) {
-            c->have_recordable = true;
-            c->nwa_valid     = mos_track_info_nwa_valid(t);
-            c->free_blocks   = mos_track_info_free_blocks(t);
-            c->next_writable = mos_track_info_next_writable(t);
-            c->track_size    = mos_track_info_track_size(t);
+        if (d.kind == MOS_WATCH_DECIDE_TERMINAL) {
+            /* device_removed already emitted on an earlier call; this slot
+               pumped again (external notify after emission). Just free it. */
+            a->active[best] = false;
+            continue;
         }
-
-        /* (c) Formattable view via raw READ FORMAT CAPACITIES (0x23) — the
-           blank-rewritable gap (a)/(b) can't fill (no whole-disk node, no
-           track). TWO gates: first the current profile (a cheap, non-exclusive
-           GET CONFIGURATION) — only formattable media (rewritable + BD-R) has
-           a formattable view, so for pressed / write-once CD-R,DVD±R / empty
-           media we issue NO raw read and make NO exclusive-access attempt at
-           all; then, for formattable profiles, the raw read self-gates on
-           exclusive access (unset on BUSY/contended). */
-        uint16_t profile = 0;
-        if (mos_internal_mmc_get_current_profile(h, &profile) == MOS_OK &&
-            mos_internal_profile_is_formattable(profile))
-            c->have_formattable =
-                mos_internal_read_format_caps(h, &c->formattable);
+        /* SLEEP_UNTIL: fold the earliest deadline. */
+        if (d.next_poll_at_mono_ms < out.next_poll_at_mono_ms) {
+            out.next_poll_at_mono_ms = d.next_poll_at_mono_ms;
+        }
     }
-
-    *out = c;
-    return MOS_OK;
+    return out;
 }
 
-/* One GET PERFORMANCE (0xAC) Performance Data read in the given direction
-   (WRITE=0 read, WRITE=1 write). TOLERANCE=10b nominal, EXCEPT=0,
-   STARTING_LBA=0. Returns the decoded max kB/s + descriptor count. */
-static mos_error mos_internal_get_perf(mos_handle_t *h, uint8_t write,
-                                       uint32_t *max_kbps, uint16_t *count)
-{
-    uint8_t         buf[2048] = {0};
-    SCSITaskStatus  st        = 0;
-    SCSI_Sense_Data sd        = {0};
-
-    IOReturn rc = (*h->mmc)->GetPerformance(
-        h->mmc,
-        (UInt8)0x02,             /* TOLERANCE = 10b (nominal)      */
-        (UInt8)write,            /* WRITE                          */
-        (UInt8)0x00,             /* EXCEPT = 0 (nominal perf)      */
-        (UInt32)0,               /* STARTING_LBA                   */
-        (UInt16)64,              /* MAXIMUM_NUMBER_OF_DESCRIPTORS  */
-        buf, (UInt16)sizeof(buf),
-        &st, &sd);
-
-    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
-        return (rc != kIOReturnSuccess)
-                   ? mos_internal_ioreturn_to_mos_error(rc)
-                   : MOS_ERR_IO;
-    }
-    if (!mos_internal_perf_data_parse(buf, sizeof(buf), max_kbps, count)) {
-        return MOS_ERR_IO;   /* short/incoherent header */
-    }
-    return MOS_OK;
-}
-
-mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
-{
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    /* Two Performance Data reads assembled into one result. The read
-       direction is the gate (defines `have`); the write direction is
-       best-effort (read-only drive or non-writable medium leaves
-       max_write_kbps 0). */
-    struct mos_drive_perf *p = &h->drive_perf;
-    *p = (struct mos_drive_perf){0};
-
-    uint32_t rd_max = 0, wr_max = 0;
-    uint16_t rd_cnt = 0, wr_cnt = 0;
-
-    mos_error e = mos_internal_get_perf(h, 0, &rd_max, &rd_cnt);
-    if (e != MOS_OK) return e;
-
-    (void)mos_internal_get_perf(h, 1, &wr_max, &wr_cnt);  /* best-effort */
-
-    p->descriptor_count = rd_cnt;
-    p->max_read_kbps    = rd_max;
-    p->max_write_kbps   = wr_max;
-    p->have             = (rd_cnt > 0);   /* read direction is the gate */
-    *out = p;
-    return MOS_OK;
-}
-
-/* Shared MODE SENSE(10) issuance for the two read-only optical pages
-   (AGENTS.md scope doctrine, layer 2). Signature confirmed against
-   SCSITaskLib.h (LLBAA, DBD, PC, PAGE_CODE, buffer, bufferSize, taskStatus,
-   senseData). PC = 00b (current values); DBD=1 (no block descriptor) keeps
-   the reply compact, though the walker tolerates a descriptor either way. */
-static mos_error mos_internal_mode_sense10(mos_handle_t *h, uint8_t page,
-                                           uint8_t *buf, size_t buf_len)
-{
-    SCSITaskStatus  st = 0;
-    SCSI_Sense_Data sd = {0};
-    IOReturn rc = (*h->mmc)->ModeSense10(
-        h->mmc,
-        (UInt8)0,                /* LLBAA = 0                           */
-        (UInt8)1,                /* DBD = 1 (disable block descriptor)  */
-        (UInt8)0x00,             /* PC = current values                 */
-        (UInt8)page,             /* PAGE_CODE                           */
-        buf, (UInt16)buf_len,
-        &st, &sd);
-    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
-        return (rc != kIOReturnSuccess)
-                   ? mos_internal_ioreturn_to_mos_error(rc)
-                   : MOS_ERR_IO;
-    }
-    return MOS_OK;
-}
-
-mos_error mos_query_mode_caps(mos_handle_t *h, const mos_mode_caps **out)
-{
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    uint8_t   buf[96] = {0};
-    mos_error e = mos_internal_mode_sense10(h, 0x2A, buf, sizeof buf);
-    if (e != MOS_OK) return e;
-
-    if (!mos_internal_mode_caps_parse(buf, sizeof(buf), &h->mode_caps)) {
-        return MOS_ERR_IO;   /* page 0x2A absent or short — refused whole */
-    }
-    *out = &h->mode_caps;
-    return MOS_OK;
-}
-
-mos_error mos_query_error_recovery(mos_handle_t *h,
-                                   const mos_error_recovery **out)
-{
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    uint8_t   buf[64] = {0};
-    mos_error e = mos_internal_mode_sense10(h, 0x01, buf, sizeof buf);
-    if (e != MOS_OK) return e;
-
-    if (!mos_internal_error_recovery_parse(buf, sizeof(buf),
-                                           &h->error_recovery)) {
-        return MOS_ERR_IO;   /* page 0x01 absent or short — refused whole */
-    }
-    *out = &h->error_recovery;
-    return MOS_OK;
-}
-
-/* ==== src/mos_serial.c ==== */
-/*
- * mos_serial.c — the drive-serial query (mos_query_serial): one raw INQUIRY
- * (EVPD=1, PAGE CODE=0x80, Unit Serial Number) on the mos_raw_cdb path,
- * decoded by the pure parser in mos_vpd80.c. The serial is the durable
- * drive-inventory key that survives replug and machine moves (registry_id is
- * attachment-scoped). Named for the datum it produces, not the generic
- * INQUIRY command set: this file owns the serial verb only — any future VPD
- * page is its own argument, not a fold into "the inquiry file".
- *
- * Authored raw, not via the convenience Inquiry, because MMCDeviceInterface's
- * Inquiry takes only SCSICmd_INQUIRY_StandardData* — no EVPD / PAGE CODE
- * parameter — so VPD page 0x80 is structurally unreachable through it
- * (contrast ModeSense10's PC/PAGE_CODE, GetConfiguration's RT). That is the
- * layer-1 "no convenience method carries the information" showing (AGENTS.md
- * scope doctrine; design + full derivation:
- * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md).
- *
- * Never disturbs another consumer. mos_raw_cdb is the SINGLE
- * ObtainExclusiveAccess call site (ARCHITECTURE.md §3); this file adds none.
- * Exclusive access is the gate: if anyone else holds the drive — a mounted
- * IOMedia nub, Finder, MakeMKV, another initiator — ObtainExclusiveAccess
- * fails (kIOReturnBusy / kIOReturnExclusiveAccess) and mos_raw_cdb returns
- * the mapped error WITHOUT issuing the CDB, so the serial read backs off
- * cleanly rather than contending. On success the lock is held only for the
- * single INQUIRY and released immediately (mos_raw_cdb releases per call —
- * never held across the handle's life). This is the same BUSY-on-mounted
- * guard the §5.5 nub invariant relies on. The degradation is benign: the
- * serial is a static drive fact, equally readable with the tray empty (the
- * natural time to inventory a drive), and any non-OK leaves serial null —
- * the field's existing default. INQUIRY changes no drive state, so there is
- * no lock-lifetime question (unlike the tray PREVENT verbs).
- */
-
-
-/* 252-byte reply buffer: the serial fits in serial_str (64) many times over;
-   the SPC PAGE LENGTH is a single byte (max 255), so this receives any
-   conforming page and the parser truncates into serial_str. */
-#define MOS_SERIAL_REPLY_BUF 252u
-
-mos_error mos_query_serial(mos_handle_t *h, const char **out)
-{
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    /* INQUIRY (SPC-4 0x12), 6-byte CDB:
-         byte0   opcode 0x12
-         byte1   bit0 EVPD = 1            — request a vital-product-data page
-         byte2   PAGE CODE = 0x80         — Unit Serial Number
-         byte3-4 ALLOCATION LENGTH (BE)   — MOS_SERIAL_REPLY_BUF
-         byte5   CONTROL = 0
-       IMMED has no meaning for INQUIRY; the call waits for final status. */
-    const uint8_t cdb[6] = {
-        0x12, 0x01, 0x80,
-        (uint8_t)(MOS_SERIAL_REPLY_BUF >> 8),
-        (uint8_t)(MOS_SERIAL_REPLY_BUF & 0xFF),
-        0x00,
-    };
-
-    uint8_t  buf[MOS_SERIAL_REPLY_BUF] = {0};
-    uint32_t task_status               = 0;
-    uint8_t  sense[18]                 = {0};
-    uint64_t xferred                   = 0;
-
-    /* Exclusive access unavailable (mounted media, another holder) →
-       kIOReturnBusy/ExclusiveAccess → MOS_ERR_BUSY, the CDB never issues;
-       any transport error surfaces honestly. The caller treats every non-OK
-       as "serial stays null". */
-    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
-                              MOS_XFER_FROM_TARGET, 2000,
-                              &task_status, sense, &xferred);
-    if (e != MOS_OK) return e;
-    if (task_status != MOS_SCSI_STATUS_GOOD)   /* CHECK CONDITION etc. */
-        return MOS_ERR_IO;
-
-    /* Dual-length rule (O-4): bound the parse to the bytes the transport
-       actually delivered, not the full buffer — some USB bridges under-fill.
-       The page's own PAGE LENGTH only shrinks the serial within that span. */
-    size_t trusted = (xferred < sizeof buf) ? (size_t)xferred : sizeof buf;
-    if (!mos_internal_vpd80_serial_parse(buf, trusted,
-                                         h->serial_str, sizeof h->serial_str))
-        return MOS_ERR_IO;   /* page absent / wrong page / no serial → null */
-
-    *out = h->serial_str;
-    return MOS_OK;
-}
-
-/* ==== src/mos_drive_inquiry.c ==== */
-/*
- * mos_drive_inquiry.c — the drive-identity query (mos_query_drive_inquiry):
- * one raw STANDARD INQUIRY (EVPD=0, allocation length >= 74) on the
- * mos_raw_cdb path, decoded by the pure parser in mos_inqdata.c. Surfaces the
- * drive's self-reported identity (vendor/product/revision) AND the VERSION
- * byte (SPC compliance level) + version-descriptor list — the canonical truth
- * `mos drive` prefers over the DiscRecording cache. Named for the datum (the
- * drive's INQUIRY self-report), not the generic INQUIRY command.
- *
- * Authored raw, not via the convenience Inquiry, because that method returns
- * only the 36-byte standard header (SCSICmd_INQUIRY_StandardData), so the
- * version descriptors at bytes 58-73 are structurally unreachable through it
- * — the same layer-1 raw-verb showing as the serial, the same INQUIRY opcode
- * (0x12) in a different mode: EVPD=0 here vs EVPD=1/page-0x80 in mos_serial.c
- * (AGENTS.md scope-doctrine ADR; design:
- * doc/research/2026-06-16-drive-identity-enrichment-survey.md).
- *
- * mos_raw_cdb is the SINGLE ObtainExclusiveAccess call site; this file adds
- * none. Exclusive access is the gate: a mounted volume / other holder makes
- * the open fail BUSY and the CDB never issues, so the read backs off rather
- * than disturb a live nub — the same benign degradation as the serial (a
- * static drive fact, read with the tray empty). INQUIRY changes no state.
- */
-
-
-/* 96-byte reply: covers the version descriptors (bytes 58-73) with margin;
-   the parser bounds the decode by both this and the reply's Additional Length. */
-#define MOS_INQUIRY_REPLY_BUF 96u
-
-mos_error mos_query_drive_inquiry(mos_handle_t *h,
-                                    const mos_drive_inquiry **out)
-{
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    /* STANDARD INQUIRY (SPC-4 0x12), 6-byte CDB:
-         byte0   opcode 0x12
-         byte1   EVPD = 0                  — standard data (not a VPD page)
-         byte2   PAGE CODE = 0x00          — must be 0 when EVPD=0
-         byte3-4 ALLOCATION LENGTH (BE)    — MOS_INQUIRY_REPLY_BUF (>= 74)
-         byte5   CONTROL = 0 */
-    const uint8_t cdb[6] = {
-        0x12, 0x00, 0x00,
-        (uint8_t)(MOS_INQUIRY_REPLY_BUF >> 8),
-        (uint8_t)(MOS_INQUIRY_REPLY_BUF & 0xFF),
-        0x00,
-    };
-
-    uint8_t  buf[MOS_INQUIRY_REPLY_BUF] = {0};
-    uint32_t task_status               = 0;
-    uint8_t  sense[18]                 = {0};
-    uint64_t xferred                   = 0;
-
-    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
-                              MOS_XFER_FROM_TARGET, 2000,
-                              &task_status, sense, &xferred);
-    if (e != MOS_OK) return e;
-    if (task_status != MOS_SCSI_STATUS_GOOD)
-        return MOS_ERR_IO;
-
-    /* Dual-length rule (O-4): bound the parse to the realized transfer count,
-       not the full buffer — the parser further bounds by the reply's own
-       Additional Length. */
-    size_t trusted = (xferred < sizeof buf) ? (size_t)xferred : sizeof buf;
-    if (!mos_internal_inqdata_parse(buf, trusted, &h->drive_inquiry))
-        return MOS_ERR_IO;   /* truncated below the 5-byte fixed header */
-
-    *out = &h->drive_inquiry;
-    return MOS_OK;
-}
-
-/* ==== src/mos_tray.c ==== */
-/*
- * mos_tray.c — tray-control verbs that CHANGE drive state: eject/close
- * (START STOP UNIT 0x1B) and lock/unlock (PREVENT ALLOW MEDIUM REMOVAL
- * 0x1E). Each verb is one raw 6-byte CDB on the mos_raw_cdb path, with a
- * sense check in place of a payload decode.
- *
- * mos_raw_cdb is the SINGLE ObtainExclusiveAccess call site
- * (ARCHITECTURE.md §3); this file adds none, so the BUSY-on-mounted guard the
- * §5.5 nub invariant relies on also covers the tray verbs: a user-initiated
- * lock/eject on a MOUNTED volume returns MOS_ERR_BUSY rather than disturbing
- * a live IOMedia nub.
- *
- * Authored raw, not via convenience methods, because MMCDeviceInterface's
- * SetTrayState cannot surface a 5/53/02 locked-eject refusal (ARCHITECTURE.md
- * §9.7/§9.9) — the layer-1 "no convenience method carries the information"
- * showing (AGENTS.md scope doctrine).
- *
- * Lock lifetime: the PREVENT state is per-I_T-nexus and survives a handle
- * close / process exit (T10 04-349r1 §6.18; the SCSITaskUserClient close is
- * none of the SPC-4 clearing events, and Apple's
- * IOSCSIMultimediaCommandsDevice issues no voluntary ALLOW on exclusive-
- * access release). mos holds nothing for the lock window — the verbs are
- * fire-and-forget, recovery is a later mos_tray_unlock on the same single
- * initiator. No atexit ALLOW on the lock path: a single-shot lock that
- * released itself on return would be a no-op, and a persistent lock is
- * exactly what a ripping-robot orchestrator wants to outlive the process.
- */
-
-
-/* The CDBs as fixed 6-byte arrays. IMMED (byte1 bit0) is 0 on all, so the
-   call WAITS for the honest final status instead of an immediate "accepted"
-   — a locked eject's 5/53/02 must arrive on the sense channel.
-
-   START STOP UNIT (SPC-4 0x1B): byte4 = PWRCND(7:4) 0 | NO_FLUSH(bit2) 0 |
-   LoEj(bit1) | START(bit0). eject = LoEj 1, START 0 -> 0x02;
-   close/load = LoEj 1, START 1 -> 0x03.
-
-   PREVENT ALLOW MEDIUM REMOVAL (SPC-4 0x1E): byte4 PREVENT field
-   {PERSISTENT(bit1), PREVENT(bit0)} (T10 04-349r1 Table 8):
-     0x00 clear basic Prevent (unlock)        0x01 set basic Prevent (lock)
-     0x02 clear Persistent Prevent (p-allow)  0x03 set Persistent Prevent (p-lock)
-   The two states are INDEPENDENT — 0x00 does not clear a 0x03 lock, 0x02 does
-   (04-349r1 §6.18.2 / §6.18.3.2). */
-static const uint8_t cdb_eject [6] = { 0x1B, 0x00, 0x00, 0x00, 0x02, 0x00 };
-static const uint8_t cdb_close [6] = { 0x1B, 0x00, 0x00, 0x00, 0x03, 0x00 };
-static const uint8_t cdb_unlock        [6] = { 0x1E, 0x00, 0x00, 0x00, 0x00, 0x00 };
-static const uint8_t cdb_lock          [6] = { 0x1E, 0x00, 0x00, 0x00, 0x01, 0x00 };
-static const uint8_t cdb_unlock_persist[6] = { 0x1E, 0x00, 0x00, 0x00, 0x02, 0x00 };
-static const uint8_t cdb_lock_persist  [6] = { 0x1E, 0x00, 0x00, 0x00, 0x03, 0x00 };
-
-/* Prevent/allow is electronic (instant); eject/close drives the tray motor
-   and needs time for mechanical travel. GESN uses 2000 ms; eject/close start
-   at 5000 ms (a fixture refines it if a slow loader appears). */
-#define MOS_TRAY_PREVENT_TIMEOUT_MS 2000u
-#define MOS_TRAY_MOTION_TIMEOUT_MS  5000u
-
-mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
-                                mos_tray_outcome *outcome, uint8_t sense_out[3])
-{
-    if (!h || !cdb || !outcome) return MOS_ERR_INVALID_ARG;
-    if (sense_out) { sense_out[0] = sense_out[1] = sense_out[2] = 0; }
-
-    /* 0x1B gets the mechanical timeout, 0x1E the short one — opcode is the
-       only discriminator the wrapper needs. */
-    uint32_t timeout = (cdb[0] == 0x1B) ? MOS_TRAY_MOTION_TIMEOUT_MS
-                                        : MOS_TRAY_PREVENT_TIMEOUT_MS;
-
-    uint32_t task_status = 0;
-    uint8_t  sense[18]   = {0};
-    mos_error e = mos_raw_cdb(h, cdb, 6, NULL, 0, MOS_XFER_NONE,
-                              timeout, &task_status, sense, NULL);
-    if (e != MOS_OK) return e;          /* transport/lock: honest failure */
-
-    uint8_t sk = 0, asc = 0, ascq = 0;
-    mos_internal_parse_sense(sense, &sk, &asc, &ascq);
-    *outcome = mos_internal_tray_classify(task_status, sk, asc, ascq);
-    if (sense_out) { sense_out[0] = sk; sense_out[1] = asc; sense_out[2] = ascq; }
-    return MOS_OK;
-}
-
-mos_error mos_tray_eject(mos_handle_t *h, bool force,
-                         mos_tray_outcome *out, uint8_t sense[3])
-{
-    if (!h || !out) return MOS_ERR_INVALID_ARG;
-
-    /* force = unlock-then-eject (the kernel EjectTheMedia sequence), saving
-       the caller the detect-5/53/02 -> unlock -> retry round trip. The basic
-       ALLOW is best-effort: an unlocked drive answers GOOD anyway, and a
-       transport/lock failure surfaces on the eject below. Each CDB releases
-       exclusive access on return, so there is a brief inter-CDB
-       unlocked-but-not-ejected window — benign for the dedicated robot.
-       Folding both under one hold would need a second ObtainExclusiveAccess
-       call site (§3), out of scope. force does not (and need not) clear a
-       Persistent Prevent lock: an initiator eject succeeds under it by spec
-       (04-349r1 §6.18.3.2). The ALLOW's sense is discarded (NULL); the
-       returned sense reflects the eject. */
-    if (force) {
-        mos_tray_outcome ignored = MOS_TRAY_DONE;
-        (void)mos_internal_tray_cmd(h, cdb_unlock, &ignored, NULL);
-    }
-    return mos_internal_tray_cmd(h, cdb_eject, out, sense);
-}
-
-mos_error mos_tray_close(mos_handle_t *h, mos_tray_outcome *out, uint8_t sense[3])
-{
-    if (!h || !out) return MOS_ERR_INVALID_ARG;
-    return mos_internal_tray_cmd(h, cdb_close, out, sense);
-}
-
-mos_error mos_tray_lock(mos_handle_t *h, bool persistent,
-                        mos_tray_outcome *out, uint8_t sense[3])
-{
-    if (!h || !out) return MOS_ERR_INVALID_ARG;
-    return mos_internal_tray_cmd(h, persistent ? cdb_lock_persist : cdb_lock,
-                                 out, sense);
-}
-
-mos_error mos_tray_unlock(mos_handle_t *h, bool persistent,
-                          mos_tray_outcome *out, uint8_t sense[3])
-{
-    if (!h || !out) return MOS_ERR_INVALID_ARG;
-    return mos_internal_tray_cmd(h,
-                                 persistent ? cdb_unlock_persist : cdb_unlock,
-                                 out, sense);
-}

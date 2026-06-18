@@ -151,18 +151,20 @@ endif()
 # mos_core happens to pull IOKit anyway. See ARCHITECTURE.md §3 and
 # AGENTS.md rule 3.
 
-# Source-of-truth lists, named once and reused by every target (the library
-# archives AND the macOS adapter/emit test executables, which compile these
-# TUs directly against the fake rather than linking the archive). A new TU is
-# added here once, not copied into each target — the duplication that used to
-# let an added parser link-fail in the adapter/emit jobs is gone.
+# Source-of-truth lists for the TWO-ARCHIVE SPLIT (pure IOKit-free vs core
+# IOKit) — the one piece of source classification a directory walk can't
+# derive, since it is semantic (which TUs touch IOKit), not in the filename.
+# This is the ONLY place the split lives; scripts/amalgamate.sh does NOT keep a
+# parallel list — it globs src/*.c (the weave is one TU and order-insensitive
+# under -Werror), so a TU can no longer be in one and missing from the other
+# (the link-fail that used to slip through). A new .c is added to the right
+# list here; the amalgamation picks it up automatically.
 #
 # MOS_PURE_SOURCES — the IOKit-free layer (mos_pure archive; also linked by
 #   the unit tests on every platform).
 # MOS_CORE_BASE_SOURCES — the IOKit adapter TUs EXCEPT the watch run-loop TU.
 #   The adapter/emit test targets compile these against the fake; mos_watch.c
-#   is held out because it needs the separate watch fake, so only the watch
-#   test target (and the real mos_core) add it.
+#   is held out because it needs the separate watch fake.
 # MOS_CORE_SOURCES — the full adapter layer (BASE + mos_watch.c).
 set(MOS_PURE_SOURCES
     src/mos_pure.c
