@@ -8,18 +8,15 @@ int         opt_index   = 0;     /* 0 = unset; 1-based when set */
 const char *opt_bsd     = NULL;
 uint64_t    opt_registry = 0;     /* 0 = unset; >= 2^32+256 when set */
 const char *opt_tray_action = NULL; /* tray sub-verb; NULL = missing */
-bool        flag_list   = false;
 bool        flag_json   = false;
-bool        flag_watch  = false;
-bool        flag_metadata = false;
-bool        flag_drive = false;
-bool        flag_features = false;
-bool        flag_tray   = false;  /* tray subcommand (control verbs) */
-bool        flag_capacity = false; /* capacity subcommand (mos.capacity.v1) */
 bool        flag_force  = false;  /* tray eject --force */
 bool        flag_persistent = false; /* tray lock/unlock --persistent */
-bool        flag_probe  = false;  /* probe subcommand (MOS_CLI_PROBE builds) */
 bool        flag_dump   = false;  /* probe --dump one-shot DR capture */
+
+/* The command selected for this invocation; see common.h. NULL until main
+   sets it — and in the emit-fixtures harness, which calls run fns directly,
+   NULL reads as one-shot (non-compact) framing, which is what it wants. */
+const mos_cli_command *mos_cli_selected = NULL;
 
 const char *progname = "mos";
 
@@ -91,14 +88,18 @@ int mos_cli_emit_unknown_and_fail(const char *context, mos_error err,
             progname, context, mos_error_description(err));
 
     if (flag_json) {
-        /* Framing follows the mode: watch is NDJSON (one object per line),
-           so a multi-line envelope would break a line-framed consumer mid-
-           failure; one-shot keeps the pretty-printed form. Same JSON either
-           way — only whitespace differs, so one set of fixtures covers both. */
-        const char *nl  = flag_watch ? ""  : "\n";
-        const char *i2  = flag_watch ? ""  : "  ";
-        const char *i4  = flag_watch ? ""  : "    ";
-        const char *sp  = flag_watch ? ""  : " ";
+        /* Framing follows the mode: a command that streams NDJSON (watch —
+           MOS_CLI_CMD_NDJSON) emits one object per line, so a multi-line
+           envelope would break a line-framed consumer mid-failure; one-shot
+           keeps the pretty-printed form. Same JSON either way — only
+           whitespace differs, so one set of fixtures covers both. Read from
+           the selected command's flags, not a per-verb global. */
+        bool compact = mos_cli_selected &&
+                       (mos_cli_selected->flags & MOS_CLI_CMD_NDJSON);
+        const char *nl  = compact ? ""  : "\n";
+        const char *i2  = compact ? ""  : "  ";
+        const char *i4  = compact ? ""  : "    ";
+        const char *sp  = compact ? ""  : " ";
         fprintf(stdout, "{%s", nl);
         fprintf(stdout, "%s\"schema\":%s\"mos.error.v1\",%s", i2, sp, nl);
         if (dev_node && *dev_node) {

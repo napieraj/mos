@@ -81,6 +81,12 @@ static void emit_human(const feat_collect *c)
     }
 }
 
+/* Command descriptor (see mos_cli_command in common.h). */
+const mos_cli_command mos_cli_command_features = {
+    .name = "features", .synopsis = "[drive]", .run = mos_cli_run_features,
+    .summary = "MMC feature list with current bits",
+};
+
 int mos_cli_run_features(void)
 {
     mos_error err = MOS_OK;

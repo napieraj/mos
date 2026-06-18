@@ -109,6 +109,12 @@ static void emit_human(const capacity_doc *d)
     (void)mos_cli_human_block(stdout, pairs, n);
 }
 
+/* Command descriptor (see mos_cli_command in common.h). */
+const mos_cli_command mos_cli_command_capacity = {
+    .name = "capacity", .synopsis = "[drive]", .run = mos_cli_run_capacity,
+    .summary = "Disc capacity (media size + free/append space)",
+};
+
 int mos_cli_run_capacity(void)
 {
     mos_error err = MOS_OK;

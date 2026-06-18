@@ -425,6 +425,16 @@ Or drive CMake directly: `cmake -B build -DCMAKE_BUILD_TYPE=Release &&
 cmake --build build`. To embed `mos` in your own project, see
 [Using the library](#using-the-library).
 
+### Man page and shell completions
+
+`cmake --install` (and the Homebrew formula) install a `mos(1)` man page and
+bash/zsh/fish completions for the subcommands, options, and `tray` actions.
+After a Homebrew install they are linked automatically — `man mos` works, and
+completion is live in a new shell. From a manual install they land under the
+install prefix's `share/man/man1`, `share/bash-completion/completions`,
+`share/zsh/site-functions`, and `share/fish/vendor_completions.d`. The raw
+files live in [`completions/`](completions) and [`man/mos.1`](man/mos.1).
+
 ## Requirements
 
 - macOS 12 Monterey or later (arm64 or x86_64)

@@ -140,6 +140,15 @@ static bool parse_action(tray_act *act)
     return true;
 }
 
+/* Command descriptor (see mos_cli_command in common.h). The TRAY_ACTION
+   flag tells main.c to consume the action word (eject/close/lock/unlock)
+   ahead of the selector. */
+const mos_cli_command mos_cli_command_tray = {
+    .name = "tray", .synopsis = "<action> [drive]", .run = mos_cli_run_tray,
+    .summary = "Control the tray (eject, close, lock, unlock)",
+    .flags = MOS_CLI_CMD_TRAY_ACTION,
+};
+
 int mos_cli_run_tray(void)
 {
     tray_act act;

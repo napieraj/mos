@@ -185,6 +185,14 @@ static void emit_json(const mos_state_result *r, int index1,
     fputs("\n}\n", stdout);
 }
 
+/* Command descriptor (see mos_cli_command in common.h): this verb's single
+   home for name, args, and one-line summary — read by main.c's dispatch +
+   --help table and parsed by scripts/gen-cli-docs.py. */
+const mos_cli_command mos_cli_command_state = {
+    .name = "state", .synopsis = "[drive]", .run = mos_cli_run_state,
+    .summary = "Report drive state (default verb)",
+};
+
 int mos_cli_run_state(void)
 {
     mos_error err = MOS_OK;

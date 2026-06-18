@@ -69,13 +69,14 @@ README = ROOT / "README.md"
 
 
 def c_verbs():
-    """The CLI's verb set, parsed from main.c's dispatch table (the
-    `strcmp(cmd, "<verb>")` chain — the file's own header calls a dispatch
-    line the way you add a verb). Derived, not hardcoded, so a new verb is
-    picked up automatically; which of these is a pair verb is then decided by
-    c_human_labels() returning labels vs None (no emit_human pairs[])."""
+    """The CLI's verb set, parsed from main.c's command table (the
+    &mos_cli_command_<verb> entries in the dispatch array — the file's own
+    'add a verb = a descriptor + one array line' rule). Derived, not
+    hardcoded, so a new verb is picked up automatically; which of these is a
+    pair verb is then decided by c_human_labels() returning labels vs None
+    (no emit_human pairs[])."""
     src = (ROOT / "cli" / "main.c").read_text()
-    return set(re.findall(r'strcmp\(cmd,\s*"([a-z]+)"\)', src))
+    return set(re.findall(r'&mos_cli_command_([a-z]+)\b', src))
 
 
 def fenced_blocks(md: str):

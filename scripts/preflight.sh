@@ -36,6 +36,9 @@ run ./scripts/check-test-registration.sh
 step "documentation staleness"
 run sh ./scripts/doc-staleness.sh
 
+step "CLI docs (completions + man) in sync with the command table"
+run python3 ./scripts/gen-cli-docs.py --check
+
 step "README <-> schema/code contract"
 # check_readme.py self-skips (prints a note, exits 0) when jsonschema is
 # absent, so this is best-effort locally and authoritative in CI.
