@@ -77,8 +77,10 @@ static void emit_json(const capacity_doc *d)
         fputs("null", stdout);
     }
 
-    /* Formattable view (READ FORMAT CAPACITIES). null on mounted/contended/
-       unsupported media (the raw read self-gates). type is a fixed token or
+    /* Formattable view (READ FORMAT CAPACITIES). null on non-formattable
+       media (pressed / write-once / empty) — the profile gate issues no read
+       there; the ReadFormatCapacities convenience method is non-exclusive, so a
+       mounted formattable disc still reports its view. type is a fixed token or
        null for a reserved code; format_type per descriptor is the raw code. */
     fputs(",\n  \"formattable\": ", stdout);
     if (d->have_formattable) {
