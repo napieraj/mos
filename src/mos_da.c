@@ -80,6 +80,60 @@ bool mos_internal_da_volume(const char *bsd_name,
     return mounted;
 }
 
+/* Run-loop deadline for the force-unmount, in 100 ms ticks (5 s total). The
+   unmount is async (callback), so we pump the run loop until it lands or the
+   deadline passes — never blocking the caller indefinitely. */
+#define MOS_DA_UNMOUNT_DEADLINE_TICKS 50
+
+typedef struct { bool done; bool ok; } mos_da_unmount_ctx;
+
+static void mos_internal_da_unmount_cb(DADiskRef disk,
+                                       DADissenterRef dissenter, void *context)
+{
+    (void)disk;
+    mos_da_unmount_ctx *c = (mos_da_unmount_ctx *)context;
+    c->ok   = (dissenter == NULL);   /* NULL dissenter ⇒ unmount accepted */
+    c->done = true;
+}
+
+/* Force-unmount EVERY volume on whole-disk "diskN"
+   (kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole). True on success.
+   ONLY the `tray eject --force` path calls this: a forced unmount kills open
+   file handles (data-loss capable) — that is the "open no matter what"
+   contract, strictly opt-in behind --force. This is the SINGLE DiskArbitration
+   ACTION mos performs; unlike the synchronous description read above it needs a
+   scheduled session + run loop (the callback modality). DADiskUnmount takes the
+   disk, not a session (the disk carries its session); verified against DADisk.h
+   (options kDADiskUnmountOptionForce=0x00080000, Whole=0x1; success = NULL
+   dissenter). */
+bool mos_internal_da_unmount(const char *bsd_name)
+{
+    if (!bsd_name || !bsd_name[0]) return false;
+
+    DASessionRef session = DASessionCreate(kCFAllocatorDefault);
+    if (!session) return false;
+
+    bool      ok   = false;
+    DADiskRef disk = DADiskCreateFromBSDName(kCFAllocatorDefault,
+                                             session, bsd_name);
+    if (disk) {
+        mos_da_unmount_ctx ctx = { false, false };
+        CFRunLoopRef       rl  = CFRunLoopGetCurrent();
+        DASessionScheduleWithRunLoop(session, rl, kCFRunLoopDefaultMode);
+        DADiskUnmount(disk,
+                      kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole,
+                      mos_internal_da_unmount_cb, &ctx);
+        for (int i = 0; i < MOS_DA_UNMOUNT_DEADLINE_TICKS && !ctx.done; i++)
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, true);
+        DASessionUnscheduleFromRunLoop(session, rl, kCFRunLoopDefaultMode);
+        ok = ctx.done && ctx.ok;
+        CFRelease(disk);
+    }
+
+    CFRelease(session);
+    return ok;
+}
+
 #else  /* !MOS_USE_DISKARBITRATION */
 
 /* No DiskArbitration linked: the mount layer is never consulted, so every
@@ -92,6 +146,17 @@ bool mos_internal_da_volume(const char *bsd_name,
     (void)bsd_name;
     if (name_buf && name_cap) name_buf[0] = 0;
     if (path_buf && path_cap) path_buf[0] = 0;
+    return false;
+}
+
+/* No DiskArbitration linked: there is no unmount path, so a forced eject cannot
+   clear a Finder/system mount. Returns false (capability absent), which leaves
+   `tray eject --force` reporting the mount as MOS_ERR_BUSY rather than opening
+   it — the honest degradation for the opt-out build (the consumer unmounts
+   with `diskutil unmountDisk` first, exactly as without --force). */
+bool mos_internal_da_unmount(const char *bsd_name)
+{
+    (void)bsd_name;
     return false;
 }
 

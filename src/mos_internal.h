@@ -158,6 +158,13 @@ bool mos_internal_da_volume(const char *bsd_name,
                             char *name_buf, size_t name_cap,
                             char *path_buf, size_t path_cap);
 
+/* Force-unmount every volume on whole-disk "diskN" via DiskArbitration
+   (kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole). True on success.
+   The SOLE DA action mos performs (scheduled session + run loop), used only by
+   `tray eject --force`. Returns false when DA is opted out at build time
+   (capability absent) — the force eject then reports the mount as BUSY. */
+bool mos_internal_da_unmount(const char *bsd_name);
+
 /* Extract one device's snapshot (registry id, bsd unit, identity) from a
    DRDeviceRef passed as CFTypeRef (this header stays free of DiscRecording
    types). False when the registry path doesn't resolve — the same skip gate

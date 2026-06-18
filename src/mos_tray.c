@@ -84,22 +84,46 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
 
-    /* force = unlock-then-eject (the kernel EjectTheMedia sequence), saving
-       the caller the detect-5/53/02 -> unlock -> retry round trip. The basic
-       ALLOW is best-effort: an unlocked drive answers GOOD anyway, and a
-       transport/lock failure surfaces on the eject below. Each CDB releases
-       exclusive access on return, so there is a brief inter-CDB
-       unlocked-but-not-ejected window — benign for the dedicated robot.
-       Folding both under one hold would need a second ObtainExclusiveAccess
-       call site (§3), out of scope. force does not (and need not) clear a
-       Persistent Prevent lock: an initiator eject succeeds under it by spec
-       (04-349r1 §6.18.3.2). The ALLOW's sense is discarded (NULL); the
-       returned sense reflects the eject. */
-    if (force) {
-        mos_tray_outcome ignored = MOS_TRAY_DONE;
-        (void)mos_internal_tray_cmd(h, cdb_unlock, &ignored, NULL);
+    /* ONE flow. Every eject grabs exclusive access (in mos_raw_cdb) and issues
+       the CDB; a plain eject reports the result verbatim. --force diverges only
+       on a CLEARABLE failure and then RECONVERGES on the same eject CDB:
+
+         - MOS_ERR_BUSY = a Finder/system mount holds exclusive access
+           (SCSITaskLib: "media is still mounted"; mos_pure.c maps it,
+           mos_scsi.c static-asserts the constant) -> force-unmount, re-eject.
+         - REFUSED_LOCKED = a basic Prevent lock refused the eject CDB -> clear
+           BOTH Prevent states (basic then persistent, so nothing is left
+           locked when a lock was in the way), re-eject.
+
+       The one failure --force cannot clear is MOS_ERR_EXCLUSIVE_ACCESS = another
+       userland client (no SCSI preempt exists): it falls through and surfaces,
+       tray shut. At most two blockers (mount, lock) stack, so the loop is
+       bounded at two passes. Each CDB grabs/releases exclusive access per call
+       — mos_raw_cdb stays the sole §3 lock site; no second one is introduced.
+       (A drive with ONLY a Persistent Prevent and no mount/basic-lock ejects on
+       the first CDB — an initiator eject succeeds under Persistent Prevent by
+       spec — so it opens without a speculative clear; --force clears persistent
+       only when a lock actually blocked, never issuing a command it can't know
+       it needs.) */
+    mos_error e = mos_internal_tray_cmd(h, cdb_eject, out, sense);
+    if (!force) return e;
+
+    for (int pass = 0; pass < 2; pass++) {
+        if (e == MOS_ERR_BUSY) {                          /* Finder/system mount */
+            char name[24];
+            if (!mos_bsd_name_format(h->bsd_unit, name, sizeof name) ||
+                !mos_internal_da_unmount(name))
+                break;                                    /* mount uncleared */
+        } else if (e == MOS_OK && *out == MOS_TRAY_REFUSED_LOCKED) {  /* basic Prevent */
+            mos_tray_outcome ignored = MOS_TRAY_DONE;
+            (void)mos_internal_tray_cmd(h, cdb_unlock,         &ignored, NULL);
+            (void)mos_internal_tray_cmd(h, cdb_unlock_persist, &ignored, NULL);
+        } else {
+            break;   /* DONE, EXCLUSIVE_ACCESS (peer client), or transport — stop */
+        }
+        e = mos_internal_tray_cmd(h, cdb_eject, out, sense);   /* reconverge */
     }
-    return mos_internal_tray_cmd(h, cdb_eject, out, sense);
+    return e;
 }
 
 mos_error mos_tray_close(mos_handle_t *h, mos_tray_outcome *out, uint8_t sense[3])

@@ -425,6 +425,62 @@ Persistent Prevent state answering 0x02/0x03 with 5/24/00 (classified
 refused_other — already handled). Each lands as a fixture + dated note with
 a generic defense, never a per-device special-case.
 
+### Addendum: `tray eject --force` = "open no matter what" — admits a forced
+### unmount + clears both Prevent states (2026-06-18, narrows three prior lines)
+
+The maintainer's contract for `--force` is **open the tray no matter what is in
+the way that mos can clear**. Three prior positions are narrowed (append-don't-
+edit; they stand, this rebuts on the merits):
+
+1. **"mos does not unmount for you" (this ADR, ~L377) — narrowed to: `tray
+   eject --force` force-unmounts a mounted volume.** When the eject's
+   `ObtainExclusiveAccess` returns `kIOReturnBusy`, SCSITaskLib defines that as
+   *"media is still mounted"* (verbatim, `SCSITaskLib.h`) — the Finder/system
+   mount, **distinct** from `kIOReturnExclusiveAccess` = another userland client
+   (mos maps both: `mos_pure.c`, static-asserted in `mos_scsi.c`). On BUSY,
+   `--force` calls `mos_internal_da_unmount` (`DADiskUnmount`,
+   `kDADiskUnmountOptionForce | …Whole`) and retries. This is **DATA-LOSS
+   CAPABLE** (a forced unmount kills open file handles) and is the one place mos
+   destroys state — strictly opt-in behind `--force`, never on the default
+   eject (which still reports `MOS_ERR_BUSY`, unchanged). The drutil-contrast
+   "mechanism, not policy" line holds for the **default** path; `--force` is the
+   explicit policy opt-in.
+
+2. **The one blocker `--force` CANNOT defeat: another exclusive-access client.**
+   `kIOReturnExclusiveAccess` (a peer like makemkvcon mid-rip) has no SCSI
+   preempt and no unmount fix — `--force` surfaces `MOS_ERR_EXCLUSIVE_ACCESS`
+   and leaves the tray closed. "No matter what" has this one physical exception,
+   and the return-code split is exactly how mos tells it from the mount.
+
+3. **"force does not (and need not) clear a Persistent Prevent lock" (Lock-
+   lifetime note above) — narrowed: when a lock blocks the eject, `--force`
+   clears BOTH Prevent states** (basic ALLOW 0x00 then Persistent ALLOW 0x02).
+   The old note was right that an initiator eject *succeeds* under Persistent
+   Prevent by spec — so the flow is REACTIVE: a basic lock surfaces as
+   REFUSED_LOCKED and `--force` clears both states then re-ejects, but a drive
+   with ONLY Persistent Prevent (no basic lock, not mounted) ejects on the first
+   CDB and is left as-is — `--force` never issues a speculative ALLOW for an
+   unqueryable Prevent state that did not block (the Prevent states cannot be
+   read back; PREVENT ALLOW is write-only). "Leave nothing locked" holds for the
+   case that matters — a lock in the way — without a wasted command otherwise.
+
+**DA-action re-admission (narrows the 2026-06-11 "DA retired entirely" /
+2026-06-12 "synchronous description read ONLY" addenda).** `mos_internal_da_unmount`
+is the SINGLE DiskArbitration **action** mos performs: it needs a scheduled
+session + run loop (the callback modality), unlike the synchronous
+`DADiskCopyDescription` those addenda authorized. It is bounded by a 5 s
+run-loop deadline and confined to `tray eject --force`. DA stays opt-out
+(`MOS_USE_DISKARBITRATION=0`): the no-DA build links a stub returning false, so
+a forced eject of a mounted disc reports `MOS_ERR_BUSY` (capability absent) —
+the consumer unmounts with `diskutil unmountDisk` first, as without `--force`.
+
+**Verification.** `DADiskUnmount`'s signature (disk, options, callback, context
+— *no* session param), option constants (`Force=0x00080000`, `Whole=0x1`), and
+success = NULL dissenter were confirmed against `DADisk.h` (maintainer-supplied,
+since the DA framework headers were not in the IOKit/DR SDK bundles). The DA
+*runtime* behavior is hardware-falsifiable per the hardware-role ADR; the macOS
+`-Werror` adapter build is the API compile-gate.
+
 ## ADR: verb `state` replaces `status`; bare selector is the default subject (2026-06-14)
 
 The default verb was renamed `status` → `state` (clean break, no alias),
