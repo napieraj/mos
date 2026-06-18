@@ -90,8 +90,9 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e);
 
 /* The profile-suppression rule, in one place: 0x0000 is the SCSI sentinel
    "no current profile", so profile-derived fields (current_profile_name,
-   media_class, the human Profile row) are omitted for it — a name would
-   imply a profile is set. Use this, never a bare compare. */
+   media_class, metadata's human Profile row, and the profile-sourced branch
+   of state's human Media row) are omitted for it — a name would imply a
+   profile is set. Use this, never a bare compare. */
 static inline bool mos_cli_profile_present(uint16_t profile)
 {
     return profile != 0x0000;

@@ -42,8 +42,7 @@ $ mos state 1
 Registry ID:  4295032831
         BSD:  /dev/disk4
       State:  ready
-    Profile:  bd — bd_rom
-      Media:  bd_rom
+      Media:  bd — bd_rom
    Writable:  no
      Vendor:  HL-DT-ST
     Product:  BD-RE WH16NS60
@@ -120,6 +119,18 @@ Registry ID:  4295032831
     Product:  BD-RE WH16NS60
    Firmware:  1.00
 ```
+
+A loaded disc adds a `Media:` row and a `Writable:` row (an empty tray has
+neither — both come from the kernel media node). `Media:` is the disc's
+identity from the best available source: the MMC profile with its class
+(`bd — bd_rom`) when the drive is READY, falling back to the kernel's cached
+`media_type` token (`bd_re`) when it isn't — read with **zero SCSI commands**,
+so a loading or busy disc is still named — then the raw hex code as a last
+resort. In `--json` these stay **separate** keys (`current_profile` /
+`current_profile_name` / `media_class`, and `media_type` / `writable`), so a
+machine consumer keeps the distinction the one-line human view folds together;
+`media_type` and `writable` are the same fields the [`watch`](#watch) stream
+carries, so a one-shot read and the stream agree.
 
 ### list
 

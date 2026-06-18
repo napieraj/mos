@@ -1,7 +1,7 @@
 Registry ID:  4294967587
         BSD:  /dev/disk4
       State:  ready
-    Profile:  cd — cd_rom
+      Media:  cd — cd_rom
      Volume:  Audio CD
      Vendor:  HL-DT-ST
     Product:  BD-RE WH16NS40

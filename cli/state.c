@@ -59,33 +59,39 @@ static void emit_human(const mos_state_result *r, int index1,
         pairs[n++] = (mos_cli_human_pair){ "Sense", sense_buf };
     }
 
-    uint16_t profile = mos_state_result_current_profile(r);
-    char prof_buf[64];
+    /* One media-identity row, source-priority value. The MMC profile name (with
+       its class, "bd — bd_rom") wins when the drive answered it — READY only;
+       it is the drive's own GET CONFIGURATION verdict. Off the not-ready branch
+       the profile is suppressed (current_profile 0x0000), so fall back to the
+       kernel's cached media_type token ("bd_re"), which is read zero-MMC off the
+       media node and present even mid-load — so a loading/busy disc is still
+       named. Hex is the last resort: a present-but-unnamed profile code with no
+       Type. (The JSON keeps current_profile_name and media_type as SEPARATE
+       keys — they are distinct fields; this collapse is human-view only, where
+       showing the same token twice was just noise.) */
+    uint16_t    profile    = mos_state_result_current_profile(r);
+    const char *media_type = mos_state_result_media_type(r);
+    char        media_buf[64];
+    const char *media_val  = NULL;
     if (mos_cli_profile_present(profile)) {
         const char *pn = mos_profile_name(profile);
         const char *pc = mos_profile_class(profile);
-        /* Coarse — precise, the same em-dash the drive verb's Standards row
-           uses for the same relationship. Both tokens are mos vocabulary
-           (lookups of the profile code), so the separator can't collide with
-           content. The machine-key hex lives in --json's current_profile, not
-           this human row; hex appears here only as the fallback when the code
-           has no name (then it is the only identifier). */
-        if (pn && pc)
-            snprintf(prof_buf, sizeof prof_buf, "%s — %s", pc, pn);
-        else if (pn)
-            snprintf(prof_buf, sizeof prof_buf, "%s", pn);
-        else
-            snprintf(prof_buf, sizeof prof_buf, "0x%04x", profile);
-        pairs[n++] = (mos_cli_human_pair){ "Profile", prof_buf };
+        if (pn && pc) {
+            snprintf(media_buf, sizeof media_buf, "%s — %s", pc, pn);
+            media_val = media_buf;
+        } else if (pn) {
+            media_val = pn;
+        } else if (media_type) {           /* unnamed code → prefer the named Type */
+            media_val = media_type;
+        } else {
+            snprintf(media_buf, sizeof media_buf, "0x%04x", profile);
+            media_val = media_buf;
+        }
+    } else if (media_type) {               /* not READY → kernel Type is the only source */
+        media_val = media_type;
     }
-
-    /* Media type: the kernel's optical Type token, read with zero MMC off the
-       media node. Shows even when Profile is suppressed (not-ready disc), and
-       is finer than the profile class — so on a busy/loading disc this is the
-       only line that names the media. Absent when no Type is published. */
-    const char *media_type = mos_state_result_media_type(r);
-    if (media_type)
-        pairs[n++] = (mos_cli_human_pair){ "Media", media_type };
+    if (media_val)
+        pairs[n++] = (mos_cli_human_pair){ "Media", media_val };
 
     /* Writable: the kernel's IOMedia flag, tri-state — row suppressed when
        absent (-1), mirroring the JSON key suppression. yes/no, not blank. */
