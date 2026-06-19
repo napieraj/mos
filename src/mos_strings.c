@@ -3,7 +3,10 @@
  * mos_scsi.c stays exclusively IOKit-linked. No IOKit.
  */
 
-#include "mos.h"
+#include "mos_pure.h"   /* declares the mos_internal_* helpers defined here
+                           (mos_pure.h re-includes mos.h) — so the definitions
+                           are checked against their prototypes (-Wmissing-
+                           prototypes). */
 #include <stdio.h>   /* snprintf for hex escapes */
 #include <stddef.h>
 #include <stdint.h>

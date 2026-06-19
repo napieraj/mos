@@ -439,9 +439,11 @@ jobs:
     # so a verb added or renamed there is picked up here with no edit —
     # there is no second copy of the file list to keep in sync. The src/
     # ADAPTER set is the one thing still listed explicitly, on purpose: it
-    # is the IOKit-linked layer (mos_scsi/query/watch/state/dr/da) that
-    # Linux CI cannot compile, and it changes only on a deliberate
-    # architectural event, unlike verbs which are added routinely.
+    # is the IOKit-linked layer (mos_scsi/query/watch/state/dr/da plus the
+    # raw-CDB verb TUs mos_serial/drive_inquiry/tray) that Linux CI cannot
+    # compile, and it changes only on a deliberate architectural event,
+    # unlike verbs which are added routinely. Keep this list in lockstep with
+    # MOS_CORE_BASE_SOURCES in CMakeLists.txt.
     #
     # The glob also sweeps in the pure-API verbs (cli/metadata.c,
     # cli/drive.c, cli/features.c, cli/tray.c, cli/capacity.c). That is
@@ -492,6 +494,7 @@ jobs:
           mkdir -p /tmp/strict-adapter
           for src in src/mos_scsi.c src/mos_query.c src/mos_watch.c src/mos_state.c \
                      src/mos_dr.c src/mos_da.c \
+                     src/mos_serial.c src/mos_drive_inquiry.c src/mos_tray.c \
                      cli/*.c \
                      tests/test_watch_lifetime.c; do
             obj="/tmp/strict-adapter/$(basename "$src" .c).o"

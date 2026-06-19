@@ -98,7 +98,8 @@ struct mos_handle {
     struct mos_session_layout session_layout;
 
     /* Handle-owned capacity result (mos_query_capacity). Assembled from
-       the open-time IOMedia size above + a fresh track_info read. */
+       the per-call-refreshed IOMedia size above + a fresh track_info read +
+       (for formattable profiles) a READ FORMAT CAPACITIES convenience read. */
     struct mos_capacity       capacity;
 
     /* Handle-owned drive-performance result (mos_query_drive_perf). */

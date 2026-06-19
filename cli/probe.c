@@ -58,7 +58,8 @@
 /* ---- Signal handling --------------------------------------------- */
 
 static volatile sig_atomic_t g_interrupted = 0;
-static void on_sigint(int sig) { (void)sig; g_interrupted = 1; }
+static volatile sig_atomic_t g_signo       = 0;   /* which signal ended the stream */
+static void on_signal(int sig) { g_signo = sig; g_interrupted = 1; }
 
 /* ---- Time helpers ------------------------------------------------- */
 
@@ -587,7 +588,7 @@ int mos_cli_run_probe(void)
        the run-loop slice below notices the flag promptly. */
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = on_sigint;
+    sa.sa_handler = on_signal;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGINT,  &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
@@ -748,7 +749,9 @@ int mos_cli_run_probe(void)
 
     int rc;
     if (g_interrupted) {
-        emit_shutdown(bsd_name, "sigint");
+        /* Map the actual signal — SIGTERM (service stop) must not be reported
+           as SIGINT (operator interrupt). g_signo is set in the handler. */
+        emit_shutdown(bsd_name, g_signo == SIGTERM ? "sigterm" : "sigint");
         /* Clean write or consumer-closed pipe → EX_OK (tail -f semantics);
            real write error → EX_IOERR. */
         rc = mos_cli_finalize_oneshot_stdout(EX_OK);
