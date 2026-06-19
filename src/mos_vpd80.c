@@ -31,13 +31,16 @@
 
 /* Decode page 0x80 into out[0..out_cap). True only when the reply echoes
    page code 0x80 and carries a complete, non-empty serial (trailing spaces /
-   NULs trimmed). out is always NUL-terminated. A drive that does not implement
-   the page (it is optional), has none programmed (all-spaces), or under-
-   delivers the reply (PAGE LENGTH > bytes received) returns false → the caller
-   leaves serial null, never an empty or truncated string. A serial that is
-   complete on the wire but longer than out_cap is truncated with a visible
-   "..." marker (never a silent prefix — see the copy step). Non-ASCII bytes
-   are copied verbatim and escaped at the output sink (mos_cli_json_str /
+   NULs trimmed) that can be represented WHOLE as a C string. out is always
+   NUL-terminated. Returns false → the caller leaves serial null (never an
+   empty, truncated, or NUL-severed string) when the drive does not implement
+   the page (it is optional), has none programmed (all-spaces), under-delivers
+   the reply (PAGE LENGTH > bytes received), or the serial cannot be held whole
+   — longer than out_cap, or containing an interior NUL (which would sever the
+   C string invisibly at the NUL). This is the complete-or-unavailable rule for
+   a durable identity key: a prefix is an indistinguishable, wrong key (two
+   drives can share it), so it is refused, not marked. Non-ASCII bytes are
+   copied verbatim and escaped at the output sink (mos_cli_json_str /
    mos_safe_ascii), as with vendor/product/revision. */
 bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
                                      char *out, size_t out_cap)
@@ -73,34 +76,27 @@ bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
     }
     if (serial_len == 0) return false;        /* page present, no serial */
 
-    /* Copy into out, reserving the NUL. A serial that fits is copied whole.
-       One that exceeds the buffer is truncated WITH A VISIBLE TRAILING MARKER
-       ("…" as ASCII "..."), never silently: this value can be cached as a
-       durable identity key, and a silent prefix is indistinguishable from a
-       complete serial — a different-but-equally-wrong key. The marker signals
-       "incomplete" so the consumer never mistakes the prefix for the whole
-       serial. ASCII so it survives both sinks unescaped (mos_safe_ascii /
-       mos_cli_json_str). Real serials sit far below the buffer (mos_serial.c
-       sinks 64 bytes), so this fires only on a pathological/hostile over-long
-       serial; it never overflows. (Distinct from the transport-under-delivery
-       refusal above: there we hold only a prefix of UNKNOWN length and refuse;
-       here we hold the WHOLE serial and our sink is merely too small, so the
-       marked prefix is honest about exactly what it is.) */
-    static const char MARK[] = "...";
-    const size_t mark_len = sizeof MARK - 1u;       /* 3 */
-    if (serial_len <= out_cap - 1u) {
-        for (size_t i = 0; i < serial_len; i++) out[i] = (char)buf[VPD_HDR + i];
-        out[serial_len] = 0;
-    } else if (out_cap > mark_len + 1u) {
-        size_t copy = out_cap - 1u - mark_len;
-        for (size_t i = 0; i < copy; i++) out[i] = (char)buf[VPD_HDR + i];
-        for (size_t i = 0; i < mark_len; i++) out[copy + i] = MARK[i];
-        out[copy + mark_len] = 0;
-    } else {
-        /* out_cap too small even to hold the marker — plain bounded copy. */
-        size_t copy = out_cap - 1u;
-        for (size_t i = 0; i < copy; i++) out[i] = (char)buf[VPD_HDR + i];
-        out[copy] = 0;
-    }
+    /* Complete-or-unavailable. The serial is a durable identity key the caller
+       caches sticky, so it must be representable WHOLE as a C string or refused
+       — a prefix is a different-but-equally-wrong key two drives can share.
+       Two ways the whole serial cannot be held, both REFUSE (return false), the
+       same disposition as the transport-under-delivery case above:
+
+         - an interior NUL: trailing NULs were trimmed, but a NUL among the
+           remaining bytes would sever the C string invisibly at the NUL,
+           hiding everything after it (the collision the review's interior-NUL
+           reproducer exploits). It is non-ASCII for a SPC serial; treat it as
+           an unrepresentable key, not data to copy.
+         - serial_len > out_cap - 1: the whole serial does not fit. (Real
+           serials sit far below mos_serial.c's 64-byte sink, so this fires only
+           on a pathological/hostile over-long serial.)
+
+       Refusing precedes any copy, so nothing partial is ever emitted. */
+    for (size_t i = 0; i < serial_len; i++)
+        if (buf[VPD_HDR + i] == 0x00) return false;   /* interior NUL */
+    if (serial_len > out_cap - 1u) return false;       /* would not fit whole */
+
+    for (size_t i = 0; i < serial_len; i++) out[i] = (char)buf[VPD_HDR + i];
+    out[serial_len] = 0;
     return true;
 }

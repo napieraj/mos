@@ -192,8 +192,11 @@ void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
    Reserved[2], all decimal ASCII (GMT). We emit RFC 3339 UTC
    "YYYY-MM-DDTHH:MM:SSZ" — the SAME form mos.event.v1's `ts` uses
    (mos_watch_core.c::format_rfc3339), integer seconds + trailing Z.
-   The 14 date/time bytes must all be decimal ASCII or the reply is refused
-   (empty out) — fail closed on a malformed descriptor. */
+   The 14 date/time bytes must all be decimal ASCII AND form a real calendar
+   date/time (month 1-12, day valid for the month incl. leap years, hour 0-23,
+   minute/second 0-59) or the reply is refused (empty out) — fail closed on a
+   malformed or out-of-range descriptor rather than emit a fake RFC 3339
+   string. Profile is stricter than RFC 3339: no leap second (second 0-59). */
 void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
                                             char *out, size_t out_cap)
 {
@@ -210,6 +213,28 @@ void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
     const uint8_t *d = f.data;
     /* d[0..1] Century, [2..3] Year, [4..5] Month, [6..7] Day,
        [8..9] Hour, [10..11] Minute, [12..13] Second. */
+
+    /* Reject impossible calendar values. We emit an RFC 3339 timestamp, so a
+       shape-valid-but-nonsense descriptor (month 99, day 99, hour 99 — a
+       hostile bridge or a firmware bug) must fail closed (empty out), not be
+       dressed up as a standards-conforming date. Range profile, STRICTER than
+       RFC 3339 in one respect: the second is 0-59 — leap second 60 is not
+       accepted (a firmware creation stamp is never at a leap second, and this
+       keeps the C decoder in step with the schema's date-time format check). */
+    #define MOS_V2(i) ((unsigned)((d[(i)] - '0') * 10 + (d[(i) + 1] - '0')))
+    unsigned year   = MOS_V2(0) * 100u + MOS_V2(2);
+    unsigned month  = MOS_V2(4);
+    unsigned day    = MOS_V2(6);
+    unsigned hour   = MOS_V2(8);
+    unsigned minute = MOS_V2(10);
+    unsigned second = MOS_V2(12);
+    #undef MOS_V2
+    static const unsigned mdays[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
+    bool leap = (year % 4u == 0u && year % 100u != 0u) || year % 400u == 0u;
+    if (month < 1u || month > 12u) return;
+    unsigned dmax = mdays[month - 1u] + ((month == 2u && leap) ? 1u : 0u);
+    if (day < 1u || day > dmax) return;
+    if (hour > 23u || minute > 59u || second > 59u) return;
     out[0]=(char)d[0];  out[1]=(char)d[1];  out[2]=(char)d[2];  out[3]=(char)d[3];
     out[4]='-';  out[5]=(char)d[4];  out[6]=(char)d[5];
     out[7]='-';  out[8]=(char)d[6];  out[9]=(char)d[7];

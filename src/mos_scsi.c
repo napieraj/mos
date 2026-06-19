@@ -141,8 +141,13 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
                than re-resolved by media_id later. */
             whole_bytes = mos_internal_cf_number_u64(child,
                               CFSTR(kIOMediaSizeKey));
-            whole_block = (uint32_t)mos_internal_cf_number_u64(child,
+            /* Block size is reported as u64 but stored u32. Optical block
+               sizes are tiny (512/2048/4096); a value that does not fit u32 is
+               a malformed/hostile registry property, so fail closed to 0
+               (absent) rather than silently truncate the high bits. */
+            uint64_t blk = mos_internal_cf_number_u64(child,
                               CFSTR(kIOMediaPreferredBlockSizeKey));
+            whole_block = (blk <= UINT32_MAX) ? (uint32_t)blk : 0u;
         } else if (!is_whole && fallback_name[0] == 0 &&
                    mos_internal_bsd_name_is_whole_shape(this_name)) {
             strlcpy(fallback_name, this_name, sizeof(fallback_name));

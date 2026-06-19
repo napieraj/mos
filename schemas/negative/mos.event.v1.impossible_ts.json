@@ -1,0 +1,10 @@
+{
+  "schema": "mos.event.v1",
+  "event": "device_removed",
+  "registry_id": 4295032831,
+  "stream_open_ms": 1,
+  "bsd_node": "/dev/disk4",
+  "seq": 1,
+  "ts": "2013-99-99T99:99:99Z",
+  "prev_state": "ready"
+}

@@ -623,6 +623,35 @@ TEST(adapter_tray_refused_other_carries_its_sense)
     return 0;
 }
 
+TEST(adapter_da_unmount_binds_to_media_identity)
+{
+    /* F1 regression: the force-unmount target is bound to the handle's current
+       media identity (registry entry id), not just a "diskN" string. macOS
+       reuses BSD unit numbers, so a stale/reused name must NOT cause a forced
+       unmount of an unrelated disk (data-loss). mos_internal_da_unmount unmounts
+       only when the IOMedia behind diskN has the exact id the caller passes. */
+    mos_fake_reset();
+    mos_fake_set_da_volume("ARRIVAL", "/Volumes/ARRIVAL");   /* a mount exists */
+    const uint64_t cur = 0x100000456ull;                     /* default media_id */
+
+    /* (a) Matching identity → the unmount proceeds (fake DADiskUnmount succeeds). */
+    EXPECT(mos_internal_da_unmount("disk4", cur));
+
+    /* (b) Mismatched identity (diskN reused by an unrelated disk) → REFUSED,
+       the wrong disk is never unmounted. */
+    mos_fake_set_da_media_id(cur ^ 0xFFFFull);
+    EXPECT(!mos_internal_da_unmount("disk4", cur));
+
+    /* (c) Zero expected id (identity unknown, e.g. media vanished) → refused. */
+    EXPECT(!mos_internal_da_unmount("disk4", 0));
+
+    /* (d) diskN no longer backs any IOMedia (media absent) → refused, no crash. */
+    mos_fake_reset();
+    mos_fake_set_bsd_unit(-1);                               /* no whole-disk node */
+    EXPECT(!mos_internal_da_unmount("disk4", cur));
+    return 0;
+}
+
 TEST(adapter_tray_exclusive_denied_is_negative_error)
 {
     mos_fake_reset();
@@ -665,6 +694,7 @@ int main(void)
     RUN(adapter_feature_enumeration_order_and_stop);
     RUN(adapter_tray_cdbs_pinned_byte_for_byte);
     RUN(adapter_tray_eject_force_clean_drive_just_ejects);
+    RUN(adapter_da_unmount_binds_to_media_identity);
     RUN(adapter_tray_locked_eject_classifies_refused_locked);
     RUN(adapter_tray_refused_other_carries_its_sense);
     RUN(adapter_tray_exclusive_denied_is_negative_error);

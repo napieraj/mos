@@ -110,9 +110,19 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
 
     for (int pass = 0; pass < 2; pass++) {
         if (e == MOS_ERR_BUSY) {                          /* Finder/system mount */
+            /* Re-resolve the CURRENT media under h->svc before unmounting: the
+               cached h->bsd_unit can be stale (opened empty, or a swap since
+               the last media query), and a forced unmount is data-loss-capable.
+               The refresh derives bsd_unit + media_id from h->svc's live child,
+               so the name we format and the identity we bind both describe the
+               disc actually in THIS drive now. media gone (bsd_unit < 0) → fail
+               closed; the bind in mos_internal_da_unmount closes the residual
+               BSD-reuse race. */
+            mos_internal_refresh_media_identity(h);
             char name[24];
-            if (!mos_bsd_name_format(h->bsd_unit, name, sizeof name) ||
-                !mos_internal_da_unmount(name))
+            if (h->bsd_unit < 0 ||
+                !mos_bsd_name_format(h->bsd_unit, name, sizeof name) ||
+                !mos_internal_da_unmount(name, h->media_id))
                 break;                                    /* mount uncleared */
         } else if (e == MOS_OK && *out == MOS_TRAY_REFUSED_LOCKED) {  /* basic Prevent */
             mos_tray_outcome ignored = MOS_TRAY_DONE;
