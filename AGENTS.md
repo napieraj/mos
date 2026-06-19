@@ -1069,3 +1069,61 @@ a USB-SATA bridge truncating a reply — each lands as a fixture + dated note an
 at most, a refinement of the menu's allocation lengths or parameters, never a
 per-device special-case. The capture tool's job is to record what the drive
 returned, so a surprising reply is the deliverable, not a defect.
+
+## ADR: `MOS_CLI_PROBE` ships OFF at the first tag — `probe` is falsification
+## surface, not consumer surface (2026-06-19)
+
+`MOS_CLI_PROBE` defaults **ON** today, and the CMake comment
+(`CMakeLists.txt:299`) states the only reason: so the Apple-only, callback-heavy
+`cli/probe.c` TU is *compiled and contract-tested on every CI run instead of
+bitrotting behind an opt-in flag*. That is a build-system bitrot guard — it was
+never a claim that `probe` is consumer surface. This entry records that the
+**consumer artifact must ship without it**, and separates the two axes the
+default-ON conflates.
+
+**Decision.** At the **first tag**, `MOS_CLI_PROBE` flips to **default OFF**.
+`probe` and its three modes (`--dump` DR-dictionary capture, the notification
+stream, and `--capture` raw-MMC fixture capture) are **falsification /
+diagnostic** surface — they exist for the hardware-role ADR's two jobs
+(falsifying axioms, acquiring fixtures), not for library consumers. A shipped
+`mos` is the lean state/identity/tray/capacity CLI; the diagnostic surface
+(raw CDB issuance via the CLI, the CommonCrypto SHA-256 dependency, the fixed
+capture menu) is not in it.
+
+**Why the two axes are separable — and both are satisfied.** "What CI
+compiles/tests" and "what the consumer ships" are independent. The bitrot guard
+needs only *one* CI job at `-DMOS_CLI_PROBE=ON`; it does not require the
+*consumer default* to be ON. So at tag: the CMake default goes OFF (a plain
+build is the lean consumer build — the honest default), and CI gains/keeps an
+explicit `-DMOS_CLI_PROBE=ON` job so the TU stays compiled and contract-tested.
+probe is tested-always and shipped-never.
+
+**Doc consequence (the thing this ADR resolves).** Three surfaces, two truths:
+`mos --help` is `#ifdef`-gated (build-accurate); the **man page and shell
+completions are static committed artifacts that list `probe` unconditionally**
+— `gen-cli-docs.py` extracts verbs by regex over `cli/main.c`'s table and is
+blind to the `#ifdef`. While the default is ON these agree; the moment the
+shipped default is OFF they would over-document. So the tag-time work is: make
+`gen-cli-docs.py` gating-aware (the shipped/default build excludes the
+`MOS_CLI_PROBE` verbs/flags, so the generated man + completions omit them), and
+relocate `probe`/`--dump`/`--capture` documentation to INTEGRATION_HARNESS.md /
+CONTRIBUTING.md (the contributor/diagnostic docs). This supersedes the
+within-session question of whether to annotate the man page with a "requires
+MOS_CLI_PROBE" availability note — at tag the shipped docs simply describe the
+shipped (OFF) build, so no note is needed.
+
+**Why not now (pre-tag).** The default stays ON until the tag. The only current
+"consumers" are HEAD installers — developers and early adopters — and the
+fixture-capture workflow this branch shipped (`mos probe --capture`,
+tests/fixtures/README.md + INTEGRATION_HARNESS.md) wants `probe` present with
+zero friction. Flipping pre-tag would force every from-source capture build to
+add `-DMOS_CLI_PROBE=ON` for no consumer benefit (there is no tag, no real
+consumer yet). The flip is a release-mechanics step bound to the first tag, like
+the schema freeze (ROADMAP standing constraints).
+
+**What stays true regardless.** The OFF build already compiles and rejects
+`probe` with a "not built into this binary" diagnostic (CI "Probe-retired build"
+leg, `cli/main.c`), and `cli/probe.c` — including its CommonCrypto/`--capture`
+code — is wholly inside the `if(MOS_CLI_PROBE)` CMake guard, so OFF pulls none
+of it in. The flip is a default change + a generator change + a doc move, not a
+code-path change to the library.
