@@ -2631,8 +2631,7 @@ mos_error mos_query_drive_inquiry(mos_handle_t *h,
  *
  * No IOKit: the shell (src/mos_query.c) hands us a fixed zero-init buffer
  * filled via the ReadFormatCapacities convenience method (MMCDeviceInterface) —
- * NOT a raw CDB (correcting the earlier "fifth raw verb" call; the wrapper
- * exists in SCSITaskLib.h — see the AGENTS.md ADR +
+ * NOT a raw CDB: the wrapper exists in SCSITaskLib.h (see the AGENTS.md ADR +
  * doc/research/2026-06-18-readformatcapacities-convenience-exists.md). Read-
  * only: mos reports formattable capacities and never issues FORMAT UNIT (0x04).
  *
@@ -3445,7 +3444,7 @@ mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
        the read returns 0 for DVD/BD (no IOCDMedia node) and for a just-inserted
        CD whose node isn't up yet — both fall through to the issued READ TOC
        below, which stays the universal path and the only one for DVD/BD.
-       AGENTS.md ADR 2026-06-18. */
+       See the AGENTS.md ADR. */
     mos_internal_refresh_media_identity(h);
     uint8_t cdtoc[MOS_CDTOC_REPLY_BUF];
     size_t  clen = mos_internal_read_cdtoc(h->svc, cdtoc, sizeof cdtoc);
@@ -6859,9 +6858,9 @@ bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
 
          - an interior NUL: trailing NULs were trimmed, but a NUL among the
            remaining bytes would sever the C string invisibly at the NUL,
-           hiding everything after it (the collision the review's interior-NUL
-           reproducer exploits). It is non-ASCII for a SPC serial; treat it as
-           an unrepresentable key, not data to copy.
+           hiding everything after it — so two serials differing only past
+           the NUL would collide. It is non-ASCII for a SPC serial; treat it
+           as an unrepresentable key, not data to copy.
          - serial_len > out_cap - 1: the whole serial does not fit. (Real
            serials sit far below mos_serial.c's 64-byte sink, so this fires only
            on a pathological/hostile over-long serial.)

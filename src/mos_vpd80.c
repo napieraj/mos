@@ -84,9 +84,9 @@ bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
 
          - an interior NUL: trailing NULs were trimmed, but a NUL among the
            remaining bytes would sever the C string invisibly at the NUL,
-           hiding everything after it (the collision the review's interior-NUL
-           reproducer exploits). It is non-ASCII for a SPC serial; treat it as
-           an unrepresentable key, not data to copy.
+           hiding everything after it — so two serials differing only past
+           the NUL would collide. It is non-ASCII for a SPC serial; treat it
+           as an unrepresentable key, not data to copy.
          - serial_len > out_cap - 1: the whole serial does not fit. (Real
            serials sit far below mos_serial.c's 64-byte sink, so this fires only
            on a pathological/hostile over-long serial.)
