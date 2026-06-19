@@ -52,6 +52,19 @@ These corroborate the spec-derived fixtures; they gate nothing.
 - **Schema freeze.** `mos.*.v1` documents are mutable in place until the
   first tag that ships them; the freeze — and the any-new-shape-is-`.v2`
   rule — takes effect at that tag. Canonical: the AGENTS.md schema ADR.
+- **Ship lean: `probe` OFF at tag.** `MOS_CLI_PROBE` defaults ON *today* only
+  to keep the Apple-only `cli/probe.c` TU compiled and contract-tested every CI
+  run (CMakeLists.txt:299) — a bitrot guard, not a consumer signal. `probe` and
+  its `--dump`/`--capture` modes are falsification/diagnostic surface, not
+  consumer surface. **At the first tag the default flips to OFF** so the shipped
+  binary is lean; CI keeps a `-DMOS_CLI_PROBE=ON` job so the TU stays tested,
+  `gen-cli-docs.py` becomes gating-aware so the shipped man page + completions
+  describe the OFF build (today they list `probe` unconditionally — regex over
+  the verb table, blind to the `#ifdef`), and `probe`/`--dump`/`--capture`
+  documentation moves to INTEGRATION_HARNESS.md / CONTRIBUTING.md. Canonical:
+  the AGENTS.md probe-default ADR. Pre-tag the default stays ON (HEAD installers
+  are developers, and the fixture-capture workflow wants `mos probe --capture`
+  present with zero friction).
 - **Division of labour.** DR enumerates and hands over cheap coarse status (a
   passive, GESN-fed snapshot "not guaranteed current"); mos owns the
   synchronous, fully-checked state machine and the deep rip-relevant metadata
