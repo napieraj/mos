@@ -47,7 +47,7 @@ _mos()
     local opts="$global_opts"
     case "$sub" in
         tray)  opts="-i --index --bsd -j --json -h --help --version --force --persistent" ;;
-        probe) opts="-i --index --bsd -j --json -h --help --version --dump" ;;
+        probe) opts="-i --index --bsd -j --json -h --help --version --dump --capture" ;;
     esac
 
     if [[ "$cur" == -* ]]; then

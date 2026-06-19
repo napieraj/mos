@@ -62,7 +62,7 @@ GENERATED_NOTE = (
 # Flags scoped to a single verb (mirrors main.c's validation guards:
 # `(flag_force||flag_persistent) && !flag_tray` and `flag_dump && !flag_probe`).
 TRAY_FLAGS = ["--force", "--persistent"]
-PROBE_FLAGS = ["--dump"]
+PROBE_FLAGS = ["--dump", "--capture"]
 
 
 def read(path):
@@ -270,7 +270,8 @@ _mos() {{
                 probe)
                     _arguments \\
                         "${{global_opts[@]}}" \\
-                        '--dump[one-shot DiscRecording dictionary capture]'
+                        '--dump[one-shot DiscRecording dictionary capture]' \\
+                        '--capture[fixed-menu raw MMC capture (mos.capture.v0)]'
                     ;;
                 *)
                     _arguments "${{global_opts[@]}}"
@@ -337,6 +338,7 @@ complete -c mos      -l version -d 'Show version'
 complete -c mos -l force      -n '__fish_mos_using_subcommand tray'  -d 'eject: open no matter what (unmount + clear locks)'
 complete -c mos -l persistent -n '__fish_mos_using_subcommand tray'  -d 'lock/unlock: Persistent Prevent'
 complete -c mos -l dump       -n '__fish_mos_using_subcommand probe' -d 'One-shot DiscRecording capture'
+complete -c mos -l capture    -n '__fish_mos_using_subcommand probe' -d 'Fixed-menu raw MMC capture'
 """
 
 

@@ -80,9 +80,10 @@ READ CAPACITY fixture lands with the v0.4 `capacity` parser.
 
 Raw bytes, no wrapper. Filename encodes semantics:
 `<command>_<state>_<drive-model>.bin` for captures; spec-derived buffers drop
-the model. When the planned `mos_capture` tool ships (v0.3, see
-`../../INTEGRATION_HARNESS.md`), each `.bin` gains a `.json` manifest with command
-metadata, transfer length, task status, parsed sense, and a SHA-256.
+the model. The `mos probe --capture` tool (see `../../INTEGRATION_HARNESS.md`)
+emits each reply as a `mos.capture.v0` NDJSON line that carries the manifest
+inline — command metadata, transfer length, task status, parsed sense, and a
+SHA-256 — alongside the `reply` hex that decodes to the `.bin`.
 
 ## Contributing device captures
 
@@ -93,11 +94,26 @@ If you have an optical drive and want to add realism:
 2. Run `mos state --json` in each tray/media state (plus one
    `mos probe --dump` per drive for the DiscRecording dictionaries)
    and submit the output with the integration-harness PR.
-3. For raw byte capture, write a small C program that calls
-   `mos_open_by_bsd_name()` then `mos_raw_cdb()` with the CDB of interest
-   (e.g. 0x46 GET CONFIGURATION, 0x51 READ DISC INFO) and dump the buffer.
-   `mos_raw_cdb` is public and works today; the `mos_capture` convenience
-   wrapper does not exist yet.
+3. For raw byte capture, run `mos probe --capture <drive>` on an unmounted
+   disc. It issues the fixed menu of known MMC commands (GET CONFIGURATION
+   0x46, READ DISC INFORMATION 0x51, GESN 0x4A, READ TOC 0x43, READ DISC
+   STRUCTURE 0xAD, INQUIRY standard + VPD 0x80) and emits each raw reply as a
+   `mos.capture.v0` NDJSON line. Decode the chosen command's `reply` hex into
+   the committed `<command>_<state>_<model>.bin`, then check it against the
+   line's `sha256`:
+
+   ```sh
+   mos probe --capture disk4 | tee capture_blank_cdr_WH16NS60.ndjson
+   jq -r 'select(.command=="read_disc_information").reply' capture_*.ndjson \
+       | xxd -r -p > readdiscinfo_blank_cdr_WH16NS60.bin
+   jq -r 'select(.command=="read_disc_information").sha256' capture_*.ndjson
+   shasum -a 256 readdiscinfo_blank_cdr_WH16NS60.bin   # must match
+   ```
+
+   The full capture+decode+falsification procedure (which command tokens exist,
+   how to read an empty `reply` / `ok:false` line, what to submit) is in
+   `../../INTEGRATION_HARNESS.md` → "Capturing fixtures". (Raw issuance is
+   library-internal — `mos_internal_raw_cdb` — not a public API.)
 
 ## Log-derived captures (2026-06-12/13, media-info stage 1)
 

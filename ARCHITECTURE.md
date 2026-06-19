@@ -125,19 +125,20 @@ The design uses both, gated by what we need and when:
   Taking exclusive access here is safe for the very reason it would be fatal
   on a mounted disc: we reach this path **only when TUR reported not-ready**,
   which means no media is mounted, so `ObtainExclusiveAccess` does not hit the
-  `kIOReturnBusy` mounted-volume case. `mos_raw_cdb()` acquires and releases
-  the lock per call — never held for the handle's lifetime.
+  `kIOReturnBusy` mounted-volume case. `mos_internal_raw_cdb()` acquires and
+  releases the lock per call — never held for the handle's lifetime.
 
-- **Diagnostic raw-CDB path:** `mos_raw_cdb()` (public C API; on the
-  deprecation path for v0.4, see ROADMAP) gives embedders arbitrary CDB
-  injection through the raw `SCSITaskDeviceInterface`; returns
-  `MOS_ERR_BUSY` / `MOS_ERR_EXCLUSIVE_ACCESS` if something else holds the
-  drive. There is no CLI flag for it — the CLI surface is derived state
-  only (§10).
+- **Internal raw-CDB path:** `mos_internal_raw_cdb()` is the library-internal
+  mechanism every raw verb routes through (GESN, the tray opcodes, INQUIRY);
+  returns `MOS_ERR_BUSY` / `MOS_ERR_EXCLUSIVE_ACCESS` if something else holds
+  the drive. It is **not** public API — the public passthrough that once
+  exposed it was retired (AGENTS.md). Diagnostic raw access is the fixed-menu
+  `mos probe --capture` (§10), built on this path; there is no general
+  arbitrary-CDB surface.
 
-`mos_raw_cdb()` in `mos_scsi.c` is the *only* place `ObtainExclusiveAccess`
-is ever called — both the tray-bit GESN and caller-issued diagnostics route
-through it.
+`mos_internal_raw_cdb()` in `mos_scsi.c` is the *only* place
+`ObtainExclusiveAccess` is ever called — the tray-bit GESN, the tray opcodes,
+INQUIRY, and the `mos probe --capture` menu all route through it.
 
 **Lock composability (acquire-on-call / release-on-return).** The two
 facts above — the lock lives at exactly one call site, and that call site
@@ -174,7 +175,7 @@ mounted volume even on the branch that does take the lock.
 Byte-exact CDB layouts. All fields are big-endian unless noted.
 
 **Reading note:** The default query path builds only one of these CDBs
-by hand — the GESN tray probe (§4.2), issued raw through `mos_raw_cdb()`
+by hand — the GESN tray probe (§4.2), issued raw through `mos_internal_raw_cdb()`
 precisely because the `GetTrayState` convenience wrapper masks failure
 (§3, §9.7). The rest go through `MMCDeviceInterface` convenience methods
 (`TestUnitReady`, `GetConfiguration`) which are wired into the
@@ -190,8 +191,9 @@ all the byte layouts here because:
    commands regardless of whether we issued them directly or via a
    convenience wrapper.
 2. Readers auditing the library need to see what wire format we expect
-   in each direction, especially since `mos_raw_cdb()` lets callers
-   issue these CDBs by hand for diagnostic purposes.
+   in each direction, especially since the diagnostic `mos probe --capture`
+   issues these CDBs (on the internal `mos_internal_raw_cdb()` path) to
+   capture raw fixtures.
 
 For the actual runtime call sites, see `mos_scsi.c` — the MMC wrappers
 live there.
@@ -260,7 +262,7 @@ Media Event Descriptor (4 bytes, when class == 4)
 field `media_present` / `door_open` in `media_event_desc`.
 
 Note: this CDB **is** the default tray probe (since v0.3) — the
-`get_tray_state` vtable op issues it through `mos_raw_cdb()` on the not-ready
+`get_tray_state` vtable op issues it through `mos_internal_raw_cdb()` on the not-ready
 path and decodes the door bit with the pure `mos_internal_gesn_media_door_open`
 (NEA gate, Media-class check, full-span reject). We do **not** call the
 `GetTrayState` MMC convenience method: it masks a GESN failure as a confident
@@ -440,7 +442,7 @@ reached only when TUR is not ready.
       else / no usable sense      → UNKNOWN
 
 3. Not ready ⇒ not mounted ⇒ the lock is free. get_tray_state:
-      raw GESN (0x4A) under exclusive access (mos_raw_cdb)
+      raw GESN (0x4A) under exclusive access (mos_internal_raw_cdb)
       MOS_OK   → door bit is AUTHORITATIVE (open/closed)
       error    → no bit; fork on the TUR sense:
                     3A/02 → open
@@ -634,7 +636,7 @@ same drive.
 | Command                         | Timeout (ms) | Set by |
 |---------------------------------|--------------|--------|
 | TEST UNIT READY                 | kernel default | convenience wrapper |
-| GET EVENT STATUS NOTIFICATION   | 2000         | **mos** (`mos_raw_cdb`) |
+| GET EVENT STATUS NOTIFICATION   | 2000         | **mos** (`mos_internal_raw_cdb`) |
 | GET CONFIGURATION               | kernel default | convenience wrapper |
 | READ DISC INFORMATION           | kernel default | convenience wrapper (on-demand typed API only — never the state path) |
 | INQUIRY                         | (retired — identity from the DR directory) | — |
@@ -749,11 +751,12 @@ unchanged from Sequoia 15.x):
   discovery now rides `DRCopyDeviceArray` on the same kext
   substrate (DiscRecording sits above these families too).
 
-`SCSITaskUserClient` (545.100.10) is also loaded. mos's raw-CDB
-diagnostic path (`mos_raw_cdb()`, C API) opens this user-client
-directly to acquire exclusive access for arbitrary CDB injection —
-and since the 2026-05-30 redesign the default query path's not-ready
-branch issues its GESN tray probe through the same function (§3). Whether `MMCDeviceInterface`'s convenience methods
+`SCSITaskUserClient` (545.100.10) is also loaded. mos's internal raw-CDB
+path (`mos_internal_raw_cdb()`) opens this user-client directly to acquire
+exclusive access — the GESN tray probe, the tray opcodes, and INQUIRY all
+route through it, and the diagnostic `mos probe --capture` menu issues its
+fixed command set the same way; the public passthrough that once exposed it
+was retired (AGENTS.md). Whether `MMCDeviceInterface`'s convenience methods
 route through the same kernel user-client internally is opaque
 from user-space — Apple's plug-in implementation is closed —
 but mos itself never opens the `SCSITaskUserClient` interface on

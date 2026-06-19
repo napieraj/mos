@@ -501,22 +501,57 @@ drutil tray close
 These logs go in `tests/fixtures/` as human-readable records. They are
 reference material for reviewers, not automated-test inputs.
 
-For true raw-response byte captures (the `.bin` files we eventually
-want under `tests/fixtures/`), write a small diagnostic C program that
-calls `mos_open_by_bsd_name()` then `mos_raw_cdb()` with a specific CDB
-(for example 0x4A GET EVENT STATUS NOTIFICATION) and dumps the
-returned buffer. This is an open TODO — see issue tracker. The
-`mos_raw_cdb` function itself is public API and works today; only the
-fixture-capture helper doesn't exist yet.
+For true raw-response byte captures (the `.bin` files under
+`tests/fixtures/`), run `mos probe --capture <drive>` on an UNMOUNTED
+disc. It issues the fixed menu of MMC commands mos's decoders consume and
+emits one `mos.capture.v0` NDJSON line per command, each carrying the
+reply hex, task status, parsed sense, transfer length, and a SHA-256.
+(Raw CDB issuance is library-internal — `mos_internal_raw_cdb`, exercised
+through this fixed menu — not a public passthrough; the menu self-gates on
+exclusive access, so a mounted disc reports `busy` rather than capturing.)
+
+The menu command tokens (the `.command` field, used to select a line):
+`inquiry_standard`, `inquiry_serial`, `get_configuration`,
+`get_event_status`, `read_disc_information`, `read_toc`,
+`read_disc_structure_dvd`, `read_disc_structure_bd`.
+
+```sh
+# Capture the whole menu for one physical state to an NDJSON log.
+./build/bin/mos probe --capture disk4 \
+    | tee capture_<state>_$(hostname -s).ndjson
+
+# Materialize one command's reply as a committed .bin (jq + xxd).
+# Pick lines where the drive ANSWERED with data: skip "ok":false (busy /
+# exclusive-access) and empty "reply" (CHECK CONDITION — e.g. READ TOC on a
+# non-CD, READ DISC STRUCTURE on the wrong media type). The sense {sk,asc,ascq}
+# on each line tells you why a command came back empty.
+jq -r 'select(.command=="get_configuration").reply' capture_*.ndjson \
+    | xxd -r -p > getconfig_<state>_<model>.bin
+
+# Verify the .bin against the manifest's SHA-256 — they MUST match (the digest
+# is computed over exactly the bytes the reply hex decodes to).
+jq -r 'select(.command=="get_configuration").sha256' capture_*.ndjson
+shasum -a 256 getconfig_<state>_<model>.bin
+```
+
+`jq`/`xxd`/`shasum` are the only tooling: `xxd -r -p` turns the plain hex
+string back into bytes, `shasum -a 256` confirms the round-trip. Name the
+`.bin` `<command>_<state>_<model>.bin` (see `tests/fixtures/README.md`
+"Format") and add its provenance row there.
 
 ## Reporting results
 
 Open a PR titled `fixtures: <drive model> on macOS <version>` with:
 
 1. The `.bin` fixture files.
-2. Your row filled in in the matrix above.
-3. A one-paragraph note on any surprises (unexpected sense codes,
-   profile values, timing oddities).
+2. The `capture_*.ndjson` log(s) they were decoded from — it is the
+   provenance record (per-command SHA-256, task status, parsed sense) that
+   lets a reviewer re-verify a `.bin` without the drive.
+3. Your row filled in in the matrix above.
+4. A one-paragraph note on any surprises (unexpected sense codes,
+   profile values, timing oddities). Per the hardware-role ADR a surprise
+   is the deliverable — it lands as a committed fixture + dated note, never
+   a per-device special-case in `src/`.
 
 ## Sensitive information
 

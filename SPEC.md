@@ -240,12 +240,14 @@ Non-command members: `AddCallbackDispatcherToRunLoop` /
 `RemoveCallbackDispatcherFromRunLoop` (async run-loop wiring — unused; mos is
 synchronous).
 
-### SCSITaskDeviceInterface — the raw-CDB path (`mos_raw_cdb`, the ONLY exclusive site)
+### SCSITaskDeviceInterface — the raw-CDB path (`mos_internal_raw_cdb`, the ONLY exclusive site)
 
 mos authors a raw CDB only with a layer-1 showing; the **four** raw verbs (GESN
 0x4A, START STOP UNIT 0x1B, PREVENT ALLOW MEDIUM REMOVAL 0x1E, INQUIRY EVPD
-0x80) all go through `mos_scsi.c`'s `mos_raw_cdb` — the SINGLE
-`ObtainExclusiveAccess` call site. Lifecycle: `ObtainExclusiveAccess` →
+0x80) all go through `mos_scsi.c`'s `mos_internal_raw_cdb` — the SINGLE
+`ObtainExclusiveAccess` call site (internal mechanism only; the public
+passthrough was retired — AGENTS.md. The diagnostic `mos probe --capture`
+fixed menu issues its read-only command set through the same path). Lifecycle: `ObtainExclusiveAccess` →
 `CreateSCSITask` → `SetCommandDescriptorBlock` (+ `SetScatterGatherEntries`,
 `SetTimeoutDuration`) → `ExecuteTaskSync` → `GetTaskStatus` /
 `GetRealizedDataTransferCount` / `GetAutoSenseData` → `ReleaseExclusiveAccess`.
@@ -302,5 +304,5 @@ convenience methods above, not these ioctls.
    Prefer it.
 3. Only if **neither** carries it — a documented absence (INQUIRY's missing
    EVPD) or a masking convenience (GetTrayState) — author a raw CDB through
-   `mos_raw_cdb` with the AGENTS layer-1 showing. Never infer "no convenience
+   `mos_internal_raw_cdb` with the AGENTS layer-1 showing. Never infer "no convenience
    method" from §9.7; that is a subset, this table is the inventory.

@@ -16,6 +16,17 @@
 #include <IOKit/scsi/SCSITaskLib.h>
 #include <IOKit/scsi/SCSICmds_REQUEST_SENSE_Defs.h>
 
+/* Transfer direction constants for mos_internal_raw_cdb(). Internal, not
+   public ABI: raw CDB issuance is a library-internal mechanism (the public
+   passthrough was retired — AGENTS.md). The values are pinned to the SDK's
+   kSCSIDataTransfer_* enumerators by _Static_assert in mos_scsi.c, the one TU
+   that sees both names. */
+typedef enum {
+    MOS_XFER_NONE         = 0,
+    MOS_XFER_FROM_TARGET  = 2, /* drive → host (read-like) */
+    MOS_XFER_TO_TARGET    = 1, /* host → drive (write-like) */
+} mos_xfer_dir;
+
 /* ---- Handle layout (opaque to public callers) ----------------------- */
 
 struct mos_handle {
@@ -191,7 +202,7 @@ mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profil
 
 /* Thin shim over the pure IOReturn→mos_error map (mos_scsi.c), so the typed
    query surface (mos_query.c) maps transport failures identically to the
-   convenience wrappers and mos_raw_cdb. CHECK CONDITION rides task
+   convenience wrappers and mos_internal_raw_cdb. CHECK CONDITION rides task
    status/sense, not IOReturn, so this maps only transport failures. */
 mos_error mos_internal_ioreturn_to_mos_error(IOReturn rc);
 
@@ -226,14 +237,38 @@ size_t mos_internal_read_media_type(io_service_t svc, char *buf, size_t cap);
 int mos_internal_read_writable(io_service_t svc);
 
 /* Issue one 6-byte tray CDB (START STOP UNIT 0x1B / PREVENT ALLOW MEDIUM
-   REMOVAL 0x1E) via mos_raw_cdb and classify the result. Negative mos_error
-   on transport/lock failure (BUSY, NO_DEVICE, IO); on an ANSWERED command,
-   MOS_OK with *outcome (DONE / REFUSED_LOCKED / REFUSED_OTHER). sense_out,
-   when non-NULL, gets {sk, asc, ascq} (zeroed on MOS_OK with no sense). Adds
-   no ObtainExclusiveAccess — that stays mos_raw_cdb (§3). Shared by the four
-   mos_tray_* verbs. */
+   REMOVAL 0x1E) via mos_internal_raw_cdb and classify the result. Negative
+   mos_error on transport/lock failure (BUSY, NO_DEVICE, IO); on an ANSWERED
+   command, MOS_OK with *outcome (DONE / REFUSED_LOCKED / REFUSED_OTHER).
+   sense_out, when non-NULL, gets {sk, asc, ascq} (zeroed on MOS_OK with no
+   sense). Adds no ObtainExclusiveAccess — that stays mos_internal_raw_cdb
+   (§3). Shared by the four mos_tray_* verbs. */
 mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
                                 mos_tray_outcome *outcome, uint8_t sense_out[3]);
+
+/* Issue a raw CDB against the drive — the SINGLE ObtainExclusiveAccess call
+   site (ARCHITECTURE.md §3). Internal mechanism only: the public passthrough
+   that exposed this was retired (AGENTS.md). Acquires and releases exclusive
+   access within the single call, so it never leaves the drive blocked against
+   Finder / DiskArbitration; returns MOS_ERR_BUSY / MOS_ERR_EXCLUSIVE_ACCESS
+   without issuing the CDB when the drive is mounted or held by another client.
+
+   cdb_len must be 6, 10, 12, or 16 (the lengths SCSITaskLib accepts); other
+   values return MOS_ERR_INVALID_ARG. timeout_ms must be > 0 — 0 is
+   SCSITaskLib's "Wait Forever", rejected at the boundary. scsi_task_status and
+   sense are required; bytes_transferred may be NULL. Callers: the GESN tray
+   probe (mos_scsi.c), the tray verbs (mos_tray.c), the INQUIRY reads
+   (mos_serial.c / mos_drive_inquiry.c), and the diagnostic capture menu
+   (cli/probe.c, MOS_CLI_PROBE). */
+mos_error mos_internal_raw_cdb(mos_handle_t *h,
+                               const uint8_t *cdb, size_t cdb_len,
+                               void *data_buf, size_t data_len,
+                               mos_xfer_dir direction,
+                               uint32_t timeout_ms,
+                               /* out: */
+                               uint32_t *scsi_task_status,
+                               uint8_t   sense[18],
+                               uint64_t *bytes_transferred);
 
 
 

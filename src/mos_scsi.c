@@ -1,7 +1,7 @@
 /*
  * mos_scsi.c — IOKit lifecycle, enumeration, the MMC convenience
  * primitives the state core uses (TUR / current-profile / tray-state),
- * and the one raw-CDB path (mos_raw_cdb — the sole ObtainExclusiveAccess
+ * and the one raw-CDB path (mos_internal_raw_cdb — the sole ObtainExclusiveAccess
  * site). The typed mos_query_* verb surface lives in mos_query.c.
  *
  * All internal functions must be `static` or `mos_internal_`-prefixed;
@@ -565,12 +565,12 @@ _Static_assert((uint32_t)kIOReturnTimeout         == 0xE00002D6u,
 _Static_assert((uint32_t)kIOReturnNotAttached     == 0xE00002D9u,
                "kIOReturnNotAttached mapping in mos_pure.c is out of date");
 
-/* mos_raw_cdb passes mos_xfer_dir straight to SetScatterGatherEntries, so
-   the public values MUST equal the SDK's kSCSIDataTransfer_* enumerators —
+/* mos_internal_raw_cdb passes mos_xfer_dir straight to SetScatterGatherEntries,
+   so the values MUST equal the SDK's kSCSIDataTransfer_* enumerators —
    a renumbering would send CDBs in the wrong direction. Pin them. */
 _Static_assert((int)MOS_XFER_NONE        == (int)kSCSIDataTransfer_NoDataTransfer,
                "MOS_XFER_NONE no longer matches kSCSIDataTransfer_NoDataTransfer "
-               "— mos_raw_cdb passes mos_xfer_dir directly to "
+               "— mos_internal_raw_cdb passes mos_xfer_dir directly to "
                "SetScatterGatherEntries; the values MUST be identical.");
 _Static_assert((int)MOS_XFER_TO_TARGET   == (int)kSCSIDataTransfer_FromInitiatorToTarget,
                "MOS_XFER_TO_TARGET no longer matches "
@@ -581,8 +581,8 @@ _Static_assert((int)MOS_XFER_FROM_TARGET == (int)kSCSIDataTransfer_FromTargetToI
                "kSCSIDataTransfer_FromTargetToInitiator — see MOS_XFER_NONE "
                "assertion above for the rationale.");
 
-/* The pure tray classifier (mos_pure.c) compares mos_raw_cdb's task status
-   against MOS_SCSI_STATUS_GOOD but can't include the SDK to check they
+/* The pure tray classifier (mos_pure.c) compares mos_internal_raw_cdb's task
+   status against MOS_SCSI_STATUS_GOOD but can't include the SDK to check they
    agree — pin it here, the one TU that sees both names. */
 _Static_assert((int)MOS_SCSI_STATUS_GOOD == (int)kSCSITaskStatus_GOOD,
                "MOS_SCSI_STATUS_GOOD no longer matches kSCSITaskStatus_GOOD "
@@ -608,8 +608,8 @@ mos_error mos_internal_mmc_get_tray_state(mos_handle_t *h, bool *tray_open)
 
        Reached only on the not-ready path (TUR already proved reachable and
        not mounted), so exclusive access is free of mount conflict.
-       mos_raw_cdb acquires and releases the lock per call — single-shot,
-       never held.
+       mos_internal_raw_cdb acquires and releases the lock per call —
+       single-shot, never held.
 
        CDB and response byte map: ARCHITECTURE.md §4.2. */
     const uint8_t cdb[10] = {
@@ -626,7 +626,7 @@ mos_error mos_internal_mmc_get_tray_state(mos_handle_t *h, bool *tray_open)
     uint32_t task_status = 0;
     uint8_t  sense[18]   = {0};
 
-    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb,
+    mos_error e = mos_internal_raw_cdb(h, cdb, sizeof cdb,
                               resp, sizeof resp,
                               MOS_XFER_FROM_TARGET,
                               2000,                 /* ms, ARCHITECTURE.md §4.2 */
@@ -746,7 +746,7 @@ uint64_t mos_handle_registry_id(const mos_handle_t *h)
 
 /* ---- Raw CDB (diagnostic only) ------------------------------------- */
 
-mos_error mos_raw_cdb(mos_handle_t *h,
+mos_error mos_internal_raw_cdb(mos_handle_t *h,
                       const uint8_t *cdb, size_t cdb_len,
                       void *data_buf, size_t data_len,
                       mos_xfer_dir direction,
@@ -789,7 +789,7 @@ mos_error mos_raw_cdb(mos_handle_t *h,
         if (!h->std) return MOS_ERR_DRIVER_REJECTED;
     }
 
-    /* Invariant pin (debug): every raw_cdb call releases exclusive access on
+    /* Invariant pin (debug): every mos_internal_raw_cdb call releases exclusive access on
        every exit path, so the lock is never held across calls — it must be
        free on entry. A future early return that forgot to clear
        have_exclusive would otherwise skip the acquire below and run the CDB

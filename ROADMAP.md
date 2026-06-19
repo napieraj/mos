@@ -66,9 +66,13 @@ The typed verbs that justify removing the raw passthrough, plus the removal.
 reserved-name surface is now empty (the reserved-name machinery retired with
 it). What remains:
 
-- **Remove `mos_raw_cdb()`** — once the typed verbs cover the diagnostic
-  cases the raw passthrough is legacy, and its removal is the major-version
-  justification. What remains is the removal decision itself.
+- **Remove the public `raw_cdb` passthrough** — DONE. The typed verbs cover
+  the diagnostic cases, so the public passthrough was retired: the function is
+  now `mos_internal_raw_cdb` (internal-only, still the sole
+  `ObtainExclusiveAccess` site), and the diagnostic fixture-capture workflow it
+  served moved to the fixed-menu `mos probe --capture` (`mos.capture.v0`).
+  Decision record: AGENTS.md. This is the major-version (public-surface)
+  reduction the item called for.
 
 - **`eject_requested` watch event** — the cooperative soft-eject the tray
   `lock --persistent` verb sets up: under Persistent Prevent the operator
@@ -209,7 +213,7 @@ release-on-return lock discipline is built to coexist with them, not host them.
 spec-conformance (the bar) ─► pure suite + fuzz green ─► decision layer correct
           └─► adapter smoke run on any Mac+drive ─► tag shipped (not a design gate)
 
-v0.4 ─► raw_cdb removed ─► API stable
+v0.4 ─► raw_cdb retired to internal (DONE) ─► API stable
           └─► eject_requested watch event (rig-gated, optional)
 
 v1.0 ─► multi-drive fixtures ─► integration-test gaps ─► CHANGELOG ─► ship

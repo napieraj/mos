@@ -1,10 +1,10 @@
 /*
  * mos_tray.c — tray-control verbs that CHANGE drive state: eject/close
  * (START STOP UNIT 0x1B) and lock/unlock (PREVENT ALLOW MEDIUM REMOVAL
- * 0x1E). Each verb is one raw 6-byte CDB on the mos_raw_cdb path, with a
- * sense check in place of a payload decode.
+ * 0x1E). Each verb is one raw 6-byte CDB on the mos_internal_raw_cdb path,
+ * with a sense check in place of a payload decode.
  *
- * mos_raw_cdb is the SINGLE ObtainExclusiveAccess call site
+ * mos_internal_raw_cdb is the SINGLE ObtainExclusiveAccess call site
  * (ARCHITECTURE.md §3); this file adds none, so the BUSY-on-mounted guard the
  * §5.5 nub invariant relies on also covers the tray verbs: a user-initiated
  * lock/eject on a MOUNTED volume returns MOS_ERR_BUSY rather than disturbing
@@ -68,7 +68,7 @@ mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
 
     uint32_t task_status = 0;
     uint8_t  sense[18]   = {0};
-    mos_error e = mos_raw_cdb(h, cdb, 6, NULL, 0, MOS_XFER_NONE,
+    mos_error e = mos_internal_raw_cdb(h, cdb, 6, NULL, 0, MOS_XFER_NONE,
                               timeout, &task_status, sense, NULL);
     if (e != MOS_OK) return e;          /* transport/lock: honest failure */
 
@@ -84,7 +84,7 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
 
-    /* ONE flow. Every eject grabs exclusive access (in mos_raw_cdb) and issues
+    /* ONE flow. Every eject grabs exclusive access (in mos_internal_raw_cdb) and issues
        the CDB; a plain eject reports the result verbatim. --force diverges only
        on a CLEARABLE failure and then RECONVERGES on the same eject CDB:
 
@@ -99,7 +99,7 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
        userland client (no SCSI preempt exists): it falls through and surfaces,
        tray shut. At most two blockers (mount, lock) stack, so the loop is
        bounded at two passes. Each CDB grabs/releases exclusive access per call
-       — mos_raw_cdb stays the sole §3 lock site; no second one is introduced.
+       — mos_internal_raw_cdb stays the sole §3 lock site; no second one is introduced.
        (A drive with ONLY a Persistent Prevent and no mount/basic-lock ejects on
        the first CDB — an initiator eject succeeds under Persistent Prevent by
        spec — so it opens without a speculative clear; --force clears persistent

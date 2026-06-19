@@ -1,6 +1,6 @@
 /*
  * mos_serial.c — the drive-serial query (mos_query_serial): one raw INQUIRY
- * (EVPD=1, PAGE CODE=0x80, Unit Serial Number) on the mos_raw_cdb path,
+ * (EVPD=1, PAGE CODE=0x80, Unit Serial Number) on the mos_internal_raw_cdb path,
  * decoded by the pure parser in mos_vpd80.c. The serial is the durable
  * drive-inventory key that survives replug and machine moves (registry_id is
  * attachment-scoped). Named for the datum it produces, not the generic
@@ -15,14 +15,14 @@
  * scope doctrine; design + full derivation:
  * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md).
  *
- * Never disturbs another consumer. mos_raw_cdb is the SINGLE
+ * Never disturbs another consumer. mos_internal_raw_cdb is the SINGLE
  * ObtainExclusiveAccess call site (ARCHITECTURE.md §3); this file adds none.
  * Exclusive access is the gate: if anyone else holds the drive — a mounted
  * IOMedia nub, Finder, MakeMKV, another initiator — ObtainExclusiveAccess
- * fails (kIOReturnBusy / kIOReturnExclusiveAccess) and mos_raw_cdb returns
+ * fails (kIOReturnBusy / kIOReturnExclusiveAccess) and mos_internal_raw_cdb returns
  * the mapped error WITHOUT issuing the CDB, so the serial read backs off
  * cleanly rather than contending. On success the lock is held only for the
- * single INQUIRY and released immediately (mos_raw_cdb releases per call —
+ * single INQUIRY and released immediately (mos_internal_raw_cdb releases per call —
  * never held across the handle's life). This is the same BUSY-on-mounted
  * guard the §5.5 nub invariant relies on. The degradation is benign: the
  * serial is a static drive fact, equally readable with the tray empty (the
@@ -67,7 +67,7 @@ mos_error mos_query_serial(mos_handle_t *h, const char **out)
        kIOReturnBusy/ExclusiveAccess → MOS_ERR_BUSY, the CDB never issues;
        any transport error surfaces honestly. The caller treats every non-OK
        as "serial stays null". */
-    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
+    mos_error e = mos_internal_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
                               MOS_XFER_FROM_TARGET, 2000,
                               &task_status, sense, &xferred);
     if (e != MOS_OK) return e;

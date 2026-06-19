@@ -111,7 +111,7 @@ deny 'DARegisterDiskDescriptionChangedCallback' \
      "the watch's DA wake retired in DR pivot Phase 2a"
 
 # CLI flags that never shipped / were removed.
-deny '\-\-raw\b'     "no --raw CLI flag exists; mos_raw_cdb is C API only"
+deny '\-\-raw\b'     "no --raw CLI flag exists; raw CDB issuance is internal (mos_internal_raw_cdb)"
 deny '\-\-verbose\b' "no --verbose CLI flag exists"
 
 # Pre-redesign mechanisms (removed 2026-05-30).
@@ -127,6 +127,13 @@ deny 'EXPECT_BYTES' "macro deleted with mos_cdb.c cleanup"
 # renames until the dead names were added here — do so at every rename).
 deny 'matches_self_or_partition' \
      "renamed to mos_internal_bsd_unit_matches"
+# The public mos_raw_cdb() passthrough was retired (2026-06-19): the function
+# is now internal-only (mos_internal_raw_cdb), and diagnostic capture moved to
+# `mos probe --capture`. A bare `mos_raw_cdb` in a LIVE doc is stale; the
+# internal name has its own substring so this never matches it, and the
+# append-only records (AGENTS/CLAUDE/research/history) are exempt by scope.
+deny 'mos_raw_cdb\b' \
+     "public passthrough retired; use mos_internal_raw_cdb (internal) or 'mos probe --capture'"
 deny 'stream_id' \
      "retired in favor of registry_id + stream_open_ms (session identity)"
 

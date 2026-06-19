@@ -130,6 +130,14 @@ With
 one-shot DiscRecording dictionary capture (text + XML plists; takes no
 drive argument).
 .TP
+.B \-\-capture
+With
+.BR "probe " <drive> :
+issue the fixed menu of known MMC commands and emit each raw reply as
+NDJSON
+.RI ( mos.capture.v0 )
+for fixture capture. Read-only; capture an unmounted disc.
+.TP
 .BR \-j ", " \-\-json
 Emit JSON
 .RI ( mos.state.v1 " / " mos.error.v1 " / " mos.list.v1 ).

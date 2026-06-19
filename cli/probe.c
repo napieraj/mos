@@ -1,7 +1,7 @@
-/* cli/probe.c — the probe command: diagnostic substrate observer.
+/* cli/probe.c — the probe command: diagnostic substrate observer + capture.
  * Compiled in only under MOS_CLI_PROBE (default ON, see CMakeLists.txt).
  *
- * Two modes:
+ * Three modes:
  *
  *   mos probe <drive>   Subscribe to one drive's push-notification sources
  *                       and log each event as NDJSON (mos.probe.v0) with
@@ -15,13 +15,23 @@
  *
  *   mos probe --dump    One-shot: DRCopyDeviceArray order plus each device's
  *                       DRDeviceCopyInfo / DRDeviceCopyStatus dictionary as an
- *                       XML plist, then exit (the fixture-capture mode).
+ *                       XML plist, then exit (the DR-dictionary capture mode).
+ *
+ *   mos probe --capture <drive>
+ *                       One-shot: issue the FIXED MENU of MMC commands mos's
+ *                       own decoders consume and emit each raw reply as NDJSON
+ *                       (mos.capture.v0) — the in-tree, fixed-menu replacement
+ *                       for the retired public mos_raw_cdb passthrough
+ *                       (AGENTS.md). Read-only; produces tests/fixtures/*.bin
+ *                       material.
  *
  * The observation path is raw — events come straight from IOKit/DiscRecording
- * callbacks, through none of mos's state interpretation.
+ * callbacks, through none of mos's state interpretation. The capture path is
+ * equally raw — replies are the drive's wire bytes, undecoded.
  */
 #include "common.h"
 
+#include <CommonCrypto/CommonDigest.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <DiscRecording/DRCoreDevice.h>
 #include <DiscRecording/DRCoreNotifications.h>
@@ -39,10 +49,11 @@
 #include <sysexits.h>
 #include <time.h>
 
-/* mos_internal_parse_bsd_unit lives in the pure layer; reused here to avoid a
-   second BSD-name parse rule. The only cli/ TU reaching a private header
-   (CONTRIBUTING.md records the exception). */
+/* The two private headers reached only by this diagnostic TU (the documented
+   CONTRIBUTING.md exception): mos_pure.h for the BSD-name and sense parsers,
+   mos_internal.h for mos_internal_raw_cdb + mos_xfer_dir (the --capture menu). */
 #include "../src/mos_pure.h"
+#include "../src/mos_internal.h"
 
 /* ---- Signal handling --------------------------------------------- */
 
@@ -323,6 +334,155 @@ static int run_dr_dump(void)
     return mos_cli_finalize_oneshot_stdout(EX_OK);
 }
 
+/* ---- --capture: fixed-menu raw MMC capture -------------------------- *
+ *
+ * Issue the fixed menu of commands mos's own decoders consume and emit each
+ * raw reply as one mos.capture.v0 NDJSON line — the in-tree, fixed-menu
+ * replacement for the retired public mos_raw_cdb passthrough (AGENTS.md). The
+ * `reply` hex IS the bytes a tests/fixtures/<command>_*.bin needs; the
+ * manifest fields (task status, parsed sense, transfer length, SHA-256) match
+ * the format tests/fixtures/README.md specifies. Every command is read-only.
+ *
+ * Faithful by construction: the CDB bytes are identical whether the library
+ * normally issues a command via a convenience method or raw, so a raw capture
+ * yields exactly the wire reply a fixture needs. Media-dependent commands
+ * (READ TOC needs a CD; READ DISC STRUCTURE a DVD/BD) answer CHECK CONDITION
+ * on the wrong or absent medium — recorded in `sense`, not hidden. Each
+ * command self-gates on exclusive access (mos_internal_raw_cdb): a mounted
+ * volume returns MOS_ERR_BUSY without issuing the CDB, so capture an UNMOUNTED
+ * disc (an empty tray is the natural inventory moment). */
+struct capture_cmd {
+    const char *name;       /* fixture command token */
+    uint8_t     cdb[16];
+    uint8_t     cdb_len;    /* 6 / 10 / 12 (SCSITaskLib also accepts 16) */
+    uint32_t    alloc_len;  /* data_len of the FROM_TARGET read; MUST equal the
+                               allocation-length field encoded in cdb[] */
+};
+
+/* The menu. Allocation lengths are generous; the drive returns only what it
+   has and bytes_transferred reports the realized span (the dual-length rule).
+   Byte layouts: SPEC.md / ARCHITECTURE.md §4.2 (GESN matches mos_scsi.c). */
+static const struct capture_cmd capture_menu[] = {
+    /* INQUIRY standard (0x12, EVPD=0), byte4 alloc=96. */
+    { "inquiry_standard",
+      {0x12, 0x00, 0x00, 0x00, 0x60, 0x00}, 6, 96 },
+    /* INQUIRY VPD Unit Serial Number (0x12, EVPD=1, page 0x80), byte4 alloc=255. */
+    { "inquiry_serial",
+      {0x12, 0x01, 0x80, 0x00, 0xFF, 0x00}, 6, 255 },
+    /* GET CONFIGURATION (0x46), RT=0 (all features), bytes7-8 alloc=1024 (0x0400). */
+    { "get_configuration",
+      {0x46, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00}, 10, 1024 },
+    /* GET EVENT STATUS NOTIFICATION (0x4A), IMMED=1, Media class, bytes7-8 alloc=8. */
+    { "get_event_status",
+      {0x4A, 0x01, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x08, 0x00}, 10, 8 },
+    /* READ DISC INFORMATION (0x51), bytes7-8 alloc=64 (0x0040). */
+    { "read_disc_information",
+      {0x51, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00}, 10, 64 },
+    /* READ TOC/PMA/ATIP (0x43), format 0000b (byte2), bytes7-8 alloc=768 (0x0300). */
+    { "read_toc",
+      {0x43, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00}, 10, 768 },
+    /* READ DISC STRUCTURE (0xAD), media type 0 (DVD/HD-DVD), format 0x00
+       (physical), bytes8-9 alloc=2048 (0x0800). */
+    { "read_disc_structure_dvd",
+      {0xAD, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00},
+      12, 2048 },
+    /* READ DISC STRUCTURE (0xAD), media type 1 (BD), format 0x00 (Disc
+       Information / DI), bytes8-9 alloc=2048. */
+    { "read_disc_structure_bd",
+      {0xAD, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00},
+      12, 2048 },
+};
+
+#define MOS_CAPTURE_BUF 4096  /* >= the largest alloc_len in capture_menu */
+
+static void emit_hex(FILE *f, const uint8_t *p, size_t n)
+{
+    static const char hexd[] = "0123456789abcdef";
+    fputc('"', f);
+    for (size_t i = 0; i < n; ++i) {
+        fputc(hexd[p[i] >> 4], f);
+        fputc(hexd[p[i] & 0x0F], f);
+    }
+    fputc('"', f);
+}
+
+static void emit_capture_record(const struct capture_cmd *cmd, mos_handle_t *h)
+{
+    char ts[64];
+    format_rfc3339_utc(ts, sizeof(ts));
+
+    uint8_t  buf[MOS_CAPTURE_BUF] = {0};
+    uint32_t task_status          = 0;
+    uint8_t  sense[18]            = {0};
+    uint64_t xferred              = 0;
+
+    mos_error e = mos_internal_raw_cdb(h, cmd->cdb, cmd->cdb_len,
+                                       buf, cmd->alloc_len,
+                                       MOS_XFER_FROM_TARGET, 5000,
+                                       &task_status, sense, &xferred);
+
+    fputs("{", stdout);
+    fputs("\"schema\":\"mos.capture.v0\"", stdout);
+    fputs(",\"ts\":", stdout); mos_cli_json_str(stdout, ts);
+    fputs(",\"command\":", stdout); mos_cli_json_str(stdout, cmd->name);
+    printf(",\"opcode\":\"0x%02x\"", cmd->cdb[0]);
+    fputs(",\"cdb\":", stdout); emit_hex(stdout, cmd->cdb, cmd->cdb_len);
+    printf(",\"alloc_len\":%u", cmd->alloc_len);
+
+    if (e != MOS_OK) {
+        /* Transport / exclusive-access failure: the CDB did not complete (BUSY
+           on mounted media is the common case — capture an unmounted disc).
+           No reply / status / sense to report. */
+        fputs(",\"ok\":false,\"error\":", stdout);
+        mos_cli_json_str(stdout, mos_cli_error_to_code(e));
+        fputs("}\n", stdout);
+        fflush(stdout);
+        return;
+    }
+
+    uint8_t sk = 0, asc = 0, ascq = 0;
+    mos_internal_parse_sense(sense, &sk, &asc, &ascq);
+
+    /* Clamp the reported span to the buffer (defensive: the transport count
+       should already be <= alloc_len <= sizeof buf). */
+    size_t n = (xferred > sizeof buf) ? sizeof buf : (size_t)xferred;
+
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(buf, (CC_LONG)n, digest);
+
+    fputs(",\"ok\":true", stdout);
+    printf(",\"task_status\":\"0x%02x\"", task_status);
+    printf(",\"sense\":{\"sk\":%u,\"asc\":%u,\"ascq\":%u}",
+           (unsigned)sk, (unsigned)asc, (unsigned)ascq);
+    printf(",\"bytes_transferred\":%zu", n);
+    fputs(",\"sha256\":", stdout); emit_hex(stdout, digest, sizeof digest);
+    fputs(",\"reply\":", stdout);  emit_hex(stdout, buf, n);
+    fputs("}\n", stdout);
+    fflush(stdout);
+}
+
+static int run_capture(void)
+{
+    /* main.c guarantees exactly one of opt_bsd / opt_index is set (registry-id
+       and the no-drive case are rejected at usage time). */
+    mos_error err = MOS_OK;
+    mos_handle_t *h = opt_bsd ? mos_open_by_bsd_name(opt_bsd, &err)
+                              : mos_open_by_index(opt_index, &err);
+    if (!h) {
+        fprintf(stderr, "%s: probe --capture: could not open drive (%s)\n",
+                progname, mos_cli_error_to_code(err));
+        return (err == MOS_ERR_NO_DEVICE) ? EX_NOINPUT : EX_UNAVAILABLE;
+    }
+
+    for (size_t i = 0; i < sizeof capture_menu / sizeof capture_menu[0]; ++i) {
+        emit_capture_record(&capture_menu[i], h);
+        if (ferror(stdout)) break;   /* consumer closed the pipe */
+    }
+
+    mos_close(h);
+    return mos_cli_finalize_oneshot_stdout(EX_OK);
+}
+
 static void general_interest_cb(void *refcon,
                                 io_service_t service,
                                 natural_t messageType,
@@ -413,6 +573,12 @@ int mos_cli_run_probe(void)
     if (flag_dump) {
         init_timebase();
         return run_dr_dump();
+    }
+
+    if (flag_capture) {
+        /* One-shot fixed-menu capture; emits its own RFC 3339 ts per record
+           (no monotonic clock needed). */
+        return run_capture();
     }
 
     init_timebase();
