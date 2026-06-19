@@ -8,8 +8,7 @@
  *
  * No IOKit: the shell (src/mos_query.c) hands us a fixed zero-init buffer
  * filled via the ReadFormatCapacities convenience method (MMCDeviceInterface) —
- * NOT a raw CDB (correcting the earlier "fifth raw verb" call; the wrapper
- * exists in SCSITaskLib.h — see the AGENTS.md ADR +
+ * NOT a raw CDB: the wrapper exists in SCSITaskLib.h (see the AGENTS.md ADR +
  * doc/research/2026-06-18-readformatcapacities-convenience-exists.md). Read-
  * only: mos reports formattable capacities and never issues FORMAT UNIT (0x04).
  *

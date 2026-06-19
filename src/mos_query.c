@@ -70,7 +70,7 @@ mos_error mos_query_toc(mos_handle_t *h, const mos_toc **out)
        the read returns 0 for DVD/BD (no IOCDMedia node) and for a just-inserted
        CD whose node isn't up yet — both fall through to the issued READ TOC
        below, which stays the universal path and the only one for DVD/BD.
-       AGENTS.md ADR 2026-06-18. */
+       See the AGENTS.md ADR. */
     mos_internal_refresh_media_identity(h);
     uint8_t cdtoc[MOS_CDTOC_REPLY_BUF];
     size_t  clen = mos_internal_read_cdtoc(h->svc, cdtoc, sizeof cdtoc);
