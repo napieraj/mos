@@ -486,6 +486,50 @@ since the DA framework headers were not in the IOKit/DR SDK bundles). The DA
 *runtime* behavior is hardware-falsifiable per the hardware-role ADR; the macOS
 `-Werror` adapter build is the API compile-gate.
 
+### Addendum: the forced unmount is bound to the handle's media identity, and
+### refreshes before it fires (2026-06-19, hardens the addendum above)
+
+The 2026-06-18 addendum had `tray eject --force` format the cached `h->bsd_unit`
+and force-unmount that name. A 2026-06-19 review found that **insufficient
+authority for a data-loss-capable op**: the cached unit goes stale (a handle
+opened with the tray empty has `bsd_unit == -1`; a handle held across a swap has
+last-query's unit), and macOS **reuses BSD unit numbers** — so the old path
+could (a) fail to clear the *current* mount, or (b) force-unmount an *unrelated*
+disk that inherited `diskN`. This entry records the fix; it hardens, does not
+reverse, the addendum above (the data-loss contract and the one DA *action* are
+unchanged).
+
+**Two gates now stand between BUSY and the unmount** (`mos_tray.c`, `mos_da.c`):
+1. **Refresh first.** On the BUSY (mounted) branch, `mos_internal_refresh_media_identity(h)`
+   re-resolves `bsd_unit` + `media_id` off `h->svc`'s live IOMedia child, so the
+   name formatted and the identity bound both describe the disc in *this* drive
+   *now*. Media gone (`bsd_unit < 0`) ⇒ fail closed, mount left as `MOS_ERR_BUSY`.
+2. **Bind to identity.** `mos_internal_da_unmount` now takes the expected
+   whole-disk IOMedia **registry entry id** (`h->media_id`) and unmounts only
+   when the IOMedia behind `diskN` carries that exact id (registry ids are
+   globally unique and **not reused**, unlike BSD unit numbers — the property
+   that makes them the right anchor). A mismatch (reused `diskN`), a zero id
+   (identity unknown), or no IOMedia behind `diskN` all **fail closed** — never
+   unmount a disk that is not the one verified under the handle's stable service.
+
+**No new command or DA modality.** The bind reads identity via
+`DADiskCopyIOMedia` — a **synchronous, scheduling-free DA read** (returns the
+IOMedia `io_service_t`, no run loop, no callback), i.e. the same read class the
+2026-06-12 addendum already admitted (`DADiskCopyDescription`), not a second DA
+*action*. `mos_internal_da_unmount` remains the SINGLE DA action; the
+one-raw-CDB count and command surface are untouched. `DADiskCopyIOMedia`'s
+signature (`io_service_t DADiskCopyIOMedia(DADiskRef)`, owned return released via
+`IOObjectRelease`) is the real DA header's; the macOS `-Werror` legs are the
+compile-gate (green on PR #85), and the headless fake gained `DADiskCopyIOMedia`
++ a `da_media_id` desync so `adapter_da_unmount_binds_to_media_identity` exercises
+match / mismatch / zero-id / no-media.
+
+**What hardware can still falsify, never establish** (per the hardware-role ADR):
+a non-conformant bridge whose IOMedia registry id is unstable across a re-probe
+(would make a legitimate unmount fail closed — surfaces as an uncleared mount,
+the safe direction); each such case lands as a fixture + dated note with a
+generic gate, never a per-device special-case.
+
 ## ADR: verb `state` replaces `status`; bare selector is the default subject (2026-06-14)
 
 The default verb was renamed `status` → `state` (clean break, no alias),
