@@ -33,7 +33,7 @@ const char *mos_cli_human_rate(uint32_t kbps, char *buf, size_t cap);
 
 /* Transfer rate scaled to the loaded medium's native 1x multiple, the
    headline figure with the absolute rate in parentheses:
-   "~3.6x BD (16.0 MB/s)". `media_class` is mos_profile_class() of the loaded
+   "~3.6× BD (16.0 MB/s)". `media_class` is mos_profile_class() of the loaded
    disc ("cd"/"dvd"/"bd"/"hd_dvd"); when it is NULL or a class with no defined
    1x base (no medium / MO / unknown), this degrades to a plain
    mos_cli_human_rate (just the absolute rate). The multiple is approximate
