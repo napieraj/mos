@@ -3,10 +3,12 @@
  * mos_scsi.c stays exclusively IOKit-linked. No IOKit.
  */
 
-#include "mos_pure.h"   /* declares the mos_internal_* helpers defined here
-                           (mos_pure.h re-includes mos.h) — so the definitions
-                           are checked against their prototypes (-Wmissing-
-                           prototypes). */
+/* mos_pure.h (which re-includes mos.h) declares the mos_internal_* helpers
+   defined in this file, so the definitions are checked against their
+   prototypes (-Wmissing-prototypes). Kept on its own line above the include:
+   the amalgamator drops library-local #include lines wholesale, so a trailing
+   block comment here would be orphaned into dist/mos.c (scripts/amalgamate.sh). */
+#include "mos_pure.h"
 #include <stdio.h>   /* snprintf for hex escapes */
 #include <stddef.h>
 #include <stdint.h>
