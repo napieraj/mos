@@ -28,6 +28,7 @@ extern bool        flag_force;     /* tray eject --force (open no matter what:
                                       force-unmount + clear locks, then eject) */
 extern bool        flag_persistent;/* tray lock/unlock --persistent */
 extern bool        flag_dump;     /* probe --dump one-shot DR capture */
+extern bool        flag_capture;  /* probe --capture: fixed-menu raw MMC capture */
 extern const char *progname;
 
 /* ---- Command table ---------------------------------------------------- *

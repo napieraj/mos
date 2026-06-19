@@ -84,6 +84,9 @@ void mos_cli_print_usage(FILE *f)
 #ifdef MOS_CLI_PROBE
         "      --dump        With probe: one-shot DR dictionary capture\n"
         "                    (text + XML plists; takes no drive argument)\n"
+        "      --capture     With probe <drive>: issue the fixed menu of known\n"
+        "                    MMC commands and emit each raw reply as NDJSON\n"
+        "                    (mos.capture.v0) for fixture capture\n"
 #endif
         "  -j, --json        Emit JSON (mos.state.v1 / mos.error.v1 /\n"
         "                    mos.list.v1). watch is always NDJSON\n"
@@ -116,6 +119,7 @@ enum {
     OPT_PERSISTENT,
 #ifdef MOS_CLI_PROBE
     OPT_DUMP,
+    OPT_CAPTURE,
 #endif
 };
 
@@ -126,9 +130,10 @@ static const struct option long_options[] = {
     { "force",      no_argument,    0, OPT_FORCE },
     { "persistent", no_argument,    0, OPT_PERSISTENT },
 #ifdef MOS_CLI_PROBE
-    /* Compiled out so an OFF build rejects --dump as unknown rather than
-       half-recognizing it. */
+    /* Compiled out so an OFF build rejects --dump/--capture as unknown rather
+       than half-recognizing them. */
     { "dump",    no_argument,       0, OPT_DUMP },
+    { "capture", no_argument,       0, OPT_CAPTURE },
 #endif
     /* optional_argument so --json=value reaches the rejection diagnostic
        below rather than being silently discarded; bare --json gives a
@@ -299,7 +304,8 @@ int main(int argc, char **argv)
             case OPT_FORCE:      flag_force = true; break;
             case OPT_PERSISTENT: flag_persistent = true; break;
 #ifdef MOS_CLI_PROBE
-            case OPT_DUMP: flag_dump = true; break;
+            case OPT_DUMP:    flag_dump = true; break;
+            case OPT_CAPTURE: flag_capture = true; break;
 #endif
             case 'j':
                 if (!reject_legacy_json_version(optarg)) return EX_USAGE;
@@ -409,6 +415,16 @@ int main(int argc, char **argv)
     if (flag_dump && flag_json) {
         fprintf(stderr, "%s: probe --dump output is plain text + XML "
                         "plists; --json does not apply\n", progname);
+        return EX_USAGE;
+    }
+    if (flag_capture && !(selected->flags & MOS_CLI_CMD_PROBE)) {
+        fprintf(stderr, "%s: --capture requires the probe subcommand\n",
+                progname);
+        return EX_USAGE;
+    }
+    if (flag_capture && flag_dump) {
+        fprintf(stderr, "%s: probe --dump and --capture are different modes; "
+                        "pick one\n", progname);
         return EX_USAGE;
     }
     if ((selected->flags & MOS_CLI_CMD_PROBE) && !flag_dump && opt_registry) {

@@ -1,7 +1,7 @@
 /*
  * mos_drive_inquiry.c — the drive-identity query (mos_query_drive_inquiry):
  * one raw STANDARD INQUIRY (EVPD=0, allocation length >= 74) on the
- * mos_raw_cdb path, decoded by the pure parser in mos_inqdata.c. Surfaces the
+ * mos_internal_raw_cdb path, decoded by the pure parser in mos_inqdata.c. Surfaces the
  * drive's self-reported identity (vendor/product/revision) AND the VERSION
  * byte (SPC compliance level) + version-descriptor list — the canonical truth
  * `mos drive` prefers over the DiscRecording cache. Named for the datum (the
@@ -15,7 +15,7 @@
  * (AGENTS.md scope-doctrine ADR; design:
  * doc/research/2026-06-16-drive-identity-enrichment-survey.md).
  *
- * mos_raw_cdb is the SINGLE ObtainExclusiveAccess call site; this file adds
+ * mos_internal_raw_cdb is the SINGLE ObtainExclusiveAccess call site; this file adds
  * none. Exclusive access is the gate: a mounted volume / other holder makes
  * the open fail BUSY and the CDB never issues, so the read backs off rather
  * than disturb a live nub — the same benign degradation as the serial (a
@@ -53,7 +53,7 @@ mos_error mos_query_drive_inquiry(mos_handle_t *h,
     uint8_t  sense[18]                 = {0};
     uint64_t xferred                   = 0;
 
-    mos_error e = mos_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
+    mos_error e = mos_internal_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
                               MOS_XFER_FROM_TARGET, 2000,
                               &task_status, sense, &xferred);
     if (e != MOS_OK) return e;

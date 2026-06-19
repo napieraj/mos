@@ -417,6 +417,23 @@ case "$ERR" in
     assert_ec       "probe --dump exits 0"        "0"    "$EC"
     assert_contains "probe --dump banner"         "$OUT" "mos probe --dump"
     assert_contains "probe --dump empty directory" "$OUT" "0 device(s)"
+
+    # Test 31: --capture validation matrix. The capture round-trip (issuing
+    # the fixed MMC menu) needs a drive, so CI exercises parsing/gating only —
+    # the same limitation as stream mode. Every contradiction is 64; a
+    # well-formed but absent drive reaches the open and exits 66.
+    run_mos probe --capture
+    assert_ec "probe --capture without a drive exits 64" "64" "$EC"
+    run_mos probe --capture --dump
+    assert_ec "probe --capture + --dump exits 64" "64" "$EC"
+    run_mos --capture
+    assert_ec "--capture without probe exits 64" "64" "$EC"
+    run_mos probe --capture 4294967552
+    assert_ec "probe --capture registry-id selector exits 64" "64" "$EC"
+    run_mos probe --capture disk99
+    assert_ec "probe --capture absent bsd exits 66" "66" "$EC"
+    run_mos probe --capture 99
+    assert_ec "probe --capture absent index exits 66" "66" "$EC"
     ;;
 esac
 

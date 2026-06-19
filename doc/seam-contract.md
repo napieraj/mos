@@ -154,7 +154,7 @@ authority; monotone in the claim). Detection: pinned + fuzz.)*
 
 **O-4 exception (recorded 2026-06-11): the GESN tray probe.**
 `mos_internal_mmc_get_tray_state` passes `bytes_transferred = NULL` to
-`mos_raw_cdb` and bounds the decoder by `allocated ∧ claimed` only —
+`mos_internal_raw_cdb` and bounds the decoder by `allocated ∧ claimed` only —
 the `transferred` leg is deliberately omitted because some USB bridges
 under-report the realized byte count, and trusting it would fail
 honest replies (rationale at the call site, `mos_scsi.c`). Consequence

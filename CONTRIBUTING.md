@@ -136,7 +136,7 @@ a handle from a value at the use site:
 - **no `_t`** — query-result objects read through accessors
   (`mos_state_result`, `mos_disc_info`, `mos_toc`, `mos_drive_caps`, …),
   public enums (`mos_error`, `mos_state`, `mos_disc_status`,
-  `mos_event_kind`, `mos_xfer_dir`), and plain pure-data structs
+  `mos_event_kind`), and plain pure-data structs
   (`mos_toc_entry`, `mos_config_feature`, `mos_cli_human_pair`).
 
 A struct exposed publicly as an iteration subject is defined as a bare
@@ -244,7 +244,8 @@ is `doc/research/2026-06-15-comment-purge-plan.md`):
 - **`src/mos_scsi.c`** — IOKit lifecycle (`mos_open_*`, `mos_close`),
   enumeration, the MMC convenience primitives the state core uses
   (TUR / current-profile / tray-state), and the raw CDB path
-  (`mos_raw_cdb` — the sole `ObtainExclusiveAccess` site). Links against
+  (`mos_internal_raw_cdb` — the sole `ObtainExclusiveAccess` site, internal
+  only; the public passthrough was retired). Links against
   `IOKit.framework` and `CoreFoundation.framework`. Pure helpers were
   extracted to `mos_pure.c` during the v0.2 library split.
 
@@ -260,11 +261,13 @@ is `doc/research/2026-06-15-comment-purge-plan.md`):
   emission is hand-rolled; the output contract is consumed by
   downstream automation). Links `mos_core`; does not include private
   headers (exception: `cli/probe.c`, a diagnostic compiled in under
-  `MOS_CLI_PROBE`, includes `src/mos_pure.h` for the BSD-unit parse).
+  `MOS_CLI_PROBE`, includes `src/mos_pure.h` for the BSD-unit/sense parse
+  and `src/mos_internal.h` for `mos_internal_raw_cdb` — the `--capture` menu).
 
   On a new machine, `mos list` then `mos state --json` exercise the
   full library path; `mos probe --dump` captures the raw DiscRecording
-  dictionaries when enumeration disagrees with expectation. (The
+  dictionaries, and `mos probe --capture <drive>` captures the raw MMC
+  replies (`mos.capture.v0`) that become `tests/fixtures/*.bin`. (The
   standalone `tools/` probes were consolidated into `mos probe` on
   2026-06-11 — see the ROADMAP append.)
 
@@ -275,8 +278,8 @@ is `doc/research/2026-06-15-comment-purge-plan.md`):
    never take the lock — TUR GOOD short-circuits before any exclusive
    access, so a mounted, in-progress rip is never disturbed. The one
    sanctioned exception is the not-ready branch's GESN tray probe,
-   which routes through `mos_raw_cdb()` and is safe precisely because
-   not-ready ⇒ not mounted ⇒ the lock is free. `mos_raw_cdb()` remains
+   which routes through `mos_internal_raw_cdb()` and is safe precisely because
+   not-ready ⇒ not mounted ⇒ the lock is free. `mos_internal_raw_cdb()` remains
    the only call site of `ObtainExclusiveAccess`. See
    `ARCHITECTURE.md` §3.
 2. **Do not add transcoding, decoding, or any higher-layer media
@@ -462,7 +465,7 @@ this in one step if the tap is set up for it.
 - [ ] No new fixed-size arrays in public structs.
 - [ ] `make test` passes.
 - [ ] If you added a code path that issues a raw CDB, it's behind
-      `mos_raw_cdb()` and not on the default query path.
+      `mos_internal_raw_cdb()` and not on the default query path.
 - [ ] `ARCHITECTURE.md` updated if decision-tree or state semantics
       changed.
 - [ ] Hardware fixture added to `tests/fixtures/` if your change was

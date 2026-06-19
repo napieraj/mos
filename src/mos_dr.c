@@ -7,7 +7,7 @@
  * expose). DR is not a SCSI command author (AGENTS.md scope doctrine): it is
  * a substrate above the same kext the MMC path uses, and DR authors no raw
  * CDB itself — every raw verb (GESN, the tray opcodes, INQUIRY) lives in the
- * MMC path via mos_raw_cdb (AGENTS.md tracks the running count).
+ * MMC path via mos_internal_raw_cdb (AGENTS.md tracks the running count).
  *
  * Identity resolution: DR exposes a device's IORegistry *path*
  * (kDRDeviceIORegistryEntryPathKey), not its entry ID. mos's identity

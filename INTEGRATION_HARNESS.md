@@ -501,13 +501,18 @@ drutil tray close
 These logs go in `tests/fixtures/` as human-readable records. They are
 reference material for reviewers, not automated-test inputs.
 
-For true raw-response byte captures (the `.bin` files we eventually
-want under `tests/fixtures/`), write a small diagnostic C program that
-calls `mos_open_by_bsd_name()` then `mos_raw_cdb()` with a specific CDB
-(for example 0x4A GET EVENT STATUS NOTIFICATION) and dumps the
-returned buffer. This is an open TODO — see issue tracker. The
-`mos_raw_cdb` function itself is public API and works today; only the
-fixture-capture helper doesn't exist yet.
+For true raw-response byte captures (the `.bin` files under
+`tests/fixtures/`), run `mos probe --capture <drive>` on an UNMOUNTED
+disc. It issues the fixed menu of MMC commands mos's decoders consume
+(GET CONFIGURATION, READ DISC INFORMATION, GET EVENT STATUS
+NOTIFICATION, READ TOC, READ DISC STRUCTURE, INQUIRY standard + VPD
+0x80) and emits each raw reply as a `mos.capture.v0` NDJSON line
+carrying the reply hex, task status, parsed sense, transfer length, and
+a SHA-256. Decode a line's `reply` field into the committed
+`<command>_<state>_<model>.bin`. (Raw CDB issuance is library-internal —
+`mos_internal_raw_cdb`, exercised through this fixed menu — not a public
+passthrough; the menu self-gates on exclusive access, so a mounted disc
+reports `busy` rather than capturing.)
 
 ## Reporting results
 

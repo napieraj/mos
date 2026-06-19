@@ -49,7 +49,8 @@ _mos() {
                 probe)
                     _arguments \
                         "${global_opts[@]}" \
-                        '--dump[one-shot DiscRecording dictionary capture]'
+                        '--dump[one-shot DiscRecording dictionary capture]' \
+                        '--capture[fixed-menu raw MMC capture (mos.capture.v0)]'
                     ;;
                 *)
                     _arguments "${global_opts[@]}"

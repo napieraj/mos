@@ -2,10 +2,10 @@
  * mos.h — mac-optical-state public C API (version: MOS_VERSION_STRING below)
  *
  * Pure-C public surface for querying macOS optical drive state via
- * MMCDeviceInterface. Raw SCSITaskDeviceInterface access is exposed
- * through mos_raw_cdb(); the default state path issues one raw CDB
- * (GESN) on its not-ready branch, briefly taking the exclusive lock
- * — safe by the nub invariant. See ARCHITECTURE.md §3/§5.5.
+ * MMCDeviceInterface. The default state path issues one raw CDB (GESN)
+ * on its not-ready branch, briefly taking the exclusive lock — safe by
+ * the nub invariant. See ARCHITECTURE.md §3/§5.5. (Raw CDB issuance is
+ * a library-internal mechanism, not public surface.)
  *
  * Design goals:
  *   - Trivially embeddable in non-macOS-specific C/C++ projects.
@@ -100,24 +100,16 @@ typedef enum {
     MOS_ERR_NO_DEVICE         = -2, /* no drive at that index/bsd */
     MOS_ERR_DRIVER_REJECTED   = -3, /* IOKit would not attach SCSITaskUserClient */
     MOS_ERR_EXCLUSIVE_ACCESS  = -4, /* another client holds the drive */
-    MOS_ERR_BUSY              = -5, /* contention from another client (e.g.
-                                       raw-CDB callers competing for exclusive
-                                       access) — NOT "media is mounted", which
-                                       the default path handles correctly. */
+    MOS_ERR_BUSY              = -5, /* contention from another client competing
+                                       for exclusive access — NOT "media is
+                                       mounted", which the default path handles
+                                       correctly. */
     MOS_ERR_TIMEOUT           = -6,
     MOS_ERR_IO                = -7, /* unexpected IOKit / kernel error */
     MOS_ERR_UNSUPPORTED       = -8, /* command not supported by drive */
     MOS_ERR_OOM               = -9,
 } mos_error;
 MOS_ABI_PIN_I32(mos_error);
-
-/* Transfer direction constants for mos_raw_cdb(). */
-typedef enum {
-    MOS_XFER_NONE         = 0,
-    MOS_XFER_FROM_TARGET  = 2, /* drive → host (read-like) */
-    MOS_XFER_TO_TARGET    = 1, /* host → drive (write-like) */
-} mos_xfer_dir;
-MOS_ABI_PIN_I32(mos_xfer_dir);
 
 /* READ DISC INFORMATION disc status (MMC-6 0x51 byte 2, bits 1:0) —
    the disc-completion signal a blank-vs-finalized decision needs. */
@@ -528,7 +520,7 @@ uint64_t    mos_handle_registry_id(const mos_handle_t *h);
 
 /*
  * Query the drive's Unit Serial Number: one raw INQUIRY (EVPD=1, PAGE
- * CODE=0x80) on the mos_raw_cdb exclusive-access path, decoded by the
+ * CODE=0x80) on the internal exclusive-access raw-CDB path, decoded by the
  * bounds-checked pure parser. This is the durable inventory key that
  * survives replug and machine moves — registry_id is attachment identity
  * (replug mints a new one) and must not be used as a durable key.
@@ -558,7 +550,7 @@ typedef struct mos_drive_inquiry mos_drive_inquiry;
 /*
  * Query the standards the drive claims: the VERSION byte (SPC compliance
  * level) and the version-descriptor list, from a raw STANDARD INQUIRY
- * (EVPD=0, allocation length >= 74) on the mos_raw_cdb exclusive-access path.
+ * (EVPD=0, allocation length >= 74) on the internal exclusive-access raw-CDB path.
  * The version descriptors live at INQUIRY bytes 58-73, which macOS's
  * convenience Inquiry (a 36-byte standard-header read) cannot reach — the
  * same layer-1 raw-verb showing as the serial, the same INQUIRY opcode in a
@@ -992,7 +984,7 @@ mos_error mos_enumerate_features(mos_handle_t *h,
  * The commands mos issues that CHANGE drive state rather than report it
  * (ARCHITECTURE.md §1's reporter-only stance is narrowed, not reversed —
  * the query path never issues these). Each is one raw 6-byte CDB on the
- * mos_raw_cdb path, so each
+ * internal exclusive-access raw-CDB path, so each
  * acquires and RELEASES exclusive access within the call:
  *
  *   - MOS_ERR_BUSY / MOS_ERR_EXCLUSIVE_ACCESS when the drive is mounted as a
@@ -1016,7 +1008,7 @@ mos_error mos_enumerate_features(mos_handle_t *h,
  * drive returned — meaningful on a refusal (REFUSED_LOCKED is always 5/53/02;
  * REFUSED_OTHER is whatever the drive reported, e.g. 5/24/00 for an
  * unsupported Persistent Prevent), all-zero on DONE. Zeroed on a transport
- * failure (negative return). Same shape as mos_raw_cdb's sense out-param.
+ * failure (negative return). Same shape as the internal raw-CDB sense out-param.
  */
 
 /* Eject the tray / unload the medium (START STOP UNIT 0x1B, LoEj=1 START=0).
@@ -1061,34 +1053,6 @@ mos_error mos_tray_unlock(mos_handle_t *h, bool persistent,
 /* Stable lower_snake_case token for an outcome: "done" / "refused_locked" /
    "refused_other". Same contract as mos_state_description (never NULL). */
 const char *mos_tray_outcome_description(mos_tray_outcome o);
-
-/*
- * Diagnostic: issue a raw CDB against the drive. Requires exclusive
- * access; returns MOS_ERR_BUSY or MOS_ERR_EXCLUSIVE_ACCESS if the drive
- * is mounted or held by another process. For fixture capture and hardware
- * investigation — not production surface; prefer mos_query_state() and the
- * typed APIs.
- *
- * cdb_len must be 6, 10, 12, or 16 (the lengths SCSITaskLib accepts);
- * other values return MOS_ERR_INVALID_ARG. timeout_ms must be > 0 — 0 is
- * SCSITaskLib's "Wait Forever", rejected at the boundary rather than
- * silently applied. scsi_task_status and sense are required (raw
- * diagnostics are uninformative without them); bytes_transferred may be
- * NULL.
- *
- * Exclusive access is acquired and released within the single call, so a
- * diagnostic does not leave the drive blocked against Finder /
- * DiskArbitration; a sequence of raw CDBs pays one obtain/release each.
- */
-mos_error mos_raw_cdb(mos_handle_t *h,
-                      const uint8_t *cdb, size_t cdb_len,
-                      void *data_buf, size_t data_len,
-                      mos_xfer_dir direction,
-                      uint32_t timeout_ms,
-                      /* out: */
-                      uint32_t *scsi_task_status,
-                      uint8_t   sense[18],
-                      uint64_t *bytes_transferred);
 
 /* Safe to call on NULL. Do not call twice on the same handle. */
 void mos_close(mos_handle_t *h);

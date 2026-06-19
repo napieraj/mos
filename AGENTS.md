@@ -1002,3 +1002,70 @@ drive/bridge where the kernel builds no `IOCDMedia` node for valid CD media (the
 issued-READ-TOC fallback covers it); a `CDTOC` blob that disagrees with the
 issued TOC on the same disc (lands as a fixture + dated note with a generic
 gate, never a per-device special-case).
+
+## ADR: public `mos_raw_cdb()` passthrough retired; raw issuance is internal,
+## diagnostic capture is `mos probe --capture` (2026-06-19)
+
+ROADMAP's v0.4 item "Remove `mos_raw_cdb()`" is realized — as **unpublish, not
+delete**, the shape the feasibility note already named
+(`doc/research/2026-06-18-read-format-capacities-feasibility.md:85`: the item
+removes the *public* passthrough; the internal raw-CDB mechanism every typed
+verb rides survives). This entry records the surface change and why it touches
+no doctrine line.
+
+**What changed.** The function `mos_raw_cdb` is renamed `mos_internal_raw_cdb`
+and its declaration moved from `include/mos.h` to `src/mos_internal.h`; the
+public doc block is gone. It is no longer callable by an embedder — the public
+C API loses the arbitrary-CDB passthrough. The `mos_xfer_dir` enum + `MOS_XFER_*`
+constants moved with it (they had no public consumer once the passthrough left;
+verified by grep before the move) and are pinned to the SDK
+`kSCSIDataTransfer_*` values by the same `_Static_assert` in `mos_scsi.c`. Pre-
+first-tag, no external consumers, so the removal is free (the JSON-schema ADR's
+mutable-in-place reasoning applied to the C surface).
+
+**What is unchanged — the internal mechanism.** `mos_internal_raw_cdb` remains
+the SINGLE `ObtainExclusiveAccess` call site (ARCHITECTURE §3); its five callers
+are untouched: the GESN tray probe (`mos_scsi.c`), the tray opcodes
+(`mos_tray.c`), the two INQUIRY reads (`mos_serial.c`, `mos_drive_inquiry.c`),
+and now the diagnostic capture menu (`cli/probe.c`). The one-raw-CDB count
+(GESN + the two tray opcodes + INQUIRY = one-of-four) is unchanged — no library
+query path gained or lost a raw verb.
+
+**Fixture capture migrated to `mos probe --capture`.** The two docs that pointed
+fixture contributors at the public passthrough (`tests/fixtures/README.md`,
+`INTEGRATION_HARNESS.md`) now point at a new third probe mode: `mos probe
+--capture <drive>` issues a FIXED MENU of the read-only commands mos's own
+decoders consume (INQUIRY standard + VPD 0x80, GET CONFIGURATION, GESN, READ
+DISC INFORMATION, READ TOC, READ DISC STRUCTURE DVD/BD) and emits each raw reply
+as a `mos.capture.v0` NDJSON line carrying the reply hex + the manifest
+`tests/fixtures/README.md` specified (task status, parsed sense, transfer
+length, SHA-256). The `reply` hex decodes to the committed `.bin`. This is the
+in-tree, fixed-menu version of the exact "write a C program calling
+`mos_raw_cdb`" workflow the old docs described — the long-anticipated
+`mos_capture` tool, now shipped.
+
+**Why a fixed menu, not an arbitrary-CDB CLI flag.** An arbitrary-CDB `--cdb`
+mode would relocate the retired passthrough into the shipped binary — shrinking
+the C surface while growing an equivalent raw surface, a net-zero (arguably
+negative) scope move. The fixed menu issues only commands mos already knows, so
+it grows no general-SCSI surface; the cases an arbitrary passthrough could reach
+and the menu cannot (exotic non-mos CDBs) are general-SCSI exploration, which
+layer 2 forecloses anyway. (Decision: maintainer, 2026-06-19.)
+
+**Scope-doctrine compliance.** The capture menu issues raw CDBs, but it lives in
+the diagnostic `probe` subcommand behind `MOS_CLI_PROBE` (default ON) — the
+threat model there is the developer who enabled it (CLAUDE.md), not the library's
+query path. It changes no library command surface: the one-of-four count, the
+no-lock-on-READY query shape, and layer-1's "kernel-authored by default" all
+hold for `mos_query_*`. Every menu command is a non-destructive READ; the menu
+self-gates on exclusive access (a mounted volume returns BUSY without issuing),
+so capture wants an unmounted disc. Privilege footprint (layer 3) unchanged: the
+same SCSITaskUserClient console grant. `mos.capture.v0` is a diagnostic format,
+NOT a published `schemas/` document — the same call as `mos.probe.v0`.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+menu CDB byte layout that a drive answers with an unexpected CHECK CONDITION, or
+a USB-SATA bridge truncating a reply — each lands as a fixture + dated note and,
+at most, a refinement of the menu's allocation lengths or parameters, never a
+per-device special-case. The capture tool's job is to record what the drive
+returned, so a surprising reply is the deliverable, not a defect.

@@ -7,7 +7,7 @@
  * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md.
  *
  * No IOKit: the shell hands us a fixed zero-init buffer (filled via
- * mos_raw_cdb) bounded to the bytes the transport actually returned
+ * mos_internal_raw_cdb) bounded to the bytes the transport actually returned
  * (dual-length rule O-4 — the realized count, not the device-claimed
  * length, is the trusted span). The page's own PAGE LENGTH never extends
  * past that span; if it exceeds it (the transport under-delivered) the
