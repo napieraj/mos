@@ -10,11 +10,23 @@
 # JSON API: https://pypi.org/pypi/<pkg>/<version>/json and copy the
 # digests.sha256 field for every entry in urls[].
 #
-# Pinned for jsonschema v4.23.0 (2024-07-08).
+# Pinned for jsonschema v4.23.0 (2024-07-08). rfc3339-validator (and its
+# only dep, six) backs jsonschema's FormatChecker so `format: "date-time"`
+# is enforced as a hard assertion, not just an annotation — without it the
+# validators silently skip the date-time check (validate.py asserts the
+# checker is registered so a missing dep fails loudly, not silently).
 
 jsonschema==4.23.0 \
     --hash=sha256:fbadb6f8b144a8f8cf9f0b89ba94501d143e50411a1278633f56a7acf7fd5566 \
     --hash=sha256:d71497fef26351a33265337fa77ffeb82423f3ea21283cd9467bb03999266bc4
+
+rfc3339-validator==0.1.4 \
+    --hash=sha256:24f6ec1eda14ef823da9e36ec7113124b39c04d50a4d3d3a3c2859577e7791fa \
+    --hash=sha256:138a2abdf93304ad60530167e51d2dfb9549521a836871b88d7f4695d0022f6b
+
+six==1.17.0 \
+    --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
+    --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
 
 attrs==24.2.0 \
     --hash=sha256:81921eb96de3191c8258c199618104dd27ac608d9366f5e35d011eae1867ede2 \

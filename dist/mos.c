@@ -1155,7 +1155,8 @@ struct mos_handle {
     struct mos_session_layout session_layout;
 
     /* Handle-owned capacity result (mos_query_capacity). Assembled from
-       the open-time IOMedia size above + a fresh track_info read. */
+       the per-call-refreshed IOMedia size above + a fresh track_info read +
+       (for formattable profiles) a READ FORMAT CAPACITIES convenience read. */
     struct mos_capacity       capacity;
 
     /* Handle-owned drive-performance result (mos_query_drive_perf). */
@@ -1167,8 +1168,10 @@ struct mos_handle {
     struct mos_error_recovery error_recovery;
 
     /* Handle-owned INQUIRY VPD-0x80 serial (mos_query_serial). Filled by the
-       raw-INQUIRY shell, returned by borrowed pointer; 64 holds any real
-       drive serial (SPC max 255 truncates, never overflows). */
+       raw-INQUIRY shell, returned by borrowed pointer; 64 holds any real drive
+       serial. A serial that cannot be held whole — longer than this buffer or
+       carrying an interior NUL — is refused (serial stays null), never
+       truncated: a partial identity key is worse than none (mos_vpd80.c). */
     char                      serial_str[64];
 
     /* Handle-owned standard-INQUIRY result (mos_query_drive_inquiry). */
@@ -1230,8 +1233,17 @@ bool mos_internal_da_volume(const char *bsd_name,
    (kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole). True on success.
    The SOLE DA action mos performs (async DADiskUnmount, awaited on a semaphore),
    used only by `tray eject --force`. Returns false when DA is opted out at build
-   time (capability absent) — the force eject then reports the mount as BUSY. */
-bool mos_internal_da_unmount(const char *bsd_name);
+   time (capability absent) — the force eject then reports the mount as BUSY.
+
+   IDENTITY BIND (data-loss safety): bsd_name alone is NOT sufficient authority
+   to destroy state — macOS reuses "diskN" unit numbers, so a stale name can
+   resolve to an unrelated disk. expected_media_id is the whole-disk IOMedia
+   registry entry ID the caller just resolved off the handle's stable drive
+   service (h->media_id); the unmount proceeds only if the IOMedia behind diskN
+   has that exact id (registry IDs are unique and not reused). A mismatch, a
+   zero expected id (identity unknown), or no IOMedia behind diskN all fail
+   closed — refuse rather than risk unmounting the wrong disk. */
+bool mos_internal_da_unmount(const char *bsd_name, uint64_t expected_media_id);
 
 /* Extract one device's snapshot (registry id, bsd unit, identity) from a
    DRDeviceRef passed as CFTypeRef (this header stays free of DiscRecording
@@ -1887,8 +1899,11 @@ void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
    Reserved[2], all decimal ASCII (GMT). We emit RFC 3339 UTC
    "YYYY-MM-DDTHH:MM:SSZ" — the SAME form mos.event.v1's `ts` uses
    (mos_watch_core.c::format_rfc3339), integer seconds + trailing Z.
-   The 14 date/time bytes must all be decimal ASCII or the reply is refused
-   (empty out) — fail closed on a malformed descriptor. */
+   The 14 date/time bytes must all be decimal ASCII AND form a real calendar
+   date/time (month 1-12, day valid for the month incl. leap years, hour 0-23,
+   minute/second 0-59) or the reply is refused (empty out) — fail closed on a
+   malformed or out-of-range descriptor rather than emit a fake RFC 3339
+   string. Profile is stricter than RFC 3339: no leap second (second 0-59). */
 void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
                                             char *out, size_t out_cap)
 {
@@ -1905,6 +1920,28 @@ void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
     const uint8_t *d = f.data;
     /* d[0..1] Century, [2..3] Year, [4..5] Month, [6..7] Day,
        [8..9] Hour, [10..11] Minute, [12..13] Second. */
+
+    /* Reject impossible calendar values. We emit an RFC 3339 timestamp, so a
+       shape-valid-but-nonsense descriptor (month 99, day 99, hour 99 — a
+       hostile bridge or a firmware bug) must fail closed (empty out), not be
+       dressed up as a standards-conforming date. Range profile, STRICTER than
+       RFC 3339 in one respect: the second is 0-59 — leap second 60 is not
+       accepted (a firmware creation stamp is never at a leap second, and this
+       keeps the C decoder in step with the schema's date-time format check). */
+    #define MOS_V2(i) ((unsigned)((d[(i)] - '0') * 10 + (d[(i) + 1] - '0')))
+    unsigned year   = MOS_V2(0) * 100u + MOS_V2(2);
+    unsigned month  = MOS_V2(4);
+    unsigned day    = MOS_V2(6);
+    unsigned hour   = MOS_V2(8);
+    unsigned minute = MOS_V2(10);
+    unsigned second = MOS_V2(12);
+    #undef MOS_V2
+    static const unsigned mdays[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
+    bool leap = (year % 4u == 0u && year % 100u != 0u) || year % 400u == 0u;
+    if (month < 1u || month > 12u) return;
+    unsigned dmax = mdays[month - 1u] + ((month == 2u && leap) ? 1u : 0u);
+    if (day < 1u || day > dmax) return;
+    if (hour > 23u || minute > 59u || second > 59u) return;
     out[0]=(char)d[0];  out[1]=(char)d[1];  out[2]=(char)d[2];  out[3]=(char)d[3];
     out[4]='-';  out[5]=(char)d[4];  out[6]=(char)d[5];
     out[7]='-';  out[8]=(char)d[6];  out[9]=(char)d[7];
@@ -2013,11 +2050,31 @@ static void mos_internal_da_unmount_cb(DADiskRef disk,
     dispatch_semaphore_signal(c->sem);
 }
 
+/* True when the IOMedia behind `disk` is the exact registry object identified
+   by expected_media_id — the identity bind that keeps a reused "diskN" from
+   sending the force-unmount to the wrong disk. DADiskCopyIOMedia returns the
+   IOMedia io_service_t (owned, released here); its registry entry ID is the
+   same value mos_internal_bsd_unit captured off h->svc's child. */
+static bool mos_internal_da_disk_is_media(DADiskRef disk,
+                                          uint64_t expected_media_id)
+{
+    if (expected_media_id == 0) return false;       /* identity unknown */
+    io_service_t media = DADiskCopyIOMedia(disk);
+    if (media == IO_OBJECT_NULL) return false;      /* diskN has no IOMedia */
+    uint64_t got = 0;
+    bool match = (IORegistryEntryGetRegistryEntryID(media, &got) == KERN_SUCCESS)
+                 && got == expected_media_id;
+    IOObjectRelease(media);
+    return match;
+}
+
 /* Force-unmount EVERY volume on whole-disk "diskN"
    (kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole). True on success.
    ONLY the `tray eject --force` path calls this: a forced unmount kills open
    file handles (data-loss capable) — that is the "open no matter what"
-   contract, strictly opt-in behind --force. This is the SINGLE DiskArbitration
+   contract, strictly opt-in behind --force. The unmount is GATED on the
+   identity bind above: a stale/reused BSD name that no longer resolves to the
+   caller's media is refused, never unmounted. This is the SINGLE DiskArbitration
    ACTION mos performs; unlike the synchronous description read above, DADiskUnmount
    is asynchronous (returns void, delivers via callback — verified against
    DADisk.h: takes the disk, not a session; options Force=0x00080000, Whole=0x1;
@@ -2027,7 +2084,7 @@ static void mos_internal_da_unmount_cb(DADiskRef disk,
    once when the unmount resolves, so the context cannot outlive a late callback
    (no use-after-free), and a genuinely wedged force-unmount blocks here just as
    `diskutil` would (the I/O path itself is stuck). */
-bool mos_internal_da_unmount(const char *bsd_name)
+bool mos_internal_da_unmount(const char *bsd_name, uint64_t expected_media_id)
 {
     if (!bsd_name || !bsd_name[0]) return false;
 
@@ -2037,7 +2094,10 @@ bool mos_internal_da_unmount(const char *bsd_name)
     bool      ok   = false;
     DADiskRef disk = DADiskCreateFromBSDName(kCFAllocatorDefault,
                                              session, bsd_name);
-    if (disk) {
+    /* Fail closed unless diskN still resolves to the handle's current media:
+       a destructive op on a stale/reused BSD name must never touch a disk that
+       is not the one the caller verified under its drive service. */
+    if (disk && mos_internal_da_disk_is_media(disk, expected_media_id)) {
         dispatch_semaphore_t sem = dispatch_semaphore_create(0);
         mos_da_unmount_ctx   ctx = { sem, false };
         DASessionSetDispatchQueue(session,
@@ -2049,8 +2109,8 @@ bool mos_internal_da_unmount(const char *bsd_name)
         DASessionSetDispatchQueue(session, NULL);   /* detach before release */
         ok = ctx.ok;
         dispatch_release(sem);
-        CFRelease(disk);
     }
+    if (disk) CFRelease(disk);
 
     CFRelease(session);
     return ok;
@@ -2076,9 +2136,10 @@ bool mos_internal_da_volume(const char *bsd_name,
    `tray eject --force` reporting the mount as MOS_ERR_BUSY rather than opening
    it — the honest degradation for the opt-out build (the consumer unmounts
    with `diskutil unmountDisk` first, exactly as without --force). */
-bool mos_internal_da_unmount(const char *bsd_name)
+bool mos_internal_da_unmount(const char *bsd_name, uint64_t expected_media_id)
 {
     (void)bsd_name;
+    (void)expected_media_id;
     return false;
 }
 
@@ -4836,8 +4897,13 @@ static int64_t mos_internal_bsd_unit(io_service_t svc, uint64_t *media_id_out,
                than re-resolved by media_id later. */
             whole_bytes = mos_internal_cf_number_u64(child,
                               CFSTR(kIOMediaSizeKey));
-            whole_block = (uint32_t)mos_internal_cf_number_u64(child,
+            /* Block size is reported as u64 but stored u32. Optical block
+               sizes are tiny (512/2048/4096); a value that does not fit u32 is
+               a malformed/hostile registry property, so fail closed to 0
+               (absent) rather than silently truncate the high bits. */
+            uint64_t blk = mos_internal_cf_number_u64(child,
                               CFSTR(kIOMediaPreferredBlockSizeKey));
+            whole_block = (blk <= UINT32_MAX) ? (uint32_t)blk : 0u;
         } else if (!is_whole && fallback_name[0] == 0 &&
                    mos_internal_bsd_name_is_whole_shape(this_name)) {
             strlcpy(fallback_name, this_name, sizeof(fallback_name));
@@ -5983,6 +6049,11 @@ enrich:
  * mos_scsi.c stays exclusively IOKit-linked. No IOKit.
  */
 
+/* mos_pure.h (which re-includes mos.h) declares the mos_internal_* helpers
+   defined in this file, so the definitions are checked against their
+   prototypes (-Wmissing-prototypes). Kept on its own line above the include:
+   the amalgamator drops library-local #include lines wholesale, so a trailing
+   block comment here would be orphaned into dist/mos.c (scripts/amalgamate.sh). */
 #include <stdio.h>   /* snprintf for hex escapes */
 #include <stddef.h>
 #include <stdint.h>
@@ -6653,9 +6724,19 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
 
     for (int pass = 0; pass < 2; pass++) {
         if (e == MOS_ERR_BUSY) {                          /* Finder/system mount */
+            /* Re-resolve the CURRENT media under h->svc before unmounting: the
+               cached h->bsd_unit can be stale (opened empty, or a swap since
+               the last media query), and a forced unmount is data-loss-capable.
+               The refresh derives bsd_unit + media_id from h->svc's live child,
+               so the name we format and the identity we bind both describe the
+               disc actually in THIS drive now. media gone (bsd_unit < 0) → fail
+               closed; the bind in mos_internal_da_unmount closes the residual
+               BSD-reuse race. */
+            mos_internal_refresh_media_identity(h);
             char name[24];
-            if (!mos_bsd_name_format(h->bsd_unit, name, sizeof name) ||
-                !mos_internal_da_unmount(name))
+            if (h->bsd_unit < 0 ||
+                !mos_bsd_name_format(h->bsd_unit, name, sizeof name) ||
+                !mos_internal_da_unmount(name, h->media_id))
                 break;                                    /* mount uncleared */
         } else if (e == MOS_OK && *out == MOS_TRAY_REFUSED_LOCKED) {  /* basic Prevent */
             mos_tray_outcome ignored = MOS_TRAY_DONE;
@@ -6725,13 +6806,16 @@ mos_error mos_tray_unlock(mos_handle_t *h, bool persistent,
 
 /* Decode page 0x80 into out[0..out_cap). True only when the reply echoes
    page code 0x80 and carries a complete, non-empty serial (trailing spaces /
-   NULs trimmed). out is always NUL-terminated. A drive that does not implement
-   the page (it is optional), has none programmed (all-spaces), or under-
-   delivers the reply (PAGE LENGTH > bytes received) returns false → the caller
-   leaves serial null, never an empty or truncated string. A serial that is
-   complete on the wire but longer than out_cap is truncated with a visible
-   "..." marker (never a silent prefix — see the copy step). Non-ASCII bytes
-   are copied verbatim and escaped at the output sink (mos_cli_json_str /
+   NULs trimmed) that can be represented WHOLE as a C string. out is always
+   NUL-terminated. Returns false → the caller leaves serial null (never an
+   empty, truncated, or NUL-severed string) when the drive does not implement
+   the page (it is optional), has none programmed (all-spaces), under-delivers
+   the reply (PAGE LENGTH > bytes received), or the serial cannot be held whole
+   — longer than out_cap, or containing an interior NUL (which would sever the
+   C string invisibly at the NUL). This is the complete-or-unavailable rule for
+   a durable identity key: a prefix is an indistinguishable, wrong key (two
+   drives can share it), so it is refused, not marked. Non-ASCII bytes are
+   copied verbatim and escaped at the output sink (mos_cli_json_str /
    mos_safe_ascii), as with vendor/product/revision. */
 bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
                                      char *out, size_t out_cap)
@@ -6767,35 +6851,28 @@ bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
     }
     if (serial_len == 0) return false;        /* page present, no serial */
 
-    /* Copy into out, reserving the NUL. A serial that fits is copied whole.
-       One that exceeds the buffer is truncated WITH A VISIBLE TRAILING MARKER
-       ("…" as ASCII "..."), never silently: this value can be cached as a
-       durable identity key, and a silent prefix is indistinguishable from a
-       complete serial — a different-but-equally-wrong key. The marker signals
-       "incomplete" so the consumer never mistakes the prefix for the whole
-       serial. ASCII so it survives both sinks unescaped (mos_safe_ascii /
-       mos_cli_json_str). Real serials sit far below the buffer (mos_serial.c
-       sinks 64 bytes), so this fires only on a pathological/hostile over-long
-       serial; it never overflows. (Distinct from the transport-under-delivery
-       refusal above: there we hold only a prefix of UNKNOWN length and refuse;
-       here we hold the WHOLE serial and our sink is merely too small, so the
-       marked prefix is honest about exactly what it is.) */
-    static const char MARK[] = "...";
-    const size_t mark_len = sizeof MARK - 1u;       /* 3 */
-    if (serial_len <= out_cap - 1u) {
-        for (size_t i = 0; i < serial_len; i++) out[i] = (char)buf[VPD_HDR + i];
-        out[serial_len] = 0;
-    } else if (out_cap > mark_len + 1u) {
-        size_t copy = out_cap - 1u - mark_len;
-        for (size_t i = 0; i < copy; i++) out[i] = (char)buf[VPD_HDR + i];
-        for (size_t i = 0; i < mark_len; i++) out[copy + i] = MARK[i];
-        out[copy + mark_len] = 0;
-    } else {
-        /* out_cap too small even to hold the marker — plain bounded copy. */
-        size_t copy = out_cap - 1u;
-        for (size_t i = 0; i < copy; i++) out[i] = (char)buf[VPD_HDR + i];
-        out[copy] = 0;
-    }
+    /* Complete-or-unavailable. The serial is a durable identity key the caller
+       caches sticky, so it must be representable WHOLE as a C string or refused
+       — a prefix is a different-but-equally-wrong key two drives can share.
+       Two ways the whole serial cannot be held, both REFUSE (return false), the
+       same disposition as the transport-under-delivery case above:
+
+         - an interior NUL: trailing NULs were trimmed, but a NUL among the
+           remaining bytes would sever the C string invisibly at the NUL,
+           hiding everything after it (the collision the review's interior-NUL
+           reproducer exploits). It is non-ASCII for a SPC serial; treat it as
+           an unrepresentable key, not data to copy.
+         - serial_len > out_cap - 1: the whole serial does not fit. (Real
+           serials sit far below mos_serial.c's 64-byte sink, so this fires only
+           on a pathological/hostile over-long serial.)
+
+       Refusing precedes any copy, so nothing partial is ever emitted. */
+    for (size_t i = 0; i < serial_len; i++)
+        if (buf[VPD_HDR + i] == 0x00) return false;   /* interior NUL */
+    if (serial_len > out_cap - 1u) return false;       /* would not fit whole */
+
+    for (size_t i = 0; i < serial_len; i++) out[i] = (char)buf[VPD_HDR + i];
+    out[serial_len] = 0;
     return true;
 }
 

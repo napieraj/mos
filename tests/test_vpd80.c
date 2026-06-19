@@ -1,11 +1,12 @@
 /*
  * test_vpd80.c — INQUIRY VPD page 0x80 (Unit Serial Number) decode, plus
- * the parser's hostile-input behaviour: the page-code echo must gate, an
- * under-delivered reply (PAGE LENGTH claims more than the trusted span the
- * shell passes) is REFUSED rather than emitted as a prefix — the serial is a
- * durable identity key, complete or nothing — and a serial complete on the
- * wire but longer than the output buffer truncates with a visible "..."
- * marker, never silently and never overflowing.
+ * the parser's hostile-input behaviour: the page-code echo must gate, and the
+ * serial is a durable identity key that is complete-or-unavailable — anything
+ * that cannot be represented WHOLE as a C string is REFUSED, never emitted as a
+ * prefix. That covers an under-delivered reply (PAGE LENGTH claims more than
+ * the trusted span the shell passes), a serial longer than the output buffer,
+ * and a serial with an interior NUL (which would sever the C string). A prefix
+ * is an indistinguishable, wrong key two drives could share.
  */
 #include "test_harness.h"
 #include "../src/mos_pure.h"
@@ -73,27 +74,45 @@ TEST(vpd80_under_delivery_refused)
     return 0;
 }
 
-TEST(vpd80_truncates_to_out_cap_with_marker)
+TEST(vpd80_overlong_serial_refused)
 {
-    /* A serial COMPLETE on the wire but longer than the output buffer is
-       truncated with a visible trailing "..." marker — never a silent prefix
-       (which would be an indistinguishable, wrong cache key) and never an
-       overflow. */
+    /* A serial COMPLETE on the wire but longer than the output buffer cannot
+       be held whole, so it is REFUSED (false), serial left null — never a
+       prefix (an indistinguishable, wrong cache key) and never an overflow.
+       Two serials sharing a prefix but differing past out_cap must not both
+       decode to the same truncated key — refusal makes that impossible. */
     uint8_t s[40];
     memset(s, 'X', sizeof s);
     uint8_t b[64];
     size_t total = build_vpd80(b, 0x80, (uint8_t)sizeof s, s, sizeof s);
 
-    char out[8] = {0};                       /* 7 chars + NUL */
-    EXPECT(mos_internal_vpd80_serial_parse(b, total, out, sizeof out));
-    EXPECT_STREQ(out, "XXXX...");            /* 4 value bytes + marker, NUL-term */
-    EXPECT(strlen(out) == 7);
+    char out[8];                              /* far too small for 40 bytes */
+    out[0] = 'z';
+    EXPECT(!mos_internal_vpd80_serial_parse(b, total, out, sizeof out));
+    EXPECT(out[0] == 0);                      /* NUL-terminated on refusal */
 
-    /* out_cap too small to hold the marker → plain bounded truncation, still
-       NUL-terminated, still no overflow. */
-    char tiny[3] = {0};                       /* 2 chars + NUL, marker is 3 */
-    EXPECT(mos_internal_vpd80_serial_parse(b, total, tiny, sizeof tiny));
-    EXPECT_STREQ(tiny, "XX");
+    /* A serial that fits exactly (out_cap-1 bytes) still decodes whole. */
+    uint8_t s7[7];
+    memset(s7, 'Y', sizeof s7);
+    total = build_vpd80(b, 0x80, (uint8_t)sizeof s7, s7, sizeof s7);
+    EXPECT(mos_internal_vpd80_serial_parse(b, total, out, sizeof out));
+    EXPECT_STREQ(out, "YYYYYYY");             /* 7 chars exactly fills out[8] */
+    return 0;
+}
+
+TEST(vpd80_interior_nul_refused)
+{
+    /* An interior NUL (not trailing padding) would sever the C string
+       invisibly at the NUL — two serials "ABC\0X" and "ABC\0Y" would both
+       decode to "ABC", a collision. The parser refuses such a reply. */
+    const uint8_t s[] = { 'A','B','C',0x00,'X' };
+    uint8_t b[64];
+    size_t total = build_vpd80(b, 0x80, (uint8_t)sizeof s, s, sizeof s);
+
+    char out[64];
+    out[0] = 'z';
+    EXPECT(!mos_internal_vpd80_serial_parse(b, total, out, sizeof out));
+    EXPECT(out[0] == 0);                      /* NUL-terminated on refusal */
     return 0;
 }
 
@@ -133,6 +152,7 @@ void register_vpd80_tests(void)
     RUN(vpd80_serial_basic);
     RUN(vpd80_trims_trailing_space_and_nul);
     RUN(vpd80_under_delivery_refused);
-    RUN(vpd80_truncates_to_out_cap_with_marker);
+    RUN(vpd80_overlong_serial_refused);
+    RUN(vpd80_interior_nul_refused);
     RUN(vpd80_fail_closed);
 }

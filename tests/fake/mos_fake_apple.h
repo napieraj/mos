@@ -49,6 +49,13 @@ void mos_fake_set_identity(const char *vendor, const char *product,
 void mos_fake_set_drive_id(uint64_t id);
 void mos_fake_set_media_id(uint64_t id);
 
+/* Desync the IOMedia id reported behind a DADiskRef from the media under the
+   drive service. Models a reused "diskN" resolving to an unrelated disk, so
+   the `tray eject --force` unmount bind (mos_internal_da_unmount) must refuse.
+   Unset by default — DADiskCopyIOMedia's media reports the same id as the
+   whole-disk node, the normal same-disk case. */
+void mos_fake_set_da_media_id(uint64_t id);
+
 /* Override the IOMedia node's kernel-cached capacity (kIOMediaSizeKey /
    kIOMediaPreferredBlockSizeKey, what mos_query_capacity reads). Default
    0/0 (absent: blank/unrecorded); non-zero models sized recorded/pressed

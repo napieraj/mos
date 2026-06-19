@@ -798,8 +798,8 @@ uint32_t mos_session_layout_leadout_lba(const mos_session_layout *s, uint8_t i);
 typedef struct mos_capacity mos_capacity;
 
 /*
- * Assemble the disc's capacity WITHOUT issuing a capacity command, from
- * two sources already available to an open handle:
+ * Assemble the disc's capacity WITHOUT authoring a raw capacity CDB, from
+ * three sources already reachable by an open handle:
  *   - the whole-disk IOMedia node's kernel-cached byte and block size
  *     (kIOMediaSizeKey / kIOMediaPreferredBlockSizeKey) — the kernel's own
  *     attach-time READ CAPACITY, read as a registry property with no SCSI
@@ -809,9 +809,15 @@ typedef struct mos_capacity mos_capacity;
  *   - the recordable / append view (free blocks, next writable address,
  *     first-track size) from READ TRACK INFORMATION, the same non-exclusive
  *     read mos_query_track_info uses — best-effort.
+ *   - the formattable view from READ FORMAT CAPACITIES (0x23), issued via the
+ *     non-exclusive ReadFormatCapacities convenience method (MMCDeviceInterface)
+ *     — no raw CDB, no exclusive access, so it too works on MOUNTED media. Only
+ *     read for formattable profiles (see the formattable accessor below).
  * Each view is independently nullable: the media size is absent on
  * blank/absent media, the recordable view on a pressed disc with no
- * readable track. No raw CDB is authored. `out` REQUIRED (NULL =>
+ * readable track, the formattable view on a non-formattable profile. No raw
+ * capacity CDB is authored — the kernel-cached size is a registry read and the
+ * other two views are non-exclusive convenience reads. `out` REQUIRED (NULL =>
  * MOS_ERR_INVALID_ARG); on success *out is valid until the next query or
  * mos_close().
  */
@@ -838,14 +844,13 @@ uint32_t mos_capacity_track_size(const mos_capacity *c);
    rewritable medium reports (DVD±RW, DVD-RAM, BD-RE), which the media-size and
    recordable halves above cannot give on a freshly BLANK rewritable (no
    whole-disk node yet, no track to read). Meaningful only when
-   have_formattable is true. The read is DOUBLY GATED: it runs only for
-   formattable media — the rewritable profiles plus BD-R (gated on the current
-   profile, so pressed / write-once CD-R,DVD±R / empty drives report
-   have_formattable=false with no raw read attempted) — and, for those, it is a
-   raw CDB that SELF-GATES on exclusive access, so a mounted or otherwise-held
-   drive also reports false (data, not an error; the natural moment is an
-   unmounted blank disc). mos reports these capacities; it never issues
-   FORMAT UNIT.
+   have_formattable is true. The read is GATED on the current profile: it runs
+   only for formattable media — the rewritable profiles plus BD-R — so pressed /
+   write-once CD-R,DVD±R / empty drives report have_formattable=false with no
+   read attempted. For those formattable profiles it is issued via the
+   non-exclusive ReadFormatCapacities convenience method (MMCDeviceInterface),
+   so it takes no exclusive access and the view is reported even on MOUNTED
+   formattable media. mos reports these capacities; it never issues FORMAT UNIT.
 
    The Current/Maximum Capacity Descriptor: format_type is 1 unformatted /
    2 formatted / 3 no-media (map with mos_format_capacity_type_name);

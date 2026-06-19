@@ -19,9 +19,18 @@ import sys
 from pathlib import Path
 
 try:
-    from jsonschema import Draft202012Validator
+    from jsonschema import Draft202012Validator, FormatChecker
 except ImportError:
     print("jsonschema not installed. `pip install jsonschema`", file=sys.stderr)
+    sys.exit(2)
+
+# Enforce `format` (date-time) as a hard assertion, matching schemas/validate.py.
+# Needs rfc3339-validator (schemas/requirements-ci.txt); assert it is registered
+# so a missing dep fails loudly instead of silently skipping the check.
+_FORMAT_CHECKER = FormatChecker()
+if "date-time" not in _FORMAT_CHECKER.checkers:
+    print("date-time format checker not registered — install rfc3339-validator "
+          "(see schemas/requirements-ci.txt)", file=sys.stderr)
     sys.exit(2)
 
 # (verb, scenario, expected schema). The expected schema is checked
@@ -66,7 +75,8 @@ def main() -> int:
     def validator_for(name: str) -> Draft202012Validator:
         if name not in validators:
             schema = json.loads((schemas / f"{name}.json").read_text())
-            validators[name] = Draft202012Validator(schema)
+            validators[name] = Draft202012Validator(
+                schema, format_checker=_FORMAT_CHECKER)
         return validators[name]
 
     def validate_doc(doc: object, expect: str) -> list[str]:

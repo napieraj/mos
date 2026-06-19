@@ -98,7 +98,8 @@ struct mos_handle {
     struct mos_session_layout session_layout;
 
     /* Handle-owned capacity result (mos_query_capacity). Assembled from
-       the open-time IOMedia size above + a fresh track_info read. */
+       the per-call-refreshed IOMedia size above + a fresh track_info read +
+       (for formattable profiles) a READ FORMAT CAPACITIES convenience read. */
     struct mos_capacity       capacity;
 
     /* Handle-owned drive-performance result (mos_query_drive_perf). */
@@ -110,8 +111,10 @@ struct mos_handle {
     struct mos_error_recovery error_recovery;
 
     /* Handle-owned INQUIRY VPD-0x80 serial (mos_query_serial). Filled by the
-       raw-INQUIRY shell, returned by borrowed pointer; 64 holds any real
-       drive serial (SPC max 255 truncates, never overflows). */
+       raw-INQUIRY shell, returned by borrowed pointer; 64 holds any real drive
+       serial. A serial that cannot be held whole — longer than this buffer or
+       carrying an interior NUL — is refused (serial stays null), never
+       truncated: a partial identity key is worse than none (mos_vpd80.c). */
     char                      serial_str[64];
 
     /* Handle-owned standard-INQUIRY result (mos_query_drive_inquiry). */
@@ -173,8 +176,17 @@ bool mos_internal_da_volume(const char *bsd_name,
    (kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole). True on success.
    The SOLE DA action mos performs (async DADiskUnmount, awaited on a semaphore),
    used only by `tray eject --force`. Returns false when DA is opted out at build
-   time (capability absent) — the force eject then reports the mount as BUSY. */
-bool mos_internal_da_unmount(const char *bsd_name);
+   time (capability absent) — the force eject then reports the mount as BUSY.
+
+   IDENTITY BIND (data-loss safety): bsd_name alone is NOT sufficient authority
+   to destroy state — macOS reuses "diskN" unit numbers, so a stale name can
+   resolve to an unrelated disk. expected_media_id is the whole-disk IOMedia
+   registry entry ID the caller just resolved off the handle's stable drive
+   service (h->media_id); the unmount proceeds only if the IOMedia behind diskN
+   has that exact id (registry IDs are unique and not reused). A mismatch, a
+   zero expected id (identity unknown), or no IOMedia behind diskN all fail
+   closed — refuse rather than risk unmounting the wrong disk. */
+bool mos_internal_da_unmount(const char *bsd_name, uint64_t expected_media_id);
 
 /* Extract one device's snapshot (registry id, bsd unit, identity) from a
    DRDeviceRef passed as CFTypeRef (this header stays free of DiscRecording

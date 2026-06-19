@@ -16,10 +16,21 @@ import sys
 from pathlib import Path
 
 try:
-    from jsonschema import Draft202012Validator
+    from jsonschema import Draft202012Validator, FormatChecker
 except ImportError:
     print("jsonschema package not installed. `pip install jsonschema`",
           file=sys.stderr)
+    sys.exit(2)
+
+# Enforce `format` keywords (notably "date-time") as hard assertions, not the
+# annotation-by-default JSON Schema 2020-12 gives them. date-time checking only
+# works when rfc3339-validator is installed (see schemas/requirements-ci.txt);
+# assert it is registered so a missing dep fails loudly here rather than
+# silently skipping every date-time check and passing a malformed timestamp.
+_FORMAT_CHECKER = FormatChecker()
+if "date-time" not in _FORMAT_CHECKER.checkers:
+    print("date-time format checker not registered — install rfc3339-validator "
+          "(see schemas/requirements-ci.txt)", file=sys.stderr)
     sys.exit(2)
 
 
@@ -276,7 +287,8 @@ def main() -> int:
         # Validate the schema document itself (catches a malformed schema
         # that would otherwise silently accept/reject fixtures by accident).
         Draft202012Validator.check_schema(body)
-        schemas[schema_file.stem] = Draft202012Validator(body)
+        schemas[schema_file.stem] = Draft202012Validator(
+            body, format_checker=_FORMAT_CHECKER)
     if not schemas:
         print(f"No schemas found under {here}", file=sys.stderr)
         return 2

@@ -872,12 +872,63 @@ TEST(firmware_date_absent_malformed_and_bounds)
     return 0;
 }
 
+TEST(firmware_date_rejects_impossible_calendar)
+{
+    /* All-digit but out-of-range fields must fail closed (empty out), not be
+       emitted as a fake RFC 3339 string — the review's 2013-99-99T99:99:99Z
+       case. Template = the valid 28-byte 010Ch reply; date bytes at [12..25]
+       are Century Year Month Day Hour Minute Second (2 ASCII digits each). */
+    uint8_t tmpl[] = {
+        0x00,0x00,0x00,0x18,  0x00,0x00, 0x00,0x10,
+        0x01,0x0C, 0x03, 0x10,
+        0x32,0x30, 0x31,0x33, 0x30,0x38, 0x31,0x32,   /* 2013-08-12 */
+        0x31,0x33, 0x32,0x30, 0x34,0x33, 0x00,0x00,   /* 13:20:43 */
+    };
+    /* (offset-into-buf, two ASCII digits) of a field forced out of range. */
+    struct { int off; char a, b; } bad[] = {
+        {16, '9','9'},   /* month 99  */
+        {16, '0','0'},   /* month 00  */
+        {16, '1','3'},   /* month 13  */
+        {18, '9','9'},   /* day 99    */
+        {18, '0','0'},   /* day 00    */
+        {18, '3','2'},   /* day 32 (Aug) */
+        {20, '2','4'},   /* hour 24   */
+        {22, '6','0'},   /* minute 60 */
+        {24, '6','0'},   /* second 60 (leap second not accepted) */
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        uint8_t b[sizeof tmpl];
+        memcpy(b, tmpl, sizeof tmpl);
+        b[bad[i].off]     = (uint8_t)bad[i].a;
+        b[bad[i].off + 1] = (uint8_t)bad[i].b;
+        char out[24];
+        out[0] = 'z';
+        mos_internal_firmware_date_from_config(b, sizeof b, out, sizeof out);
+        EXPECT(out[0] == 0);                  /* refused */
+    }
+
+    /* Feb 29 must be accepted in a leap year and rejected in a common year. */
+    uint8_t feb29[sizeof tmpl];
+    char out[24];
+    memcpy(feb29, tmpl, sizeof tmpl);
+    feb29[16]='0'; feb29[17]='2'; feb29[18]='2'; feb29[19]='9';  /* 02-29 */
+    feb29[12]='2'; feb29[13]='0'; feb29[14]='2'; feb29[15]='4';  /* 2024 (leap) */
+    mos_internal_firmware_date_from_config(feb29, sizeof feb29, out, sizeof out);
+    EXPECT_STREQ(out, "2024-02-29T13:20:43Z");
+    feb29[12]='2'; feb29[13]='0'; feb29[14]='2'; feb29[15]='3';  /* 2023 (common) */
+    out[0] = 'z';
+    mos_internal_firmware_date_from_config(feb29, sizeof feb29, out, sizeof out);
+    EXPECT(out[0] == 0);                       /* Feb 29 2023 rejected */
+    return 0;
+}
+
 void register_config_tests(void)
 {
     RUN(profile_list_extracts_drive_static_set);
     RUN(profile_list_absent_empty_bounds_and_null);
     RUN(firmware_date_decodes_iso8601);
     RUN(firmware_date_absent_malformed_and_bounds);
+    RUN(firmware_date_rejects_impossible_calendar);
     RUN(toc_parses_real_pony_cd_single);
     RUN(aacs_caps_from_real_wh16ns40_capture);
     RUN(aacs_caps_decode_and_fail_closed);
