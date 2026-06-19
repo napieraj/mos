@@ -98,9 +98,22 @@ If you have an optical drive and want to add realism:
    disc. It issues the fixed menu of known MMC commands (GET CONFIGURATION
    0x46, READ DISC INFORMATION 0x51, GESN 0x4A, READ TOC 0x43, READ DISC
    STRUCTURE 0xAD, INQUIRY standard + VPD 0x80) and emits each raw reply as a
-   `mos.capture.v0` NDJSON line. Decode a line's `reply` hex into the committed
-   `<command>_<state>_<model>.bin`. (Raw issuance is library-internal —
-   `mos_internal_raw_cdb` — not a public API.)
+   `mos.capture.v0` NDJSON line. Decode the chosen command's `reply` hex into
+   the committed `<command>_<state>_<model>.bin`, then check it against the
+   line's `sha256`:
+
+   ```sh
+   mos probe --capture disk4 | tee capture_blank_cdr_WH16NS60.ndjson
+   jq -r 'select(.command=="read_disc_information").reply' capture_*.ndjson \
+       | xxd -r -p > readdiscinfo_blank_cdr_WH16NS60.bin
+   jq -r 'select(.command=="read_disc_information").sha256' capture_*.ndjson
+   shasum -a 256 readdiscinfo_blank_cdr_WH16NS60.bin   # must match
+   ```
+
+   The full capture+decode+falsification procedure (which command tokens exist,
+   how to read an empty `reply` / `ok:false` line, what to submit) is in
+   `../../INTEGRATION_HARNESS.md` → "Capturing fixtures". (Raw issuance is
+   library-internal — `mos_internal_raw_cdb` — not a public API.)
 
 ## Log-derived captures (2026-06-12/13, media-info stage 1)
 
