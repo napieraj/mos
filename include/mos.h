@@ -1242,7 +1242,7 @@ mos_watch_t *mos_watch_open_by_registry_id(uint64_t registry_id,
        drive's events including later joiners (the event's ts carries
        join time); (registry_id, stream_open_ms) stays per-session
        unique because a replug re-mints the registry_id.
-     - Up to 16 concurrently watched drives; arrivals beyond that are
+     - Up to 64 concurrently watched drives; arrivals beyond that are
        dropped for that plug session (no rescan when a slot frees — a
        replug re-announces the drive).
    mos_watch_bsd_unit() returns -1 on an all-watch (no single unit).

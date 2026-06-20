@@ -151,6 +151,47 @@ it). What remains:
   the kernel's own GESN poll. Design + the rig-check-first build order:
   `doc/research/2026-06-13-eject-request-watch-event.md`.
 
+- **Watch all-mode static audit (W1–W4) — DISPOSITIONED, no release blocker.** A
+  macOS-only static audit of `mos_watch.c` filed four findings; verified
+  vendor-blind against the tree + the 26.4 `DRNotificationCenter.h`. None is an
+  undocumented defect:
+  - **W1 (DR enumerates only writable devices)** — STRUCK outright. The §9.1
+    attach rule blocks `SCSITaskUserClient` on read-only drives, so DR's
+    writable-only boundary coincides with mos's openable set (DR-pivot decision
+    record); the audit didn't know the attach rule.
+  - **W2 (run-loop / thread affinity)** — CLOSED, not a defect.
+    `DRNotificationCenter.h` *mandates* the affinity verbatim ("posted to the
+    runloop it was created on"; receive on another loop ⇒ create the center from
+    that loop), so capturing `CFRunLoopGetCurrent()` at open + the single-thread
+    contract is correct, documented SDK use. The `CFRetain` of the captured loop
+    makes off-thread misuse MEMORY-SAFE only — it stays a contract violation
+    degraded to polling/sleep (the wakes target the origin loop, so off-thread
+    they never break the current thread's sleep; the pump falls back to its poll
+    cadence), NOT a "safe no-op". An enforcing thread-id assert is not added (it
+    would reject the degraded-but-safe path). `mos_watch.c` comment reworded off
+    the "safe no-op" phrasing.
+  - **W3 (one-shot Appeared recovery)** — ACCEPTED known limitation, deferred to
+    v0.next (hardware-gated, not a pre-tag blocker). The one-shot rescan already
+    narrowed the loss window from one snapshot failure to two consecutive
+    (`mos_watch.c` struct comment), so a drive can still be missed after TWO
+    consecutive resolution failures. The deferred fix must be STRONGER than
+    re-arming the Boolean: a bounded retry with a deadline/backoff that (a)
+    spreads attempts across pump cycles — the current rescan fires immediately
+    off the Appeared `CFRunLoopStop`, so both attempts hit the *same* unsettled
+    IORegistry; spacing them lets it settle — and (b) terminates after the
+    bound, so an empty all-watch cannot re-arm `all_rescan_pending` and sleep
+    forever. Make it CONVERGENT: `mos_internal_dr_copy_snapshot` reports
+    completeness, and an incomplete copy re-arms within the bound rather than
+    clear-before-copy. Built only on rig evidence per the hardware-role ADR.
+  - **W4 (full-table overflow drop)** — CLOSED by contract. The all-watch holds
+    up to `MOS_WATCH_ALL_CAP` = 64 drives; arrivals beyond that are dropped for
+    the plug session and recovered by a REPLUG (re-fires Appeared), NOT by a
+    later slot free — the code never re-scans previously-dropped devices when a
+    slot frees. Doc drift fixed: the public cap text (`mos.h`) read 16, now 64;
+    the internal `watch_all_add_device` comment ("drop until a slot frees")
+    implied a reconsideration the code does not do, and now states the
+    replug-recovery contract.
+
   (Held-handle identity refresh — `bsd_unit`/`media_id`/size now
   re-resolved per media-scoped query, not captured once at open —
   shipped 2026-06-14; decision record:
