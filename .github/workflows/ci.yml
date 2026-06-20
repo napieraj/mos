@@ -545,6 +545,13 @@ jobs:
       - name: Grep live docs for known-stale markers
         run: sh scripts/doc-staleness.sh
 
+      - name: CONTRIBUTING.md file tree tracks the repo
+        # The "Code layout" tree in CONTRIBUTING.md is hand-maintained and
+        # drifts the moment a new src/cli/script/schema file lands without a
+        # line (it did — ~14 src files were missing). Forward + reverse check
+        # against git-tracked files; pure stdlib, no pip. Edit the tree to fix.
+        run: python3 scripts/check-file-tree.py
+
       - name: CLI docs track the command table
         # completions/{mos.bash,_mos,mos.fish} and the SUBCOMMANDS block of
         # man/mos.1 are generated from the command table (each cli/<verb>.c
