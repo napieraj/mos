@@ -81,6 +81,7 @@ static struct {
     uint32_t toc_status;        uint8_t toc[804]; size_t toc_len;
     uint32_t ds_status;         uint8_t ds[4096]; size_t ds_len;
     uint32_t rti_status;        uint8_t rti[64];  size_t rti_len;
+    uint32_t perf_status;       uint8_t perf[64]; size_t perf_len;
     bool     da_present;        /* DADiskCopyDescription returns a dict   */
     char     da_name[256];      /* VolumeName; "" = key absent            */
     char     da_path[1024];     /* VolumePath; "" = key absent (unmounted)*/
@@ -241,6 +242,14 @@ void mos_fake_set_disc_structure_reply(uint32_t task_status,
     g.ds_status = task_status;
     g.ds_len = (len > sizeof g.ds) ? sizeof g.ds : len;
     if (bytes && g.ds_len) memcpy(g.ds, bytes, g.ds_len);
+}
+
+void mos_fake_set_perf_reply(uint32_t task_status,
+                             const uint8_t *bytes, size_t len)
+{
+    g.perf_status = task_status;
+    g.perf_len = (len > sizeof g.perf) ? sizeof g.perf : len;
+    if (bytes && g.perf_len) memcpy(g.perf, bytes, g.perf_len);
 }
 
 void mos_fake_set_readtrackinfo_reply(uint32_t task_status,
@@ -723,8 +732,12 @@ static IOReturn mmc_GetPerformance(void *self, SCSICmdField2Bit TOLERANCE,
     (void)self; (void)TOLERANCE; (void)WRITE; (void)EXCEPT;
     (void)STARTING_LBA; (void)MAXIMUM_NUMBER_OF_DESCRIPTORS;
     (void)senseDataBuffer;
-    if (buffer && bufferSize) memset(buffer, 0, bufferSize);
-    if (taskStatus) *taskStatus = (SCSITaskStatus)kSCSITaskStatus_GOOD;
+    if (buffer && bufferSize) {
+        size_t n = (g.perf_len < (size_t)bufferSize) ? g.perf_len : (size_t)bufferSize;
+        memset(buffer, 0, bufferSize);
+        if (n) memcpy(buffer, g.perf, n);
+    }
+    if (taskStatus) *taskStatus = (SCSITaskStatus)g.perf_status;
     return kIOReturnSuccess;
 }
 

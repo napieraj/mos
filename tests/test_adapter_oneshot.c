@@ -294,6 +294,127 @@ TEST(adapter_media_churn_refuses_mixed_observation)
     return 0;
 }
 
+/* Compound-query coherence (2026-06-20): mos_query_drive_perf and
+   mos_query_physical_structure each issue TWO media-dependent reads, so a
+   media swap between them could splice disc A's first read with disc B's
+   second. They carry the same S1/S2 generation-coherence retry as
+   mos_query_state / mos_query_capacity: re-observe once on a swap, refuse
+   (BUSY) on churn. */
+
+/* One Nominal Performance Descriptor reporting 5540 kB/s (Start == End perf);
+   24 bytes = 8-byte header (Data Length = 20) + one 16-byte descriptor. */
+static const uint8_t k_perf_5540[] = {
+    0,0,0,20,        /* Performance Data Length (BE) = bytes after byte 3   */
+    0,0,0,0,         /* [4] write/except echo  [5..7] reserved              */
+    0,0,0,0,         /* desc Start LBA                                       */
+    0,0,0x15,0xA4,   /* desc Start Performance = 5540 kB/s                   */
+    0,0,0,0,         /* desc End LBA                                         */
+    0,0,0x15,0xA4,   /* desc End Performance   = 5540 kB/s                   */
+};
+
+/* Minimal Physical Format Information reply: 21 bytes = 4-byte header
+   (declared length 19 => trusted end 21, the PHYS_MIN_LEN floor) + base[0..16].
+   base[0] = 0x01 => book_type 0 (DVD-ROM), part_version 1. */
+static const uint8_t k_phys_dvdrom[] = {
+    0x00,0x13, 0x00,0x00,   /* Disc Structure Data Length = 19, reserved     */
+    0x01,                   /* base[0]  book_type 0 | part_version 1         */
+    0x00,0x00,0x00,         /* base[1..3] size/rate, layers/path/type, dens. */
+    0x00,                   /* base[4]  reserved                             */
+    0x00,0x00,0x00,         /* base[5..7]  starting PSN                       */
+    0x00,                   /* base[8]  reserved                             */
+    0x00,0x00,0x00,         /* base[9..11] end PSN                            */
+    0x00,                   /* base[12] reserved                             */
+    0x00,0x00,0x00,         /* base[13..15] end PSN layer 0                   */
+    0x00,                   /* base[16] bca                                   */
+};
+
+TEST(adapter_perf_swap_between_discs_retries_coherent)
+{
+    mos_fake_reset();
+    mos_fake_set_perf_reply(0x00 /*GOOD*/, k_perf_5540, sizeof k_perf_5540);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    /* Disc B (fresh media_id, same diskN) arrives between the two GET
+       PERFORMANCE reads: S1 != S2 once, then the retry observes B twice. */
+    mos_fake_set_media_swap_after_first_capture(4, 0x100000999ull);
+
+    const mos_drive_perf *p = NULL;
+    EXPECT_EQ(MOS_OK, mos_query_drive_perf(h, &p));
+    EXPECT(p != NULL);
+    EXPECT(mos_drive_perf_have(p));
+    EXPECT_EQ(5540u, mos_drive_perf_max_read_kbps(p));
+    EXPECT_EQ(4u, mos_fake_capture_walks());   /* S1,S2 then retry S1',S2' */
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_perf_churn_refuses_mixed_observation)
+{
+    mos_fake_reset();
+    mos_fake_set_perf_reply(0x00 /*GOOD*/, k_perf_5540, sizeof k_perf_5540);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    /* Every capture mints a fresh media_id: the one retry exhausts, so the
+       query refuses rather than splice read perf from one disc with write
+       perf from another. */
+    mos_fake_set_media_churn(true);
+
+    const mos_drive_perf *p = NULL;
+    EXPECT_EQ(MOS_ERR_BUSY, mos_query_drive_perf(h, &p));
+    EXPECT(p == NULL);
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_physical_swap_between_discs_retries_coherent)
+{
+    mos_fake_reset();
+    mos_fake_set_disc_structure_reply(0x00 /*GOOD*/, k_phys_dvdrom,
+                                      sizeof k_phys_dvdrom);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    /* Swap between the FORMAT 0x00 (physical) and 0x01 (copyright) reads. */
+    mos_fake_set_media_swap_after_first_capture(4, 0x100000999ull);
+
+    const mos_physical_structure *d = NULL;
+    EXPECT_EQ(MOS_OK, mos_query_physical_structure(h, &d));
+    EXPECT(d != NULL);
+    EXPECT(mos_physical_structure_have_physical(d));
+    EXPECT_EQ(0u, mos_physical_structure_book_type(d));     /* DVD-ROM       */
+    EXPECT_EQ(1u, mos_physical_structure_part_version(d));
+    EXPECT_EQ(4u, mos_fake_capture_walks());
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_physical_churn_refuses_mixed_observation)
+{
+    mos_fake_reset();
+    mos_fake_set_disc_structure_reply(0x00 /*GOOD*/, k_phys_dvdrom,
+                                      sizeof k_phys_dvdrom);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    mos_fake_set_media_churn(true);
+
+    const mos_physical_structure *d = NULL;
+    EXPECT_EQ(MOS_ERR_BUSY, mos_query_physical_structure(h, &d));
+    EXPECT(d == NULL);
+    mos_close(h);
+    return 0;
+}
+
 TEST(adapter_disc_info_replays_fixtures)
 {
     /* Two committed READ DISC INFORMATION fixtures through the real
@@ -825,6 +946,10 @@ int main(void)
     RUN(adapter_media_swap_to_absent_retries_coherent);
     RUN(adapter_media_swap_between_discs_retries_coherent);
     RUN(adapter_media_churn_refuses_mixed_observation);
+    RUN(adapter_perf_swap_between_discs_retries_coherent);
+    RUN(adapter_perf_churn_refuses_mixed_observation);
+    RUN(adapter_physical_swap_between_discs_retries_coherent);
+    RUN(adapter_physical_churn_refuses_mixed_observation);
     RUN(adapter_disc_info_replays_fixtures);
     RUN(adapter_toc_round_trip_and_fail_closed);
     RUN(adapter_da_volume_lookup_modalities);

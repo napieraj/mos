@@ -3763,44 +3763,59 @@ mos_error mos_query_physical_structure(mos_handle_t *h,
        shrinks the parse, and an under-filled reply fails the per-format
        min-length gate. The two reads are independent (partial-readability
        ladder), so a drive that answers one format but not the other still
-       yields the half it gave; both merge into one handle-owned struct. */
-    struct mos_physical_structure *d = &h->physical_structure;
-    *d = (struct mos_physical_structure){0};
+       yields the half it gave.
 
-    uint8_t         buf[2048] = {0};
-    SCSITaskStatus  st        = 0;
-    SCSI_Sense_Data sd        = {0};
+       Generation coherence: the two reads are a COMPOUND observation, so a
+       media swap between them could splice disc A's physical layout with disc
+       B's copyright/CSS state. Capture S1, build into a LOCAL temp, capture S2;
+       commit only when the media generation held, else retry once and then
+       MOS_ERR_BUSY rather than publish a mix. No media-presence gate — the
+       no-media snapshot (bsd_unit -1 / media_id 0) is a valid generation that
+       coheres with itself; a non-DVD / absent disc answers neither format and
+       returns MOS_ERR_IO before S2 (no structure to be incoherent about). */
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        mos_media_snapshot s1;
+        mos_internal_capture_media_snapshot(h->svc, &s1);
 
-    IOReturn rc = (*h->mmc)->ReadDiscStructure(
-        h->mmc,
-        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
-        (UInt32)0,               /* ADDRESS                          */
-        (UInt8)0,                /* LAYER_NUMBER                     */
-        (UInt8)0x00,             /* FORMAT = Physical Format Info    */
-        buf, (UInt16)sizeof(buf),
-        &st, &sd);
-    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
-        (void)mos_internal_physical_format_parse(buf, sizeof(buf), d);
+        struct mos_physical_structure tmp = {0};
+        uint8_t         buf[2048] = {0};
+        SCSITaskStatus  st        = 0;
+        SCSI_Sense_Data sd        = {0};
 
-    memset(buf, 0, sizeof buf);
-    st = 0;
-    sd = (SCSI_Sense_Data){0};
-    rc = (*h->mmc)->ReadDiscStructure(
-        h->mmc,
-        (UInt8)0x00,             /* MEDIA_TYPE = DVD / HD-DVD       */
-        (UInt32)0,               /* ADDRESS                          */
-        (UInt8)0,                /* LAYER_NUMBER                     */
-        (UInt8)0x01,             /* FORMAT = Copyright Management    */
-        buf, (UInt16)sizeof(buf),
-        &st, &sd);
-    if (rc == kIOReturnSuccess && st == kSCSITaskStatus_GOOD)
-        (void)mos_internal_copyright_mgmt_parse(buf, sizeof(buf), d);
+        /* Transport failure (negative IOReturn: device lost / exclusive access
+           lost mid-read) compromises the compound observation and is SURFACED;
+           a command-level non-GOOD status is a tolerable "this format absent". */
+        IOReturn rc = (*h->mmc)->ReadDiscStructure(
+            h->mmc, (UInt8)0x00, (UInt32)0, (UInt8)0, (UInt8)0x00,
+            buf, (UInt16)sizeof(buf), &st, &sd);
+        if (rc != kIOReturnSuccess)
+            return mos_internal_ioreturn_to_mos_error(rc);
+        if (st == kSCSITaskStatus_GOOD)
+            (void)mos_internal_physical_format_parse(buf, sizeof(buf), &tmp);
 
-    if (!d->have_physical && !d->have_copyright) {
-        return MOS_ERR_IO;   /* neither format answered (non-DVD or refused) */
+        memset(buf, 0, sizeof buf);
+        st = 0;
+        sd = (SCSI_Sense_Data){0};
+        rc = (*h->mmc)->ReadDiscStructure(
+            h->mmc, (UInt8)0x00, (UInt32)0, (UInt8)0, (UInt8)0x01,
+            buf, (UInt16)sizeof(buf), &st, &sd);
+        if (rc != kIOReturnSuccess)
+            return mos_internal_ioreturn_to_mos_error(rc);
+        if (st == kSCSITaskStatus_GOOD)
+            (void)mos_internal_copyright_mgmt_parse(buf, sizeof(buf), &tmp);
+
+        if (!tmp.have_physical && !tmp.have_copyright)
+            return MOS_ERR_IO;   /* neither format answered (non-DVD or refused) */
+
+        mos_media_snapshot s2;
+        mos_internal_capture_media_snapshot(h->svc, &s2);
+        if (mos_internal_media_snapshot_coherent(&s1, &s2)) {
+            h->physical_structure = tmp;
+            *out = &h->physical_structure;
+            return MOS_OK;
+        }
     }
-    *out = d;
-    return MOS_OK;
+    return MOS_ERR_BUSY;   /* generation changed across the two reads twice */
 }
 
 mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out)
@@ -4018,36 +4033,53 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
     if (out) *out = NULL;
     if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
-    /* Two Performance Data reads assembled into one result. The read
-       direction is the gate (defines `have`); the write direction is
-       best-effort (read-only drive or non-writable medium leaves
-       max_write_kbps 0). */
-    struct mos_drive_perf *p = &h->drive_perf;
-    *p = (struct mos_drive_perf){0};
+    /* Two Performance Data reads assembled into one result. The read direction
+       is the gate (defines `have`); the write direction is best-effort
+       (read-only drive or non-writable medium leaves max_write_kbps 0). The
+       descriptors are media-dependent (the CURRENT disc's supported speeds), so
+       the two reads are a COMPOUND observation: a media swap between them could
+       splice disc A's read speed with disc B's write speed. Same S1/S2
+       generation coherence as capacity — build into a local temp, commit only
+       when the generation held, else retry once then MOS_ERR_BUSY. No
+       media-presence gate (a no-media snapshot coheres with itself; a drive
+       that refuses read GET PERFORMANCE without media returns its error before
+       S2). */
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        mos_media_snapshot s1;
+        mos_internal_capture_media_snapshot(h->svc, &s1);
 
-    uint32_t rd_max = 0, wr_max = 0;
-    uint16_t rd_cnt = 0, wr_cnt = 0;
+        uint32_t rd_max = 0, wr_max = 0;
+        uint16_t rd_cnt = 0, wr_cnt = 0;
 
-    mos_error e = mos_internal_get_perf(h, 0, &rd_max, &rd_cnt);
-    if (e != MOS_OK) return e;
+        mos_error e = mos_internal_get_perf(h, 0, &rd_max, &rd_cnt);
+        if (e != MOS_OK) return e;          /* read direction is the gate */
 
-    /* Write direction is best-effort ENRICHMENT, with one carve-out. A drive may
-       refuse write GET PERFORMANCE on read-only media (CHECK CONDITION) or answer
-       an empty list — write speed is then simply absent (data, not an error), so
-       a command-level MOS_ERR_IO is tolerated. But a TRANSPORT failure (negative:
-       device lost, or exclusive access lost between the two reads) compromises
-       the whole query and is SURFACED, not silently flattened to
-       max_write_kbps == 0 — the indistinguishable-from-empty case R3 (F3) flagged.
-       This is the specific tolerated-vs-fatal policy the contract now documents. */
-    mos_error we = mos_internal_get_perf(h, 1, &wr_max, &wr_cnt);
-    if (we != MOS_OK && we != MOS_ERR_IO) return we;
+        /* Write direction is best-effort ENRICHMENT, with one carve-out. A drive
+           may refuse write GET PERFORMANCE on read-only media (CHECK CONDITION)
+           or answer an empty list — write speed is then simply absent (data, not
+           an error), so a command-level MOS_ERR_IO is tolerated. But a TRANSPORT
+           failure (negative: device lost, or exclusive access lost between the
+           reads) compromises the whole query and is SURFACED, not silently
+           flattened to max_write_kbps == 0 (the indistinguishable-from-empty case
+           R3 F3 flagged). */
+        mos_error we = mos_internal_get_perf(h, 1, &wr_max, &wr_cnt);
+        if (we != MOS_OK && we != MOS_ERR_IO) return we;
 
-    p->descriptor_count = rd_cnt;
-    p->max_read_kbps    = rd_max;
-    p->max_write_kbps   = wr_max;
-    p->have             = (rd_cnt > 0);   /* read direction is the gate */
-    *out = p;
-    return MOS_OK;
+        struct mos_drive_perf tmp = {0};
+        tmp.descriptor_count = rd_cnt;
+        tmp.max_read_kbps    = rd_max;
+        tmp.max_write_kbps   = wr_max;
+        tmp.have             = (rd_cnt > 0);
+
+        mos_media_snapshot s2;
+        mos_internal_capture_media_snapshot(h->svc, &s2);
+        if (mos_internal_media_snapshot_coherent(&s1, &s2)) {
+            h->drive_perf = tmp;
+            *out = &h->drive_perf;
+            return MOS_OK;
+        }
+    }
+    return MOS_ERR_BUSY;   /* generation changed across the two reads twice */
 }
 
 /* Shared MODE SENSE(10) issuance for the two read-only optical pages
