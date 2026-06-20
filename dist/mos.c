@@ -7517,7 +7517,9 @@ static void watch_all_add_device(mos_watch_t *w,
     }
     int i = mos_internal_watch_all_free_slot(&w->all);
     if (i < 0) {
-        return; /* full and genuinely new — documented drop until a slot frees */
+        return; /* full and genuinely new — dropped for this plug session. A
+                   later slot free does NOT reconsider it (no rescan on free);
+                   recovery is a replug, which re-fires Appeared (mos.h). */
     }
     /* free_slot returns ANY inactive slot, so this one may be RECYCLED from a
        device that was removed (the core freed it: mos_watch_core.c active[best]
@@ -7970,9 +7972,12 @@ static mos_watch_t *watch_open_from_validated_handle(
        thread (embedder behind a dispatch queue / thread pool / actor), the
        unconditional derefs in callbacks, teardown, and the pump gate become
        use-after-free. Retain here / release in mos_watch_close so it lives
-       for the handle's life. This makes off-thread misuse a safe no-op — it
-       does NOT make cross-thread use functional; the single-thread contract
-       stands. */
+       for the handle's life. The retain makes off-thread misuse memory-safe,
+       but it stays a CONTRACT VIOLATION degraded to polling/sleep: the wakes
+       (CFRunLoopStop) target the ORIGIN loop, so driven off-thread they never
+       break the current thread's sleep and the pump falls back to its poll
+       cadence. It does NOT make cross-thread use functional; the single-thread
+       contract stands. */
     w->run_loop = CFRunLoopGetCurrent();
     CFRetain(w->run_loop);
 
