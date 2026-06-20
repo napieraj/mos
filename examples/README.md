@@ -28,7 +28,10 @@ Beyond routing, it uses `mos` as more than a classifier:
   the `.iso`;
 - an optional **`mos tray` lifecycle** — lock an idle drive during a rip so a
   stray operator eject becomes a reported event, not a retraction mid-read;
-  eject when done (the "swap me" signal). No FOSS ripper does PREVENT-locking;
+  a plain `mos tray eject` when done (the "swap me" signal — a still-mounted
+  disc reports `BUSY`, so the data branch unmounts first; forced unmount is an
+  experimental, flag-gated `mos` build option, not used here). No FOSS ripper
+  does PREVENT-locking;
 - **content-protection / region** notes (CSS/CPRM/AACS) read from `mos`'s own
   fields, and **CD-Extra** detection from `disc.session_layout`;
 - a **`mos watch`** loop that switches on each ready event's `media_type` — the

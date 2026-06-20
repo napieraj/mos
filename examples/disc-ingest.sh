@@ -282,7 +282,7 @@ write_sidecar() {
 # which is exactly what an autoloader robot wants. Eject-when-done is the
 # universal "this disc is finished, swap it" signal.
 tray_lock()  { [ "$LOCK_DURING_RIP" = 1 ] && run "$MOS" tray lock "$1" || true; }
-tray_eject() { [ "$EJECT_WHEN_DONE" = 1 ] && run "$MOS" tray eject "$1" --force || true; }
+tray_eject() { [ "$EJECT_WHEN_DONE" = 1 ] && run "$MOS" tray eject "$1" || true; }
 
 # protection_note <metadata-json> — surface what the disc/drive say about
 # content protection (a reported fact, never enforcement). DVD carries a
