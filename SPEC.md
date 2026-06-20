@@ -304,8 +304,9 @@ Not an IOKit/MMC surface — the **mount layer** (`mos_da.c`). Linked only when
 headers): the disk-object calls (`DADiskCreate*` / `DADiskCopy*` / `DADiskGetTypeID`)
 and the `kDADiskDescription*` keys are verified verbatim against
 `DiskArbitration.framework/Headers/DADisk.h` (canonical); `DASessionCreate` /
-`DASessionSetDispatchQueue` live in `DASession.h`; `DADiskUnmount` in the DA
-unmount/approval section. Every function mos uses is `macos(10.4)` EXCEPT
+`DASessionSetDispatchQueue` live in `DASession.h`; `DADiskUnmount` (with its
+`DADiskUnmountOptions` / `DADiskUnmountCallback`) in the umbrella
+`DiskArbitration.h`. Every function mos uses is `macos(10.4)` EXCEPT
 `DASessionSetDispatchQueue` (`macos(10.7)`) — both well under mos's 12.0
 deployment floor.
 
@@ -316,7 +317,7 @@ deployment floor.
 | `DADiskCreateFromBSDName` | DADisk.h | `(allocator, session, const char *)` → `DADiskRef` (CFRelease) | the force-unmount target. |
 | `DADiskCopyDescription` | DADisk.h | `(DADiskRef)` → `CFDictionaryRef` (CFRelease) | volume name/path read (keys below). Header note: contacts the daemon for the LATEST description (resolved by the ref's name), unless called inside a registered DA callback. |
 | `DADiskCopyIOMedia` | DADisk.h | `(DADiskRef)` → `io_service_t` (**IOObjectRelease**) | volume lookup's **endpoint identity guard** (A2): the IOMedia the ref currently resolves to; mos compares its `IORegistryEntryGetRegistryEntryID` to `media_id` and commits the name/path only on a match. Valid for a READ (no later daemon re-resolution); the unmount ACTION cannot use it (the daemon re-resolves the name AFTER any check — AGENTS TOCTOU addendum). |
-| `DADiskUnmount` | DA unmount sect. | `(disk, options, callback, context)` → `void` (async) | the **SINGLE DA action**: `tray eject --force` (`Force|Whole`). Data-loss-capable, opt-in. Made synchronous via the queue + semaphore (the unbounded-wait KNOWN ISSUE if `DASessionSetDispatchQueue` silently fails — post-tag, ROADMAP). |
+| `DADiskUnmount` | DiskArbitration.h | `(disk, options, callback, context)` → `void` (async; callback `(disk, dissenter, context)`, NULL dissenter = success) | the **SINGLE DA action**: `tray eject --force` with `kDADiskUnmountOptionForce` (`0x00080000`) `\| kDADiskUnmountOptionWhole` (`0x1`). Data-loss-capable, opt-in. Made synchronous via the queue + semaphore (the unbounded-wait KNOWN ISSUE if `DASessionSetDispatchQueue` silently fails — post-tag, ROADMAP). |
 
 Description keys (DADisk.h, both `macos(10.4)`): `kDADiskDescriptionVolumeNameKey`
 (CFString → `volume_name`), `kDADiskDescriptionVolumePathKey` (CFURL →
@@ -327,6 +328,47 @@ zero-command off the IOKit registry instead, not via DA. Unused DADisk.h surface
 `DADiskCopyWholeDisk`, `DADiskGetTypeID`. Privilege: every DA read takes no
 entitlement / TCC / exclusive access (scope-doctrine layer 3); `DADiskUnmount` is
 the only action and the only data-loss path.
+
+### Watch-wake surface — IOKit interest + DiscRecording doorbell (`mos_watch.c`)
+
+The notification sources the watch schedules on its private run-loop mode — never
+command-issuing, all wake-only (the poll floor is the correctness floor; the
+doorbell is latency only). Verified against `IOKit.framework/Headers/IOKitLib.h`
++ `IOMessage.h` and `DiscRecording.framework/Headers/DRCoreNotifications.h`.
+**Ownership rule: `Create*` returns OWNED (release it), `Get*` returns BORROWED
+(do NOT release) — `mos_watch.c` teardown honors it (audited: the IOKit source is
+freed via `IONotificationPortDestroy`, the DR source/center are `CFRelease`d).**
+
+IOKit interest (single-target termination / property wake):
+- `IONotificationPortCreate(mach_port_t)` → `IONotificationPortRef` — OWNED,
+  `IONotificationPortDestroy`.
+- `IONotificationPortGetRunLoopSource(port)` → `CFRunLoopSourceRef` — **BORROWED**
+  (header: "caller should not release"; freed by `IONotificationPortDestroy`).
+- `IOServiceAddInterestNotification(port, service, kIOGeneralInterest, cb, refcon,
+  &notif)` — message types from `IOMessage.h`: `kIOMessageServiceIsTerminated`
+  (drive removed → terminal for a single-target watch),
+  `kIOMessageServicePropertyChange` (re-poll wake).
+
+DiscRecording doorbell (media/tray-change + all-mode discovery):
+- `DRNotificationCenterCreate(void)` → `DRNotificationCenterRef` — OWNED.
+  **Run-loop affinity: delivers on the run loop it was CREATED on** (the W2
+  single-thread-contract basis — to receive on another loop you must create the
+  center from it).
+- `DRNotificationCenterCreateRunLoopSource(center)` → `CFRunLoopSourceRef` —
+  **OWNED** (`Create` — released; contrast the IOKit `Get` above).
+- `DRNotificationCenterAddObserver(center, observer, cb, name, object)` /
+  `…RemoveObserver(center, observer, name, object)`; callback
+  `DRNotificationCallback = void(*)(center, observer, CFStringRef name,
+  DRTypeRef object, CFDictionaryRef info)`.
+- Notification names: `kDRDeviceAppearedNotification` (all-mode join),
+  `kDRDeviceDisappearedNotification`, `kDRDeviceStatusChangedNotification`
+  (device-scoped state wake); `kDRDeviceIORegistryEntryPathKey` resolves the
+  changed device → registry id. (Apple-availability: the DR notification API is
+  `10.2+`, well under mos's 12.0 floor.)
+
+No commands, no exclusive access, no entitlement. Single-target creation failure
+falls back to poll-only; all-mode has no poll floor, so `mos_watch_open_all` fails
+instead (discovery rides the doorbell).
 
 ### Decision order for a new verb
 
