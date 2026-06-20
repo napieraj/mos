@@ -664,6 +664,13 @@ static void setup_dr_doorbell_wake(mos_watch_t *w)
                                         NULL);
     }
 
+    /* AddObserver is void with no documented failure channel; the fallible
+       setup is center/source creation (checked above), and all-watch open fails
+       honestly (MOS_ERR_IO) if either fails. The Appeared observer catches
+       FUTURE arrivals ("a device has become available", DRCoreDevice.h);
+       devices already present at registration are caught by the explicit initial
+       DRCopyDeviceArray snapshot (mos_watch_open_all) + registry-ID dedup, NOT by
+       an SDK already-connected guarantee — the SDK documents none. */
     w->dr_center = center;
     w->dr_source = source;
 }

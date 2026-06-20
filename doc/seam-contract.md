@@ -158,18 +158,31 @@ authority; monotone in the claim). Detection: pinned + fuzz.)*
 the `transferred` leg is deliberately omitted because some USB bridges
 under-report the realized byte count, and trusting it would fail
 honest replies (rationale at the call site, `mos_scsi.c`). Consequence
-is bounded: worst case, a device claiming a full Media event
-descriptor over a genuinely short transfer has byte 5 read from the
-zero-initialized buffer as "door closed", on the not-ready path only —
-and the state core treats a false decoder return as "no authoritative
-bit", so nothing downstream compounds it. This is the ONLY waiver;
-every other variable-size transfer follows O-4 as written, and any new
-parser still must. Revisit when the rig can A/B `realizedByteCount`
-against bridge behavior — evidence either retires the waiver or pins
-it with a captured fixture. Two independent review passes (2026-06-11
-intake) filed this as an O-4 violation before finding the call-site
-comment; this entry exists so the next one doesn't, and so nobody
-"fixes" it into breaking the bridges it accommodates.
+is bounded but NOT benign, and its precise shape was corrected
+2026-06-20 (third review): worst case, a device claiming a full Media
+event descriptor (Event Data Length ≥ 6, NEA clear, class Media) over a
+genuinely short transfer has byte 5 read from the zero-initialized
+buffer as "door closed". The decoder therefore returns **true** with an
+authoritative `door_open = false` — NOT a false "no authoritative bit"
+return (the earlier wording here claimed the latter and was wrong on
+that point). On the not-ready path, if TUR sense is `02/3A/02` (medium
+absent, tray open), that fabricated closed bit makes the core classify
+**EMPTY where a realized-length-bounded decode would fall back to the
+sense and classify OPEN**. No OOB read and no lock effect (this is
+downstream of the lock decision; the §5.5 nub theorem is unaffected),
+and nothing compounds beyond that single tray-state misclassification.
+This is the ONLY waiver; every other variable-size transfer follows O-4
+as written, and any new parser still must. Revisit when the rig can A/B
+`realizedByteCount` against bridge behavior — evidence either retires
+the waiver or pins it with a captured fixture. Three review passes have
+now filed this (the 2026-06-11 intake's two, plus a 2026-06-20 static
+audit); the disposition is unchanged — the waiver accommodates real
+bridge under-reporting, and the OPEN→EMPTY case is a crafted-bytes
+hypothetical that the hardware-role ADR moves only via a captured
+fixture, never a behavior change on a review alone (AGENTS.md Process
+rule 2). The cost is recorded honestly here so the next reviewer weighs
+the real trade-off, not the understated one, and so nobody "fixes" it
+into breaking the bridges it accommodates.
 
 **O-4 canonical-data corollary (recorded 2026-06-18): under-delivery of
 a value cached or preferred as authoritative is REFUSED, not trusted-as-
@@ -177,9 +190,10 @@ short.** O-4 guarantees no OOB read — the device claim only shrinks the
 trusted bound. It does NOT, by itself, decide what to DO when the claim
 exceeds the delivered bytes (`claimed > transferred`, an under-delivering
 bridge). For most parsers the answer is "decode what arrived": a bounded
-partial read whose downstream effect is benign (the GESN waiver above —
-a false decoder return becomes "no authoritative bit"; the config walk —
-a short feature reads as absent). But two reads feed values the system
+partial read whose downstream effect is bounded (the GESN waiver above —
+worst case a fabricated closed tray bit, see the exception note for the
+exact OPEN→EMPTY shape; the config walk — a short feature reads as
+absent). But two reads feed values the system
 treats as AUTHORITATIVE and STICKY: the drive serial (VPD 0x80,
 `mos_vpd80.c` — a durable inventory key cached once per watch session)
 and the standard-INQUIRY identity (`mos_inqdata.c` — the canonical

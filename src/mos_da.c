@@ -101,7 +101,8 @@ static void mos_internal_da_unmount_cb(DADiskRef disk,
    by expected_media_id — the identity bind that keeps a reused "diskN" from
    sending the force-unmount to the wrong disk. DADiskCopyIOMedia returns the
    IOMedia io_service_t (owned, released here); its registry entry ID is the
-   same value mos_internal_bsd_unit captured off h->svc's child. */
+   same value mos_internal_capture_media_snapshot captured (media_id) off
+   h->svc's child. */
 static bool mos_internal_da_disk_is_media(DADiskRef disk,
                                           uint64_t expected_media_id)
 {
