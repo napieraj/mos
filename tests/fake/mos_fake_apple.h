@@ -121,6 +121,13 @@ void mos_fake_set_method_ioreturn(mos_fake_method m, uint32_t io_return);
    (another client holds the drive). Cleared by mos_fake_reset(). */
 void mos_fake_set_exclusive_denied(bool denied);
 
+/* Make ReleaseExclusiveAccess return non-success AND keep the lock held
+   (lock_balance is NOT decremented) — models a kernel that does not confirm
+   the release. The adapter must then leave the handle poisoned (have_exclusive
+   true): the next raw command fails closed without issuing a task, and
+   mos_close retries the release. Cleared by mos_fake_reset(). */
+void mos_fake_set_release_fail(bool fail);
+
 /* Make IOCreatePlugInInterfaceForService fail (kext declines to attach
    SCSITaskUserClient): every open maps to MOS_ERR_DRIVER_REJECTED,
    yielding a deterministic identical-error streak for the backoff
@@ -138,5 +145,12 @@ size_t mos_fake_last_cdb(uint8_t out[16]);
    balance 0 alone can't distinguish from "never acquired"). */
 int mos_fake_lock_balance(void);
 int mos_fake_lock_acquires(void);
+
+/* Invocation counters since reset, so a test can assert a POISONED handle
+   issues no further task (creates/executes unchanged) and that mos_close
+   retried the release (release_calls rose). */
+int mos_fake_release_calls(void);
+int mos_fake_task_creates(void);
+int mos_fake_execute_calls(void);
 
 #endif /* MOS_FAKE_APPLE_H */

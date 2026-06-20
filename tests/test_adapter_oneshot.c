@@ -676,6 +676,63 @@ TEST(adapter_tray_exclusive_denied_is_negative_error)
     return 0;
 }
 
+TEST(adapter_raw_cdb_release_failure_poisons_handle)
+{
+    /* A ReleaseExclusiveAccess the kernel does not confirm (non-success) must
+       NOT be reported as success. mos_internal_raw_cdb returns the unlock error
+       (precedence over a GOOD execute), leaves the scalar outputs at their zero
+       init, and POISONS the handle: the next raw call fails closed WITHOUT
+       issuing a task, and mos_close makes a final release retry. (Apple defines
+       a non-success release as "release not confirmed" — the in-kernel
+       logical-unit driver may stay quiesced, so the flag must stay true.) */
+    mos_fake_reset();
+    mos_error err = MOS_OK;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL && err == MOS_OK);
+
+    mos_fake_set_release_fail(true);
+
+    /* START STOP UNIT (eject): a non-data CDB whose execute SUCCEEDS, so the
+       only failure is the unlock. Outputs pre-set to non-zero to prove the
+       error path does not copy task results over the zero init. */
+    const uint8_t cdb[6] = { 0x1B, 0x00, 0x00, 0x00, 0x02, 0x00 };
+    uint32_t st   = 0xABCD;
+    uint64_t xfer = 99;
+    uint8_t  sense[18];
+    memset(sense, 0xAB, sizeof sense);
+
+    mos_error e = mos_internal_raw_cdb(h, cdb, sizeof cdb, NULL, 0,
+                                       MOS_XFER_NONE, 5000, &st, sense, &xfer);
+
+    /* (1) Not MOS_OK — the unlock failure takes precedence over the GOOD execute. */
+    EXPECT(e != MOS_OK);
+    /* (2) Scalar outputs stay at raw_cdb's zero init (no copy on the error). */
+    EXPECT(st == 0);
+    EXPECT(xfer == 0);
+    EXPECT(sense[0] == 0);
+    /* The model kernel still holds the lock (release did not decrement). */
+    EXPECT(mos_fake_lock_balance() == 1);
+
+    /* (3) Poisoned: a second raw call fails closed and issues NO task. */
+    int creates  = mos_fake_task_creates();
+    int executes = mos_fake_execute_calls();
+    e = mos_internal_raw_cdb(h, cdb, sizeof cdb, NULL, 0,
+                             MOS_XFER_NONE, 5000, &st, sense, &xfer);
+    EXPECT(e != MOS_OK);
+    EXPECT(mos_fake_task_creates()  == creates);   /* no new task created     */
+    EXPECT(mos_fake_execute_calls() == executes);  /* no new task executed    */
+    EXPECT(mos_fake_lock_balance()  == 1);         /* not re-acquired          */
+
+    /* (4) mos_close retries the release. Clear the injection so the retry
+       confirms; verify a release was attempted and the lock cleared. */
+    int rel = mos_fake_release_calls();
+    mos_fake_set_release_fail(false);
+    mos_close(h);
+    EXPECT(mos_fake_release_calls() > rel);   /* close attempted the release   */
+    EXPECT(mos_fake_lock_balance() == 0);     /* retry confirmed: lock cleared */
+    return 0;
+}
+
 int main(void)
 {
     printf("adapter one-shot (headless, link-seam fake):\n");
@@ -698,6 +755,7 @@ int main(void)
     RUN(adapter_tray_locked_eject_classifies_refused_locked);
     RUN(adapter_tray_refused_other_carries_its_sense);
     RUN(adapter_tray_exclusive_denied_is_negative_error);
+    RUN(adapter_raw_cdb_release_failure_poisons_handle);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);
     return mos_tests_failed ? 1 : 0;

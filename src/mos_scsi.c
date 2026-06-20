@@ -523,11 +523,32 @@ mos_handle_t *mos_open_device(const mos_device_info_t *info,
     return mos_internal_open_by_registry_id(info->registry_id, err_out);
 }
 
+/* Release the exclusive lock, clearing have_exclusive ONLY on a kernel-
+   confirmed release. SCSITaskLib defines a non-success ReleaseExclusiveAccess
+   as "release not confirmed": the in-kernel logical-unit driver may still be
+   quiesced. On that, the flag STAYS true and the handle is POISONED —
+   mos_internal_raw_cdb fails closed on the next call (it can prove neither that
+   it still holds nor that it has released the lock), and mos_close makes a
+   final best-effort retry. Caller must hold the lock. */
+static mos_error mos_internal_release_exclusive(mos_handle_t *h)
+{
+    assert(h && h->std && h->have_exclusive);
+    IOReturn rc = (*h->std)->ReleaseExclusiveAccess(h->std);
+    if (rc != kIOReturnSuccess)
+        return mos_internal_ioreturn_to_mos_error(rc);
+    h->have_exclusive = false;
+    return MOS_OK;
+}
+
 void mos_close(mos_handle_t *h)
 {
     if (!h) return;
     if (h->std) {
-        if (h->have_exclusive) (*h->std)->ReleaseExclusiveAccess(h->std);
+        /* Final best-effort release of a still-held (or poisoned) lock before
+           dropping the interface. A still-failing release leaves have_exclusive
+           true, but the interface Release below tears down the user client,
+           which the kernel cleans up on connection close. */
+        if (h->have_exclusive) (void)mos_internal_release_exclusive(h);
         (*h->std)->Release(h->std);
     }
     if (h->mmc)    (*h->mmc)->Release(h->mmc);
@@ -794,79 +815,90 @@ mos_error mos_internal_raw_cdb(mos_handle_t *h,
         if (!h->std) return MOS_ERR_DRIVER_REJECTED;
     }
 
-    /* Invariant pin (debug): every mos_internal_raw_cdb call releases exclusive access on
-       every exit path, so the lock is never held across calls — it must be
-       free on entry. A future early return that forgot to clear
-       have_exclusive would otherwise skip the acquire below and run the CDB
-       believing it holds a lock it doesn't; assert catches that in debug. */
-    assert(!h->have_exclusive);
+    /* Fail closed on a POISONED handle. The "lock never held across calls"
+       guarantee holds only while every release is kernel-confirmed; a prior
+       ReleaseExclusiveAccess that returned non-success left have_exclusive true
+       (the kernel may still treat this client as the logical-unit driver). We
+       can prove neither that we hold nor that we released the lock, so refuse
+       rather than issue a CDB on an unproven lock — mos_close retries the
+       release. (This replaces the old debug-only assert with a real release-
+       build gate; see mos_internal_release_exclusive.) */
+    if (h->have_exclusive)
+        return MOS_ERR_IO;
 
     /* Raw CDB requires exclusive access. */
-    if (!h->have_exclusive) {
-        IOReturn rx = (*h->std)->ObtainExclusiveAccess(h->std);
-        if (rx != kIOReturnSuccess)
-            return mos_internal_ioreturn_to_mos_error(rx);
-        h->have_exclusive = true;
-    }
+    IOReturn rc = (*h->std)->ObtainExclusiveAccess(h->std);
+    if (rc != kIOReturnSuccess)
+        return mos_internal_ioreturn_to_mos_error(rc);
+    h->have_exclusive = true;
 
-    SCSITaskInterface **t = (*h->std)->CreateSCSITask(h->std);
+    /* Single post-acquire epilogue: every path below converges on `cleanup`,
+       which releases the task (if any) and then attempts EXACTLY ONE release
+       via the checked helper. A release failure takes PRECEDENCE over the
+       command result — its consequences are system-wide (the drive stays
+       locked out of Finder / DA) — and leaves the scalar outputs at their zero
+       init. A diagnostic command must never hold the lock for the handle's
+       lifetime. */
+    SCSITaskInterface **t               = NULL;
+    mos_error           operation_error = MOS_OK;
+    mos_error           release_error;
+    bool                reply_valid     = false;
+    SCSI_Sense_Data     sense_struct    = {0};
+    SCSITaskStatus      st              = 0;
+    UInt64              xferred         = 0;
+    IOVirtualRange      sg = { (IOVirtualAddress)data_buf, (IOByteCount)data_len };
+
+    t = (*h->std)->CreateSCSITask(h->std);
     if (!t) {
-        /* Release the lock acquired above (every exit clears
-           have_exclusive, so it's always false on entry) — holding it is
-           pointless without a task. */
-        (*h->std)->ReleaseExclusiveAccess(h->std);
-        h->have_exclusive = false;
-        return MOS_ERR_IO;
+        operation_error = MOS_ERR_IO;
+        goto cleanup;
     }
 
     /* Check each Set* IOReturn — ignoring one ships a malformed task and a
-       baffling execute-time error. Identical cleanup, so all converge on
-       one label. */
-    IOReturn sr;
-    sr = (*t)->SetCommandDescriptorBlock(t, (UInt8 *)cdb, (UInt8)cdb_len);
-    if (sr != kIOReturnSuccess) goto setup_failed;
-
-    IOVirtualRange sg = { (IOVirtualAddress)data_buf, (IOByteCount)data_len };
-    sr = (*t)->SetScatterGatherEntries(t,
+       baffling execute-time error. */
+    rc = (*t)->SetCommandDescriptorBlock(t, (UInt8 *)cdb, (UInt8)cdb_len);
+    if (rc != kIOReturnSuccess) {
+        operation_error = mos_internal_ioreturn_to_mos_error(rc);
+        goto cleanup;
+    }
+    rc = (*t)->SetScatterGatherEntries(t,
         data_len ? &sg : NULL,
         (UInt8)(data_len ? 1 : 0),
         (UInt64)data_len,
         (UInt8)direction);
-    if (sr != kIOReturnSuccess) goto setup_failed;
-
-    sr = (*t)->SetTimeoutDuration(t, timeout_ms);
-    if (sr != kIOReturnSuccess) goto setup_failed;
-
-    /* sense was zeroed in the zero-outputs block; nothing writes it since. */
-    SCSI_Sense_Data sense_struct = {0};
-    SCSITaskStatus   st           = 0;
-    UInt64           xferred      = 0;
-
-    IOReturn er = (*t)->ExecuteTaskSync(t, &sense_struct, &st, &xferred);
-    (*t)->Release(t);
-
-    /* Release before returning: a diagnostic command must not hold the lock
-       for the handle's lifetime (would block Finder / MakeMKV / DA mounts).
-       Released on success and IO-failure; only the InvalidArg exits skip it,
-       never having acquired. */
-    (*h->std)->ReleaseExclusiveAccess(h->std);
-    h->have_exclusive = false;
-
-    /* Transport failure: outputs stay at the zeros above (defined, not
-       garbage); st/sense/xferred aren't copied. */
-    if (er != kIOReturnSuccess) {
-        return mos_internal_ioreturn_to_mos_error(er);
+    if (rc != kIOReturnSuccess) {
+        operation_error = mos_internal_ioreturn_to_mos_error(rc);
+        goto cleanup;
     }
+    rc = (*t)->SetTimeoutDuration(t, timeout_ms);
+    if (rc != kIOReturnSuccess) {
+        operation_error = mos_internal_ioreturn_to_mos_error(rc);
+        goto cleanup;
+    }
+
+    /* sense_struct/st/xferred are zero-initialized above, so a transport
+       failure (or a partial sense fill) copies defined data, never garbage. */
+    rc = (*t)->ExecuteTaskSync(t, &sense_struct, &st, &xferred);
+    if (rc != kIOReturnSuccess)
+        operation_error = mos_internal_ioreturn_to_mos_error(rc);
+    else
+        reply_valid = true;
+
+cleanup:
+    if (t)
+        (*t)->Release(t);
+
+    /* Exactly one release attempt per acquire. */
+    release_error = mos_internal_release_exclusive(h);
+    if (release_error != MOS_OK)
+        return release_error;   /* unlock failure: precedence; outputs stay zero */
+    if (operation_error != MOS_OK)
+        return operation_error;
+    if (!reply_valid)
+        return MOS_ERR_IO;      /* release-build backstop; not reachable today */
 
     *scsi_task_status = (uint32_t)st;
     memcpy(sense, &sense_struct, 18);
     if (bytes_transferred) *bytes_transferred = (uint64_t)xferred;
-
     return MOS_OK;
-
-setup_failed:
-    (*t)->Release(t);
-    (*h->std)->ReleaseExclusiveAccess(h->std);
-    h->have_exclusive = false;
-    return mos_internal_ioreturn_to_mos_error(sr);
 }
