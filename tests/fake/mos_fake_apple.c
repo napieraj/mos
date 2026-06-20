@@ -95,12 +95,17 @@ static struct {
                                    indexed by mos_fake_method, 0 = success */
     bool     plugin_fail;
     bool     exclusive_denied;
+    bool     release_fail;      /* ReleaseExclusiveAccess returns non-success
+                                   AND leaves the lock held (no decrement) */
     uint32_t raw_status;        uint8_t raw[64];  size_t raw_len;
     uint64_t raw_realized;      uint8_t raw_sense[18];
 } g;
 
 static int      g_lock_balance;
 static int      g_lock_acquires;
+static int      g_release_calls;   /* ReleaseExclusiveAccess invocations    */
+static int      g_task_creates;    /* CreateSCSITask invocations            */
+static int      g_execute_calls;   /* ExecuteTaskSync invocations           */
 static unsigned g_iter_remaining;
 
 /* Per-task capture: the CDB and scatter-gather the adapter set, so
@@ -129,6 +134,9 @@ void mos_fake_reset(void)
     g.tur_status = 0; /* kSCSITaskStatus_GOOD */
     g_lock_balance   = 0;
     g_lock_acquires  = 0;
+    g_release_calls  = 0;
+    g_task_creates   = 0;
+    g_execute_calls  = 0;
     g_iter_remaining = 0;
     memset(&g_task, 0, sizeof g_task);
 }
@@ -230,6 +238,7 @@ void mos_fake_set_raw_reply(uint32_t task_status,
 }
 
 void mos_fake_set_exclusive_denied(bool denied) { g.exclusive_denied = denied; }
+void mos_fake_set_release_fail(bool fail) { g.release_fail = fail; }
 
 void mos_fake_set_plugin_fail(bool fail) { g.plugin_fail = fail; }
 
@@ -246,6 +255,9 @@ size_t mos_fake_last_cdb(uint8_t out[16])
 
 int mos_fake_lock_balance(void)  { return g_lock_balance;  }
 int mos_fake_lock_acquires(void) { return g_lock_acquires; }
+int mos_fake_release_calls(void) { return g_release_calls; }
+int mos_fake_task_creates(void)  { return g_task_creates;  }
+int mos_fake_execute_calls(void) { return g_execute_calls; }
 
 /* ---- IOKit registry ------------------------------------------------ */
 
@@ -684,6 +696,11 @@ static IOReturn std_ObtainExclusiveAccess(void *self)
 static IOReturn std_ReleaseExclusiveAccess(void *self)
 {
     (void)self;
+    g_release_calls++;
+    /* Model a kernel that does NOT confirm the release: return non-success and
+       leave the lock HELD (balance unchanged). The adapter must then keep the
+       handle poisoned (have_exclusive true) and retry at mos_close. */
+    if (g.release_fail) return kIOReturnError;
     /* Over-release drives the balance negative; the test's balance==0 check
        catches it. */
     g_lock_balance--;
@@ -693,6 +710,7 @@ static IOReturn std_ReleaseExclusiveAccess(void *self)
 static SCSITaskInterface **std_CreateSCSITask(void *self)
 {
     (void)self;
+    g_task_creates++;
     ensure_vtbls();
     memset(&g_task, 0, sizeof g_task);
     return &g_task_ptr;
@@ -739,6 +757,7 @@ static IOReturn task_ExecuteTaskSync(void *task,
                                      UInt64 *realizedTransferCount)
 {
     (void)task;
+    g_execute_calls++;
     if (g.method_rc[MOS_FAKE_METHOD_EXECUTE]) {
         return (IOReturn)g.method_rc[MOS_FAKE_METHOD_EXECUTE];
     }
