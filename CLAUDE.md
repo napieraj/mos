@@ -106,43 +106,29 @@ the lifecycle without verifying call sites. A confident
 assertion — critique or praise, my own or a reviewer's — gets
 verified before I act on it, not after.
 
-### Reviewing reviews: I trust them differently by attribution
+### Reviewing reviews: arrival order biases me
 Date: 2026-05-15
 
-Across four external reviews of this codebase in one session (two
-labeled as from ChatGPT, two from Claude in other windows), my
-evaluation tracked the attribution more than the merits.
+Across several external reviews of this codebase in one session, my evaluation
+tracked something other than the merits: ARRIVAL ORDER.
 
-When a ChatGPT review's findings checked out against the working tree,
-I credited the rigor and didn't audit whether the snapshot the reviewer
-saw matched current state. When a Claude review's findings DIDN'T check
-out, I attributed it to sloppiness (R3) or selective verification (R4)
-rather than the more obvious explanation that's symmetric to the
-ChatGPT case: the reviewer was reading a stale snapshot of the tree.
+Each review was built on a snapshot (a zip, a brief, an upload) the working
+tree had already moved past. The FIRST to land was caught stale — correctly.
+The error was the generalization that followed: every later review was then
+discounted as ALSO stale, and any finding it surfaced as ALREADY surfaced by
+the first, so the later ones lost RELATIVE value regardless of who wrote them
+or whether their findings were independently real. Which reviewer landed
+first was incidental — reverse the order and the credit reverses with it.
 
-The asymmetry isn't subtle. In all four cases the reviewer received
-some snapshot (a zip, a brief, an upload). In all four cases the
-working tree had moved on. The ChatGPT reviews looked rigorous because
-their findings happened to still be current; the Claude reviews looked
-sloppy because their findings happened to be stale. Same mechanism,
-different surface impression, evaluated asymmetrically by me.
-
-When asked "did you treat every claim unbiased," I admitted no in
-narrow terms (confirmations vs findings) but kept the broader bias
-out of frame: I'm motivated to find other-model-me wrong in ways I'm
-not motivated to find other-model-not-me wrong. Catching another
-Claude in error is a self-justifying narrative — it positions
-current-session-Claude as the one correctly applying the doctrine.
-Catching ChatGPT in error doesn't have that payoff, so I didn't push
-on whether ChatGPT findings were also snapshot-stale.
-
-This bias survives explicit awareness. Saying "treat this symmetrically"
-is not the same as treating it symmetrically. The recorded failure
-mode is the bias itself, not an operational rule that fixes it. Future
-instances reading this: when you find yourself working harder to find
-fault with a review specifically because it's from another instance
-of the model family, that effort is suspect. The work isn't more
-careful — it's pointed in a self-flattering direction.
+The meat, and the guard. Review evaluation gets biased by signals other than
+the merits — here arrival ORDER and a redundancy discount. The snapshot-
+staleness is symmetric: every reviewer saw a tree that had moved on, so
+crediting the first and dismissing the rest is an order artifact, not a quality
+difference. Verify each review on its own merits regardless of SOURCE and ORDER,
+and never let an earlier review's coverage discount a later one's independent
+finding — a second reviewer re-surfacing a real bug is corroboration, not
+redundancy. The bias survives explicit awareness: saying "weight them equally"
+is not doing it.
 
 ### Friction in reviews is a feature
 Date: 2026-05-15
