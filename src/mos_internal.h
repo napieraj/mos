@@ -218,12 +218,37 @@ mos_error mos_internal_mmc_get_current_profile(mos_handle_t *h, uint16_t *profil
    status/sense, not IOReturn, so this maps only transport failures. */
 mos_error mos_internal_ioreturn_to_mos_error(IOReturn rc);
 
+/* One whole-disk media generation, captured off a drive service in a SINGLE
+   IORegistry walk so every field describes the SAME IOMedia node (mos_scsi.c).
+   Absent sentinels: bsd_unit -1, media_id/bytes/block 0, media_type NULL,
+   writable -1. media_type is a static token (mos_internal_media_type_token). */
+typedef struct {
+    int64_t     bsd_unit;
+    uint64_t    media_id;       /* whole-IOMedia entry ID; the swap fingerprint */
+    uint64_t    media_bytes;    /* kIOMediaSizeKey */
+    uint32_t    block_bytes;    /* kIOMediaPreferredBlockSizeKey */
+    const char *media_type;     /* kIO{CD,DVD,BD}MediaTypeKey → token, NULL absent */
+    signed char writable;       /* kIOMediaWritableKey: -1 absent / 0 ro / 1 rw */
+} mos_media_snapshot;
+
+/* Capture one media generation off `svc` in a single walk; all six fields read
+   off the same node. Zero SCSI commands, no exclusive access (mos_scsi.c). */
+void mos_internal_capture_media_snapshot(io_service_t svc, mos_media_snapshot *s);
+
+/* Commit a captured snapshot to the handle's media-scoped fields. */
+void mos_internal_apply_media_snapshot(mos_handle_t *h, const mos_media_snapshot *s);
+
+/* True iff two snapshots describe the same media generation (media_id AND
+   bsd_unit agree) — used to detect a media change across a state query. */
+bool mos_internal_media_snapshot_coherent(const mos_media_snapshot *a,
+                                          const mos_media_snapshot *b);
+
 /* Re-resolve the handle's media-scoped identity (whole-disk bsd_unit,
-   media_id swap fingerprint, kernel-cached size/block bytes) from its
-   stable drive service — the freshness the media-scoped queries (state,
-   capacity, volume) call first so a handle held across an insert/eject
-   reports current media. Local IORegistry walk off h->svc; no SCSI
-   command, no exclusive access (mos_scsi.c). */
+   media_id swap fingerprint, kernel-cached size/block bytes, media type, and
+   writability) from its stable drive service — the freshness the media-scoped
+   queries (state, capacity, volume) call first so a handle held across an
+   insert/eject reports current media. One capture+apply: a local IORegistry
+   walk off h->svc; no SCSI command, no exclusive access (mos_scsi.c). */
 void mos_internal_refresh_media_identity(mos_handle_t *h);
 
 /* Copy the kernel-cached full-TOC (kIOCDMediaTOCKey, a CDTOC CFData blob) off
@@ -233,20 +258,6 @@ void mos_internal_refresh_media_identity(mos_handle_t *h);
    pure IORegistry read like the cached capacity (mos_scsi.c). The pure parser
    mos_internal_cdtoc_parse turns the blob into the per-session layout. */
 size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap);
-
-/* Copy the kernel optical-media "Type" string (kIO{CD,DVD,BD}MediaTypeKey, all
-   literally "Type") off the drive's IO{CD,DVD,BD}Media node into `buf` (NUL-
-   terminated), returning the length copied or 0 when absent (no media, or no
-   media-type node yet). Zero SCSI commands, no exclusive access — a pure
-   IORegistry read like read_cdtoc, but media-class-agnostic. mos_internal_
-   media_type_token maps the result to a token. */
-size_t mos_internal_read_media_type(io_service_t svc, char *buf, size_t cap);
-
-/* Read the kernel IOMedia Writable flag (kIOMediaWritableKey, OSBoolean) off the
-   drive's IO{CD,DVD,BD}Media node. Tri-state return: -1 = no optical media node /
-   key absent, 0 = read-only, 1 = writable. Zero SCSI commands, no exclusive
-   access — the same optical-node walk as read_media_type, reading a CFBoolean. */
-int mos_internal_read_writable(io_service_t svc);
 
 /* Issue one 6-byte tray CDB (START STOP UNIT 0x1B / PREVENT ALLOW MEDIUM
    REMOVAL 0x1E) via mos_internal_raw_cdb and classify the result. Negative

@@ -211,6 +211,88 @@ TEST(adapter_lock_denied_falls_back_to_sense)
     return 0;
 }
 
+/* R3 mos_state.c audit (2026-06-20): a media swap/removal between the query's
+   identity capture and its TUR/GESN must not publish a temporally mixed result.
+   The S1/S2 coherence retry re-observes once, then refuses (BUSY) on churn. */
+
+TEST(adapter_media_swap_to_absent_retries_coherent)   /* R3 sequence A */
+{
+    mos_fake_reset();                        /* media present, unit 4 */
+    uint8_t sense[18], gesn[8];
+    make_sense(sense, 0x02, 0x3A, 0x00);     /* not ready, no medium */
+    make_gesn(gesn, /*door_open=*/false);
+    mos_fake_set_tur(0x02 /*CHECK CONDITION*/, sense);
+    mos_fake_set_raw_reply(0x00 /*GOOD*/, gesn, 8, 8, NULL);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    /* The medium vanishes between the query's S1 capture and its S2 confirm. */
+    mos_fake_set_media_swap_after_first_capture(-1, 0);
+
+    const mos_state_result *r = NULL;
+    EXPECT_EQ(MOS_OK, mos_query_state(h, &r));
+    EXPECT(r != NULL);
+    EXPECT_EQ(MOS_STATE_EMPTY, mos_state_result_state(r));
+    /* No stale identity: the published unit is the coherent post-swap -1, not
+       S1's 4 (the EMPTY-with-nonzero-bsd_unit incoherence R3 demonstrated). */
+    EXPECT_EQ(-1, mos_handle_bsd_unit(h));
+    EXPECT_EQ(4u, mos_fake_capture_walks());  /* S1,S2 then a retry S1',S2' */
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_media_swap_between_discs_retries_coherent)   /* R3 sequence B */
+{
+    mos_fake_reset();                        /* media present, unit 4 */
+    uint8_t cfg[64];
+    size_t  cfg_len = load_fixture("getconfig_dvdrom_current.bin", cfg, sizeof cfg);
+    mos_fake_set_getconfig_reply(0x00, cfg, cfg_len);
+    mos_fake_set_tur(0x00 /*GOOD*/, NULL);   /* ready */
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    /* Disc A at S1, disc B (same diskN, fresh IOMedia id) by S2 — only media_id
+       reveals the swap; bsd_unit stays 4, so it cannot. The retry must fire on
+       the id alone and republish the coherent post-swap generation. */
+    mos_fake_set_media_swap_after_first_capture(4, 0x100000999ull);
+
+    const mos_state_result *r = NULL;
+    EXPECT_EQ(MOS_OK, mos_query_state(h, &r));
+    EXPECT(r != NULL);
+    EXPECT_EQ(MOS_STATE_READY, mos_state_result_state(r));
+    EXPECT_EQ(4u, mos_fake_capture_walks());  /* media_id change forced a retry */
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_media_churn_refuses_mixed_observation)
+{
+    mos_fake_reset();
+    uint8_t cfg[64];
+    size_t  cfg_len = load_fixture("getconfig_dvdrom_current.bin", cfg, sizeof cfg);
+    mos_fake_set_getconfig_reply(0x00, cfg, cfg_len);
+    mos_fake_set_tur(0x00 /*GOOD*/, NULL);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    /* Every capture mints a fresh media_id: no two observations agree, so the
+       query exhausts its one retry and refuses rather than publish a mix. */
+    mos_fake_set_media_churn(true);
+
+    const mos_state_result *r = NULL;
+    mos_error q = mos_query_state(h, &r);
+    EXPECT_EQ(MOS_ERR_BUSY, q);
+    EXPECT(r == NULL);
+    mos_close(h);
+    return 0;
+}
+
 TEST(adapter_disc_info_replays_fixtures)
 {
     /* Two committed READ DISC INFORMATION fixtures through the real
@@ -739,6 +821,9 @@ int main(void)
     RUN(adapter_not_ready_gesn_open_is_open);
     RUN(adapter_becoming_ready_is_loading);
     RUN(adapter_lock_denied_falls_back_to_sense);
+    RUN(adapter_media_swap_to_absent_retries_coherent);
+    RUN(adapter_media_swap_between_discs_retries_coherent);
+    RUN(adapter_media_churn_refuses_mixed_observation);
     RUN(adapter_disc_info_replays_fixtures);
     RUN(adapter_toc_round_trip_and_fail_closed);
     RUN(adapter_da_volume_lookup_modalities);

@@ -99,6 +99,20 @@ static struct {
                                    AND leaves the lock held (no decrement) */
     uint32_t raw_status;        uint8_t raw[64];  size_t raw_len;
     uint64_t raw_realized;      uint8_t raw_sense[18];
+
+    /* Media-coherence knobs (mos_query_state S1/S2 retry). The capture walk's
+       effective identity (eff_unit/eff_id) tracks (bsd_unit, media_id) by
+       default; a swap arms a different identity from the 2nd capture on (one
+       media change, then stable → the retry succeeds); churn mints a fresh id
+       every walk (continuous change → the retry gives up → MOS_ERR_BUSY). */
+    bool     swap_armed;
+    bool     swap_first_done;
+    int64_t  swap_unit;
+    uint64_t swap_id;
+    bool     churn;
+    unsigned capture_walks;     /* total IORegistry capture walks since reset */
+    int64_t  eff_unit;          /* this walk's effective bsd_unit / media_id  */
+    uint64_t eff_id;
 } g;
 
 static int      g_lock_balance;
@@ -127,6 +141,8 @@ void mos_fake_reset(void)
     g.drive_id = 0x100000123ull;
     g.media_id = 0x100000456ull;
     g.bsd_unit = 4;
+    g.eff_unit = g.bsd_unit;
+    g.eff_id   = g.media_id;
     strcpy(g.vendor,   "HL-DT-ST");
     strcpy(g.product,  "DVDROM");
     strcpy(g.revision, "A100");
@@ -159,6 +175,33 @@ void mos_fake_set_media_size(uint64_t bytes, uint32_t block_bytes)
     g.media_bytes = bytes;
     g.media_block_bytes = block_bytes;
 }
+
+/* Arm a one-time media swap: the FIRST capture walk after this call still sees
+   the current (bsd_unit, media_id); every later walk sees (unit, id). Models a
+   media change between a state query's S1 capture and its S2 confirmation —
+   the query's coherence retry should re-observe and publish the post-swap
+   generation. Resets the walk counter so a test can assert the retry count. */
+void mos_fake_set_media_swap_after_first_capture(int64_t unit, uint64_t id)
+{
+    g.swap_armed = true;
+    g.swap_first_done = false;
+    g.swap_unit = unit;
+    g.swap_id = id;
+    g.capture_walks = 0;
+}
+
+/* Continuous churn: every capture walk mints a fresh media_id, so no two
+   captures agree — the coherence retry exhausts and the query returns BUSY
+   rather than publish a mixed observation. Resets the walk counter. */
+void mos_fake_set_media_churn(bool on)
+{
+    g.churn = on;
+    g.capture_walks = 0;
+}
+
+/* Total IORegistry capture walks since the last reset/knob-set — lets a test
+   confirm a query retried (4 walks: S1,S2,S1',S2') vs ran clean (2). */
+unsigned mos_fake_capture_walks(void) { return g.capture_walks; }
 
 void mos_fake_set_identity(const char *vendor, const char *product,
                            const char *revision)
@@ -261,6 +304,27 @@ int mos_fake_execute_calls(void) { return g_execute_calls; }
 
 /* ---- IOKit registry ------------------------------------------------ */
 
+/* Compute this capture walk's effective media identity (see the swap/churn
+   knobs). Called once per registry walk so the BSD-name read, the Whole/size
+   reads, and the entry-ID read within the walk all see one consistent
+   generation. */
+static void fake_begin_capture_walk(void)
+{
+    g.capture_walks++;
+    g.eff_unit = g.bsd_unit;
+    g.eff_id   = g.media_id;
+    if (g.churn) {
+        g.eff_id = g.media_id + (uint64_t)g.capture_walks;   /* fresh every walk */
+    } else if (g.swap_armed) {
+        if (g.swap_first_done) {
+            g.eff_unit = g.swap_unit;
+            g.eff_id   = g.swap_id;
+        } else {
+            g.swap_first_done = true;   /* first capture sees the pre-swap state */
+        }
+    }
+}
+
 kern_return_t IORegistryEntryCreateIterator(io_registry_entry_t entry,
                                             const io_name_t plane,
                                             IOOptionBits options,
@@ -268,8 +332,9 @@ kern_return_t IORegistryEntryCreateIterator(io_registry_entry_t entry,
 {
     (void)plane; (void)options;
     if (entry != FAKE_SVC || !iterator) return KERN_FAILURE;
-    /* One whole-disk IOMedia child iff media present. */
-    g_iter_remaining = (g.bsd_unit >= 0) ? 1u : 0u;
+    fake_begin_capture_walk();
+    /* One whole-disk IOMedia child iff media present this walk. */
+    g_iter_remaining = (g.eff_unit >= 0) ? 1u : 0u;
     *iterator = FAKE_ITER;
     return KERN_SUCCESS;
 }
@@ -290,7 +355,7 @@ CFTypeRef IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
     if (entry != FAKE_MEDIA || !key) return NULL;
     if (CFEqual(key, CFSTR(kIOBSDNameKey))) {
         char name[32];
-        snprintf(name, sizeof name, "disk%lld", (long long)g.bsd_unit);
+        snprintf(name, sizeof name, "disk%lld", (long long)g.eff_unit);
         return CFStringCreateWithCString(kCFAllocatorDefault, name,
                                          kCFStringEncodingUTF8);
     }
@@ -320,7 +385,7 @@ kern_return_t IORegistryEntryGetRegistryEntryID(io_registry_entry_t entry,
 {
     if (!entryID) return KERN_FAILURE;
     if (entry == FAKE_SVC)   { *entryID = g.drive_id; return KERN_SUCCESS; }
-    if (entry == FAKE_MEDIA) { *entryID = g.media_id; return KERN_SUCCESS; }
+    if (entry == FAKE_MEDIA) { *entryID = g.eff_id; return KERN_SUCCESS; }
     if (entry == FAKE_DA_MEDIA) {
         *entryID = g.da_media_id_set ? g.da_media_id : g.media_id;
         return KERN_SUCCESS;

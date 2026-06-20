@@ -62,6 +62,16 @@ void mos_fake_set_da_media_id(uint64_t id);
    media. */
 void mos_fake_set_media_size(uint64_t bytes, uint32_t block_bytes);
 
+/* Media-coherence knobs for the mos_query_state S1/S2 retry. A swap makes the
+   first capture walk after the call see the current identity and every later
+   walk see (unit, id) — one media change, then stable, so the query's retry
+   re-observes and succeeds. Churn mints a fresh media_id every walk, so the
+   retry exhausts and the query returns MOS_ERR_BUSY. mos_fake_capture_walks
+   reports the walk count since the last reset/knob-set (4 == one retry). */
+void mos_fake_set_media_swap_after_first_capture(int64_t unit, uint64_t id);
+void mos_fake_set_media_churn(bool on);
+unsigned mos_fake_capture_walks(void);
+
 /* The MMC reply scripts. Bytes are copied into the fake; pass the
    committed fixture bytes. `task_status` is an SCSITaskStatus value
    (0x00 == GOOD). A status != GOOD or a NULL/zero-length reply makes
