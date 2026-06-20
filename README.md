@@ -333,7 +333,7 @@ bash/zsh/fish completions; raw files live in [`completions/`](completions) and
 
 - libaacs `src/file/mmc_device_darwin.c` — live, compiled IOKit MMC backend with
   DiskArbitration coordination; closest shipping reference for the pattern
-  (LGPL-2.1; study, don't copy).
+  (LGPL-2.1).
 - cdrtools `libscg/scsi-mac-iokit.c` — older SCSITaskLib consumer; dormant since
   2021 but correct.
 - libcdio `lib/driver/osx.c` — the IOKit platform driver; right headers and
