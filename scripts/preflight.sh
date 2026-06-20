@@ -36,6 +36,9 @@ run ./scripts/check-test-registration.sh
 step "documentation staleness"
 run sh ./scripts/doc-staleness.sh
 
+step "CONTRIBUTING.md file tree in sync with the repo"
+run python3 ./scripts/check-file-tree.py
+
 step "CLI docs (completions + man) in sync with the command table"
 run python3 ./scripts/gen-cli-docs.py --check
 
