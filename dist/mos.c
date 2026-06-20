@@ -1010,7 +1010,12 @@ void mos_internal_watch_notify_wake(mos_watch_state *w);
  * it only schedules, relabels mid-stream joins (snapshot → device_appeared),
  * and makes device_removed per-slot rather than stream-terminal. */
 
-#define MOS_WATCH_ALL_CAP 16
+/* Live watch-all cores. 64 matches the `mos list` / enumerate cap and is the
+   HARD CEILING here: the multiplexer's per-call `visited` set is a single
+   uint64_t (mos_watch_core.c), so above 64 needs a wider bitmask, not another
+   bump. Each slot is a full mos_watch_state, but the runtime cost scales with
+   drives actually present, not the cap — raising it only adds headroom. */
+#define MOS_WATCH_ALL_CAP 64
 
 typedef struct {
     mos_watch_state cores[MOS_WATCH_ALL_CAP];
@@ -8405,8 +8410,8 @@ mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
     out.next_poll_at_mono_ms = UINT64_MAX;
     if (!a) return out;
 
-    /* Visit active slots in ascending registry_id (selection scan; CAP 16,
-       a sort would be ceremony). Returning on the first EMIT bounds per-call
+    /* Visit active slots in ascending registry_id (selection scan; the CAP is
+       small, a sort would be ceremony). Returning on the first EMIT bounds per-call
        work; the next call re-enters at the lowest id, draining same-tick
        events in id order. */
     _Static_assert(MOS_WATCH_ALL_CAP <= 64, "visited bitmask is 64-wide");
