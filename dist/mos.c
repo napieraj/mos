@@ -2379,26 +2379,51 @@ bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
 
 #include <string.h>
 
-/* Bounded CFString → C-buffer copy. CFStringGetCString fails outright (no
-   usable partial-write contract) on too-small buffers, so conversion goes
-   through a 256-byte temp: values up to 255 bytes convert then strlcpy to
-   the SPC-4 field width; longer values fail conversion and yield "" — for
-   identity fields whose real domain is ≤16 bytes, an absurdly long value is
-   hostile and empty is correct. Non-string values also yield "". dst is
-   always NUL-terminated. Shared with the DA volume lookup (mos_da.c), which
-   reads volume-controlled strings under the same trust terms. */
+/* Strict CFString → C-buffer copy: COMPLETE-OR-EMPTY, the mos_vpd80 identity
+   rule applied to DR's dictionary strings. The full UTF-8 form is written only
+   if it fits in cap-1 bytes AND carries no interior NUL; otherwise dst is left
+   empty. No truncated write: a value over-wide for its field (the real domain
+   is ≤16 bytes — an absurdly long value is hostile per scope-doctrine layer 4)
+   and an interior NUL (which would sever the field at a downstream C-string
+   sink, the mos_vpd80 bug class) both collapse to "", which every reader treats
+   as absent. CFStringGetBytes (not CFStringGetCString) reports both the
+   converted-character count and the realized byte count, so the device's
+   claimed length and its delivery are both checked. Non-string values yield "".
+   dst is always NUL-terminated. Returns whether a complete value was written. */
+static bool mos_internal_dr_cfstring_strict(CFTypeRef value,
+                                            char *dst, size_t cap)
+{
+    if (!dst || cap == 0) return false;
+    dst[0] = 0;
+    if (!value || CFGetTypeID(value) != CFStringGetTypeID()) return false;
+
+    CFStringRef s = (CFStringRef)value;
+    CFIndex nchars = CFStringGetLength(s);
+    CFIndex used   = 0;
+    CFIndex got = CFStringGetBytes(s, CFRangeMake(0, nchars),
+                                   kCFStringEncodingUTF8, 0 /*no loss byte*/,
+                                   false /*no BOM*/, (UInt8 *)dst,
+                                   (CFIndex)(cap - 1), &used);
+    /* Not every character fit in cap-1 bytes ⇒ over-width ⇒ empty. */
+    if (got != nchars || used < 0 || (size_t)used >= cap) {
+        dst[0] = 0;
+        return false;
+    }
+    /* A complete value of `used` bytes must carry no interior NUL. */
+    if (memchr(dst, 0, (size_t)used) != NULL) {
+        dst[0] = 0;
+        return false;
+    }
+    dst[used] = 0;
+    return true;
+}
+
+/* Bounded CFString → C-buffer copy, complete-or-empty (see the strict helper).
+   Shared with the DA volume lookup (mos_da.c), which reads volume-controlled
+   strings under the same trust terms. */
 void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap)
 {
-    if (!dst || cap == 0) return;
-    dst[0] = 0;
-    if (!value || CFGetTypeID(value) != CFStringGetTypeID()) return;
-
-    char tmp[256];
-    if (!CFStringGetCString((CFStringRef)value, tmp, sizeof tmp,
-                            kCFStringEncodingUTF8)) {
-        return;
-    }
-    strlcpy(dst, tmp, cap);
+    (void)mos_internal_dr_cfstring_strict(value, dst, cap);
 }
 
 /* path → IORegistry entry → uint64 entry ID; 0 on any failure (the
@@ -2407,11 +2432,14 @@ void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap)
 uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path)
 {
     io_string_t p;
-    if (!path || CFGetTypeID(path) != CFStringGetTypeID()) return 0;
-    if (!CFStringGetCString((CFStringRef)path, p, sizeof(io_string_t),
-                            kCFStringEncodingUTF8)) {
-        return 0;
-    }
+    /* Reject a non-string, over-width, or interior-NUL path outright. An
+       interior NUL would sever the path at IORegistryEntryFromPath's C-string
+       boundary, so a prefix could resolve a DIFFERENT entry and fabricate a
+       non-zero WRONG registry_id — defeating the 0 = "unavailable" sentinel
+       that disarms swap detection. Complete-or-empty keeps a malformed path
+       at the 0 sentinel. */
+    if (!mos_internal_dr_cfstring_strict(path, p, sizeof p)) return 0;
+    if (p[0] == 0) return 0;
 
     io_registry_entry_t e MOS_IO_AUTO =
         IORegistryEntryFromPath(kIOMainPortDefault, p);

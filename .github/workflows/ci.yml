@@ -95,6 +95,27 @@ jobs:
           ASAN_OPTIONS=abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
              /tmp/test_dr_doorbell
 
+      - name: DR identity hygiene guard (complete-or-empty CF copies)
+        # mos_dr.c copies DiscRecording's identity strings, the media BSD
+        # name, and the IORegistry path out of CF dictionaries that, per
+        # scope-doctrine layer 4, can carry adversarial bytes. The strict
+        # copy is complete-or-empty (the mos_vpd80 interior-NUL / over-width
+        # rule) so a severed or over-wide value can never become a truncated
+        # false identity or a fabricated non-zero registry_id. This pins that
+        # contract against real CoreFoundation on every push (it is in no
+        # CMake target).
+        run: |
+          set -e
+          cc -std=c11 -O1 -fsanitize=address,undefined \
+             -fno-omit-frame-pointer -fno-sanitize-recover=all \
+             -I include tests/test_dr_hygiene.c \
+             build/libmos.a build/libmos_pure.a \
+             -framework IOKit -framework CoreFoundation \
+             -framework DiscRecording -framework DiskArbitration \
+             -o /tmp/test_dr_hygiene
+          ASAN_OPTIONS=abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+             /tmp/test_dr_hygiene
+
       - name: Run CLI smoke check
         run: |
           set -e
