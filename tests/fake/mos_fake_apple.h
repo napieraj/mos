@@ -78,6 +78,10 @@ void mos_fake_set_toc_reply(uint32_t task_status,
                             const uint8_t *bytes, size_t len);
 void mos_fake_set_disc_structure_reply(uint32_t task_status,
                                        const uint8_t *bytes, size_t len);
+/* Script the GET PERFORMANCE (0xAC) Performance Data reply — both directions
+   (read/write) get this buffer; mos_query_drive_perf folds them in. */
+void mos_fake_set_perf_reply(uint32_t task_status,
+                             const uint8_t *bytes, size_t len);
 /* Script the READ TRACK INFORMATION (0x52) reply — the recordable /
    append-state view mos_query_capacity folds in. Default (unset) is a
    zeroed GOOD reply, which the parser rejects (recordable absent). */
