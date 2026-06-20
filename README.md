@@ -329,14 +329,17 @@ bash/zsh/fish completions; raw files live in [`completions/`](completions) and
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — code layout and conventions
 - [`examples/`](examples/) — worked consumer integrations
 
-**Prior art:**
+**Prior art** (fuller reference list in [`ARCHITECTURE.md`](ARCHITECTURE.md) §11):
 
 - libaacs `src/file/mmc_device_darwin.c` — live, compiled IOKit MMC backend with
   DiskArbitration coordination; closest shipping reference for the pattern
   (LGPL-2.1; study, don't copy).
 - cdrtools `libscg/scsi-mac-iokit.c` — older SCSITaskLib consumer; dormant since
   2021 but correct.
-- libcdio `lib/driver/osx.c` — right headers and names, but the MMC path is gated
-  behind `#ifdef GET_SCSI_FIXED`; structural reference only.
-- `DRDevice` / DiscRecording.framework — Apple's public alternative for
-  tray-open queries; no SCSI traffic, smaller scope than `mos`.
+- libcdio `lib/driver/osx.c` — the IOKit platform driver; right headers and
+  names, but the MMC path is gated behind `#ifdef GET_SCSI_FIXED`; structural
+  reference only.
+- libcdio `lib/driver/mmc/` (and `src/cd-info.c`) — the cross-platform MMC
+  command layer mos's metadata side mirrors: READ DISC INFORMATION, GET
+  CONFIGURATION profiles, and media-type detection (CD / DVD±R / DVD±RW /
+  DVD-RAM / BD) — the disc facts `mos metadata` and `mos drive` decode.
