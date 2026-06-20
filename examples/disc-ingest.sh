@@ -16,6 +16,7 @@
 #   - redumper     byte-perfect, offset-corrected preservation dump (redump.org)
 #   - ddrescue     error-tolerant 1:1 imaging of aging media       (GNU ddrescue)
 #   - makemkvcon   decrypt + rip encrypted video titles            (MakeMKV)
+#   - python3      parse AccurateRip's HTML offset DB               (audio CD)
 #   - shasum/diskutil  built into macOS
 #
 # Beyond routing, it shows mos used as more than a classifier:
@@ -33,6 +34,8 @@
 #                                    #   that turns ready, hot-plug included
 #   ./disc-ingest.sh <drive>...      # one-shot on the given drive selector(s)
 #   ./disc-ingest.sh fingerprint <drive>   # print the dedup hash and exit
+#   ./disc-ingest.sh offset <drive>        # print the drive's AccurateRip read
+#                                          #   offset + the disc TOC fingerprint
 #   echo /dev/disk4 | ./disc-ingest.sh -   # read dev nodes from stdin
 #
 # Config (environment overrides):
@@ -45,6 +48,9 @@
 #   MINLENGTH=120            makemkvcon --minlength (seconds; drops menus/junk)
 #   MB_USER_AGENT            MusicBrainz UA — PUT A REAL CONTACT HERE; the
 #                            service rejects a bare curl UA, cap 1 req/s.
+#   AR_OFFSET_URL            AccurateRip offset DB (default the canonical HTML
+#                            page; auto-falls back to a TSV mirror since
+#                            AccurateRip blocks bots; a file:// path works offline)
 #   DRY_RUN=1                print the command each branch WOULD run
 #
 # 0BSD, like mos. Copy it, cut the branches you don't want, make it yours.
@@ -59,7 +65,13 @@ EJECT_WHEN_DONE=${EJECT_WHEN_DONE:-0}
 LOCK_DURING_RIP=${LOCK_DURING_RIP:-0}
 MINLENGTH=${MINLENGTH:-120}
 MB_USER_AGENT=${MB_USER_AGENT:-"mos-disc-ingest/1.0 ( you@example.com )"}
+AR_OFFSET_URL=${AR_OFFSET_URL:-"http://www.accuraterip.com/driveoffsets.htm"}
+AR_MIRROR_URL=${AR_MIRROR_URL:-"https://raw.githubusercontent.com/saramibreak/DiscImageCreator/master/Release_ANSI/driveOffset.txt"}
+# AccurateRip refuses a bare curl UA with HTTP 403; present a browser UA.
+AR_UA=${AR_UA:-"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605 (KHTML, like Gecko) Version/16 Safari/605"}
+AR_DB_CACHE="${TMPDIR:-/tmp}/disc-ingest.aroffsets.$$"
 MOS=${MOS:-mos}
+trap 'rm -f "$AR_DB_CACHE"' EXIT
 
 log()  { printf '[disc-ingest] %s\n' "$*" >&2; }
 warn() { printf '[disc-ingest] WARN: %s\n' "$*" >&2; }
@@ -137,6 +149,94 @@ mb_lookup() {                               # mb_lookup <metadata-json>
 # designed to be hashed; it is the only stable identity for Blu-ray/data discs
 # that carry no MusicBrainz/CDDB id.
 fingerprint() { printf '%s' "$1" | jq -Sc '.disc' | sha256; }
+
+# -------------------------------------------------------------------------
+# AccurateRip drive READ OFFSET, paired with the disc fingerprint.
+# The offset (the per-drive sample correction that makes an audio rip
+# bit-identical across drives — AccurateRip/EAC/whipper) is NOT a value any
+# drive reports: there is no MMC command, mode page, or IOKit property for it.
+# It lives in AccurateRip's community DB, keyed on the drive IDENTITY mos DOES
+# report. So mos ships the key (vendor/product); this is the consumer lookup —
+# the boundary ROADMAP.md draws ("AccurateRip … permanently consumer-side";
+# scope doctrine in AGENTS.md). Defaults to AccurateRip's canonical HTML page,
+# falling back to a TSV mirror (AccurateRip blocks non-browser clients).
+
+# ar_normalize — stdin (HTML or TSV) -> "name<TAB>offset<TAB>count<TAB>pct" rows.
+# python only here, for the tolerant HTML-table parse (the TSV mirror needs none
+# of it): flatten newlines (cells sit on their own source lines), </tr> -> line,
+# cells -> tab, strip tags, then keep rows ending in the offset signature.
+ar_normalize() {
+    python3 -c "$(
+cat <<'PY'
+import sys, re, html
+data = sys.stdin.read()
+if re.search(r'<\s*tr', data, re.I):                 # the HTML page
+    data = data.replace('\r', ' ').replace('\n', ' ')  # cells are per-line
+    data = re.sub(r'(?i)</tr\s*>', '\n', data)       # rows -> lines
+    data = re.sub(r'(?i)<\s*t[dh][^>]*>', '\t', data)  # cells -> tabs
+    data = re.sub(r'(?i)<[^>]+>', '', data)          # drop remaining tags
+    data = html.unescape(data)
+row = re.compile(r'^(.*?)[\t ]+([+-]\d+)[\t ]+(\d+)[\t ]+(\d+)%\s*$')
+purged = re.compile(r'^(.*?)[\t ]+\[Purged\][\t ]*$')  # name + [Purged], no counts
+for line in data.splitlines():
+    line = line.replace('\r', '').rstrip()
+    m = row.match(line)
+    if m:
+        name = re.sub(r'\s+', ' ', m.group(1)).strip()
+        if name:
+            print('\t'.join([name, m.group(2), m.group(3), m.group(4)]))
+        continue
+    p = purged.match(line)
+    if p:
+        name = re.sub(r'\s+', ' ', p.group(1)).strip()
+        if name:
+            print('\t'.join([name, '[Purged]', '0', '0']))
+PY
+)"
+}
+
+# accuraterip_offset <drive-json> — echo this drive's AccurateRip read offset
+# ("+6", "[Purged]"), or nothing if the drive is unlisted. The DB is fetched
+# once per run and cached. Needs curl + python3.
+accuraterip_offset() {
+    local vendor product ar_vendor key raw
+    vendor=$(printf '%s'  "$1" | jq -r '.vendor  // ""')
+    product=$(printf '%s' "$1" | jq -r '.product // ""')
+    [ -n "$product" ] || return 1
+    # AccurateRip renames three vendors on its list (stated in the DB header).
+    case "$vendor" in
+        HL-DT-ST) ar_vendor="LG Electronics" ;;
+        JLMS)     ar_vendor="Lite-ON" ;;
+        Matshita) ar_vendor="Panasonic" ;;
+        *)        ar_vendor="$vendor" ;;
+    esac
+    key="$ar_vendor - $product"                  # AR name column is "VENDOR - MODEL"
+    if [ ! -s "$AR_DB_CACHE" ]; then
+        raw=$(curl -fsSL -A "$AR_UA" -H "Accept: text/html,*/*" "$AR_OFFSET_URL" 2>/dev/null) \
+            || raw=$(curl -fsSL -A "$AR_UA" "$AR_MIRROR_URL" 2>/dev/null) || return 2
+        [ -n "$raw" ] || return 2
+        printf '%s' "$raw" | ar_normalize >"$AR_DB_CACHE" 2>/dev/null || return 2
+    fi
+    awk -F'\t' -v key="$key" '
+        function norm(s){ s=tolower(s); gsub(/[ \t]+/," ",s); gsub(/^ +| +$/,"",s); return s }
+        BEGIN{ nkey=norm(key) } norm($1)==nkey { print $2; exit }' "$AR_DB_CACHE"
+}
+
+# offset_and_fingerprint <metadata-json> <drive-json> — the rip-log pair: the
+# drive's AccurateRip read offset together with the disc's TOC fingerprint (the
+# sha256 of mos's closed `disc` subtree, the dedup key). The offset corrects the
+# drive; the fingerprint identifies the disc.
+offset_and_fingerprint() {
+    local off="" fp
+    fp=$(fingerprint "$1")
+    if have curl && have python3; then off=$(accuraterip_offset "$2" || true); fi
+    case "$off" in
+        "")         log "AccurateRip offset: unlisted — measure: whipper offset find" ;;
+        "[Purged]") log "AccurateRip offset: [Purged] — no stable offset; measure 3 key discs" ;;
+        *)          log "AccurateRip offset: $off samples (confirm: whipper offset find -o $off)" ;;
+    esac
+    log "disc TOC fingerprint: $fp"
+}
 
 # inventory_append <metadata-json> <drive-json> <action> — one JSONL row per
 # disc, keyed by the drive's durable serial (survives replug; registry_id does
@@ -264,6 +364,9 @@ ingest_one() {                              # ingest_one <drive-selector>
         # silently lost — best-effort, like the tools that read it from the TOC.
         [ "$preemph" -gt 0 ] && log "pre-emphasis: $preemph track(s) flagged — preserve the flag (redumper) or de-emphasise (whipper/EAC)"
         if need curl "MusicBrainz lookup"; then mb_lookup "$meta" || warn "MB lookup failed"; fi
+        # Log the drive's AccurateRip read offset + the disc fingerprint — the
+        # pair an accurate-rip workflow records (offset corrects the drive).
+        offset_and_fingerprint "$meta" "$drive_json"
         tray_lock "$sel"
         if need redumper "CD dump"; then
             mkdir -p "$RIPS_DIR/$node_n"
@@ -371,6 +474,14 @@ main() {
     if [ "${1:-}" = fingerprint ]; then     # dedup hash, no side effects
         [ -n "${2:-}" ] || { warn "usage: $0 fingerprint <drive>"; exit 64; }
         fingerprint "$("$MOS" metadata "$2" --json)"; return
+    fi
+
+    if [ "${1:-}" = offset ]; then          # AccurateRip read offset + fingerprint
+        [ -n "${2:-}" ] || { warn "usage: $0 offset <drive>"; exit 64; }
+        local m d
+        m=$("$MOS" metadata "$2" --json) || { warn "mos metadata failed for $2"; exit 1; }
+        d=$("$MOS" drive "$2" --json 2>/dev/null || echo '{}')
+        offset_and_fingerprint "$m" "$d"; return
     fi
 
     if [ "$#" -gt 0 ] && [ "$1" != - ]; then
