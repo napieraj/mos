@@ -136,6 +136,17 @@ struct mos_state_result {
     signed char    writable;
 };
 
+/* DRIFT GUARD (R3 brief 3). The watch re-homes every BORROWED pointer field of
+   this struct (vendor/product/revision/serial) into watch-static storage before
+   mos_close (mos_watch.c watch_probe + watch_slot_probe); a borrowed pointer that
+   escapes un-re-homed is a post-close use-after-free. A size change here usually
+   means a new field: if it is a borrowed `const char *`, add its re-home to BOTH
+   probes and a deref to the ASan lifetime test, THEN bump this number. Static-token
+   (media_type) and scalar fields need no re-home — bump only. */
+_Static_assert(sizeof(struct mos_state_result) == 88,
+    "mos_state_result changed: if the new field is a borrowed pointer, re-home it in "
+    "mos_watch.c (watch_probe + watch_slot_probe) before bumping this size");
+
 struct mos_watch_event {
     mos_event_kind kind;
     uint64_t       seq;
@@ -172,6 +183,13 @@ struct mos_watch_event {
        -1 absent, 0 read-only, 1 writable. Appended: ABI-safe (accessor-only). */
     signed char    writable;
 };
+
+/* DRIFT GUARD (R3 brief 3): same rule as mos_state_result above — a new borrowed
+   `const char *` on the event must be re-homed before mos_close and dereffed in
+   the ASan lifetime test; bump this size only after that. */
+_Static_assert(sizeof(struct mos_watch_event) == 136,
+    "mos_watch_event changed: re-home any new borrowed pointer in mos_watch.c "
+    "before bumping this size");
 
 /* ---- Fixed-buffer capacities -------------------------------------- *
  *
@@ -2088,7 +2106,20 @@ static bool mos_internal_da_disk_is_media(DADiskRef disk,
    fires. The wait is UNBOUNDED on purpose — the callback is guaranteed exactly
    once when the unmount resolves, so the context cannot outlive a late callback
    (no use-after-free), and a genuinely wedged force-unmount blocks here just as
-   `diskutil` would (the I/O path itself is stuck). */
+   `diskutil` would (the I/O path itself is stuck).
+
+   KNOWN ISSUE (2026-06-20 review; AGENTS.md addendum "the identity bind does NOT
+   close the BSD-reuse race"): two data-loss-path defects are RECORDED here,
+   behavior unchanged pending a maintainer decision (Process rule 2):
+     1. TOCTOU. The identity bind below is a LOCAL read; DADiskUnmount transmits
+        the diskN *name* and diskarbitrationd re-resolves it by name at request
+        time, so a diskN reuse in the check->daemon-lookup window can unmount the
+        wrong disk. Public DA exposes no identity-bound unmount, so the window can
+        be minimized but not closed — only fail-closed guarantees safety.
+     2. Unbounded wait. DASessionSetDispatchQueue is void/fallible; a silent
+        failure leaves no callback port and the DISPATCH_TIME_FOREVER wait can
+        hang. A safe bounded fix needs a heap-owned context (the stack-local ctx
+        makes a naive timeout a use-after-return). */
 bool mos_internal_da_unmount(const char *bsd_name, uint64_t expected_media_id)
 {
     if (!bsd_name || !bsd_name[0]) return false;
@@ -3878,7 +3909,16 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
     mos_error e = mos_internal_get_perf(h, 0, &rd_max, &rd_cnt);
     if (e != MOS_OK) return e;
 
-    (void)mos_internal_get_perf(h, 1, &wr_max, &wr_cnt);  /* best-effort */
+    /* Write direction is best-effort ENRICHMENT, with one carve-out. A drive may
+       refuse write GET PERFORMANCE on read-only media (CHECK CONDITION) or answer
+       an empty list — write speed is then simply absent (data, not an error), so
+       a command-level MOS_ERR_IO is tolerated. But a TRANSPORT failure (negative:
+       device lost, or exclusive access lost between the two reads) compromises
+       the whole query and is SURFACED, not silently flattened to
+       max_write_kbps == 0 — the indistinguishable-from-empty case R3 (F3) flagged.
+       This is the specific tolerated-vs-fatal policy the contract now documents. */
+    mos_error we = mos_internal_get_perf(h, 1, &wr_max, &wr_cnt);
+    if (we != MOS_OK && we != MOS_ERR_IO) return we;
 
     p->descriptor_count = rd_cnt;
     p->max_read_kbps    = rd_max;
@@ -6705,6 +6745,18 @@ static const uint8_t cdb_lock_persist  [6] = { 0x1E, 0x00, 0x00, 0x00, 0x03, 0x0
 #define MOS_TRAY_PREVENT_TIMEOUT_MS 2000u
 #define MOS_TRAY_MOTION_TIMEOUT_MS  5000u
 
+/* `tray eject --force` is DATA-LOSS CAPABLE, and its DiskArbitration force-unmount
+   cannot be bound to the exact IOMedia identity end-to-end: the daemon resolves
+   the unmount target by NAME at request time, so the local registry-id bind is a
+   check, not a binding (AGENTS.md "the identity bind does NOT close the BSD-reuse
+   race"). Disabled by default for the first tag — `mos_tray_eject` returns
+   MOS_ERR_UNSUPPORTED for `force`. The force path stays COMPILED behind this flag
+   (the MOS_CLI_PROBE bitrot-guard pattern) so the post-tag guarded redesign lands
+   against live code. */
+#ifndef MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT
+#define MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT 0
+#endif
+
 mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
                                 mos_tray_outcome *outcome, uint8_t sense_out[3])
 {
@@ -6733,6 +6785,12 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
                          mos_tray_outcome *out, uint8_t sense[3])
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
+#if !MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT
+    /* First-tag: the data-loss force path is gated off (see the flag above and
+       AGENTS.md). Plain `mos tray eject` is unaffected — a mounted disc still
+       reports MOS_ERR_BUSY, which the consumer clears with `diskutil` first. */
+    if (force) return MOS_ERR_UNSUPPORTED;
+#endif
 
     /* ONE flow. Every eject grabs exclusive access (in mos_internal_raw_cdb) and issues
        the CDB; a plain eject reports the result verbatim. --force diverges only
@@ -6775,9 +6833,23 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
                 !mos_internal_da_unmount(name, h->media_id))
                 break;                                    /* mount uncleared */
         } else if (e == MOS_OK && *out == MOS_TRAY_REFUSED_LOCKED) {  /* basic Prevent */
-            mos_tray_outcome ignored = MOS_TRAY_DONE;
-            (void)mos_internal_tray_cmd(h, cdb_unlock,         &ignored, NULL);
-            (void)mos_internal_tray_cmd(h, cdb_unlock_persist, &ignored, NULL);
+            /* Clear both Prevent states so nothing is left locked. A TRANSPORT
+               failure (negative) clearing either state means the clear did NOT
+               happen, so the "nothing left locked" contract cannot be met —
+               abort with that error instead of reconverging into a false DONE
+               (R3 F2). An ANSWERED refusal (MOS_OK + REFUSED_*, e.g. a drive
+               without Persistent Prevent answering the persistent clear) is the
+               drive's own answer and is tolerated — the re-eject below is the
+               real check of whether the lock cleared. */
+            mos_tray_outcome cleared = MOS_TRAY_DONE;
+            mos_error ce = mos_internal_tray_cmd(h, cdb_unlock, &cleared, NULL);
+            if (ce == MOS_OK)
+                ce = mos_internal_tray_cmd(h, cdb_unlock_persist, &cleared, NULL);
+            if (ce != MOS_OK) {                 /* transport failure clearing a Prevent */
+                if (sense) { sense[0] = sense[1] = sense[2] = 0; }  /* contract: zeroed on negative */
+                e = ce;
+                break;
+            }
         } else {
             break;   /* DONE, EXCLUSIVE_ACCESS (peer client), or transport — stop */
         }

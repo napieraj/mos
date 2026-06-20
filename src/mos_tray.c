@@ -55,6 +55,18 @@ static const uint8_t cdb_lock_persist  [6] = { 0x1E, 0x00, 0x00, 0x00, 0x03, 0x0
 #define MOS_TRAY_PREVENT_TIMEOUT_MS 2000u
 #define MOS_TRAY_MOTION_TIMEOUT_MS  5000u
 
+/* `tray eject --force` is DATA-LOSS CAPABLE, and its DiskArbitration force-unmount
+   cannot be bound to the exact IOMedia identity end-to-end: the daemon resolves
+   the unmount target by NAME at request time, so the local registry-id bind is a
+   check, not a binding (AGENTS.md "the identity bind does NOT close the BSD-reuse
+   race"). Disabled by default for the first tag — `mos_tray_eject` returns
+   MOS_ERR_UNSUPPORTED for `force`. The force path stays COMPILED behind this flag
+   (the MOS_CLI_PROBE bitrot-guard pattern) so the post-tag guarded redesign lands
+   against live code. */
+#ifndef MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT
+#define MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT 0
+#endif
+
 mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
                                 mos_tray_outcome *outcome, uint8_t sense_out[3])
 {
@@ -83,6 +95,12 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
                          mos_tray_outcome *out, uint8_t sense[3])
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
+#if !MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT
+    /* First-tag: the data-loss force path is gated off (see the flag above and
+       AGENTS.md). Plain `mos tray eject` is unaffected — a mounted disc still
+       reports MOS_ERR_BUSY, which the consumer clears with `diskutil` first. */
+    if (force) return MOS_ERR_UNSUPPORTED;
+#endif
 
     /* ONE flow. Every eject grabs exclusive access (in mos_internal_raw_cdb) and issues
        the CDB; a plain eject reports the result verbatim. --force diverges only
@@ -125,9 +143,23 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
                 !mos_internal_da_unmount(name, h->media_id))
                 break;                                    /* mount uncleared */
         } else if (e == MOS_OK && *out == MOS_TRAY_REFUSED_LOCKED) {  /* basic Prevent */
-            mos_tray_outcome ignored = MOS_TRAY_DONE;
-            (void)mos_internal_tray_cmd(h, cdb_unlock,         &ignored, NULL);
-            (void)mos_internal_tray_cmd(h, cdb_unlock_persist, &ignored, NULL);
+            /* Clear both Prevent states so nothing is left locked. A TRANSPORT
+               failure (negative) clearing either state means the clear did NOT
+               happen, so the "nothing left locked" contract cannot be met —
+               abort with that error instead of reconverging into a false DONE
+               (R3 F2). An ANSWERED refusal (MOS_OK + REFUSED_*, e.g. a drive
+               without Persistent Prevent answering the persistent clear) is the
+               drive's own answer and is tolerated — the re-eject below is the
+               real check of whether the lock cleared. */
+            mos_tray_outcome cleared = MOS_TRAY_DONE;
+            mos_error ce = mos_internal_tray_cmd(h, cdb_unlock, &cleared, NULL);
+            if (ce == MOS_OK)
+                ce = mos_internal_tray_cmd(h, cdb_unlock_persist, &cleared, NULL);
+            if (ce != MOS_OK) {                 /* transport failure clearing a Prevent */
+                if (sense) { sense[0] = sense[1] = sense[2] = 0; }  /* contract: zeroed on negative */
+                e = ce;
+                break;
+            }
         } else {
             break;   /* DONE, EXCLUSIVE_ACCESS (peer client), or transport — stop */
         }

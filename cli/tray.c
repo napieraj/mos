@@ -199,11 +199,20 @@ int mos_cli_run_tray(void)
     }
 
     if (op != MOS_OK) {
+        /* `tray eject --force` returns MOS_ERR_UNSUPPORTED when the data-loss
+           force-unmount path is gated off (default; the library's
+           MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT flag). Give that the actionable
+           message rather than the bare "unsupported". */
+        const char *msg = (act == ACT_EJECT && flag_force &&
+                           op == MOS_ERR_UNSUPPORTED)
+            ? "forced unmount is disabled in this build; unmount the volume "
+              "first (e.g. `diskutil unmountDisk`), then `tray eject`"
+            : "tray command failed";
         char bsd_buf[24];
         if (!mos_bsd_dev_node(mos_handle_bsd_unit(h), bsd_buf, sizeof bsd_buf))
             bsd_buf[0] = 0;
         mos_close(h);
-        return mos_cli_emit_unknown_and_fail("tray command failed", op,
+        return mos_cli_emit_unknown_and_fail(msg, op,
                                      bsd_buf[0] ? bsd_buf : NULL);
     }
 

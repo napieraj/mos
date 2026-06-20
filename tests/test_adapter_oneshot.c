@@ -546,29 +546,26 @@ TEST(adapter_tray_cdbs_pinned_byte_for_byte)
     return rc;
 }
 
-TEST(adapter_tray_eject_force_clean_drive_just_ejects)
+TEST(adapter_tray_eject_force_disabled_by_default)
 {
+    /* First-tag: the data-loss force path is gated off
+       (MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT default 0; AGENTS.md "the identity
+       bind does NOT close the BSD-reuse race"). `tray eject --force` returns
+       MOS_ERR_UNSUPPORTED WITHOUT issuing any CDB or taking the exclusive lock —
+       the destructive path never runs at all. Plain eject is unaffected and is
+       covered by the other tray tests. */
     mos_fake_reset();
     mos_error err = MOS_ERR_IO;
     mos_handle_t *h = mos_open_by_index(1, &err);
     EXPECT(h != NULL);
 
-    /* New --force contract is REACTIVE: it clears a blocker only when one
-       actually refuses the eject. On a clean drive the eject succeeds on the
-       first try, so force issues NOTHING extra — no preemptive ALLOW, no
-       unmount. Exactly one CDB (the eject), one acquire, balance 0. (The old
-       contract issued an ALLOW before every forced eject — 2 acquires; this
-       pins that that preemptive step is gone.) */
-    mos_fake_set_raw_reply(0x00 /*GOOD*/, NULL, 0, 0, NULL);
     mos_tray_outcome out = (mos_tray_outcome)-1;
-    EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/true, &out, NULL));
-    EXPECT_EQ(MOS_TRAY_DONE, out);
+    EXPECT_EQ(MOS_ERR_UNSUPPORTED, mos_tray_eject(h, /*force=*/true, &out, NULL));
+    /* The gate returns before any drive I/O: no CDB, no lock acquire. */
+    EXPECT_EQ(0, mos_fake_lock_acquires());
     EXPECT_EQ(0, mos_fake_lock_balance());
-    EXPECT_EQ(1, mos_fake_lock_acquires());
     uint8_t cdb[16];
-    EXPECT_EQ(6, (int)mos_fake_last_cdb(cdb));
-    static const uint8_t eject[6] = { 0x1B, 0, 0, 0, 0x02, 0 };
-    EXPECT(memcmp(cdb, eject, 6) == 0);
+    EXPECT_EQ(0, (int)mos_fake_last_cdb(cdb));     /* no CDB authored */
     mos_close(h);
     return 0;
 }
@@ -750,7 +747,7 @@ int main(void)
     RUN(adapter_disc_id_decodes_and_fails_closed);
     RUN(adapter_feature_enumeration_order_and_stop);
     RUN(adapter_tray_cdbs_pinned_byte_for_byte);
-    RUN(adapter_tray_eject_force_clean_drive_just_ejects);
+    RUN(adapter_tray_eject_force_disabled_by_default);
     RUN(adapter_da_unmount_binds_to_media_identity);
     RUN(adapter_tray_locked_eject_classifies_refused_locked);
     RUN(adapter_tray_refused_other_carries_its_sense);
