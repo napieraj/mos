@@ -121,6 +121,23 @@ it). What remains:
        borrowed-field audit (stronger than the size floor; no current bug).
   Source: R3 macOS adapter audit; AGENTS.md TOCTOU addendum (2026-06-20).
 
+- **GESN realized-count waiver — hardware-gated revisit** (HELD, not a tag
+  blocker). R3's mos_state.c audit (2026-06-20) re-raised the O-4 GESN waiver
+  (third review to file it; external F1 declined it 2026-06-13): a device that
+  CLAIMS a full 6-byte Media descriptor but delivers only 4 GOOD bytes makes the
+  decoder read byte 5 from zero-fill — a confident "door closed" that, on the
+  not-ready 02/3A/02 path, misclassifies OPEN as EMPTY. Behavior is HELD
+  (maintainer, 2026-06-20): the waiver accommodates real USB-bridge under-
+  reporting, and bounding by realized count degrades those drives to TUR-sense
+  fallback; per the hardware-role ADR a crafted-bytes hypothetical moves only via
+  a captured fixture, never a review. The doc cost was corrected in place
+  (`doc/seam-contract.md`: the worst case is a confident wrong bit, not the
+  understated "false return / nothing compounds"). REVISIT trigger: the rig A/B's
+  `realizedByteCount` against bridge behavior — evidence either retires the waiver
+  (bound by realized count, fall back to TUR sense on a short transfer) or pins it
+  with a fixture. The companion refresh-coherence finding from the same audit
+  SHIPPED (one media snapshot + S1/S2 retry; commit on this branch).
+
 - **`eject_requested` watch event** — the cooperative soft-eject the tray
   `lock --persistent` verb sets up: under Persistent Prevent the operator
   button raises a GESN EjectRequest instead of ejecting. Surfacing it on
