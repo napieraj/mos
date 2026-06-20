@@ -329,6 +329,28 @@ zero-command off the IOKit registry instead, not via DA. Unused DADisk.h surface
 entitlement / TCC / exclusive access (scope-doctrine layer 3); `DADiskUnmount` is
 the only action and the only data-loss path.
 
+### DiscRecording device directory — enumeration + identity (`mos_dr.c`)
+
+The zero-command device directory mos enumerates and reads drive identity from —
+no MMC, no exclusive access (a framework over the same kext the command path
+uses). Verified against `DiscRecording.framework/Headers/DRCoreDevice.h`; all
+`10.2+`, every `Copy*` returns OWNED (`CFRelease`).
+
+| Function | Result (release) | mos use |
+|----------|------------------|---------|
+| `DRCopyDeviceArray(void)` | `CFArrayRef` (CFRelease) | the enumeration source (`mos_enumerate_devices`; `mos_dr.c` snapshot). Returns ALL writable optical devices — coincides with mos's openable set because the §9.1 attach rule blocks `SCSITaskUserClient` on read-only drives (W1 disposition). |
+| `DRDeviceCopyDeviceForBSDName(CFStringRef)` | `DRDeviceRef` (CFRelease) | resolve a `diskN` selector → DR device. |
+| `DRDeviceCopyDeviceForIORegistryEntryPath(CFStringRef)` | `DRDeviceRef` (CFRelease) | resolve a registry path (a notification's `kDRDeviceIORegistryEntryPathKey`) → DR device → registry id. |
+| `DRDeviceCopyInfo(DRDeviceRef)` | `CFDictionaryRef` (CFRelease) | the identity directory (keys below). |
+| `DRDeviceCopyStatus(DRDeviceRef)` | `CFDictionaryRef` (CFRelease) | coarse passive status ("not guaranteed current" — the division-of-labour floor; mos owns the synchronous state machine). |
+| `DRDeviceIsValid(DRDeviceRef)` | `Boolean` | liveness gate before trusting a DR ref under a hostile/stale directory (R3 hardening). |
+
+`DRDeviceCopyInfo` keys (DRCoreDevice.h, CFString): `kDRDeviceVendorNameKey` /
+`kDRDeviceProductNameKey` / `kDRDeviceFirmwareRevisionKey` (the pre-parsed INQUIRY
+identity mos caches at open), `kDRDeviceIORegistryEntryPathKey` (→ registry id, the
+probe authority), and `kDRDeviceMediaInfoKey` (a SUBDICTIONARY; mos reads its
+`kDRDeviceMediaBSDNameKey`). No commands, no exclusive access, no entitlement.
+
 ### Watch-wake surface — IOKit interest + DiscRecording doorbell (`mos_watch.c`)
 
 The notification sources the watch schedules on its private run-loop mode — never

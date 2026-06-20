@@ -13,7 +13,7 @@
  *
  * One document per process: `emit_fixtures <verb> <scenario> [mode]`.
  * mode is `json` (default — unchanged historical behavior) or `human`
- * (flag_json=false, exercising the cli/*.c emit_human renderers so a
+ * (flag_json=false, exercising the cli emit_human renderers so a
  * golden check — tests/emit/validate_emitted_human.py — can catch human
  * output drift the same way validate_emitted.py catches JSON drift).
  * `error` and `watch` have no single human stdout block and are not run
