@@ -346,6 +346,14 @@ io_object_t IOIteratorNext(io_iterator_t iterator)
     return FAKE_MEDIA;
 }
 
+/* The fake iterator never invalidates (no topology churn modelled here), so a
+   NULL from IOIteratorNext is always genuine exhaustion. Returning true keeps
+   the capture/cdtoc retry path on its non-invalidation branch. */
+boolean_t IOIteratorIsValid(io_iterator_t iterator)
+{
+    return iterator == FAKE_ITER;
+}
+
 CFTypeRef IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
                                           CFStringRef key,
                                           CFAllocatorRef allocator,
@@ -867,6 +875,14 @@ CFArrayRef DRCopyDeviceArray(void)
     CFIndex n = 0;
     if (g.present) { vals[0] = FAKE_DEV; n = 1; }
     return CFArrayCreate(kCFAllocatorDefault, vals, n, &kCFTypeArrayCallBacks);
+}
+
+/* A held DRDeviceRef is "still usable" while the modelled drive is present.
+   The fake does not model a device going stale mid-call, so this tracks
+   presence (the snapshot/identity guards proceed when the device exists). */
+Boolean DRDeviceIsValid(DRDeviceRef device)
+{
+    return device != NULL && g.present;
 }
 
 CFDictionaryRef DRDeviceCopyInfo(DRDeviceRef device)
