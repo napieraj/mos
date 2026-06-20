@@ -378,11 +378,17 @@ mos_error mos_query_session_layout(mos_handle_t *h,
    MOUNTED media. Read-only: never FORMAT UNIT. */
 #define MOS_FORMATCAP_REPLY_BUF 260u   /* 4-byte header + up to 32 * 8 desc */
 
-static bool mos_internal_read_format_caps(mos_handle_t *h,
-                                          struct mos_format_caps *out)
+/* READ FORMAT CAPACITIES (0x23) via the non-exclusive convenience method.
+   RETURN POLICY (the #5 transport rule, uniform with write-perf): MOS_OK with
+   *out populated on a usable reply; MOS_ERR_IO when the command is refused or
+   the reply is unusable (optional enrichment skips it, *out left zeroed); a
+   negative transport error when the device is lost — which compromises the
+   compound capacity observation and MUST surface, never flatten to "absent". */
+static mos_error mos_internal_read_format_caps(mos_handle_t *h,
+                                               struct mos_format_caps *out)
 {
     if (out) *out = (struct mos_format_caps){0};
-    if (!h || !h->mmc || !out) return false;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
 
     uint8_t         buf[MOS_FORMATCAP_REPLY_BUF] = {0};
     SCSITaskStatus  st                           = 0;
@@ -390,13 +396,17 @@ static bool mos_internal_read_format_caps(mos_handle_t *h,
 
     IOReturn rc = (*h->mmc)->ReadFormatCapacities(
         h->mmc, buf, (UInt16)sizeof(buf), &st, &sd);
-    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD)
-        return false;   /* no medium / unit rejects 0x23 → formattable unset */
+    if (rc != kIOReturnSuccess)
+        return mos_internal_ioreturn_to_mos_error(rc);   /* transport: fatal  */
+    if (st != kSCSITaskStatus_GOOD)
+        return MOS_ERR_IO;   /* no medium / unit rejects 0x23: optional skip  */
 
     /* The convenience method reports no realized count, so sizeof buf is the
        trusted length (dual-length rule O-4); the reply's own Capacity List
        Length can only shrink the decode. */
-    return mos_internal_format_caps_parse(buf, sizeof buf, out);
+    if (!mos_internal_format_caps_parse(buf, sizeof buf, out))
+        return MOS_ERR_IO;   /* unusable reply: optional skip */
+    return MOS_OK;
 }
 
 mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out)
@@ -404,50 +414,80 @@ mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out)
     if (out) *out = NULL;
     if (!h || !out) return MOS_ERR_INVALID_ARG;
 
-    struct mos_capacity *c = &h->capacity;
-    *c = (struct mos_capacity){0};
+    /* Generation-coherence retry (the mos_query_state pattern): capture S1,
+       build the compound result into a local, capture S2, commit only when the
+       media generation held; otherwise re-observe once, then MOS_ERR_BUSY
+       rather than splice one disc's byte capacity with another's track/format
+       view. Transport loss in any sub-read aborts the whole query (the #5 rule:
+       command-level refusal is optional enrichment, transport loss is fatal). */
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        mos_media_snapshot s1;
+        mos_internal_capture_media_snapshot(h->svc, &s1);
+        mos_internal_apply_media_snapshot(h, &s1);
 
-    /* Held-handle freshness: re-resolve so the size reflects the current
-       disc, not the open-time one (mos_internal_refresh_media_identity). */
-    mos_internal_refresh_media_identity(h);
+        struct mos_capacity tmp = {0};
 
-    /* (a) Whole-disk byte capacity from the kernel's attach-time READ
-       CAPACITY, cached on the IOMedia node (no command, works on mounted
-       media). 0 == absent: a blank/absent disc has no whole-disk node. */
-    c->media_bytes = h->media_bytes;
-    c->block_bytes = h->media_block_bytes;
+        /* (a) Whole-disk byte capacity from the kernel's attach-time READ
+           CAPACITY, cached on the IOMedia node (no command, works on mounted
+           media). 0 == absent: a blank/absent disc has no whole-disk node. */
+        tmp.media_bytes = h->media_bytes;
+        tmp.block_bytes = h->media_block_bytes;
 
-    /* (b) Recordable / append-state via a fresh READ TRACK INFORMATION.
-       Best-effort and independent of (a): a drive that rejects 0x52 just
-       leaves have_recordable false. Guard on the MMC interface so a handle
-       lacking it still returns the media-size half. */
-    if (h->mmc) {
-        const mos_track_info *t = NULL;
-        if (mos_query_track_info(h, &t) == MOS_OK && t) {
-            c->have_recordable = true;
-            c->nwa_valid     = mos_track_info_nwa_valid(t);
-            c->free_blocks   = mos_track_info_free_blocks(t);
-            c->next_writable = mos_track_info_next_writable(t);
-            c->track_size    = mos_track_info_track_size(t);
+        mos_error hard = MOS_OK;
+        if (h->mmc) {
+            /* (b) Recordable / append-state via a fresh READ TRACK INFORMATION.
+               Best-effort and independent of (a): a drive that rejects 0x52
+               (MOS_ERR_IO) just leaves have_recordable false; a transport loss
+               is fatal to the compound observation. */
+            const mos_track_info *t = NULL;
+            mos_error te = mos_query_track_info(h, &t);
+            if (te == MOS_OK && t) {
+                tmp.have_recordable = true;
+                tmp.nwa_valid     = mos_track_info_nwa_valid(t);
+                tmp.free_blocks   = mos_track_info_free_blocks(t);
+                tmp.next_writable = mos_track_info_next_writable(t);
+                tmp.track_size    = mos_track_info_track_size(t);
+            } else if (te != MOS_ERR_IO) {
+                hard = te;
+            }
+
+            /* (c) Formattable view via READ FORMAT CAPACITIES (0x23), issued
+               through the non-exclusive ReadFormatCapacities convenience
+               method — the blank-rewritable gap (a)/(b) can't fill (no
+               whole-disk node, no track). Gated on the current profile (a
+               cheap, non-exclusive GET CONFIGURATION): only formattable media
+               (rewritable + BD-R) has a formattable view, so for pressed /
+               write-once CD-R,DVD±R / empty media we issue no read. No lock, so
+               it also works on a MOUNTED formattable disc. Both the profile
+               gate and the 0x23 read tolerate command-level refusal and surface
+               transport loss. */
+            if (hard == MOS_OK) {
+                uint16_t profile = 0;
+                mos_error pe = mos_internal_mmc_get_current_profile(h, &profile);
+                if (pe == MOS_OK &&
+                    mos_internal_profile_is_formattable(profile)) {
+                    mos_error fe =
+                        mos_internal_read_format_caps(h, &tmp.formattable);
+                    if (fe == MOS_OK)          tmp.have_formattable = true;
+                    else if (fe != MOS_ERR_IO) hard = fe;
+                } else if (pe != MOS_OK && pe != MOS_ERR_IO) {
+                    hard = pe;
+                }
+            }
         }
+        if (hard != MOS_OK) return hard;
 
-        /* (c) Formattable view via READ FORMAT CAPACITIES (0x23), issued
-           through the non-exclusive ReadFormatCapacities convenience method —
-           the blank-rewritable gap (a)/(b) can't fill (no whole-disk node, no
-           track). Gated on the current profile (a cheap, non-exclusive GET
-           CONFIGURATION): only formattable media (rewritable + BD-R) has a
-           formattable view, so for pressed / write-once CD-R,DVD±R / empty
-           media we issue no read. No lock, so it also works on a MOUNTED
-           formattable disc (a mounted BD-RE/DVD-RAM still reports its view). */
-        uint16_t profile = 0;
-        if (mos_internal_mmc_get_current_profile(h, &profile) == MOS_OK &&
-            mos_internal_profile_is_formattable(profile))
-            c->have_formattable =
-                mos_internal_read_format_caps(h, &c->formattable);
+        mos_media_snapshot s2;
+        mos_internal_capture_media_snapshot(h->svc, &s2);
+        if (mos_internal_media_snapshot_coherent(&s1, &s2)) {
+            h->capacity = tmp;
+            *out = &h->capacity;
+            return MOS_OK;
+        }
     }
 
-    *out = c;
-    return MOS_OK;
+    /* Media generation kept changing across the reads: refuse a spliced result. */
+    return MOS_ERR_BUSY;
 }
 
 /* One GET PERFORMANCE (0xAC) Performance Data read in the given direction
