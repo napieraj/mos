@@ -687,6 +687,60 @@ cases. Command surface and privilege footprint unchanged: `DADiskCopyIOMedia` is
 synchronous, scheduling-free DA read (the same class as `DADiskCopyDescription`),
 no run loop, no callback, no exclusive access.
 
+### Addendum: the `--force` wrong-target race is REDUCIBLE — "irreducible / no
+### public mechanism" is overturned (2026-06-20)
+
+Several addenda above (the name-semantics ADR; the TOCTOU addendum) concluded the
+`tray eject --force` wrong-target data-loss race is "name-only, diskutil-class,
+irreducible — no public API binds the unmount to an identity." The **by-name
+impossibility stands** (re-verified first-hand: `DADiskRef` is name-backed,
+`DADiskUnmount` ships the string, `diskarbitrationd`'s `DADiskListGetDisk`
+re-`strcmp`s the live list at request time). But the *strong* conclusion that
+**nothing** reduces the race is **false**, and this entry records the rebuttal
+(append-don't-edit). Full first-hand investigation, every Apple-behaviour claim
+sourced to `apple-oss-distributions` DiskArbitration @ `a542bda…` + xnu:
+`doc/research/2026-06-20-force-unmount-veto-funmount-investigation.md`.
+
+**The reframe (the load-bearing idea).** Don't bind the *unmount* to an identity
+(impossible on the DA path) — **remove the competing mounts from the window** so a
+`diskN` reuse can only ever resolve to an *unmounted* disc, whose forced unmount
+destroys nothing. Mechanism: register a DiskArbitration **mount-approval veto**
+(`DARegisterDiskMountApprovalCallback`, scoped to `MediaBSDUnit==N`) for the
+unmount+eject window. Two verified facts make it work: (1) a disc holding `diskN`
+at the daemon's lookup is *necessarily freshly-published and not-yet-mounted* (BSD
+unit ↔ IOMedia lifetime — the lemma), and (2) `__DARequestUnmount` turns a forced
+unmount of an unmounted disc into `kDAReturnNotMounted` with **no `unmount(2)`
+issued**. So the veto blocks B's auto-mount → B stays unmounted → the `Force|Whole`
+no-ops on B. This **eliminates the data-loss for all DA-mediated mounts** (every
+realistic optical case) within the console-user budget.
+
+**Two costs that keep it from shipping as-is.** (a) It only covers DA-mediated
+mounts — a non-DA `mount(2)` is not vetoed (theoretical for optical media). (b)
+Decisively for mos: a veto makes mos an approval *gatekeeper*, so a wedged mos
+stalls `diskarbitrationd`'s mount pipeline for matched media (≤10 s per mount, the
+daemon's private response timeout) — i.e. **the veto sharpens the F1 hang into a
+system-wide stall.** Adopting the veto *before* fixing F1 would be a net
+availability regression. Hence F1 is now a **prerequisite** for any `--force`
+hardening, not an independent post-tag nicety (ROADMAP updated).
+
+**A second mechanism — a true identity bind, needs root.** `funmount(2)` (and
+`fsctl(VFS_CTL_UMOUNT)` by the `vfs_getnewfsid` fsid) unmount by an fd-pinned
+vnode / monotonic fsid — a reassigned `diskN` provably cannot redirect them
+(GOAL-1, the thing the DA path can't do). But `safedounmount` requires
+`f_owner==uid || root`, and DA auto-mounts optical media as **root**
+(`f_owner==0`, traced through the daemon's `_userUID`/`setuid` path), so a
+console-user mos gets EPERM. Clean, but outside the SCSITaskUserClient grant —
+the exact extra privilege, flagged.
+
+**Disposition.** Post-tag, and **F1-gated**. The current name-semantics +
+selector gate stays for the tag (a defensible *integrity* residual; the
+`MOS_USE_DISKARBITRATION=0` build still gives the hard guarantee at the cost of
+the capability). The veto / `funmount` choice is a live, informed post-tag
+decision once F1 is fixed — not a tag blocker. Avenues ruled out (so they aren't
+re-walked): `DADiskClaim` (per-object, can't pin a future disc's mount),
+unmount-approval (wrong direction), in-callback reads (read-only), `DKIOCEJECT`
+(eject needs the mount gone first), volume-UUID (no by-UUID unmount entry point).
+
 ## ADR: verb `state` replaces `status`; bare selector is the default subject (2026-06-14)
 
 The default verb was renamed `status` → `state` (clean break, no alias),
