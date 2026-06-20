@@ -283,7 +283,7 @@ jobs:
           # longer keeps a second copy (a missing entry used to fail the link
           # with an undefined register_* symbol). Same philosophy as the
           # strict-adapter job's cli/*.c glob.
-          pure_tests=$(ls tests/test_*.c | grep -vE 'tests/test_(adapter_|watch_lifetime|dr_doorbell)')
+          pure_tests=$(ls tests/test_*.c | grep -vE 'tests/test_(adapter_|watch_lifetime|dr_doorbell|dr_hygiene)')
           cc -std=c11 -Wall -Wextra -Werror \
              -Idist -Isrc -Itests \
              -mmacosx-version-min=12.0 \
