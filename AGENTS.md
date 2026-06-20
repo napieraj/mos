@@ -650,6 +650,43 @@ defensibly by moving regid to default (it is identity-stable) and keeping only
 the ephemeral index gated, or removing the gate entirely. That is a fresh dated
 argument here, not assumed.
 
+### Addendum: the READ-path identity guard is restored (DADiskCopyIOMedia);
+### "the helper is gone" stands for the unmount ACTION only (2026-06-20, A2)
+
+The "Code consequences" clause above — *"the `mos_internal_da_disk_is_media`
+helper is gone — the unmount is name-only"* — is TRUE for the unmount **action**
+and stays. But a separate commit (`88657fc`) had ALSO dropped the
+`DADiskCopyIOMedia` identity check from the unrelated **volume lookup**
+(`mos_internal_da_volume`, a READ), on the premise that resolving the IOMedia by
+registry id (`IOServiceGetMatchingService` + `DADiskCreateFromIOMedia`) made the
+description *"identity-exact by construction."* The R3 continuation audit
+(2026-06-20, A2) found that premise FALSE on the merits, and this entry records
+the rebuttal (append-don't-edit).
+
+**Why the premise was false.** `DADiskCreateFromIOMedia` is name-backed: it reads
+the object's `kIOBSDNameKey` and delegates to `DADiskCreateFromBSDName` (DADisk.h;
+the same fact the unmount path already documents), so the `DADiskRef` carries only
+the `diskN` string and `DADiskCopyDescription` resolves THAT name at the daemon. A
+`diskN` reuse in the create→describe window can hand back a different disc's
+volume — the read-only twin of the unmount BSD-reuse race.
+
+**Why the fix is valid for a READ though it is NOT for the unmount ACTION.** The
+helper `mos_internal_da_disk_is_media` is restored, but **only in the volume
+lookup**: read into locals, then re-confirm via `DADiskCopyIOMedia(disk)` that the
+ref still resolves to the exact `media_id`, and commit to the caller only on a
+match (refusing any DETECTED reuse). This works for a read because **nothing
+re-resolves after the check** — the description is already in hand. It does NOT
+work for the unmount because `DADiskUnmount` transmits the NAME and the daemon
+re-resolves it AFTER any local check (the TOCTOU addendum above), so there the
+local bind is theatre and name semantics is correct. Same helper, opposite
+verdict, because READ vs ACTION differ on whether a later daemon re-resolution can
+invalidate the check. The `DADiskCopyIOMedia` / `da_media_id` fake scaffolding
+(ROADMAP once slated it for deletion as "dead") is therefore LIVE for the read
+path; `adapter_da_volume_lookup_modalities` exercises the match + reuse-refuse
+cases. Command surface and privilege footprint unchanged: `DADiskCopyIOMedia` is a
+synchronous, scheduling-free DA read (the same class as `DADiskCopyDescription`),
+no run loop, no callback, no exclusive access.
+
 ## ADR: verb `state` replaces `status`; bare selector is the default subject (2026-06-14)
 
 The default verb was renamed `status` → `state` (clean break, no alias),

@@ -629,6 +629,47 @@ TEST(all_empty_stream_hotplug_join_leave_rejoin)
     return 0;
 }
 
+TEST(all_timeout_zero_drains_queued_appeared)   /* A3 */
+{
+    /* mos.h contract: timeout_ms == 0 must DRAIN a ready event, not sleep. An
+       empty all-watch has no poll core to pump, so a queued DR Appeared is only
+       discoverable by servicing the source. The defect: next_event(...,0)
+       returned MOS_ERR_TIMEOUT before ever running the run loop, stranding the
+       drive across every zero-timeout call. The fix does one non-blocking source
+       drain before returning timeout. The fake clock proves "do not sleep": it
+       must not advance across either call. */
+    scenario_ready_at_t0();
+    mos_fake_set_no_drive();
+
+    mos_error err = MOS_ERR_IO;
+    mos_watch_t *w = mos_watch_open_all(STABLE_MS, TRANSITION_MS, &err);
+    EXPECT(w != NULL);
+    EXPECT_EQ(MOS_OK, err);
+
+    const mos_watch_event *e = NULL;
+
+    /* Empty + nothing queued: zero-timeout times out without advancing time. */
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_watch_next_event(w, &e, 0));
+    EXPECT_EQ(0, mos_fake_clock_now());
+
+    /* A drive appears; the Appeared is queued pending (fired between calls, not
+       on a timeline step). A zero-timeout call MUST now drain it and emit
+       device_appeared — still without advancing the fake clock. */
+    mos_fake_set_drive_present(true);
+    mos_fake_fire_dr_appeared();
+
+    EXPECT_EQ(MOS_OK, mos_watch_next_event(w, &e, 0));
+    EXPECT_EQ(MOS_EVENT_DEVICE_APPEARED, mos_watch_event_kind(e));
+    EXPECT_EQ(1, mos_watch_event_seq(e));
+    EXPECT_EQ(MOS_STATE_READY, mos_watch_event_state(e));
+    EXPECT_EQ(FAKE_DRIVE_ID, mos_watch_event_registry_id(e));
+    EXPECT_EQ(0, mos_fake_clock_now());
+
+    mos_watch_close(w);
+    EXPECT_EQ(0, mos_fake_outstanding_notify_objects());
+    return 0;
+}
+
 TEST(all_status_for_unjoined_device_joins_nothing)
 {
     /* Quiet arm of the watch-all doorbell filter (mos_watch.c,
@@ -829,6 +870,7 @@ int main(void)
     RUN(watch_error_backoff_escalates_deterministically);
     RUN(all_open_fails_without_doorbell);
     RUN(all_empty_stream_hotplug_join_leave_rejoin);
+    RUN(all_timeout_zero_drains_queued_appeared);
     RUN(all_status_for_unjoined_device_joins_nothing);
     RUN(all_disappeared_unresolved_falls_to_poll_floor);
     RUN(by_name_resolves_only_actual_name);

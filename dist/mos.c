@@ -2017,6 +2017,13 @@ void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
  * identity copies. The CLI's output escaping guards terminal/JSON regardless.
  */
 
+/* strlcpy (the identity-checked buffer commit in mos_internal_da_volume) needs
+   _DARWIN_C_SOURCE; set before any header. The amalgamation already sets it via
+   mos_watch.c, so this keeps the standalone mos_da.c compile consistent. */
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE 1
+#endif
+
 
 /* DiskArbitration is an OPTIONAL link dependency. Build with
    -DMOS_USE_DISKARBITRATION=0 (and drop -framework DiskArbitration) and
@@ -2030,16 +2037,44 @@ void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
 #include <DiskArbitration/DiskArbitration.h>
 #include <dispatch/dispatch.h>   /* semaphore wait on the async unmount callback */
 
+/* True when the IOMedia currently behind `disk` carries the expected whole-disk
+   registry entry id. DADiskCopyIOMedia re-reads what the daemon resolves the
+   ref's diskN name to RIGHT NOW (owned io_service_t, released here); registry
+   entry ids are globally unique and never reused, so equality means no diskN
+   reuse has repointed the ref since we built it. (Signature
+   `io_service_t DADiskCopyIOMedia(DADiskRef)` is the real DA header's,
+   compile-gated green on the macOS -Werror legs since PR #85.) */
+static bool mos_internal_da_disk_is_media(DADiskRef disk,
+                                          uint64_t expected_media_id)
+{
+    if (expected_media_id == 0) return false;       /* identity unknown */
+    io_service_t media = DADiskCopyIOMedia(disk);
+    if (media == IO_OBJECT_NULL) return false;      /* diskN backs no IOMedia */
+    uint64_t got = 0;
+    bool match = (IORegistryEntryGetRegistryEntryID(media, &got) == KERN_SUCCESS)
+                 && got == expected_media_id;
+    IOObjectRelease(media);
+    return match;
+}
+
 /* Mounted-volume name and mount path for the whole-disk IOMedia identified by
    `media_id` (its globally-unique registry entry id — never reused, unlike
-   "diskN"). Resolves that EXACT IOMedia and reads ITS description: no name
-   round-trip and no "is this still the right disc" verification — identity is
-   exact by construction, so a reused diskN can never be misattributed here. A
-   stale id whose media is gone resolves to nothing (→ unmounted); a present id
-   resolves only to its own media. True only when DA has a description AND the
-   volume is mounted (VolumePath present); name may still be "" if the key is
-   absent or hostile — the caller maps "" to null. A zero media_id (identity
-   unknown) fails closed. Both buffers are always NUL-terminated. */
+   "diskN"). We resolve that EXACT IOMedia by id, but the description still comes
+   back through a NAME: DADiskCreateFromIOMedia reads the object's kIOBSDNameKey
+   and delegates to DADiskCreateFromBSDName (first-hand in DADisk.c — the same
+   fact the force-unmount path documents), so the DADiskRef is name-backed and
+   DADiskCopyDescription resolves that diskN at the daemon. A diskN reuse in the
+   create→describe window could therefore hand back a DIFFERENT disc's volume.
+   So this is NOT identity-exact by construction: we read into LOCAL buffers,
+   then re-confirm via mos_internal_da_disk_is_media that the ref still resolves
+   to our exact media_id, and commit to the caller ONLY on a match — refusing any
+   DETECTED reuse. This is a READ, so an observation-time identity check is the
+   right tool: unlike the unmount ACTION (where the daemon re-resolves the name
+   AFTER our check, so the bind cannot hold), nothing re-resolves after we read.
+   A stale id whose media is gone resolves to nothing (→ unmounted); true only
+   when DA has a description, the volume is mounted (VolumePath present), AND the
+   identity holds. Name may still be "" if the key is absent/hostile — caller
+   maps "" to null. A zero media_id fails closed. Both buffers NUL-terminated. */
 bool mos_internal_da_volume(uint64_t media_id,
                             char *name_buf, size_t name_cap,
                             char *path_buf, size_t path_cap)
@@ -2055,9 +2090,11 @@ bool mos_internal_da_volume(uint64_t media_id,
     DASessionRef session = DASessionCreate(kCFAllocatorDefault);
     if (!session) { IOObjectRelease(media); return false; }
 
-    bool      mounted = false;
-    DADiskRef disk    = DADiskCreateFromIOMedia(kCFAllocatorDefault,
-                                                session, media);
+    bool      mounted          = false;
+    char      local_name[256]  = {0};   /* the legit VolumeName domain (≤255) */
+    char      local_path[1024] = {0};   /* a mount path the consumer may use  */
+    DADiskRef disk             = DADiskCreateFromIOMedia(kCFAllocatorDefault,
+                                                         session, media);
     if (disk) {
         CFDictionaryRef desc = DADiskCopyDescription(disk);
         if (desc) {
@@ -2065,28 +2102,34 @@ bool mos_internal_da_volume(uint64_t media_id,
                so an absent/non-URL path means "not mounted", not an error.
                CFURLGetFileSystemRepresentation returns false when the path
                exceeds the buffer, yielding not-mounted rather than a truncated
-               path a consumer might chdir into. */
+               path a consumer might chdir into. The name-only caller (e.g.
+               `mos state`, path_buf == NULL) still uses VolumePath presence. */
             CFTypeRef path = CFDictionaryGetValue(
                 desc, kDADiskDescriptionVolumePathKey);
             bool is_url = path && CFGetTypeID(path) == CFURLGetTypeID();
             if (is_url && path_buf && path_cap) {
                 if (CFURLGetFileSystemRepresentation((CFURLRef)path, true,
-                                                     (UInt8 *)path_buf,
-                                                     (CFIndex)path_cap)) {
+                                                     (UInt8 *)local_path,
+                                                     sizeof local_path)) {
                     mounted = true;
-                } else {
-                    path_buf[0] = 0;
                 }
             } else if (is_url) {
-                /* No path buffer: VolumePath presence alone is the mount proof,
-                   so a name-only caller (e.g. `mos state`) still sees mounted. */
                 mounted = true;
             }
             if (mounted)
                 mos_internal_dr_copy_string(
                     CFDictionaryGetValue(desc, kDADiskDescriptionVolumeNameKey),
-                    name_buf, name_cap);
+                    local_name, sizeof local_name);
             CFRelease(desc);
+        }
+        /* Endpoint identity guard: commit the locals to the caller ONLY if the
+           ref still resolves to our exact media_id (catches a diskN reuse during
+           the read); any detected reuse refuses. */
+        if (mounted && mos_internal_da_disk_is_media(disk, media_id)) {
+            if (name_buf && name_cap) strlcpy(name_buf, local_name, name_cap);
+            if (path_buf && path_cap) strlcpy(path_buf, local_path, path_cap);
+        } else {
+            mounted = false;
         }
         CFRelease(disk);
     }
@@ -8176,6 +8219,7 @@ mos_error mos_watch_next_event(mos_watch_t *w, const mos_watch_event **out,
     uint64_t deadline = (timeout_ms < 0)
         ? UINT64_MAX
         : start + (uint64_t)timeout_ms;
+    bool drained = false;   /* at most one non-blocking source drain per call */
 
     for (;;) {
         /* Bounded reconciliation: a DR Appeared that couldn't snapshot its
@@ -8211,6 +8255,22 @@ mos_error mos_watch_next_event(mos_watch_t *w, const mos_watch_event **out,
            compared like the pump does. */
         uint64_t now = monotonic_ms();
         if (now >= deadline) {
+            /* Contract (mos.h): timeout_ms == 0 must DRAIN a ready event, not
+               merely poll the pure core. The deadline is already reached, but a
+               signalled DR/IOKit source may be queued with no poll core to pump
+               it — the empty all-watch + queued Appeared case, which has no
+               discovery floor and would otherwise stay invisible across every
+               zero-timeout call. Service ready sources ONCE with a non-blocking
+               run of the private mode, then re-pump (a handled Appeared adds a
+               slot or arms the rescan the loop top drains). Guarded to one drain
+               per call so a positive timeout cannot spin here; only on the owning
+               thread with a source scheduled (else the run would be a no-op). */
+            if (!drained && w->run_loop && (w->notify_source || w->dr_source) &&
+                CFRunLoopGetCurrent() == w->run_loop) {
+                drained = true;
+                CFRunLoopRunInMode(MOS_WATCH_RUN_LOOP_MODE, 0, false);
+                continue;
+            }
             return MOS_ERR_TIMEOUT;   /* caller timeout; pump again next call */
         }
 

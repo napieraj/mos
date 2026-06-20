@@ -94,6 +94,12 @@ void mos_fake_set_readtrackinfo_reply(uint32_t task_status,
    by mos_fake_reset() (no description at all). */
 void mos_fake_set_da_volume(const char *name, const char *path);
 
+/* Force the volume lookup's endpoint identity guard to see a MISMATCH:
+   DADiskCopyIOMedia's IOMedia reports registry id `id` (not the current
+   media_id), modelling a diskN reused mid-lookup. The guard then refuses
+   (reports unmounted) rather than attribute another disc's volume. */
+void mos_fake_set_da_media_id(uint64_t id);
+
 /* Raw-CDB path (the GESN tray probe). Script the ExecuteTaskSync
    outcome: reply bytes copied into the data buffer, task status, sense
    (NULL = all-zero), and realized byte count. The CDB received is

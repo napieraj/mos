@@ -110,12 +110,23 @@ it). What remains:
        selector gate (AGENTS.md ADR "name semantics, gated by selector"). The
        identity redesign was abandoned — DADisk.c verification confirmed the
        public API cannot bind the daemon's unmount to a registry id, so there is
-       nothing to "verify"; embracing name semantics dissolved the problem. Dead
-       fake scaffolding from the old bind (`mos_fake_set_da_media_id`,
-       `DADiskCopyIOMedia`, the `da_media_id` desync) is a small cleanup follow-up.
+       nothing to "verify"; embracing name semantics dissolved the problem. (The
+       `DADiskCopyIOMedia` / `da_media_id` fake scaffolding once slated for
+       deletion as "dead" was NOT removed — the R3 continuation audit (2026-06-20,
+       A2) showed it is live on the READ path: the volume lookup's endpoint
+       identity guard uses it, see the "Shipped" bullet below.)
     2. Heap-owned, bounded DA callback context with leak-or-reap-on-timeout (the
        void `DASessionSetDispatchQueue` / `DISPATCH_TIME_FOREVER` hang; a naive
-       timeout over the stack-local context is a use-after-return).
+       timeout over the stack-local context is a use-after-return). The R3
+       continuation audit (2026-06-20, A1) re-raised this as a pre-tag blocker now
+       that `--force` ships ON, distinguishing the **never-delivered** sub-case
+       (silent queue-setup failure ⇒ no callback port ⇒ hang) from the wedged-I/O
+       case the AGENTS ADD blessed "by design". Maintainer decision (2026-06-20):
+       **keep post-tag, accept the risk** — the trigger (`DASessionSetDispatchQueue`
+       silently failing) is near-impossible in practice and the path is opt-in
+       behind `--force`. When built, the bounded wait must heap-own the ENTIRE
+       late-callback dependency set (session, disk, queue, semaphore), not just the
+       result Boolean, or deliberately leak all of it on timeout.
     3. Consider a descriptor-bound unmount on any platform that exposes a safe
        identity-bound primitive.
     4. Write-speed presence/error observability (a `has_write_kbps` tri-state) if
@@ -125,6 +136,34 @@ it). What remains:
     5. Replace the `_Static_assert` size tripwire with an X-macro / generated
        borrowed-field audit (stronger than the size floor; no current bug).
   Source: R3 macOS adapter audit; AGENTS.md TOCTOU addendum (2026-06-20).
+
+- **R3 continuation audit (2026-06-20) — A2/A3 SHIPPED, A1 held, A4 post-tag.**
+    - **A2 (volume lookup not identity-exact) — SHIPPED.** `88657fc` had dropped
+      the `DADiskCopyIOMedia` endpoint check on the false premise that resolving
+      the IOMedia by registry id made the lookup "identity-exact by construction";
+      but `DADiskCreateFromIOMedia` is name-delegated (reads `kIOBSDNameKey`,
+      delegates to `DADiskCreateFromBSDName` — DADisk.h confirms), so a `diskN`
+      reuse in the create→describe window could attribute another disc's volume.
+      Restored #85's discipline on the READ path: read into locals, re-confirm via
+      `DADiskCopyIOMedia` that the ref still resolves to our exact `media_id`,
+      commit only on a match. Valid for a read (no daemon re-resolution after the
+      check), unlike the unmount ACTION where the daemon re-resolves by name.
+    - **A3 (`timeout_ms == 0` never drained a ready source) — SHIPPED.** `mos.h`
+      promises zero is "drain a ready event, do not sleep", but `next_event`
+      returned `MOS_ERR_TIMEOUT` before ever running the loop, so an empty
+      all-watch never serviced a queued Appeared. Fixed: one guarded non-blocking
+      `CFRunLoopRunInMode(…, 0, …)` before returning timeout, then re-pump.
+      Adapter-fake regression: empty all-watch + queued Appeared + timeout 0 emits
+      `device_appeared` without advancing the fake clock.
+    - **A1 (force-unmount hang) — HELD post-tag** (maintainer, above item 2).
+    - **A4 (permanent-negative serial re-probed every poll) — POST-TAG.** Watch
+      probes set `serial_grabbed` only on a successful read, so an unsupported VPD
+      0x80 (or answered-empty page) re-attempts the optional INQUIRY/exclusive
+      path every ~2 s stable poll, per slot. Separate "serial resolved" from
+      "serial present" (UNTRIED / RETRYABLE / RESOLVED_ABSENT / RESOLVED_PRESENT):
+      cache an answered permanent absence, retry only transient
+      BUSY/exclusive/timeout. Efficiency, not correctness — post-tag hardening
+      unless repeated exclusive-access traffic becomes a release criterion.
 
 - **GESN realized-count waiver — hardware-gated revisit** (HELD, not a tag
   blocker). R3's mos_state.c audit (2026-06-20) re-raised the O-4 GESN waiver

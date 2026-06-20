@@ -295,6 +295,39 @@ media. The cheap-enrichment surface (disc-ingest gaps note,
 (IODVDTypes). mos reaches the same data through the MMCDeviceInterface
 convenience methods above, not these ioctls.
 
+### DiskArbitration — mount-layer reads + the one DA action (optional link dep)
+
+Not an IOKit/MMC surface — the **mount layer** (`mos_da.c`). Linked only when
+`MOS_USE_DISKARBITRATION` (default on); the opt-out build stubs all of it to
+"unmounted" / "no unmount" with no shape change. Every function returns an
+**owned** reference (release as noted). **Provenance** (the framework splits its
+headers): the disk-object calls (`DADiskCreate*` / `DADiskCopy*` / `DADiskGetTypeID`)
+and the `kDADiskDescription*` keys are verified verbatim against
+`DiskArbitration.framework/Headers/DADisk.h` (canonical); `DASessionCreate` /
+`DASessionSetDispatchQueue` live in `DASession.h`; `DADiskUnmount` in the DA
+unmount/approval section. Every function mos uses is `macos(10.4)` EXCEPT
+`DASessionSetDispatchQueue` (`macos(10.7)`) — both well under mos's 12.0
+deployment floor.
+
+| Function | Header | Signature → result (release) | mos use |
+|----------|--------|------------------------------|---------|
+| `DASessionCreate` | DASession.h | `(allocator)` → `DASessionRef` (CFRelease) | both DA paths' session. The read path schedules no queue (synchronous); the unmount sets `DASessionSetDispatchQueue` (`macos(10.7)`; a global queue, `NULL` to unschedule before release) + a semaphore. The run-loop scheduling alternatives (`DASessionScheduleWithRunLoop`, the `DAApprovalSession*` family) are unused — mos uses the dispatch-queue path. |
+| `DADiskCreateFromIOMedia` | DADisk.h | `(allocator, session, io_service_t)` → `DADiskRef` (CFRelease) | volume lookup. **NAME-BACKED**: reads `kIOBSDNameKey`, delegates to `DADiskCreateFromBSDName` — the ref stores only the `diskN` string, so what it later resolves to is re-checked, not pinned. |
+| `DADiskCreateFromBSDName` | DADisk.h | `(allocator, session, const char *)` → `DADiskRef` (CFRelease) | the force-unmount target. |
+| `DADiskCopyDescription` | DADisk.h | `(DADiskRef)` → `CFDictionaryRef` (CFRelease) | volume name/path read (keys below). Header note: contacts the daemon for the LATEST description (resolved by the ref's name), unless called inside a registered DA callback. |
+| `DADiskCopyIOMedia` | DADisk.h | `(DADiskRef)` → `io_service_t` (**IOObjectRelease**) | volume lookup's **endpoint identity guard** (A2): the IOMedia the ref currently resolves to; mos compares its `IORegistryEntryGetRegistryEntryID` to `media_id` and commits the name/path only on a match. Valid for a READ (no later daemon re-resolution); the unmount ACTION cannot use it (the daemon re-resolves the name AFTER any check — AGENTS TOCTOU addendum). |
+| `DADiskUnmount` | DA unmount sect. | `(disk, options, callback, context)` → `void` (async) | the **SINGLE DA action**: `tray eject --force` (`Force|Whole`). Data-loss-capable, opt-in. Made synchronous via the queue + semaphore (the unbounded-wait KNOWN ISSUE if `DASessionSetDispatchQueue` silently fails — post-tag, ROADMAP). |
+
+Description keys (DADisk.h, both `macos(10.4)`): `kDADiskDescriptionVolumeNameKey`
+(CFString → `volume_name`), `kDADiskDescriptionVolumePathKey` (CFURL →
+`volume_path`, the mount proof — absent ⇒ not mounted). DADisk.h carries many more
+media/device keys (`…Media{Writable,Whole,Size,BSDName}Key`, …) that mos reads
+zero-command off the IOKit registry instead, not via DA. Unused DADisk.h surface:
+`DADiskCreateFromVolumePath` (`macos(10.7)`), `DADiskGetBSDName`,
+`DADiskCopyWholeDisk`, `DADiskGetTypeID`. Privilege: every DA read takes no
+entitlement / TCC / exclusive access (scope-doctrine layer 3); `DADiskUnmount` is
+the only action and the only data-loss path.
+
 ### Decision order for a new verb
 
 1. In the registry table → a zero-command read. Done.
