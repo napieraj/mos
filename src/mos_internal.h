@@ -181,15 +181,14 @@ bool mos_internal_da_volume(uint64_t media_id,
    used only by `tray eject --force`. Returns false when DA is opted out at build
    time (capability absent) — the force eject then reports the mount as BUSY.
 
-   IDENTITY BIND (data-loss safety): bsd_name alone is NOT sufficient authority
-   to destroy state — macOS reuses "diskN" unit numbers, so a stale name can
-   resolve to an unrelated disk. expected_media_id is the whole-disk IOMedia
-   registry entry ID the caller just resolved off the handle's stable drive
-   service (h->media_id); the unmount proceeds only if the IOMedia behind diskN
-   has that exact id (registry IDs are unique and not reused). A mismatch, a
-   zero expected id (identity unknown), or no IOMedia behind diskN all fail
-   closed — refuse rather than risk unmounting the wrong disk. */
-bool mos_internal_da_unmount(const char *bsd_name, uint64_t expected_media_id);
+   NAME SEMANTICS: unmounts the disc currently named `bsd_name`, exactly like
+   `diskutil unmountDisk` — there is no identity bind because the public DA API
+   cannot provide one (diskarbitrationd re-resolves the name at request time; see
+   the call-site comment in mos_da.c). The consent / safety against a reused
+   "diskN" is the SELECTOR GATE in cli/tray.c (explicit bsd-node / sole-drive by
+   default; an ephemeral index or identity registry-id needs MOS_FORCE_BY_IDENTITY),
+   not a library-level bind. */
+bool mos_internal_da_unmount(const char *bsd_name);
 
 /* Extract one device's snapshot (registry id, bsd unit, identity) from a
    DRDeviceRef passed as CFTypeRef (this header stays free of DiscRecording

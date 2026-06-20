@@ -55,17 +55,23 @@ static const uint8_t cdb_lock_persist  [6] = { 0x1E, 0x00, 0x00, 0x00, 0x03, 0x0
 #define MOS_TRAY_PREVENT_TIMEOUT_MS 2000u
 #define MOS_TRAY_MOTION_TIMEOUT_MS  5000u
 
-/* `tray eject --force` is DATA-LOSS CAPABLE, and its DiskArbitration force-unmount
-   cannot be bound to the exact IOMedia identity end-to-end: the daemon resolves
-   the unmount target by NAME at request time, so the local registry-id bind is a
-   check, not a binding (AGENTS.md "the identity bind does NOT close the BSD-reuse
-   race"). Disabled by default for the first tag — `mos_tray_eject` returns
-   MOS_ERR_UNSUPPORTED for `force`. The force path stays COMPILED behind this flag
-   (the MOS_CLI_PROBE bitrot-guard pattern) so the post-tag guarded redesign lands
-   against live code. */
-#ifndef MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT
-#define MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT 0
-#endif
+/* `tray eject --force` is DATA-LOSS CAPABLE: on a mounted disc it force-unmounts
+   the volume, then ejects ("open no matter what"). It operates by NAME, exactly
+   like `diskutil unmountDisk` — the daemon resolves the unmount target by the BSD
+   name at request time (verified first-hand in DiskArbitration's DADisk.c:
+   DADiskCreateFromIOMedia reads kIOBSDNameKey and delegates to
+   DADiskCreateFromBSDName, and the DADiskRef stores only the name), so mos cannot
+   bind the daemon's action to an exact IOMedia identity and does not pretend to.
+   These are honest name semantics: a `diskN` whose name was reassigned in the
+   request window is unmounted as-named, the same residual diskutil ships.
+
+   The SELECTOR-level safety lives in the CLI (cli/tray.c): force is the default
+   only for an explicit bsd-node selector (or the sole-drive case), where the user
+   named the disc; an ephemeral positional index or an identity registry-id
+   requires the MOS_FORCE_BY_IDENTITY opt-in and otherwise gets a redirect to the
+   bsd-node form. The library exposes the capability; the consumer owns the
+   policy. See the AGENTS.md ADR "tray eject --force = name semantics, gated by
+   selector". */
 
 mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
                                 mos_tray_outcome *outcome, uint8_t sense_out[3])
@@ -95,12 +101,6 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
                          mos_tray_outcome *out, uint8_t sense[3])
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
-#if !MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT
-    /* First-tag: the data-loss force path is gated off (see the flag above and
-       AGENTS.md). Plain `mos tray eject` is unaffected — a mounted disc still
-       reports MOS_ERR_BUSY, which the consumer clears with `diskutil` first. */
-    if (force) return MOS_ERR_UNSUPPORTED;
-#endif
 
     /* ONE flow. Every eject grabs exclusive access (in mos_internal_raw_cdb) and issues
        the CDB; a plain eject reports the result verbatim. --force diverges only
@@ -128,21 +128,18 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
 
     for (int pass = 0; pass < 2; pass++) {
         if (e == MOS_ERR_BUSY) {                          /* Finder/system mount */
-            /* Re-resolve the CURRENT media under h->svc before unmounting: the
-               cached h->bsd_unit can be stale (opened empty, or a swap since
-               the last media query), and a forced unmount is data-loss-capable.
-               The refresh derives bsd_unit + media_id from h->svc's live child,
-               so the name we format and the identity we bind both describe the
-               disc actually in THIS drive now. media gone (bsd_unit < 0) → fail
-               closed; the bind in mos_internal_da_unmount only NARROWS — does
-               not close — the residual BSD-reuse race (a local check;
-               diskarbitrationd re-resolves by name — see its KNOWN ISSUE
-               block), which is why the data-loss path is gated off by default. */
+            /* Re-resolve the CURRENT media under h->svc so we unmount the disc
+               actually in THIS drive now — the cached bsd_unit can be stale
+               (opened empty, or a swap since the last query). media gone
+               (bsd_unit < 0) → fail closed (nothing to clear). The unmount is by
+               NAME (diskutil semantics; see the header) — no identity bind,
+               because the daemon re-resolves by name regardless, and the
+               selector gate in cli/tray.c is where the policy lives. */
             mos_internal_refresh_media_identity(h);
             char name[24];
             if (h->bsd_unit < 0 ||
                 !mos_bsd_name_format(h->bsd_unit, name, sizeof name) ||
-                !mos_internal_da_unmount(name, h->media_id))
+                !mos_internal_da_unmount(name))
                 break;                                    /* mount uncleared */
         } else if (e == MOS_OK && *out == MOS_TRAY_REFUSED_LOCKED) {  /* basic Prevent */
             /* Clear both Prevent states so nothing is left locked. A TRANSPORT

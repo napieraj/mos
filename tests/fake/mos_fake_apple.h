@@ -131,6 +131,10 @@ void mos_fake_set_method_ioreturn(mos_fake_method m, uint32_t io_return);
    (another client holds the drive). Cleared by mos_fake_reset(). */
 void mos_fake_set_exclusive_denied(bool denied);
 
+/* Model a Finder/system mount: ObtainExclusiveAccess returns BUSY until a
+   successful DADiskUnmount clears it — exercises `tray eject --force`. */
+void mos_fake_set_mounted_busy(bool busy);
+
 /* Make ReleaseExclusiveAccess return non-success AND keep the lock held
    (lock_balance is NOT decremented) — models a kernel that does not confirm
    the release. The adapter must then leave the handle poisoned (have_exclusive

@@ -95,6 +95,8 @@ static struct {
                                    indexed by mos_fake_method, 0 = success */
     bool     plugin_fail;
     bool     exclusive_denied;
+    bool     mounted_busy;      /* ObtainExclusiveAccess returns BUSY (a mount)
+                                   until a successful DADiskUnmount clears it */
     bool     release_fail;      /* ReleaseExclusiveAccess returns non-success
                                    AND leaves the lock held (no decrement) */
     uint32_t raw_status;        uint8_t raw[64];  size_t raw_len;
@@ -281,6 +283,10 @@ void mos_fake_set_raw_reply(uint32_t task_status,
 }
 
 void mos_fake_set_exclusive_denied(bool denied) { g.exclusive_denied = denied; }
+
+/* Model a mounted volume: ObtainExclusiveAccess returns BUSY until a successful
+   DADiskUnmount clears it (so `tray eject --force` unmounts then re-ejects). */
+void mos_fake_set_mounted_busy(bool busy) { g.mounted_busy = busy; }
 void mos_fake_set_release_fail(bool fail) { g.release_fail = fail; }
 
 void mos_fake_set_plugin_fail(bool fail) { g.plugin_fail = fail; }
@@ -761,6 +767,10 @@ static SCSITaskDeviceInterface **mmc_GetSCSITaskDeviceInterface(void *self)
 static IOReturn std_ObtainExclusiveAccess(void *self)
 {
     (void)self;
+    /* A Finder/system mount: the kernel reports the media still mounted as
+       BUSY (distinct from a peer client's EXCLUSIVE_ACCESS). Cleared by a
+       successful DADiskUnmount, so a `tray eject --force` re-eject succeeds. */
+    if (g.mounted_busy) return kIOReturnBusy;
     if (g.exclusive_denied) return kIOReturnExclusiveAccess;
     /* The kernel refuses a second exclusive open; modeled so a double-acquire
        in the adapter is a test failure, not a silent balance bump. */
@@ -1035,5 +1045,8 @@ void DADiskUnmount(DADiskRef disk, DADiskUnmountOptions options,
                    DADiskUnmountCallback callback, void *context)
 {
     (void)options;
+    /* A successful force-unmount clears the Finder/system mount, so the
+       subsequent eject's ObtainExclusiveAccess no longer returns BUSY. */
+    g.mounted_busy = false;
     if (callback) callback(disk, NULL, context);   /* NULL dissenter = success */
 }
