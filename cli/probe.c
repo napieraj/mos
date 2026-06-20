@@ -22,8 +22,8 @@
  *                       own decoders consume and emit each raw reply as NDJSON
  *                       (mos.capture.v0) — the in-tree, fixed-menu replacement
  *                       for the retired public mos_raw_cdb passthrough
- *                       (AGENTS.md). Read-only; produces tests/fixtures/*.bin
- *                       material.
+ *                       (AGENTS.md). Read-only; writes .bin fixture material
+ *                       under tests/fixtures/.
  *
  * The observation path is raw — events come straight from IOKit/DiscRecording
  * callbacks, through none of mos's state interpretation. The capture path is

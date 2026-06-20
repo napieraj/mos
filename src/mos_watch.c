@@ -970,6 +970,7 @@ mos_error mos_watch_next_event(mos_watch_t *w, const mos_watch_event **out,
     uint64_t deadline = (timeout_ms < 0)
         ? UINT64_MAX
         : start + (uint64_t)timeout_ms;
+    bool drained = false;   /* at most one non-blocking source drain per call */
 
     for (;;) {
         /* Bounded reconciliation: a DR Appeared that couldn't snapshot its
@@ -1005,6 +1006,22 @@ mos_error mos_watch_next_event(mos_watch_t *w, const mos_watch_event **out,
            compared like the pump does. */
         uint64_t now = monotonic_ms();
         if (now >= deadline) {
+            /* Contract (mos.h): timeout_ms == 0 must DRAIN a ready event, not
+               merely poll the pure core. The deadline is already reached, but a
+               signalled DR/IOKit source may be queued with no poll core to pump
+               it — the empty all-watch + queued Appeared case, which has no
+               discovery floor and would otherwise stay invisible across every
+               zero-timeout call. Service ready sources ONCE with a non-blocking
+               run of the private mode, then re-pump (a handled Appeared adds a
+               slot or arms the rescan the loop top drains). Guarded to one drain
+               per call so a positive timeout cannot spin here; only on the owning
+               thread with a source scheduled (else the run would be a no-op). */
+            if (!drained && w->run_loop && (w->notify_source || w->dr_source) &&
+                CFRunLoopGetCurrent() == w->run_loop) {
+                drained = true;
+                CFRunLoopRunInMode(MOS_WATCH_RUN_LOOP_MODE, 0, false);
+                continue;
+            }
             return MOS_ERR_TIMEOUT;   /* caller timeout; pump again next call */
         }
 

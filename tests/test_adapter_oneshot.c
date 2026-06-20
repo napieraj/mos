@@ -512,11 +512,9 @@ TEST(adapter_da_volume_lookup_modalities)
     EXPECT(!mos_internal_da_volume(MID, name, sizeof name, path, sizeof path));
     EXPECT(name[0] == 0 && path[0] == 0);
 
-    /* IDENTITY-EXACT BY CONSTRUCTION (#1): a stale / wrong media id resolves to
-       NO IOMedia (its registry entry is gone, never reused), so DA is never
-       consulted and another disc can't be misattributed — even with a mount
-       present. No "expected vs actual" verification; the resolution IS the
-       identity. */
+    /* Vanished disc: a stale / wrong media id resolves to NO IOMedia (its
+       registry entry is gone, never reused), so DA is never consulted and
+       nothing is misattributed — even with a mount present. */
     mos_fake_set_da_volume("ARRIVAL", "/Volumes/ARRIVAL");
     EXPECT(!mos_internal_da_volume(0xDEADBEEFull, name, sizeof name,
                                    path, sizeof path));
@@ -524,6 +522,17 @@ TEST(adapter_da_volume_lookup_modalities)
 
     /* Zero media id (identity unknown / bridge fallback): fail closed. */
     EXPECT(!mos_internal_da_volume(0, name, sizeof name, path, sizeof path));
+    EXPECT(name[0] == 0 && path[0] == 0);
+
+    /* ENDPOINT IDENTITY GUARD (A2): the media id resolves and DA reports a
+       mount, but the name-backed DADiskRef now resolves to a DIFFERENT IOMedia
+       (a diskN reused mid-lookup). DADiskCreateFromIOMedia is name-delegated, so
+       DADiskCopyDescription could return the wrong disc's volume; the post-read
+       DADiskCopyIOMedia re-check sees id != media_id and REFUSES rather than
+       attribute another disc's mount path. */
+    mos_fake_set_da_volume("OTHERDISC", "/Volumes/OTHERDISC");
+    mos_fake_set_da_media_id(0x100000999ull);  /* != the default media id */
+    EXPECT(!mos_internal_da_volume(MID, name, sizeof name, path, sizeof path));
     EXPECT(name[0] == 0 && path[0] == 0);
 
     return 0;

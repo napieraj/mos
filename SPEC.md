@@ -295,6 +295,103 @@ media. The cheap-enrichment surface (disc-ingest gaps note,
 (IODVDTypes). mos reaches the same data through the MMCDeviceInterface
 convenience methods above, not these ioctls.
 
+### DiskArbitration — mount-layer reads + the one DA action (optional link dep)
+
+Not an IOKit/MMC surface — the **mount layer** (`mos_da.c`). Linked only when
+`MOS_USE_DISKARBITRATION` (default on); the opt-out build stubs all of it to
+"unmounted" / "no unmount" with no shape change. Every function returns an
+**owned** reference (release as noted). **Provenance** (the framework splits its
+headers): the disk-object calls (`DADiskCreate*` / `DADiskCopy*` / `DADiskGetTypeID`)
+and the `kDADiskDescription*` keys are verified verbatim against
+`DiskArbitration.framework/Headers/DADisk.h` (canonical); `DASessionCreate` /
+`DASessionSetDispatchQueue` live in `DASession.h`; `DADiskUnmount` (with its
+`DADiskUnmountOptions` / `DADiskUnmountCallback`) in the umbrella
+`DiskArbitration.h`. Every function mos uses is `macos(10.4)` EXCEPT
+`DASessionSetDispatchQueue` (`macos(10.7)`) — both well under mos's 12.0
+deployment floor.
+
+| Function | Header | Signature → result (release) | mos use |
+|----------|--------|------------------------------|---------|
+| `DASessionCreate` | DASession.h | `(allocator)` → `DASessionRef` (CFRelease) | both DA paths' session. The read path schedules no queue (synchronous); the unmount sets `DASessionSetDispatchQueue` (`macos(10.7)`; a global queue, `NULL` to unschedule before release) + a semaphore. The run-loop scheduling alternatives (`DASessionScheduleWithRunLoop`, the `DAApprovalSession*` family) are unused — mos uses the dispatch-queue path. |
+| `DADiskCreateFromIOMedia` | DADisk.h | `(allocator, session, io_service_t)` → `DADiskRef` (CFRelease) | volume lookup. **NAME-BACKED**: reads `kIOBSDNameKey`, delegates to `DADiskCreateFromBSDName` — the ref stores only the `diskN` string, so what it later resolves to is re-checked, not pinned. |
+| `DADiskCreateFromBSDName` | DADisk.h | `(allocator, session, const char *)` → `DADiskRef` (CFRelease) | the force-unmount target. |
+| `DADiskCopyDescription` | DADisk.h | `(DADiskRef)` → `CFDictionaryRef` (CFRelease) | volume name/path read (keys below). Header note: contacts the daemon for the LATEST description (resolved by the ref's name), unless called inside a registered DA callback. |
+| `DADiskCopyIOMedia` | DADisk.h | `(DADiskRef)` → `io_service_t` (**IOObjectRelease**) | volume lookup's **endpoint identity guard** (A2): the IOMedia the ref currently resolves to; mos compares its `IORegistryEntryGetRegistryEntryID` to `media_id` and commits the name/path only on a match. Valid for a READ (no later daemon re-resolution); the unmount ACTION cannot use it (the daemon re-resolves the name AFTER any check — AGENTS TOCTOU addendum). |
+| `DADiskUnmount` | DiskArbitration.h | `(disk, options, callback, context)` → `void` (async; callback `(disk, dissenter, context)`, NULL dissenter = success) | the **SINGLE DA action**: `tray eject --force` with `kDADiskUnmountOptionForce` (`0x00080000`) `\| kDADiskUnmountOptionWhole` (`0x1`). Data-loss-capable, opt-in. Made synchronous via the queue + semaphore (the unbounded-wait KNOWN ISSUE if `DASessionSetDispatchQueue` silently fails — post-tag, ROADMAP). |
+
+Description keys (DADisk.h, both `macos(10.4)`): `kDADiskDescriptionVolumeNameKey`
+(CFString → `volume_name`), `kDADiskDescriptionVolumePathKey` (CFURL →
+`volume_path`, the mount proof — absent ⇒ not mounted). DADisk.h carries many more
+media/device keys (`…Media{Writable,Whole,Size,BSDName}Key`, …) that mos reads
+zero-command off the IOKit registry instead, not via DA. Unused DADisk.h surface:
+`DADiskCreateFromVolumePath` (`macos(10.7)`), `DADiskGetBSDName`,
+`DADiskCopyWholeDisk`, `DADiskGetTypeID`. Privilege: every DA read takes no
+entitlement / TCC / exclusive access (scope-doctrine layer 3); `DADiskUnmount` is
+the only action and the only data-loss path.
+
+### DiscRecording device directory — enumeration + identity (`mos_dr.c`)
+
+The zero-command device directory mos enumerates and reads drive identity from —
+no MMC, no exclusive access (a framework over the same kext the command path
+uses). Verified against `DiscRecording.framework/Headers/DRCoreDevice.h`; all
+`10.2+`, every `Copy*` returns OWNED (`CFRelease`).
+
+| Function | Result (release) | mos use |
+|----------|------------------|---------|
+| `DRCopyDeviceArray(void)` | `CFArrayRef` (CFRelease) | the enumeration source (`mos_enumerate_devices`; `mos_dr.c` snapshot). Returns ALL writable optical devices — coincides with mos's openable set because the §9.1 attach rule blocks `SCSITaskUserClient` on read-only drives (W1 disposition). |
+| `DRDeviceCopyDeviceForBSDName(CFStringRef)` | `DRDeviceRef` (CFRelease) | resolve a `diskN` selector → DR device. |
+| `DRDeviceCopyDeviceForIORegistryEntryPath(CFStringRef)` | `DRDeviceRef` (CFRelease) | resolve a registry path (a notification's `kDRDeviceIORegistryEntryPathKey`) → DR device → registry id. |
+| `DRDeviceCopyInfo(DRDeviceRef)` | `CFDictionaryRef` (CFRelease) | the identity directory (keys below). |
+| `DRDeviceCopyStatus(DRDeviceRef)` | `CFDictionaryRef` (CFRelease) | coarse passive status ("not guaranteed current" — the division-of-labour floor; mos owns the synchronous state machine). |
+| `DRDeviceIsValid(DRDeviceRef)` | `Boolean` | liveness gate before trusting a DR ref under a hostile/stale directory (R3 hardening). |
+
+`DRDeviceCopyInfo` keys (DRCoreDevice.h, CFString): `kDRDeviceVendorNameKey` /
+`kDRDeviceProductNameKey` / `kDRDeviceFirmwareRevisionKey` (the pre-parsed INQUIRY
+identity mos caches at open), `kDRDeviceIORegistryEntryPathKey` (→ registry id, the
+probe authority), and `kDRDeviceMediaInfoKey` (a SUBDICTIONARY; mos reads its
+`kDRDeviceMediaBSDNameKey`). No commands, no exclusive access, no entitlement.
+
+### Watch-wake surface — IOKit interest + DiscRecording doorbell (`mos_watch.c`)
+
+The notification sources the watch schedules on its private run-loop mode — never
+command-issuing, all wake-only (the poll floor is the correctness floor; the
+doorbell is latency only). Verified against `IOKit.framework/Headers/IOKitLib.h`
++ `IOMessage.h` and `DiscRecording.framework/Headers/DRCoreNotifications.h`.
+**Ownership rule: `Create*` returns OWNED (release it), `Get*` returns BORROWED
+(do NOT release) — `mos_watch.c` teardown honors it (audited: the IOKit source is
+freed via `IONotificationPortDestroy`, the DR source/center are `CFRelease`d).**
+
+IOKit interest (single-target termination / property wake):
+- `IONotificationPortCreate(mach_port_t)` → `IONotificationPortRef` — OWNED,
+  `IONotificationPortDestroy`.
+- `IONotificationPortGetRunLoopSource(port)` → `CFRunLoopSourceRef` — **BORROWED**
+  (header: "caller should not release"; freed by `IONotificationPortDestroy`).
+- `IOServiceAddInterestNotification(port, service, kIOGeneralInterest, cb, refcon,
+  &notif)` — message types from `IOMessage.h`: `kIOMessageServiceIsTerminated`
+  (drive removed → terminal for a single-target watch),
+  `kIOMessageServicePropertyChange` (re-poll wake).
+
+DiscRecording doorbell (media/tray-change + all-mode discovery):
+- `DRNotificationCenterCreate(void)` → `DRNotificationCenterRef` — OWNED.
+  **Run-loop affinity: delivers on the run loop it was CREATED on** (the W2
+  single-thread-contract basis — to receive on another loop you must create the
+  center from it).
+- `DRNotificationCenterCreateRunLoopSource(center)` → `CFRunLoopSourceRef` —
+  **OWNED** (`Create` — released; contrast the IOKit `Get` above).
+- `DRNotificationCenterAddObserver(center, observer, cb, name, object)` /
+  `…RemoveObserver(center, observer, name, object)`; callback
+  `DRNotificationCallback = void(*)(center, observer, CFStringRef name,
+  DRTypeRef object, CFDictionaryRef info)`.
+- Notification names: `kDRDeviceAppearedNotification` (all-mode join),
+  `kDRDeviceDisappearedNotification`, `kDRDeviceStatusChangedNotification`
+  (device-scoped state wake); `kDRDeviceIORegistryEntryPathKey` resolves the
+  changed device → registry id. (Apple-availability: the DR notification API is
+  `10.2+`, well under mos's 12.0 floor.)
+
+No commands, no exclusive access, no entitlement. Single-target creation failure
+falls back to poll-only; all-mode has no poll floor, so `mos_watch_open_all` fails
+instead (discovery rides the doorbell).
+
 ### Decision order for a new verb
 
 1. In the registry table → a zero-command read. Done.
