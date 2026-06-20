@@ -366,7 +366,7 @@ Drop those two files into your tree and you're done — no submodule,
 no CMake subdirectory.
 
 When compiling the amalgamated output yourself, mirror what the
-CMake `mos_core` target does: link three Apple frameworks and set
+CMake `mos_core` target does: link four Apple frameworks and set
 the macOS deployment-target floor that matches the project
 (`MOS_VERSION_*` is independent of the OS floor; CMakeLists.txt
 pins `CMAKE_OSX_DEPLOYMENT_TARGET 12.0`). Example:
@@ -377,6 +377,7 @@ cc your_main.o mos.o -o your_tool \
    -framework IOKit \
    -framework CoreFoundation \
    -framework DiscRecording \
+   -framework DiskArbitration \
    -mmacosx-version-min=12.0
 ```
 
@@ -384,7 +385,11 @@ Skipping `-framework DiscRecording` will fail to link at the
 `DRCopyDeviceArray` reference in `mos_dr.c`; skipping the
 deployment-target flag will let the build silently float to
 whatever default the host SDK provides, which may not match what
-the CMake build is tested against.
+the CMake build is tested against. `DiskArbitration` is the one
+optional framework: build `mos.c` with `-DMOS_USE_DISKARBITRATION=0`
+and you may drop `-framework DiskArbitration` (volume name/path then
+always report unmounted); with the default it is required, at the
+`DADiskCopyDescription` reference in `mos_da.c`.
 
 ## Upstreaming into other projects
 

@@ -69,6 +69,8 @@
  * match Apple's kSCSITaskStatus_* enums.
  */
 
+#ifndef MOS_SCSI_STATUS_H
+#define MOS_SCSI_STATUS_H
 
 #define MOS_SCSI_STATUS_GOOD                  0x00
 #define MOS_SCSI_STATUS_CHECK_CONDITION       0x02
@@ -78,6 +80,7 @@
 #define MOS_SCSI_STATUS_TASK_SET_FULL         0x28
 #define MOS_SCSI_STATUS_ACA_ACTIVE            0x30
 
+#endif /* MOS_SCSI_STATUS_H */
 
 /* ==== src/mos_pure.h ==== */
 /*
@@ -86,6 +89,8 @@
  * without linking IOKit (mos_internal.h re-includes this).
  */
 
+#ifndef MOS_PURE_H
+#define MOS_PURE_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -1080,6 +1085,7 @@ int mos_internal_watch_all_find(const mos_watch_all_state *a,
    add/wake). NEVER returns TERMINAL — removal is per-slot. */
 mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a);
 
+#endif /* MOS_PURE_H */
 
 /* ==== src/mos_internal.h ==== */
 /*
@@ -1088,6 +1094,8 @@ mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a);
  * live in mos_pure.h so tests can include them without IOKit.
  */
 
+#ifndef MOS_INTERNAL_H
+#define MOS_INTERNAL_H
 
 
 #include <stdbool.h>
@@ -1418,6 +1426,7 @@ static inline void mos_internal_cleanup_io_object(io_object_t *p)
 #define MOS_CF_AUTO __attribute__((cleanup(mos_internal_cleanup_cftype)))
 #define MOS_IO_AUTO __attribute__((cleanup(mos_internal_cleanup_io_object)))
 
+#endif /* MOS_INTERNAL_H */
 
 /* ==== src/mos_cdtext.c ==== */
 /*
