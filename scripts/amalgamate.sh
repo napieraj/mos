@@ -25,6 +25,32 @@ INC="$ROOT/include"
 SRC="$ROOT/src"
 DIST="$ROOT/dist"
 
+# The internal headers, woven in dependency order (each uses the ones before
+# it). This is the ONE authoritative list — both the weave loop and the
+# include-stripper below derive from it, so there is no second copy to drift.
+# A manually-ordered list is the same shape SQLite's amalgamation builder uses
+# (tool/mksqlite3c.tcl, the curated `flist`): the order encodes the dependency
+# DAG and the pure-state-machines-before-IOKit-adapters reading order, which a
+# directory glob cannot.
+WEAVE_HEADERS="mos_scsi_status.h mos_pure.h mos_internal.h"
+
+# Completeness guard: every internal header in src/ must be in WEAVE_HEADERS.
+# A new src/*.h that nobody added here would otherwise leave its `#include
+# "mos_new.h"` line stripped from the .c that uses it but its body never woven
+# — an undefined-symbol link failure downstream in CI, far from the cause.
+# Fail loudly here instead, naming the missing header. Runs BEFORE any output
+# is written so a validation failure never leaves a half-written dist/.
+for hdr_path in "$SRC"/*.h; do
+    hdr=$(basename "$hdr_path")
+    case " $WEAVE_HEADERS " in
+        *" $hdr "*) : ;;
+        *)
+            echo "amalgamate: $hdr_path is not in WEAVE_HEADERS." >&2
+            echo "Add it to the list (in dependency order) before weaving." >&2
+            exit 1 ;;
+    esac
+done
+
 # --check: regenerate into a scratch dir and DIFF against the committed
 # dist/ instead of writing in place — side-effect-free, so the pre-push
 # hook and scripts/preflight.sh can run it without dirtying the tree.
@@ -118,46 +144,27 @@ cat > "$H" <<'HEADER'
 
 HEADER
 
-# The guard-stripper below collapses exactly ONE include-guard pair per
-# header: it consumes the FIRST #endif after a guard opens. An interior
-# preprocessor conditional inside a stripped header would have its #endif
-# eaten instead — silently corrupting the weave (the macOS CI compile
-# would catch it downstream, but the script itself would emit garbage
-# without complaint). Refuse loudly instead of corrupting; if a header
-# legitimately grows an interior conditional, upgrade strip_file to track
-# nesting depth first.
-for hdr in mos_scsi_status.h mos_pure.h mos_internal.h; do
-    conds=$(grep -c '^#[[:space:]]*if' "$SRC/$hdr" || true)
-    ends=$(grep -c '^#[[:space:]]*endif' "$SRC/$hdr" || true)
-    if [ "$conds" -ne 1 ] || [ "$ends" -ne 1 ]; then
-        echo "amalgamate: $SRC/$hdr has $conds #if*/#$ends #endif directives;" >&2
-        echo "the guard-stripper handles exactly the 1+1 include guard." >&2
-        echo "Upgrade strip_file to nesting-depth tracking before weaving it." >&2
-        exit 1
-    fi
-done
-
-# Helper: strip includes of mos.h / mos_internal.h / mos_pure.h /
-# mos_scsi_status.h and their include guards, so concatenation doesn't
-# produce duplicates.
+# Helper: drop the library-local quoted includes (mos.h + the woven internal
+# headers); weaving supplies their content exactly once. Include GUARDS are
+# left intact deliberately: because each header is woven exactly once, its
+# `#ifndef MOS_PURE_H … #endif` wrapper is harmless (the macro is defined once
+# and never retested), and leaving it in means an interior `#if` inside a
+# header is no longer something the weaver has to reason about — the same
+# reason SQLite's amalgamation never strips guards either. STRIP_NAMES is built
+# from WEAVE_HEADERS so the drop set and the weave list cannot diverge.
+STRIP_NAMES="mos.h $WEAVE_HEADERS"
 strip_file() {
-    awk '
-        BEGIN { in_guard = 0 }
+    awk -v names="$STRIP_NAMES" '
+        BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) drop[a[i]] = 1 }
 
-        # Drop library-local includes; weaving replaces them.
-        /^#[[:space:]]*include[[:space:]]*"mos\.h"/             { next }
-        /^#[[:space:]]*include[[:space:]]*"mos_internal\.h"/    { next }
-        /^#[[:space:]]*include[[:space:]]*"mos_pure\.h"/        { next }
-        /^#[[:space:]]*include[[:space:]]*"mos_scsi_status\.h"/ { next }
-
-        # Collapse internal header include guards.
-        /^#ifndef MOS_INTERNAL_H/    { in_guard = 1; next }
-        /^#define MOS_INTERNAL_H/    { next }
-        /^#ifndef MOS_PURE_H/        { in_guard = 1; next }
-        /^#define MOS_PURE_H/        { next }
-        /^#ifndef MOS_SCSI_STATUS_H/ { in_guard = 1; next }
-        /^#define MOS_SCSI_STATUS_H/ { next }
-        in_guard && /^#endif/ { in_guard = 0; next }
+        # Drop a library-local quoted include (tolerates a trailing comment,
+        # e.g. #include "mos.h"  /* for mos_state */); weaving replaces it.
+        /^[[:space:]]*#[[:space:]]*include[[:space:]]*"[^"]+"/ {
+            name = $0
+            sub(/^[^"]*"/, "", name)
+            sub(/".*/,     "", name)
+            if (name in drop) next
+        }
 
         { print }
     ' "$1"
@@ -168,7 +175,7 @@ strip_file() {
 # order is not significant — the headers above declare every cross-TU symbol —
 # so the glob's (LC_ALL=C) order just keeps dist/ stable. No exclusions today.
 {
-    for hdr in mos_scsi_status.h mos_pure.h mos_internal.h; do
+    for hdr in $WEAVE_HEADERS; do
         echo "/* ==== src/$hdr ==== */"
         strip_file "$SRC/$hdr"
         echo
