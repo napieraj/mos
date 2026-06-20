@@ -151,6 +151,35 @@ it). What remains:
   the kernel's own GESN poll. Design + the rig-check-first build order:
   `doc/research/2026-06-13-eject-request-watch-event.md`.
 
+- **Watch all-mode static audit (W1–W4) — DISPOSITIONED, no pre-tag code.** A
+  macOS-only static audit of `mos_watch.c` filed four findings; verified
+  vendor-blind against the tree + the 26.4 `DRNotificationCenter.h`. None is an
+  undocumented defect:
+  - **W1 (DR enumerates only writable devices)** — STRUCK. The §9.1 attach rule
+    blocks `SCSITaskUserClient` on read-only drives, so DR's writable-only
+    boundary coincides with mos's openable set (DR-pivot decision record); the
+    audit didn't know the attach rule.
+  - **W2 (run-loop / thread affinity)** — NOT a defect. `DRNotificationCenter.h`
+    *mandates* the affinity verbatim ("posted to the runloop it was created on";
+    receive on another loop ⇒ create the center from that loop), so capturing
+    `CFRunLoopGetCurrent()` at open + the single-thread contract is correct SDK
+    use, documented, with a deliberate safe-no-op off-thread. An enforcing
+    thread-id assert would *contradict* that safe-no-op; not added.
+  - **W3 (one-shot Appeared recovery)** — already a DOCUMENTED, deliberate
+    narrowing (`mos_watch.c` struct comment: the rescan took the loss window
+    from one snapshot failure to two consecutive). v0.next, hardware-gated. The
+    refinement when a rig shows a device actually lost: make the rescan
+    CONVERGENT — `mos_internal_dr_copy_snapshot` reports completeness (any
+    skipped element), and the drain re-arms `all_rescan_pending` (bounded) on an
+    incomplete copy instead of clear-before-copy. Real mechanism (the current
+    rescan fires immediately off the Appeared `CFRunLoopStop`, so both attempts
+    hit the *same* unsettled IORegistry; spreading retries across pump cycles
+    lets it settle), but an unobserved timing window — built only on rig
+    evidence per the hardware-role ADR.
+  - **W4 (full-table overflow drop)** — documented (`watch_all_add_device`:
+    "drop until a slot frees"); cap 64. v0.next: arm the same convergent rescan
+    on an all-mode `DEVICE_REMOVED` (a freed slot). Ships with W3.
+
   (Held-handle identity refresh — `bsd_unit`/`media_id`/size now
   re-resolved per media-scoped query, not captured once at open —
   shipped 2026-06-14; decision record:
