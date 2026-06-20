@@ -80,3 +80,30 @@ macOS.
 
 The script is 0BSD like `mos` — copy it, cut the branches you don't want,
 make it yours.
+
+### AccurateRip read offset (`offset` subcommand)
+
+`disc-ingest.sh` also resolves a drive's audio **read offset** — the per-drive
+sample correction that makes an audio rip bit-identical across drives
+(AccurateRip/EAC/whipper). The offset is **not a value any drive reports**: there
+is no MMC command, mode page, or IOKit property for it. It lives in AccurateRip's
+community DB, keyed on the drive **identity** `mos` *does* report. So `mos` ships
+the key; the script's `accuraterip_offset` function does the lookup — the consumer
+half of the boundary `ROADMAP.md` draws ("AccurateRip … permanently
+consumer-side").
+
+```sh
+./disc-ingest.sh offset 4
+# [disc-ingest] AccurateRip offset: +6 samples (confirm: whipper offset find -o +6)
+# [disc-ingest] disc TOC fingerprint: 9f1c…   (sha256 of mos's disc subtree)
+```
+
+It prints the **offset together with the disc TOC fingerprint** — the pair you
+log per rip: the offset corrects the drive, the fingerprint identifies the disc.
+The same line is emitted automatically on the audio-CD branch. It applies
+AccurateRip's vendor renaming (`HL-DT-ST` → `LG Electronics`, `JLMS` → `Lite-ON`,
+`Matshita` → `Panasonic`), reports `[Purged]` drives, and falls back to
+`whipper offset find` when a drive is unlisted. The DB source is AccurateRip's
+canonical HTML page; because AccurateRip blocks non-browser clients it auto-falls
+back to a TSV mirror (`AR_OFFSET_URL` pins a source — `file://` works offline).
+This branch needs `curl` + `python3` (the HTML parse).
