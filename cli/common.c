@@ -439,7 +439,7 @@ int mos_cli_collect_and_query(mos_cli_list_row *rows, int *out_n)
     return c.total;
 }
 
-/* status's no-selector path: with exactly one drive, return an open handle
+/* state's no-selector path: with exactly one drive, return an open handle
    from the same enumeration that counted (no reopen). *total carries the
    count; the handle is non-NULL only when *total == 1 and the open
    succeeded (else *err says why). With several drives the first-drive

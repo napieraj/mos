@@ -151,8 +151,9 @@ TEST(adapter_not_ready_gesn_closed_is_empty)
     EXPECT_EQ(1, mos_fake_lock_acquires());
     EXPECT_EQ(0, mos_fake_lock_balance());
 
-    /* Pin the ONE raw CDB mos authors, byte for byte (ARCHITECTURE §4.2):
-       GESN 0x4A, Polled, Media class, allocation length 8. */
+    /* Pin the GESN raw CDB mos authors on the not-ready branch, byte for
+       byte (ARCHITECTURE §4.2): GESN 0x4A, Polled, Media class, allocation
+       length 8. */
     uint8_t cdb[16];
     size_t  len = mos_fake_last_cdb(cdb);
     static const uint8_t want[10] =

@@ -116,7 +116,7 @@ static inline void mos_cli_list_volume_cell(const char *path,
 #define MOS_CLI_LIST_CAP 64
 
 /* SPC-4 identity field widths (+ NUL) and the mos_safe_ascii worst case
-   (every byte -> \xNN, 4x) — shared by status and list emitters. */
+   (every byte -> \xNN, 4x) — shared by state and list emitters. */
 #define MOS_CLI_VENDOR_CAP    9
 #define MOS_CLI_PRODUCT_CAP  17
 #define MOS_CLI_REVISION_CAP  5
@@ -147,7 +147,7 @@ void mos_cli_emit_list_table(FILE *f, const mos_cli_list_row *rows, int n, bool 
 void mos_cli_emit_list_json(const mos_cli_list_row *rows, int n);
 int  mos_cli_resolve_index_of(uint64_t reg);
 
-/* status no-selector path: open the sole present drive in the same
+/* state no-selector path: open the sole present drive in the same
    enumeration that counts. *total reports the count; the handle is
    non-NULL only when *total == 1 and the open succeeded. */
 mos_handle_t *mos_cli_open_sole_drive(mos_error *err, int *total);
