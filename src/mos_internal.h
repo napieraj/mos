@@ -166,9 +166,13 @@ uint64_t mos_internal_dr_id_for_path_value(CFTypeRef path);
 void mos_internal_dr_copy_string(CFTypeRef value, char *dst, size_t cap);
 
 /* One-shot DiskArbitration mounted-volume lookup (mos_da.c). True only
-   when mounted; gate calls on bsd_unit present. No callbacks, no run
-   loop — see the re-admission terms at the top of mos_da.c. */
-bool mos_internal_da_volume(const char *bsd_name,
+   when mounted AND the IOMedia behind "diskN" is the exact registry object
+   identified by expected_media_id — a reused "diskN" (a swap that inherited
+   the unit) is refused rather than attributing another disc's volume. A zero
+   expected_media_id (identity unknown) fails closed to not-mounted. Gate
+   calls on bsd_unit present. No callbacks, no run loop — see the re-admission
+   terms at the top of mos_da.c. */
+bool mos_internal_da_volume(const char *bsd_name, uint64_t expected_media_id,
                             char *name_buf, size_t name_cap,
                             char *path_buf, size_t path_cap);
 

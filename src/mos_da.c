@@ -36,49 +36,66 @@
    when DA has a description AND the volume is mounted (VolumePath present);
    name may still be "" if the key is absent or hostile — the caller maps ""
    to null. Both buffers are always NUL-terminated. */
-bool mos_internal_da_volume(const char *bsd_name,
+/* Defined below (shared with the force-unmount path): true when the IOMedia
+   behind `disk` carries the expected whole-disk registry entry id. */
+static bool mos_internal_da_disk_is_media(DADiskRef disk,
+                                          uint64_t expected_media_id);
+
+bool mos_internal_da_volume(const char *bsd_name, uint64_t expected_media_id,
                             char *name_buf, size_t name_cap,
                             char *path_buf, size_t path_cap)
 {
     if (name_buf && name_cap) name_buf[0] = 0;
     if (path_buf && path_cap) path_buf[0] = 0;
-    if (!bsd_name || !bsd_name[0]) return false;
+    if (!bsd_name || !bsd_name[0] || expected_media_id == 0) return false;
 
     DASessionRef session = DASessionCreate(kCFAllocatorDefault);
     if (!session) return false;
 
-    bool      mounted = false;
-    DADiskRef disk    = DADiskCreateFromBSDName(kCFAllocatorDefault,
-                                                session, bsd_name);
-    CFDictionaryRef desc = disk ? DADiskCopyDescription(disk) : NULL;
+    bool      mounted          = false;
+    char      local_name[256]  = {0};   /* the legit VolumeName domain (≤255) */
+    char      local_path[1024] = {0};   /* a mount path the consumer may use  */
+    DADiskRef disk             = DADiskCreateFromBSDName(kCFAllocatorDefault,
+                                                         session, bsd_name);
 
-    if (desc) {
-        /* VolumePath is the mount proof: DA also describes unmounted media,
-           so an absent/non-URL path means "not mounted", not an error.
-           CFURLGetFileSystemRepresentation returns false when the path
-           exceeds the buffer, yielding not-mounted rather than a truncated
-           path a consumer might chdir into. */
-        CFTypeRef path = CFDictionaryGetValue(
-            desc, kDADiskDescriptionVolumePathKey);
-        bool is_url = path && CFGetTypeID(path) == CFURLGetTypeID();
-        if (is_url && path_buf && path_cap) {
-            if (CFURLGetFileSystemRepresentation((CFURLRef)path, true,
-                                                 (UInt8 *)path_buf,
-                                                 (CFIndex)path_cap)) {
+    /* Identity bind: "diskN" can be reused, so a description fetched by name
+       could describe a DIFFERENT disc that inherited the unit after a swap
+       (the read-only twin of the force-unmount BSD-reuse race). Trust the
+       description only when the IOMedia behind this DADiskRef is the exact
+       registry object the handle resolved (expected_media_id), and re-check
+       AFTER copying it so a reuse during the copy is caught. Like every
+       public-DA-name API this NARROWS but cannot fully close the daemon-side
+       TOCTOU — for a read-only attribution it refuses on any DETECTED reuse,
+       and commits to the caller's buffers only once the identity still holds. */
+    if (disk && mos_internal_da_disk_is_media(disk, expected_media_id)) {
+        CFDictionaryRef desc = DADiskCopyDescription(disk);
+        if (desc) {
+            /* VolumePath is the mount proof: DA also describes unmounted media,
+               so an absent/non-URL path means "not mounted", not an error.
+               CFURLGetFileSystemRepresentation returns false when the path
+               exceeds the buffer, yielding not-mounted rather than a truncated
+               path a consumer might chdir into. The name-only caller (e.g.
+               `mos state`, path_buf == NULL) still resolves into local_path,
+               so VolumePath presence remains the mount proof for it. */
+            CFTypeRef path = CFDictionaryGetValue(
+                desc, kDADiskDescriptionVolumePathKey);
+            if (path && CFGetTypeID(path) == CFURLGetTypeID() &&
+                CFURLGetFileSystemRepresentation((CFURLRef)path, true,
+                                                 (UInt8 *)local_path,
+                                                 sizeof local_path)) {
                 mounted = true;
-            } else {
-                path_buf[0] = 0;
+                mos_internal_dr_copy_string(
+                    CFDictionaryGetValue(desc, kDADiskDescriptionVolumeNameKey),
+                    local_name, sizeof local_name);
             }
-        } else if (is_url) {
-            /* No path buffer: VolumePath presence alone is the mount proof,
-               so a name-only caller (e.g. `mos state`) still sees mounted. */
-            mounted = true;
+            CFRelease(desc);
         }
-        if (mounted)
-            mos_internal_dr_copy_string(
-                CFDictionaryGetValue(desc, kDADiskDescriptionVolumeNameKey),
-                name_buf, name_cap);
-        CFRelease(desc);
+        if (mounted && mos_internal_da_disk_is_media(disk, expected_media_id)) {
+            if (name_buf && name_cap) strlcpy(name_buf, local_name, name_cap);
+            if (path_buf && path_cap) strlcpy(path_buf, local_path, path_cap);
+        } else {
+            mounted = false;   /* reuse detected during the copy: refuse */
+        }
     }
 
     if (disk)    CFRelease(disk);
@@ -184,11 +201,12 @@ bool mos_internal_da_unmount(const char *bsd_name, uint64_t expected_media_id)
 /* No DiskArbitration linked: the mount layer is never consulted, so every
    disc reports unmounted — same contract as a disk DA cannot describe.
    Buffers cleared, false returned. */
-bool mos_internal_da_volume(const char *bsd_name,
+bool mos_internal_da_volume(const char *bsd_name, uint64_t expected_media_id,
                             char *name_buf, size_t name_cap,
                             char *path_buf, size_t path_cap)
 {
     (void)bsd_name;
+    (void)expected_media_id;
     if (name_buf && name_cap) name_buf[0] = 0;
     if (path_buf && path_cap) path_buf[0] = 0;
     return false;
@@ -226,10 +244,16 @@ mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
 
     if (h->bsd_unit < 0) return MOS_OK;     /* no IOMedia node: unmounted */
 
+    /* Identity unknown (bridge fallback / unresolved IOMedia id): fail closed
+       as unmounted rather than asking DA about a reusable diskN and risking an
+       unrelated disc's volume path. Ambiguous identity reports unmounted, never
+       an invented error. */
+    if (h->media_id == 0) return MOS_OK;
+
     char bsd[24];
     if (!mos_bsd_name_format(h->bsd_unit, bsd, sizeof bsd)) return MOS_OK;
 
-    bool m = mos_internal_da_volume(bsd, name_buf, name_cap,
+    bool m = mos_internal_da_volume(bsd, h->media_id, name_buf, name_cap,
                                     path_buf, path_cap);
     if (mounted) *mounted = m;
     return MOS_OK;

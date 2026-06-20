@@ -169,19 +169,37 @@ bool mos_internal_dr_device_snapshot(CFTypeRef device_ref,
     memset(s, 0, sizeof *s);
     s->bsd_unit = -1;
 
+    /* A DRDeviceRef can go stale while held: DRCopyDeviceArray is a point-in-
+       time snapshot, and a device can be unplugged between that snapshot and
+       these reads. DRDeviceIsValid exists precisely for this — it checks
+       whether a held reference is "still usable" (DRCoreDevice.h). Validate
+       before reading, again before the status read, and once more before
+       committing; otherwise a vanished device's stale identity strings could
+       be paired with a registry id that a reused topology path now resolves
+       to. Build into a local temp and commit only if valid throughout. */
+    if (!DRDeviceIsValid(dev)) return false;
+
+    mos_internal_dr_snapshot tmp;
+    memset(&tmp, 0, sizeof tmp);
+    tmp.bsd_unit = -1;
+
     CFDictionaryRef info = DRDeviceCopyInfo(dev);
-    if (info) {
-        mos_internal_dr_fill_from_info(info, s);
-        CFRelease(info);
-    }
+    if (!info) return false;
+    mos_internal_dr_fill_from_info(info, &tmp);
+    CFRelease(info);
+
     /* No reopenable identity ⇒ not usable (header). */
-    if (s->registry_id == 0) return false;
+    if (tmp.registry_id == 0) return false;
+    if (!DRDeviceIsValid(dev)) return false;
 
     CFDictionaryRef status = DRDeviceCopyStatus(dev);
     if (status) {
-        s->bsd_unit = mos_internal_dr_bsd_unit_from_status(status);
+        tmp.bsd_unit = mos_internal_dr_bsd_unit_from_status(status);
         CFRelease(status);
     }
+
+    if (!DRDeviceIsValid(dev)) return false;   /* vanished mid-read: refuse */
+    *s = tmp;
     return true;
 }
 
@@ -240,6 +258,16 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
     if (revision && rcap) revision[0] = 0;
     if (svc == IO_OBJECT_NULL) return false;
 
+    /* The identity must describe THIS service. Capture svc's own registry id
+       up front; the DR device we resolve by path must report the SAME id, or a
+       reused topology path could pair another device's vendor/product/revision
+       with this handle. A zero id (unresolvable) fails closed. */
+    uint64_t expected_id = 0;
+    if (IORegistryEntryGetRegistryEntryID(svc, &expected_id) != KERN_SUCCESS ||
+        expected_id == 0) {
+        return false;
+    }
+
     io_string_t path;
     if (IORegistryEntryGetPath(svc, kIOServicePlane, path) != KERN_SUCCESS) {
         return false;
@@ -253,13 +281,24 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
     if (!dev) return false; /* identity stays empty, non-fatal */
 
     bool ok = false;
-    CFDictionaryRef info = DRDeviceCopyInfo(dev);
-    if (info) {
-        mos_internal_dr_copy_identity_from_info(info, vendor, vcap,
-                                                product, pcap,
-                                                revision, rcap);
-        CFRelease(info);
-        ok = true;
+    /* A DRDeviceRef can go stale while held (DRDeviceIsValid, DRCoreDevice.h);
+       validate before and after reading its info. */
+    if (DRDeviceIsValid(dev)) {
+        CFDictionaryRef info = DRDeviceCopyInfo(dev);
+        if (info) {
+            /* Bind: the DR device's own IORegistry path must resolve to the
+               SAME registry id as the service, and the device must still be
+               valid, before its strings are trusted. */
+            uint64_t got_id = mos_internal_dr_id_for_path_value(
+                CFDictionaryGetValue(info, kDRDeviceIORegistryEntryPathKey));
+            if (got_id == expected_id && DRDeviceIsValid(dev)) {
+                mos_internal_dr_copy_identity_from_info(info, vendor, vcap,
+                                                        product, pcap,
+                                                        revision, rcap);
+                ok = true;
+            }
+            CFRelease(info);
+        }
     }
     CFRelease(dev);
     return ok;
