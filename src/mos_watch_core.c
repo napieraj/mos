@@ -500,8 +500,8 @@ mos_watch_decision mos_internal_watch_all_pump(mos_watch_all_state *a)
     out.next_poll_at_mono_ms = UINT64_MAX;
     if (!a) return out;
 
-    /* Visit active slots in ascending registry_id (selection scan; CAP 16,
-       a sort would be ceremony). Returning on the first EMIT bounds per-call
+    /* Visit active slots in ascending registry_id (selection scan; the CAP is
+       small, a sort would be ceremony). Returning on the first EMIT bounds per-call
        work; the next call re-enters at the lowest id, draining same-tick
        events in id order. */
     _Static_assert(MOS_WATCH_ALL_CAP <= 64, "visited bitmask is 64-wide");
