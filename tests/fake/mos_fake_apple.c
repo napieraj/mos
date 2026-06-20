@@ -433,6 +433,10 @@ io_service_t IOServiceGetMatchingService(mach_port_t masterPort,
         int64_t id = 0;
         if (n) CFNumberGetValue(n, kCFNumberSInt64Type, &id);
         if (g.present && (uint64_t)id == g.drive_id) result = FAKE_SVC;
+        /* The whole-disk IOMedia resolves by its own registry id (the volume
+           lookup's identity-exact path). Present only when media is loaded. */
+        else if (g.present && g.bsd_unit >= 0 && (uint64_t)id == g.media_id)
+            result = FAKE_MEDIA;
         /* IOServiceGetMatchingService consumes the matching dict ref. */
         CFRelease(matching);
     }
@@ -949,6 +953,18 @@ DADiskRef DADiskCreateFromBSDName(CFAllocatorRef allocator,
     if (!name || !name[0]) return NULL;
     return (DADiskRef)CFStringCreateWithCString(
         allocator, name, kCFStringEncodingUTF8);
+}
+
+/* Registry-id-exact volume lookup (mos_internal_da_volume): the caller resolved
+   `media` by its unique entry id, so any non-null media is the right disc — the
+   description read keys on the disk object, not a reusable name. */
+DADiskRef DADiskCreateFromIOMedia(CFAllocatorRef allocator,
+                                  DASessionRef session, io_service_t media)
+{
+    (void)session;
+    if (media == IO_OBJECT_NULL) return NULL;
+    return (DADiskRef)CFStringCreateWithCString(
+        allocator, "fake-da-disk-from-iomedia", kCFStringEncodingUTF8);
 }
 
 /* The IOMedia behind the disk (mos_da.c's identity bind for the force-unmount).

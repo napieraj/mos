@@ -371,32 +371,40 @@ TEST(adapter_toc_round_trip_and_fail_closed)
 TEST(adapter_da_volume_lookup_modalities)
 {
     char name[256], path[1024];
+    const uint64_t MID = 0x100000456ull;   /* the fake's default media id */
 
-    /* Unknown disk: no description, not mounted. */
+    /* Unknown disk: the IOMedia resolves but DA has no description → not
+       mounted. */
     mos_fake_reset();
-    EXPECT(!mos_internal_da_volume("disk4", name, sizeof name,
-                                   path, sizeof path));
+    EXPECT(!mos_internal_da_volume(MID, name, sizeof name, path, sizeof path));
     EXPECT(name[0] == 0 && path[0] == 0);
 
     /* Mounted with a name. */
     mos_fake_set_da_volume("ARRIVAL", "/Volumes/ARRIVAL");
-    EXPECT(mos_internal_da_volume("disk4", name, sizeof name,
-                                  path, sizeof path));
+    EXPECT(mos_internal_da_volume(MID, name, sizeof name, path, sizeof path));
     EXPECT(strcmp(name, "ARRIVAL") == 0);
     EXPECT(strcmp(path, "/Volumes/ARRIVAL") == 0);
 
     /* Present but unmounted (description without VolumePath): false, both
        empty — DA describes unmounted media too. */
     mos_fake_set_da_volume("GHOST", NULL);
-    EXPECT(!mos_internal_da_volume("disk4", name, sizeof name,
+    EXPECT(!mos_internal_da_volume(MID, name, sizeof name, path, sizeof path));
+    EXPECT(name[0] == 0 && path[0] == 0);
+
+    /* IDENTITY-EXACT BY CONSTRUCTION (#1): a stale / wrong media id resolves to
+       NO IOMedia (its registry entry is gone, never reused), so DA is never
+       consulted and another disc can't be misattributed — even with a mount
+       present. No "expected vs actual" verification; the resolution IS the
+       identity. */
+    mos_fake_set_da_volume("ARRIVAL", "/Volumes/ARRIVAL");
+    EXPECT(!mos_internal_da_volume(0xDEADBEEFull, name, sizeof name,
                                    path, sizeof path));
     EXPECT(name[0] == 0 && path[0] == 0);
 
-    /* Hostile/degenerate args stay in bounds and report unmounted. */
-    EXPECT(!mos_internal_da_volume(NULL, name, sizeof name,
-                                   path, sizeof path));
-    EXPECT(!mos_internal_da_volume("", name, sizeof name,
-                                   path, sizeof path));
+    /* Zero media id (identity unknown / bridge fallback): fail closed. */
+    EXPECT(!mos_internal_da_volume(0, name, sizeof name, path, sizeof path));
+    EXPECT(name[0] == 0 && path[0] == 0);
+
     return 0;
 }
 
