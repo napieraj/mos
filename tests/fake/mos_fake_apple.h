@@ -49,13 +49,6 @@ void mos_fake_set_identity(const char *vendor, const char *product,
 void mos_fake_set_drive_id(uint64_t id);
 void mos_fake_set_media_id(uint64_t id);
 
-/* Desync the IOMedia id reported behind a DADiskRef from the media under the
-   drive service. Models a reused "diskN" resolving to an unrelated disk, so
-   the `tray eject --force` unmount bind (mos_internal_da_unmount) must refuse.
-   Unset by default — DADiskCopyIOMedia's media reports the same id as the
-   whole-disk node, the normal same-disk case. */
-void mos_fake_set_da_media_id(uint64_t id);
-
 /* Override the IOMedia node's kernel-cached capacity (kIOMediaSizeKey /
    kIOMediaPreferredBlockSizeKey, what mos_query_capacity reads). Default
    0/0 (absent: blank/unrecorded); non-zero models sized recorded/pressed
@@ -130,6 +123,10 @@ void mos_fake_set_method_ioreturn(mos_fake_method m, uint32_t io_return);
 /* Make ObtainExclusiveAccess fail with kIOReturnExclusiveAccess
    (another client holds the drive). Cleared by mos_fake_reset(). */
 void mos_fake_set_exclusive_denied(bool denied);
+
+/* Model a Finder/system mount: ObtainExclusiveAccess returns BUSY until a
+   successful DADiskUnmount clears it — exercises `tray eject --force`. */
+void mos_fake_set_mounted_busy(bool busy);
 
 /* Make ReleaseExclusiveAccess return non-success AND keep the lock held
    (lock_balance is NOT decremented) — models a kernel that does not confirm

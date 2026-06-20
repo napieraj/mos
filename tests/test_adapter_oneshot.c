@@ -637,26 +637,32 @@ TEST(adapter_tray_cdbs_pinned_byte_for_byte)
     return rc;
 }
 
-TEST(adapter_tray_eject_force_disabled_by_default)
+TEST(adapter_tray_eject_force_unmounts_and_ejects)
 {
-    /* First-tag: the data-loss force path is gated off
-       (MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT default 0; AGENTS.md "the identity
-       bind does NOT close the BSD-reuse race"). `tray eject --force` returns
-       MOS_ERR_UNSUPPORTED WITHOUT issuing any CDB or taking the exclusive lock —
-       the destructive path never runs at all. Plain eject is unaffected and is
-       covered by the other tray tests. */
+    /* `tray eject --force` is name-semantics (diskutil-class), enabled at the
+       library: a mounted disc makes the first eject's ObtainExclusiveAccess
+       return BUSY; --force force-unmounts the volume (DADiskUnmount clears the
+       mount) and reconverges on the eject CDB, which now succeeds → DONE. The
+       SELECTOR gate (index/regid opt-in) lives in cli/tray.c, not here. */
     mos_fake_reset();
+    mos_fake_set_mounted_busy(true);     /* first eject sees the mount as BUSY */
     mos_error err = MOS_ERR_IO;
     mos_handle_t *h = mos_open_by_index(1, &err);
     EXPECT(h != NULL);
 
     mos_tray_outcome out = (mos_tray_outcome)-1;
-    EXPECT_EQ(MOS_ERR_UNSUPPORTED, mos_tray_eject(h, /*force=*/true, &out, NULL));
-    /* The gate returns before any drive I/O: no CDB, no lock acquire. */
-    EXPECT_EQ(0, mos_fake_lock_acquires());
+    EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/true, &out, NULL));
+    EXPECT_EQ(MOS_TRAY_DONE, out);
+    /* The re-eject took the exclusive lock once and released it (the BUSY first
+       attempt never acquired); balance is clean. */
     EXPECT_EQ(0, mos_fake_lock_balance());
-    uint8_t cdb[16];
-    EXPECT_EQ(0, (int)mos_fake_last_cdb(cdb));     /* no CDB authored */
+
+    /* Without --force, the same mount surfaces as MOS_ERR_BUSY (unchanged). */
+    mos_fake_set_mounted_busy(true);
+    out = (mos_tray_outcome)-1;
+    EXPECT_EQ(MOS_ERR_BUSY, mos_tray_eject(h, /*force=*/false, &out, NULL));
+    EXPECT_EQ(0, mos_fake_lock_balance());
+
     mos_close(h);
     return 0;
 }
@@ -711,32 +717,18 @@ TEST(adapter_tray_refused_other_carries_its_sense)
     return 0;
 }
 
-TEST(adapter_da_unmount_binds_to_media_identity)
+TEST(adapter_da_unmount_is_name_based)
 {
-    /* F1 regression: the force-unmount target is bound to the handle's current
-       media identity (registry entry id), not just a "diskN" string. macOS
-       reuses BSD unit numbers, so a stale/reused name must NOT cause a forced
-       unmount of an unrelated disk (data-loss). mos_internal_da_unmount unmounts
-       only when the IOMedia behind diskN has the exact id the caller passes. */
+    /* Force-unmount is NAME semantics (diskutil-class): mos_internal_da_unmount
+       unmounts the disc currently named "diskN", with no identity bind — the
+       public DA API can't provide one (the daemon re-resolves by name; verified
+       in DADisk.c). The consent against a reused name is the CLI selector gate,
+       not a library bind. Here we pin the library contract: a non-empty name
+       unmounts (fake DADiskUnmount succeeds), degenerate names fail closed. */
     mos_fake_reset();
-    mos_fake_set_da_volume("ARRIVAL", "/Volumes/ARRIVAL");   /* a mount exists */
-    const uint64_t cur = 0x100000456ull;                     /* default media_id */
-
-    /* (a) Matching identity → the unmount proceeds (fake DADiskUnmount succeeds). */
-    EXPECT(mos_internal_da_unmount("disk4", cur));
-
-    /* (b) Mismatched identity (diskN reused by an unrelated disk) → REFUSED,
-       the wrong disk is never unmounted. */
-    mos_fake_set_da_media_id(cur ^ 0xFFFFull);
-    EXPECT(!mos_internal_da_unmount("disk4", cur));
-
-    /* (c) Zero expected id (identity unknown, e.g. media vanished) → refused. */
-    EXPECT(!mos_internal_da_unmount("disk4", 0));
-
-    /* (d) diskN no longer backs any IOMedia (media absent) → refused, no crash. */
-    mos_fake_reset();
-    mos_fake_set_bsd_unit(-1);                               /* no whole-disk node */
-    EXPECT(!mos_internal_da_unmount("disk4", cur));
+    EXPECT(mos_internal_da_unmount("disk4"));   /* succeeds by name */
+    EXPECT(!mos_internal_da_unmount(NULL));      /* no name: false */
+    EXPECT(!mos_internal_da_unmount(""));        /* empty name: false */
     return 0;
 }
 
@@ -841,8 +833,8 @@ int main(void)
     RUN(adapter_disc_id_decodes_and_fails_closed);
     RUN(adapter_feature_enumeration_order_and_stop);
     RUN(adapter_tray_cdbs_pinned_byte_for_byte);
-    RUN(adapter_tray_eject_force_disabled_by_default);
-    RUN(adapter_da_unmount_binds_to_media_identity);
+    RUN(adapter_tray_eject_force_unmounts_and_ejects);
+    RUN(adapter_da_unmount_is_name_based);
     RUN(adapter_tray_locked_eject_classifies_refused_locked);
     RUN(adapter_tray_refused_other_carries_its_sense);
     RUN(adapter_tray_exclusive_denied_is_negative_error);

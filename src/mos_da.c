@@ -109,57 +109,36 @@ static void mos_internal_da_unmount_cb(DADiskRef disk,
     dispatch_semaphore_signal(c->sem);
 }
 
-/* True when the IOMedia behind `disk` is the exact registry object identified
-   by expected_media_id — the identity bind that NARROWS the window in which a
-   reused "diskN" could send the force-unmount to the wrong disk. It is a LOCAL
-   check and does not close the race (see the KNOWN ISSUE on the unmount below);
-   DADiskCopyIOMedia returns the
-   IOMedia io_service_t (owned, released here); its registry entry ID is the
-   same value mos_internal_capture_media_snapshot captured (media_id) off
-   h->svc's child. */
-static bool mos_internal_da_disk_is_media(DADiskRef disk,
-                                          uint64_t expected_media_id)
-{
-    if (expected_media_id == 0) return false;       /* identity unknown */
-    io_service_t media = DADiskCopyIOMedia(disk);
-    if (media == IO_OBJECT_NULL) return false;      /* diskN has no IOMedia */
-    uint64_t got = 0;
-    bool match = (IORegistryEntryGetRegistryEntryID(media, &got) == KERN_SUCCESS)
-                 && got == expected_media_id;
-    IOObjectRelease(media);
-    return match;
-}
-
 /* Force-unmount EVERY volume on whole-disk "diskN"
    (kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole). True on success.
    ONLY the `tray eject --force` path calls this: a forced unmount kills open
-   file handles (data-loss capable) — that is the "open no matter what"
-   contract, strictly opt-in behind --force. The unmount is GATED on the
-   identity bind above: a stale/reused BSD name that no longer resolves to the
-   caller's media is refused, never unmounted. This is the SINGLE DiskArbitration
-   ACTION mos performs; unlike the synchronous description read above, DADiskUnmount
-   is asynchronous (returns void, delivers via callback — verified against
-   DADisk.h: takes the disk, not a session; options Force=0x00080000, Whole=0x1;
-   success = NULL dissenter). We make it synchronous-from-our-side: deliver the
-   callback on a background queue and block this thread on a semaphore until it
-   fires. The wait is UNBOUNDED on purpose — the callback is guaranteed exactly
-   once when the unmount resolves, so the context cannot outlive a late callback
-   (no use-after-free), and a genuinely wedged force-unmount blocks here just as
+   file handles (data-loss capable) — the "open no matter what" contract,
+   strictly opt-in behind --force and gated by selector in cli/tray.c.
+
+   NAME SEMANTICS, by design. mos unmounts the disc currently named `bsd_name`,
+   exactly as `diskutil unmountDisk` does — there is NO identity bind, because
+   the public DA API cannot provide one: DADiskUnmount transmits the NAME and
+   diskarbitrationd re-resolves it by name at request time. (DADiskCreateFromIOMedia
+   is no escape — first-hand in DADisk.c it reads kIOBSDNameKey and delegates to
+   DADiskCreateFromBSDName; the DADiskRef stores only the name.) A `diskN`
+   reassigned in the request window is unmounted as-named, the same residual
+   diskutil ships; the CLI selector gate is the consent mechanism (explicit
+   bsd-node / sole-drive by default, identity selectors opt-in).
+
+   DADiskUnmount is asynchronous (returns void, delivers via callback — verified
+   against DADisk.h: takes the disk, not a session; options Force=0x00080000,
+   Whole=0x1; success = NULL dissenter). We make it synchronous-from-our-side:
+   deliver the callback on a background queue and block on a semaphore until it
+   fires. The wait is UNBOUNDED on purpose — the callback fires exactly once when
+   the unmount resolves, so the context cannot outlive a late callback (no
+   use-after-free), and a genuinely wedged force-unmount blocks here just as
    `diskutil` would (the I/O path itself is stuck).
 
-   KNOWN ISSUE (2026-06-20 review; AGENTS.md addendum "the identity bind does NOT
-   close the BSD-reuse race"): two data-loss-path defects are RECORDED here,
-   behavior unchanged pending a maintainer decision (Process rule 2):
-     1. TOCTOU. The identity bind below is a LOCAL read; DADiskUnmount transmits
-        the diskN *name* and diskarbitrationd re-resolves it by name at request
-        time, so a diskN reuse in the check->daemon-lookup window can unmount the
-        wrong disk. Public DA exposes no identity-bound unmount, so the window can
-        be minimized but not closed — only fail-closed guarantees safety.
-     2. Unbounded wait. DASessionSetDispatchQueue is void/fallible; a silent
-        failure leaves no callback port and the DISPATCH_TIME_FOREVER wait can
-        hang. A safe bounded fix needs a heap-owned context (the stack-local ctx
-        makes a naive timeout a use-after-return). */
-bool mos_internal_da_unmount(const char *bsd_name, uint64_t expected_media_id)
+   KNOWN ISSUE (unbounded wait): DASessionSetDispatchQueue is void/fallible; a
+   silent failure leaves no callback port and the DISPATCH_TIME_FOREVER wait can
+   hang. A bounded fix needs a heap-owned context (a stack-local ctx makes a
+   naive timeout a use-after-return) — a post-tag refinement. */
+bool mos_internal_da_unmount(const char *bsd_name)
 {
     if (!bsd_name || !bsd_name[0]) return false;
 
@@ -169,10 +148,7 @@ bool mos_internal_da_unmount(const char *bsd_name, uint64_t expected_media_id)
     bool      ok   = false;
     DADiskRef disk = DADiskCreateFromBSDName(kCFAllocatorDefault,
                                              session, bsd_name);
-    /* Fail closed unless diskN still resolves to the handle's current media:
-       a destructive op on a stale/reused BSD name must never touch a disk that
-       is not the one the caller verified under its drive service. */
-    if (disk && mos_internal_da_disk_is_media(disk, expected_media_id)) {
+    if (disk) {
         dispatch_semaphore_t sem = dispatch_semaphore_create(0);
         mos_da_unmount_ctx   ctx = { sem, false };
         DASessionSetDispatchQueue(session,
@@ -211,10 +187,9 @@ bool mos_internal_da_volume(uint64_t media_id,
    `tray eject --force` reporting the mount as MOS_ERR_BUSY rather than opening
    it — the honest degradation for the opt-out build (the consumer unmounts
    with `diskutil unmountDisk` first, exactly as without --force). */
-bool mos_internal_da_unmount(const char *bsd_name, uint64_t expected_media_id)
+bool mos_internal_da_unmount(const char *bsd_name)
 {
     (void)bsd_name;
-    (void)expected_media_id;
     return false;
 }
 

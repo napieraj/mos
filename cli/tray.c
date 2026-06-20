@@ -14,6 +14,7 @@
  */
 #include "common.h"
 
+#include <stdlib.h>   /* getenv: the MOS_FORCE_BY_IDENTITY opt-in */
 #include <string.h>
 #include <sysexits.h>
 
@@ -185,6 +186,30 @@ int mos_cli_run_tray(void)
     d.persistent  = flag_persistent;
     d.outcome     = MOS_TRAY_DONE;
 
+    /* Selector gate for the data-loss force-unmount. `tray eject --force`
+       operates by NAME (diskutil semantics — mos_tray.c). For an explicit
+       bsd-node selector, or the sole drive, the user named the disc, so force is
+       the default. For an EPHEMERAL positional index or an identity registry-id
+       — where mos derives the name and the position/id can mismatch the disc you
+       mean — refuse by default when media is present and point at the bsd-node
+       form, unless MOS_FORCE_BY_IDENTITY is set. (No media ⇒ nothing to unmount,
+       so force is harmless and not gated.) */
+    if (act == ACT_EJECT && flag_force && (opt_index || opt_registry) &&
+        d.bsd_unit >= 0 && !getenv("MOS_FORCE_BY_IDENTITY")) {
+        char dev[24];
+        (void)mos_bsd_dev_node(d.bsd_unit, dev, sizeof dev);
+        fprintf(stderr,
+            "%s: refusing `tray eject --force` via a %s selector — it can name "
+            "the wrong disc, and force-unmount is data-loss-capable.\n"
+            "The disc in this drive is %s; run:\n"
+            "    %s %s tray eject --force\n"
+            "or set MOS_FORCE_BY_IDENTITY=1 to force by %s anyway.\n",
+            progname, opt_index ? "positional-index" : "registry-id",
+            dev, progname, dev, opt_index ? "index" : "registry id");
+        mos_close(h);
+        return EX_USAGE;
+    }
+
     /* The verbs return the drive's sense triple via the out-param: all-zero
        on DONE, the real {key,asc,ascq} on any refusal (5/53/02 for
        refused_locked, e.g. 5/24/00 for an unsupported Persistent Prevent). */
@@ -199,14 +224,15 @@ int mos_cli_run_tray(void)
     }
 
     if (op != MOS_OK) {
-        /* `tray eject --force` returns MOS_ERR_UNSUPPORTED when the data-loss
-           force-unmount path is gated off (default; the library's
-           MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT flag). Give that the actionable
-           message rather than the bare "unsupported". */
+        /* A force eject that still reports BUSY means the volume could not be
+           force-unmounted — DiskArbitration is opted out of this build, or the
+           unmount was refused. Give the actionable diskutil hint rather than a
+           bare "busy". (EXCLUSIVE_ACCESS — a peer client — falls to generic.) */
         const char *msg = (act == ACT_EJECT && flag_force &&
-                           op == MOS_ERR_UNSUPPORTED)
-            ? "forced unmount is disabled in this build; unmount the volume "
-              "first (e.g. `diskutil unmountDisk`), then `tray eject`"
+                           op == MOS_ERR_BUSY)
+            ? "could not force-unmount the volume (DiskArbitration unavailable "
+              "in this build, or the unmount was refused); unmount it with "
+              "`diskutil unmountDisk` first, then `tray eject`"
             : "tray command failed";
         char bsd_buf[24];
         if (!mos_bsd_dev_node(mos_handle_bsd_unit(h), bsd_buf, sizeof bsd_buf))

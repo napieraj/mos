@@ -591,6 +591,65 @@ path; the bounded-wait/heap-context fix is post-tag since the path is gated off
 for the tag. What hardware can falsify: the exact width of the
 check→daemon-lookup window; it cannot establish that the window is safe.
 
+### Addendum: `tray eject --force` = name semantics, gated by selector — ships
+### ON by default (supersedes the "fail-closed for the first tag" disposition,
+### 2026-06-20)
+
+The disposition above disabled `--force` because the redesign only NARROWS the
+race and "only fail-closed guarantees safety." This entry supersedes it on the
+merits: the framing was wrong. The race only exists if mos PROMISES identity-
+exactness on a name-keyed action. Drop that promise — adopt name semantics —
+and there is nothing to be stale: mos unmounts the disc *currently named*
+`diskN`, exactly as `diskutil unmountDisk diskN` does, a default macOS tool
+nobody considers defective. The bind, the re-check, the compile gate, the
+"post-tag guarded redesign" were all defending an exactness claim we no longer
+make.
+
+**First-hand source verification (supersedes the secondhand citation in the
+addenda above).** Read directly from Apple's `DiskArbitration/DADisk.c`
+(`apple-oss-distributions`): `DADiskCreateFromIOMedia` reads `kIOBSDNameKey` off
+the media and **delegates to `DADiskCreateFromBSDName`**; `struct __DADisk`
+holds only `_device` (BSD name) and `_id` ("/dev/diskN") — **no `io_service_t`**.
+So `DADiskUnmount` transmits the name and `diskarbitrationd` re-resolves it by
+name at request time; there is no identity-bound unmount target in the public
+API, and `DADiskCreateFromIOMedia` is not an escape (it IS the name path). The
+earlier addenda's conclusion stands; the citation is now first-hand.
+
+**The decision.** `tray eject --force` ships **enabled by default**, name
+semantics. The data-loss consent is `--force` itself plus a **selector gate** in
+`cli/tray.c` (intent encoded by selector type):
+- **bsd-node selector** (`mos disk4 …`) or the **sole drive** → default, no flag.
+  The user named the disc (or there is exactly one), so the name action matches
+  intent.
+- **positional index** (`mos 2 …`) or **identity registry-id** → refused by
+  default with a redirect to the bsd-node form (`mos diskN tray eject --force`),
+  unless the **runtime** `MOS_FORCE_BY_IDENTITY` env opt-in is set. The index is
+  the real footgun (an ephemeral position shifting under a destructive action);
+  regid carries the identity-vs-name mismatch. No media present ⇒ nothing to
+  unmount ⇒ not gated.
+
+This is *more* conservative than `diskutil` (which force-unmounts by name with no
+gate at all), while being honest that the residual is `diskutil`-class. One
+recorded residual: mos bundles unmount **+ eject**, so a `diskN` that drifts to
+another drive between keystroke and daemon unmounts wherever the name points now
+while the eject targets the handle's drive — the same name-reassignment exposure
+`diskutil` ships, opt-in by naming.
+
+**Code consequences.** `MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT` is removed (force
+is live, not behind a compile flag). `mos_internal_da_unmount` drops its
+`expected_media_id` bind and the `mos_internal_da_disk_is_media` helper is gone —
+the unmount is name-only. The selector gate + the `MOS_FORCE_BY_IDENTITY`
+redirect live in `cli/tray.c`. The unbounded-wait KNOWN ISSUE (the void
+`DASessionSetDispatchQueue` + `DISPATCH_TIME_FOREVER`) remains a post-tag
+refinement (heap-owned context), documented at the call site — it is a hang risk,
+not a wrong-target risk.
+
+**Retire path.** The gate is conservatism, not necessity: the residual is
+identical across selectors (diskutil-class). A later entry may relax it — most
+defensibly by moving regid to default (it is identity-stable) and keeping only
+the ephemeral index gated, or removing the gate entirely. That is a fresh dated
+argument here, not assumed.
+
 ## ADR: verb `state` replaces `status`; bare selector is the default subject (2026-06-14)
 
 The default verb was renamed `status` → `state` (clean break, no alias),

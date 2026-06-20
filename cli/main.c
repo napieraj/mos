@@ -78,7 +78,10 @@ void mos_cli_print_usage(FILE *f)
         "                    'mos list'); explicit form of the positional\n"
         "      --bsd NAME    BSD form; explicit form of the positional\n"
         "      --force       tray eject: open no matter what (force-unmount +\n"
-        "                    clear locks, then eject)\n"
+        "                    clear locks, then eject). Data-loss-capable, by\n"
+        "                    name (like `diskutil unmountDisk`). Default for a\n"
+        "                    BSD-node selector or the sole drive; for an index\n"
+        "                    or registry-id, set MOS_FORCE_BY_IDENTITY=1.\n"
         "      --persistent  tray lock/unlock: the Persistent Prevent state\n"
         "                    (survives the operator eject button as an event)\n"
 #ifdef MOS_CLI_PROBE

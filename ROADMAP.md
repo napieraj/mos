@@ -65,15 +65,17 @@ These corroborate the spec-derived fixtures; they gate nothing.
   the AGENTS.md probe-default ADR. Pre-tag the default stays ON (HEAD installers
   are developers, and the fixture-capture workflow wants `mos probe --capture`
   present with zero friction).
-- **Force-unmount disabled at tag.** `tray eject --force` is a data-loss-capable
-  path whose DiskArbitration unmount cannot be bound to the exact IOMedia
-  identity end-to-end — the daemon resolves the target by NAME at request time
-  (R3 adapter audit; AGENTS.md "the identity bind does NOT close the BSD-reuse
-  race"). It is **gated off by default** behind `MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT`
-  (compile flag, default 0): `mos_tray_eject` returns `MOS_ERR_UNSUPPORTED` for
-  `force`; plain eject and the `MOS_ERR_BUSY`-on-mounted report are unchanged.
-  The force path stays compiled (only the gate is `#if`'d) so it does not
-  bitrot. Reintroduction is the post-tag item below.
+- **Force-unmount: name semantics, selector-gated, ships ON** (supersedes the
+  earlier "disabled at tag"). `tray eject --force` unmounts by NAME, exactly like
+  `diskutil unmountDisk` — the public DA API has no identity-bound unmount target
+  (first-hand in DADisk.c; AGENTS.md ADR "name semantics, gated by selector").
+  The compile flag is gone; the consent is `--force` + a CLI **selector gate**:
+  default for a bsd-node selector or the sole drive; an index or registry-id is
+  refused with a redirect unless `MOS_FORCE_BY_IDENTITY=1`. More conservative than
+  diskutil, honest that the residual is diskutil-class. The unbounded-wait
+  KNOWN ISSUE (void `DASessionSetDispatchQueue` / `DISPATCH_TIME_FOREVER`) stays a
+  post-tag refinement; the gate may later be relaxed (regid → default) per the
+  ADR's retire path.
 - **Division of labour.** DR enumerates and hands over cheap coarse status (a
   passive, GESN-fed snapshot "not guaranteed current"); mos owns the
   synchronous, fully-checked state machine and the deep rip-relevant metadata
@@ -103,11 +105,14 @@ it). What remains:
   command-level write-speed kept best-effort + documented; the `_Static_assert`
   watch re-home tripwire; and the exclusive-access release fix (#88). The
   post-tag work:
-    1. Reintroduce `tray eject --force` only behind the experimental gate, with
-       the guarded redesign — re-resolve media → verify registry id → create the
-       DA disk → re-verify `DADiskCopyIOMedia` id → callback-side re-verify →
-       fail on any mismatch. (Narrows the race; the public API still cannot prove
-       the daemon acts on the same registry object — AGENTS.md TOCTOU addendum.)
+    1. ~~Reintroduce `tray eject --force` behind the experimental gate with a
+       guarded identity redesign.~~ DONE differently: shipped as name semantics +
+       selector gate (AGENTS.md ADR "name semantics, gated by selector"). The
+       identity redesign was abandoned — DADisk.c verification confirmed the
+       public API cannot bind the daemon's unmount to a registry id, so there is
+       nothing to "verify"; embracing name semantics dissolved the problem. Dead
+       fake scaffolding from the old bind (`mos_fake_set_da_media_id`,
+       `DADiskCopyIOMedia`, the `da_media_id` desync) is a small cleanup follow-up.
     2. Heap-owned, bounded DA callback context with leak-or-reap-on-timeout (the
        void `DASessionSetDispatchQueue` / `DISPATCH_TIME_FOREVER` hang; a naive
        timeout over the stack-local context is a use-after-return).
