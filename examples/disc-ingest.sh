@@ -96,9 +96,8 @@ need() {
     return 1
 }
 
-# sha256 of stdin (or a file via redirection), hash only. macOS ships shasum;
-# Linux boxes running the pure tests have sha256sum.
-sha256() { { shasum -a 256 2>/dev/null || sha256sum; } | awk '{print $1}'; }
+# sha256 of stdin (or a file via redirection), hash only. macOS ships shasum.
+sha256() { shasum -a 256 | awk '{print $1}'; }
 
 # is_video_volume MOUNTPOINT — does this mounted disc carry a video layout?
 # mos names the disc CLASS (cd/dvd/bd) but cannot tell a movie DVD from a data
@@ -446,7 +445,7 @@ ingest_one() {                              # ingest_one <drive-selector>
             run ddrescue -b2048 -n     "$raw" "$img" "$img.map"   # fast pass, no split
             run ddrescue -b2048 -d -r3 "$raw" "$img" "$img.map"   # retry the gaps
             if [ "${DRY_RUN:-0}" != 1 ] && [ -f "$img" ]; then
-                local got; got=$(stat -f%z "$img" 2>/dev/null || stat -c%s "$img")
+                local got; got=$(stat -f%z "$img")
                 if [ -n "$size" ] && [ "$got" = "$size" ]; then
                     log "verified: $img == $size bytes (mos capacity)"
                 elif [ -n "$size" ]; then
