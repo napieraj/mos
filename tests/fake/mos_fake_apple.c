@@ -59,7 +59,6 @@ const CFStringRef kDRDeviceMediaStateKey        = CFSTR("mos.fake.MediaState");
 /* ---- Object handles (io_object_t == mach_port_t == unsigned int) --- */
 #define FAKE_SVC    ((io_service_t)1)        /* the drive service          */
 #define FAKE_MEDIA  ((io_object_t)2)         /* whole-disk IOMedia child   */
-#define FAKE_DA_MEDIA ((io_object_t)3)       /* IOMedia behind a DADiskRef  */
 #define FAKE_ITER   ((io_iterator_t)10)      /* the (single) child iterator */
 #define FAKE_DEV    ((DRDeviceRef)CFSTR("mos.fake.device"))
 #define FAKE_ID_KEY  CFSTR("mos.fake.matchID")
@@ -85,10 +84,6 @@ static struct {
     bool     da_present;        /* DADiskCopyDescription returns a dict   */
     char     da_name[256];      /* VolumeName; "" = key absent            */
     char     da_path[1024];     /* VolumePath; "" = key absent (unmounted)*/
-    uint64_t da_media_id;       /* registry id of the IOMedia behind the  */
-    bool     da_media_id_set;   /* DADiskRef; unset == tracks media_id (the
-                                   same physical media). Set to desync for the
-                                   BSD-reuse / wrong-target unmount bind test. */
 
     /* Raw-CDB script (the GESN tray probe path). */
     uint32_t method_rc[6];      /* per-method IOReturn injection;
@@ -167,10 +162,6 @@ void mos_fake_set_bsd_unit(int64_t unit) { g.bsd_unit = unit; }
 
 void mos_fake_set_drive_id(uint64_t id) { g.drive_id = id; }
 void mos_fake_set_media_id(uint64_t id) { g.media_id = id; }
-/* Desync the IOMedia id behind the DADiskRef from the media under the drive
-   service — models a reused "diskN" pointing at an unrelated disk, so the
-   force-unmount bind must refuse. */
-void mos_fake_set_da_media_id(uint64_t id) { g.da_media_id = id; g.da_media_id_set = true; }
 
 void mos_fake_set_media_size(uint64_t bytes, uint32_t block_bytes)
 {
@@ -400,10 +391,6 @@ kern_return_t IORegistryEntryGetRegistryEntryID(io_registry_entry_t entry,
     if (!entryID) return KERN_FAILURE;
     if (entry == FAKE_SVC)   { *entryID = g.drive_id; return KERN_SUCCESS; }
     if (entry == FAKE_MEDIA) { *entryID = g.eff_id; return KERN_SUCCESS; }
-    if (entry == FAKE_DA_MEDIA) {
-        *entryID = g.da_media_id_set ? g.da_media_id : g.media_id;
-        return KERN_SUCCESS;
-    }
     return KERN_FAILURE;
 }
 
@@ -991,19 +978,6 @@ DADiskRef DADiskCreateFromIOMedia(CFAllocatorRef allocator,
     if (media == IO_OBJECT_NULL) return NULL;
     return (DADiskRef)CFStringCreateWithCString(
         allocator, "fake-da-disk-from-iomedia", kCFStringEncodingUTF8);
-}
-
-/* The IOMedia behind the disk (mos_da.c's identity bind for the force-unmount).
-   Returns FAKE_DA_MEDIA when the disk resolves to current whole-disk media
-   (drive present, media inserted), else IO_OBJECT_NULL — modelling a "diskN"
-   that no longer backs any IOMedia. Its registry id (via
-   IORegistryEntryGetRegistryEntryID above) is the media's id by default, or the
-   desync'd da_media_id when a test forces the wrong-target case. The returned
-   object is "owned"; mos_da.c releases it via IOObjectRelease (a fake no-op). */
-io_service_t DADiskCopyIOMedia(DADiskRef disk)
-{
-    if (!disk || !g.present || g.bsd_unit < 0) return IO_OBJECT_NULL;
-    return FAKE_DA_MEDIA;
 }
 
 CFDictionaryRef DADiskCopyDescription(DADiskRef disk)
