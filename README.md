@@ -4,28 +4,23 @@
 [![CI](https://github.com/napieraj/mos/actions/workflows/ci.yml/badge.svg)](https://github.com/napieraj/mos/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/napieraj/mos)](https://github.com/napieraj/mos/blob/main/LICENSE)
 
-> Report what a macOS optical drive is actually doing — tray open,
-> tray closed empty, loading, unit ready, busy — by querying the
-> drive directly.
+> Report what a macOS optical drive is actually doing — tray open, tray
+> closed empty, loading, unit ready, busy — by querying the drive directly.
 
 `drutil status` can't tell an **open** tray from one **closed on an empty
-slot** — both print `No Media Inserted`, and nothing else in Apple's
-optical tooling surfaces the difference. `mos` reads it from the drive
-directly and distinguishes them, as a command-line tool and an embeddable
-pure-C library. No runtime dependencies beyond Apple's own IOKit,
-CoreFoundation, DiscRecording, and DiskArbitration frameworks; no
-entitlements, no root. A state query costs at most two MMC commands —
-TEST UNIT READY, plus a tray probe or a profile read; the decision tree
-and sense tables are in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+slot** — both print `No Media Inserted`. `mos` reads the drive directly and
+distinguishes them, as a command-line tool and an embeddable pure-C library.
+No entitlements, no root, no dependencies beyond Apple's own frameworks. The
+decision tree and sense tables are in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## Contents
 
 - [Quickstart](#quickstart)
 - [Selecting a drive](#selecting-a-drive)
 - [Commands](#commands)
-- [Using the library](#using-the-library)
-- [Shell integration](#shell-integration)
 - [JSON output](#json-output)
+- [Library](#library)
+- [Shell integration](#shell-integration)
 - [Install](#install)
 - [Requirements](#requirements)
 
@@ -49,7 +44,7 @@ Registry ID:  4295032831
    Firmware:  1.00
 ```
 
-Add `--json` for a machine-readable document:
+Add `--json` to any verb for a machine-readable document:
 
 ```
 $ mos state 1 --json
@@ -70,72 +65,37 @@ $ mos state 1 --json
 }
 ```
 
-`mos list` shows every attached drive; `mos watch` streams state changes
-as they happen. Both are covered below.
-
 ## Selecting a drive
 
-The drive is a positional argument after the subcommand, like
-`diskutil info disk4`. Three forms:
+The drive is a positional argument after the verb, like `diskutil info disk4`.
+Three forms:
 
 - an **Index** from `mos list` — `mos state 1`;
-- a **registry_id** from `mos`'s output (the `Registry ID:` row or the
-  `registry_id` field) — the drive's attachment identity: never reused,
-  and stable across disc swaps (an empty drive keeps it even with no
-  `diskN`), so in a script it targets this exact drive or fails cleanly
-  instead of landing on the wrong one;
+- a **registry_id** — the drive's attachment identity (never reused, stable
+  across disc swaps, kept even when the tray is empty) — `mos state 4295032831`;
 - a **BSD form** — `disk4`, `rdisk4`, or `/dev/disk4`.
 
-With one drive attached you can omit it (`mos state`). With several, an
-omitted subject exits 64 and prints the drive table to stderr — `mos`
-never guesses a first drive. A bare selector with no verb runs the
-default `state` verb: `mos 2` or `mos disk4` reports that drive's state.
-Bare `mos` with no arguments prints usage to stderr and exits 64.
-
-Human and JSON output share every enum string verbatim (`ready`,
-`bd_rom`), so a terminal report and a `jq` query never disagree.
-Identity (`vendor` / `product` / `firmware`) reads the same on every
-surface too. The `bsd_node` field carries the full device node
-(`/dev/disk4`), pasteable as a drive argument; it is `null` on an empty
-drive.
+With one drive attached, omit it (`mos state`). With several, an omitted subject
+exits 64 and prints the drive table to stderr — `mos` never guesses. A bare
+selector with no verb runs `state`: `mos 2`, `mos disk4`. Human and JSON output
+share every enum string verbatim, so a terminal report and a `jq` query never
+disagree.
 
 ## Commands
 
-One-shot verbs emit a single document with `--json`; `watch` streams
-NDJSON. The schemas under [`schemas/`](schemas/) are the authoritative
-field reference for every document (see [JSON output](#json-output)).
+Every one-shot verb takes `--json`; `watch` streams NDJSON. The per-document
+field reference is its schema under [`schemas/`](schemas/).
 
-### state (default)
+### `state` (default) — what the drive is doing now
 
-An open tray resolves as exactly that — no media, no BSD node, no
-guessing:
+States: `open`, `empty`, `loading`, `ready`, `busy`, `unknown`. An **open** tray
+resolves as `open` with no media and no BSD node — the case `drutil` can't
+distinguish from a closed empty slot. A loaded disc adds the `Media:` and
+`Writable:` rows shown in the [Quickstart](#quickstart); an empty tray has
+neither. In `--json`, `media_type` and `writable` are read with zero SCSI
+commands and match the [`watch`](#watch) stream, so a poll and the stream agree.
 
-```
-$ mos state 1
-Registry ID:  4295032831
-        BSD:  -
-      State:  open
-     Vendor:  HL-DT-ST
-    Product:  BD-RE WH16NS60
-   Firmware:  1.00
-```
-
-A loaded disc adds a `Media:` row and a `Writable:` row (an empty tray has
-neither — both come from the kernel media node). `Media:` is the disc's
-identity from the best available source: the MMC profile with its class
-(`bd — bd_rom`) when the drive is READY, falling back to the kernel's cached
-`media_type` token (`bd_re`) when it isn't — read with **zero SCSI commands**,
-so a loading or busy disc is still named — then the raw hex code as a last
-resort. In `--json` these stay **separate** keys (`current_profile` /
-`current_profile_name` / `media_class`, and `media_type` / `writable`), so a
-machine consumer keeps the distinction the one-line human view folds together;
-`media_type` and `writable` are the same fields the [`watch`](#watch) stream
-carries, so a one-shot read and the stream agree.
-
-### list
-
-Every attached drive with its state — one probe per row; a failing drive
-shows `error` in its row rather than killing the overview:
+### `list` — every attached drive
 
 ```
 $ mos list
@@ -144,58 +104,25 @@ $ mos list
      2  open   -                 -           PIONEER   BD-RW BDR-XS07  1.01
 ```
 
-A mounted disc shows its mount path in the `Volume` column.
-`mos list --json` (`mos.list.v1`) carries the filesystem label and mount
-point as separate `volume_name` / `volume_path` keys, both `null` when
-unmounted.
+One probe per row; a failing drive shows `error` in its row rather than killing
+the overview. A mounted disc shows its mount path in `Volume`.
 
-### watch
-
-NDJSON unconditionally — one `mos.event.v1` per line, errors included.
-With no drive given, `watch` streams the whole bus: every drive,
-hot-plug arrivals as `device_appeared`, per-drive `device_removed` with
-the stream continuing; zero drives attached is a valid empty stream that
-waits. A drive selector narrows to one drive (and the stream ends on its
-removal). An insert looks like:
+### `watch` — stream state changes (NDJSON)
 
 ```
 $ mos watch
-{"schema":"mos.event.v1","event":"snapshot",...,"state":"empty","prev_state":"unknown",...}
-{"schema":"mos.event.v1","event":"state_changed",...,"state":"loading","prev_state":"empty",...}
-{"schema":"mos.event.v1","event":"state_changed",...,"bsd_node":"/dev/disk4","state":"ready","serial":"KL2G7942618WL",...}
+{"schema":"mos.event.v1","event":"snapshot",...,"state":"empty",...}
+{"schema":"mos.event.v1","event":"state_changed",...,"state":"loading",...}
+{"schema":"mos.event.v1","event":"state_changed",...,"state":"ready","serial":"KL2G7942618WL",...}
 ```
 
-Identity-carrying events (`snapshot`, `state_changed`, `media_changed`,
-`device_appeared`) include the drive `serial` — its Unit Serial Number, the
-durable inventory key that survives replug where `registry_id` does not. It is
-grabbed once per session on a probe handle (raw INQUIRY of VPD page 0x80), so
-it is `null` in early event lines until a free poll lands it: the read
-self-gates on exclusive access, so it backs off while a disc is mounted and
-populates on the first empty/not-ready window, then stays present for the rest
-of the session. `error` and `device_removed` events never carry it.
+One `mos.event.v1` per line, errors included. With no drive it streams the whole
+bus — hot-plug arrivals as `device_appeared`, removals as `device_removed`, the
+stream continuing; a selector narrows to one drive. Events carry `media_type`,
+`writable`, and the durable `serial`, so a consumer can gate inserts without a
+second query.
 
-Those same identity-carrying events (and one-shot `mos state`) also carry
-`media_type` when the kernel publishes one — a token like `bd_re`, `dvd_minus_r`,
-or `cd_rom` read straight off the media node (`kIO{CD,DVD,BD}MediaTypeKey`) with
-**zero SCSI commands**. Unlike `current_profile`/`media_class`, which are
-suppressed off the ready state, `media_type` is present whenever a disc is in the
-drive — so a `loading` or `busy` event that shows no profile can still name the
-disc, and at finer grain than `media_class` (`bd_r` vs `bd_re` vs `bd_rom`, not
-just `bd`). It is absent when no media node carries a Type.
-
-Alongside it, `writable` (the kernel's `kIOMediaWritableKey` flag, same zero-MMC
-read) reports whether the media node accepts writes — `true` for a blank or
-appendable recordable, `false` for a ROM or write-protected disc — so a watch
-consumer can gate blank/recordable media without a second query. It is the
-kernel's *mechanism* bit, not a blank/appendable/complete classification: that
-finer tri-state is a READ DISC INFORMATION fact, surfaced only by `mos metadata`
-(it stays off the poll path by design). Like `media_type`, `writable` is present
-on not-ready events and absent when no media node carries the flag.
-
-### metadata — disc identity
-
-A finalized M-DISC Blu-ray — write-once archival media — mounts as an
-ordinary data volume:
+### `metadata` — what disc is this
 
 ```
 $ mos metadata 1
@@ -209,60 +136,13 @@ $ mos metadata 1
    Track:  -
 ```
 
-`mos metadata` answers *what disc is this*: profile and media class, the
-TOC, and — for archival flows — the disc-completion state from READ DISC
-INFORMATION, which reads disc structure rather than the filesystem.
-`blank` = unburned; `appendable` = open session; `complete` plus a
-mounted volume = burned and readable; `complete` with no volume = burned
-but unmounted, possibly damaged. It also surfaces, when the medium has
-them: the registered disc-maker identity for Blu-ray (manufacturer /
-media-type ID — `MILLEN` / `MR1` for Millenniata M-DISC); the physical
-format and copyright-management info for DVD/HD-DVD; per-track capacity
-and append state; album/track CD-TEXT for audio CDs; and, for CDs, the
-per-session layout (`session_layout`: first/last track and lead-out per
-session) decoded from the kernel-cached full-TOC — the multi-session
-structure the issued READ TOC omits, read with no SCSI command.
+Profile and media class, completion state (`blank` / `appendable` / `complete`),
+TOC, the registered disc-maker identity (e.g. `MILLEN`/`MR1` for Millenniata
+M-DISC), CD-TEXT, and a CD `session_layout`. In `--json`, the `disc` object is a
+closed, hashable fingerprint subtree — third-party IDs (MusicBrainz, AccurateRip,
+dvdid) derive from it client-side (see [Shell integration](#shell-integration)).
 
-`mos metadata --json` emits one `mos.metadata.v1` document. Its `disc`
-object is a fingerprint subtree — a fixed, closed key set you can hash
-for dedup; third-party IDs (MusicBrainz, AccurateRip, dvdid) derive from
-these fields client-side. Unreadable facts emit `null`, and partial readability is
-the normal regime, not an error — a present-but-unmounted disc reads a
-`null` volume, which is the common case for BD/UHD video that doesn't
-mount on macOS. Full field reference:
-[`schemas/mos.metadata.v1.json`](schemas/mos.metadata.v1.json).
-
-For CDs the TOC comes from the macOS kernel-cached full-TOC
-(`kIOCDMediaTOCKey`) — a superset of the issued READ TOC, read with no SCSI
-command — so a multi-session disc shows structure the issued read can't. Here
-a CD-Extra (audio in session 1, a data track in session 2) adds a `Sessions`
-row, the human form of the `session_layout` array:
-
-```
-$ mos metadata 1
-     BSD:  /dev/disk4
-  Volume:  GREATEST_HITS
-    Path:  /Volumes/GREATEST_HITS
- Profile:  cd — cd_rom
-    Disc:  complete, 2 sessions, 13 tracks
-   Media:  -
-     TOC:  tracks 1-13, lead-out LBA 287100
-   Track:  -
- CD-Text:  -
-Sessions:  2 (s1 1-12, s2 13-13)
-```
-
-In `--json` that row is the `session_layout` array — a sibling of the
-fingerprint `toc`, CD-only and `null` otherwise:
-
-```jsonc
-"session_layout": [
-  { "session": 1, "first_track": 1, "last_track": 12, "leadout_lba": 251000 },
-  { "session": 2, "first_track": 13, "last_track": 13, "leadout_lba": 287100 }
-]
-```
-
-### drive — static facts
+### `drive` — static drive facts
 
 ```
 $ mos drive 1
@@ -280,110 +160,50 @@ $ mos drive 1
 Error Recovery:  retry 20, PER
 ```
 
-Static facts that don't depend on the loaded disc: identity, content-
-protection capability (from one GET CONFIGURATION feature walk), max read/write
-speeds, and the two read-only MODE SENSE pages — `mechanical` (loading
-mechanism, eject/lock support, the live media-locked bit, buffer size)
-and `error_recovery` (the drive's read error-recovery configuration).
-`Speeds` are media-dependent (GET PERFORMANCE reflects the loaded disc, so
-they are null with an empty tray); the human view leads with the disc's
-native multiple — `~16.0× BD` — and puts the absolute rate in parentheses,
-while `--json` keeps the raw `max_read_kbps`/`max_write_kbps` integers.
-`mos drive` is the one verb where you ask for the canonical truth, so
-`Vendor`/`Product`/`Firmware` are read FRESH from the raw standard INQUIRY
-it already issues (for `Standards`), falling back to the kernel/DiscRecording
-cache that `mos list`/`mos state` use only when that raw read can't run
-(busy/mounted drive).
-The `serial` is the drive's Unit Serial Number (a raw INQUIRY of VPD
-page 0x80 — the one identity field DiscRecording does not cache); it is
-the durable inventory key that survives replug, where `registry_id` does
-not. The raw read backs off on exclusive access, so `serial` is `-`/null
-when the drive is busy or has a disc mounted, does not implement the
-page, or has no serial programmed. The `profiles` array is the
-supported-profile set from the GET CONFIGURATION Profile List feature (the
-same walk that yields AACS) — the drive-static disc types this drive can
-handle (CD/DVD/BD…), the modern BD-aware "what can this drive read/write"
-that supersedes the legacy page-0x2A media bits; the per-disc Current bit
-is omitted, so it reflects the drive, not the loaded medium. `protection`
-is the set of copy/content-protection schemes the drive can *authenticate*
-(AACS, CSS, CPRM, SecurDisc, VCPS) — a drive capability, **not** per-disc
-state and not enforcement: a feature's presence means the drive speaks the
-scheme, the per-feature Current bit (protected media loaded now) is omitted,
-and region/key state behind `REPORT KEY` is out of scope. A modern BD drive
-shows AACS+CSS at minimum, so the list reads as capabilities. For AACS,
-`bus_encryption` (BEC) and `write_bus_encryption` (WBE) are the drive-reported
-bus-encryption support bits (the human row shows the version and the read-side
-`bus encryption`; WBE is `--json`-only). `version` and
-`version_descriptors` come from a raw standard INQUIRY (EVPD=0): the SPC
-compliance level and the T10/ISO standards the drive claims (MMC-6, SPC-4,
-SBC-3…) — like `serial`, that raw read self-gates on exclusive access, so
-both are null/`-` when the drive is busy or has a disc mounted. `firmware`
-(JSON) is the firmware **version** — the 4-char SPC PRODUCT_REVISION_LEVEL,
-renamed from `revision` — and `firmware_date` is the firmware's **creation**
-timestamp from the GET CONFIGURATION Firmware Information feature (010Ch), an
-RFC 3339 UTC string (the same format `mos watch` events use), null when the
-drive doesn't implement the feature. The human `Firmware:` row shows them
-together — `1.00 (2019-01-07T13:20:43Z)`, or just `1.00` when the date is
-absent. Read-only throughout: `mos` reports
-these settings, it never changes them. Full fields:
-[`schemas/mos.drive.v1.json`](schemas/mos.drive.v1.json).
+Disc-independent facts: identity, `serial` (the durable inventory key that
+survives replug where `registry_id` does not), content-protection *capability*,
+the supported-profile set, max read/write speeds, and the mechanical and
+error-recovery configuration. Read-only — `mos` reports these, never changes them.
 
-### features — medium writability
-
-`mos features --json` (`mos.features.v1`) is the raw MMC feature list,
-one entry per GET CONFIGURATION descriptor with its `current` flag — the
-writability answer for the loaded medium. A blank M-DISC is *ready for
-archival* when `mos metadata` says the disc is blank **and** `mos
-features` shows the matching write feature current (`0x0041` for BD-R).
-Codes map against MMC-6 §5.3.
-
-### tray — control
-
-The one part of `mos` that **changes** drive state rather than reporting
-it — the query path stays reporter-only.
+### `features` — medium writability
 
 ```sh
-$ mos tray eject 1              # eject (START STOP UNIT, LoEj)
-$ mos tray eject 1 --force      # open no matter what: clear both Prevent
-                                # states + force-unmount a mount, then eject
-$ mos tray close 1
-$ mos tray lock 1               # prevent removal until an unlock
-$ mos tray lock 1 --persistent  # robot-grade: the operator eject button
-                                # becomes an event, not a retraction
-$ mos tray unlock 1             # release a lock (add --persistent to
-                                # release a --persistent one — the two
-                                # prevent states are independent)
+mos features 1 --json     # mos.features.v1 — one entry per GET CONFIGURATION descriptor
 ```
 
-`mos tray <action> --json` emits one `mos.tray.v1` document with an
-`outcome`: `done`, `refused_locked` (an eject hit a lock — a reported
-fact, not a failure; the process still exits 0), or `refused_other`
-(carrying the drive's SCSI `sense` triple so a non-lock rejection is
-diagnosable). By default `mos` issues the command and reports what happened; it
-**does not unmount for you** — the deliberate contrast with `drutil tray
-eject`'s unmount-then-eject policy, so on a mounted disc a plain eject returns
-busy (`mos.error.v1`, exit 75).
+The writability answer for the loaded medium, with each feature's `current`
+flag. A blank M-DISC is ready for archival when `metadata` reports `blank` and
+the matching write feature is current.
 
-`mos tray eject --force` is the opt-in to that policy and then some — "open no
-matter what". It's one flow: the eject is tried, and `--force` clears whatever
-blocked it and re-ejects — a mounted volume is **force-unmounted**, a basic
-Prevent lock is cleared (along with the persistent one, so a lock in the way
-leaves nothing locked). The force-unmount is **data-loss capable** — it kills
-open file handles, so reach for it on a kiosk/robot drive, not a disc something
-may be writing. The one thing it can't defeat is another program holding the
-drive exclusively (e.g. makemkvcon mid-rip): mos can't preempt a peer, so it
-reports `exclusive_access` and leaves the tray shut. (`--force` needs
-DiskArbitration; a build with `MOS_USE_DISKARBITRATION=0` can't unmount, so a
-mounted disc still returns busy.)
+### `capacity` — disc size and append/format views
 
-A lock **persists past the process** by design: the PREVENT state is
-the drive's, cleared only by an explicit unlock, a bus reset, or
-power-off — so a ripping robot can lock an idle drive and any later `mos
-tray unlock` recovers it.
+```sh
+mos capacity 1 --json     # mos.capacity.v1
+```
 
-**Locking several drives** (e.g. a robot freezing every tray before an arm
-moves) is a per-drive loop over `mos list`, not a bulk flag — `mos` exposes
-the primitive and the orchestrator owns the fan-out:
+Byte size (works even on a mounted disc), a `recordable` view (append point,
+free blocks) for blank/appendable media, and a `formattable` view for blank
+rewritables. The three are independently nullable for the disc you have.
+
+### `tray` — eject / close / lock
+
+The one verb that **changes** drive state; every query path stays reporter-only.
+
+```sh
+mos tray eject 1                 # eject (START STOP UNIT)
+mos tray close 1
+mos tray lock 1                  # prevent removal until an unlock
+mos tray lock 1 --persistent     # survives process exit — an operator eject
+                                 #   becomes an event, not a retraction
+mos tray unlock 1                # add --persistent to release a persistent lock
+```
+
+`--json` emits `mos.tray.v1` with an `outcome`: `done`, `refused_locked` (an
+eject hit a lock — a reported fact, still exit 0), or `refused_other` (carries
+the SCSI `sense` triple). A plain eject on a mounted disc returns busy (exit 75);
+`mos` does not unmount for you. A lock **persists past the process** — any later
+`mos tray unlock` recovers it. Lock several drives with a loop over `mos list`
+(one `outcome` and exit code per drive):
 
 ```sh
 for id in $(mos list --json | jq '.drives[].registry_id'); do
@@ -391,41 +211,21 @@ for id in $(mos list --json | jq '.drives[].registry_id'); do
 done
 ```
 
-The loop is deliberate, not a missing convenience. Each drive is a separate
-exclusive-access session, so `mos` could not lock them atomically even with a
-`--all` flag; the loop instead gives one `outcome` and one exit code **per
-drive**, which is exactly what a mounted member needs — locking takes
-exclusive access, so a drive holding a mounted volume returns busy while its
-idle siblings lock. The drive most likely to hold a disc is the one most
-likely to refuse, so per-drive reckoning is the point, not an inconvenience.
+## JSON output
 
-### capacity
+Every `--json` document carries a `schema` field naming its type and version —
+`mos.state.v1`, `mos.list.v1`, `mos.event.v1`, `mos.metadata.v1`, `mos.drive.v1`,
+`mos.features.v1`, `mos.capacity.v1`, `mos.tray.v1`, and `mos.error.v1` for
+failures. Consumers dispatch on it. The documents under [`schemas/`](schemas/)
+are the authoritative field reference: JSON Schema draft 2020-12 with
+`additionalProperties: false`, so you never see a key the schema doesn't name.
+`watch` streams `mos.event.v1` NDJSON unconditionally.
 
-`mos capacity --json` (`mos.capacity.v1`) reports the loaded disc's size; the
-size and `recordable` views work even on a **mounted** disc — where a tool
-that issued a raw READ CAPACITY would fail busy. A `recordable` sub-object
-adds the append-state view (free blocks, next-writable point, track size) for
-blank/appendable media; a `formattable` sub-object adds the capacities a
-**blank rewritable** (BD-RE, DVD-RAM, DVD±RW, HD DVD-RAM/-RW) or BD-R reports
-via READ FORMAT CAPACITIES — the one capacity the other two views can't give
-it (no whole-disk node yet, no track). That read is issued through the
-non-exclusive `ReadFormatCapacities` convenience method and gated on the disc
-**profile** (only formattable media is read — pressed, write-once CD-R/DVD±R,
-and empty drives skip it entirely), so `formattable` is null on
-non-formattable drives; with no exclusive access it works on a **mounted**
-formattable disc too (and mos never issues FORMAT UNIT — it reports the
-capacities, it doesn't format). The
-three views are independently nullable: a pressed disc reports a byte size but
-no append point; a blank recordable reports an append point but no whole-disk
-size yet; a blank rewritable reports its formattable capacities. Full fields:
-[`schemas/mos.capacity.v1.json`](schemas/mos.capacity.v1.json).
+## Library
 
-## Using the library
-
-`mos` is a pure-C library; the CLI is a thin client over it. The public
-header `<mos.h>` depends only on `<stdint.h>`, `<stdbool.h>`, and
-`<stddef.h>` — no Apple headers leak through it — so it compiles
-anywhere; wrap calls in `#ifdef __APPLE__` in cross-platform code.
+`mos` is a pure-C library; the CLI is a thin client over it. `<mos.h>` depends
+only on `<stdint.h>`, `<stdbool.h>`, and `<stddef.h>` — no Apple headers leak
+through it.
 
 ```c
 #include <mos.h>
@@ -433,12 +233,8 @@ anywhere; wrap calls in `#ifdef __APPLE__` in cross-platform code.
 
 int main(void) {
     mos_error err;
-    mos_handle_t *h = mos_open_by_index(1, &err);  /* 1-based, like drutil;
-                                                      or by BSD name / registry_id */
-    if (!h) {
-        fprintf(stderr, "open: %s\n", mos_error_description(err));
-        return 1;
-    }
+    mos_handle_t *h = mos_open_by_index(1, &err);   /* or by BSD name / registry_id */
+    if (!h) { fprintf(stderr, "open: %s\n", mos_error_description(err)); return 1; }
 
     const mos_state_result *r;
     if (mos_query_state(h, &r) == MOS_OK)
@@ -449,98 +245,42 @@ int main(void) {
 }
 ```
 
-Results are opaque, handle-owned, and read through accessors
-(`mos_state_result_*`), so the ABI stays stable as fields are appended.
-The same shape extends to the typed queries — `mos_query_disc_info`,
-`mos_query_toc`, `mos_query_drive_caps`, `mos_query_capacity`, and the
-rest — and to `mos_watch_*` for the event stream. The full contract,
-including ownership and lifetime rules, is documented in
-[`include/mos.h`](include/mos.h).
-
-Embed it in a CMake project:
+Results are opaque and handle-owned, read through accessors, so the ABI stays
+stable as fields are appended. Embed via CMake:
 
 ```cmake
 add_subdirectory(vendor/mos)
 target_link_libraries(your_app PRIVATE mos_core)
 ```
 
-Or vendor a single-file drop-in: `./scripts/amalgamate.sh` emits
-`dist/mos.h` + `dist/mos.c`; compile `mos.c` and link IOKit,
-CoreFoundation, DiscRecording, and DiskArbitration with
-`-mmacosx-version-min=12.0`.
+Or vendor a single-file drop-in with `./scripts/amalgamate.sh` (emits
+`dist/mos.h` + `dist/mos.c`). Full contract in [`include/mos.h`](include/mos.h).
 
 ## Shell integration
 
-The core pattern — act on every disc that turns readable, on any drive,
-hot-plug included — is one pipeline. No polling, no `sleep`. `mos` says
-what the disc *is*; existing tools do the work. The `cd` branch shows what
-"derive client-side" under `metadata` means: a **MusicBrainz Disc ID** is
-a pure function of the audio TOC `mos` already emits, so no second tool
-touches the drive — `jq` builds libdiscid's hash input (first/last track,
-then 100 frame offsets, each track and the lead-out as its LBA + 150) and
-`sha1` plus URL-safe base64 finish it.
+`mos` says what a disc *is*; existing tools do the work. Act on every disc that
+turns readable, on any drive, hot-plug included, in one pipeline — no polling, no
+`sleep`:
 
 ```sh
-# Act on every disc the moment it turns ready, on any drive, hot-plug
-# included. One event per transition — an insert fires once, a swap fires
-# media_changed, a hot-plugged drive joins live, an eject doesn't end it.
 mos watch | jq --unbuffered -r '
     select(.event != "error" and .state == "ready")
     | "\(.bsd_node) \(.media_class // "unknown")"' |
 while read -r dev class; do
-    # `ready` only means the drive can read the disc — a blank recordable is
-    # ready too. Gate on disc content so an empty/appendable disc (still
-    # writable) isn't piped into a rip; disc_info carries what the event can't.
-    case "$(mos metadata "$dev" --json | jq -r '.disc.disc_info.status')" in
-        blank|appendable) continue ;;
-    esac
     case "$class" in
-    # Audio CD: a MusicBrainz Disc ID, computed entirely from the TOC mos emits.
-    cd) mos metadata "$dev" --json | jq -r '
-            .disc.toc as $t
-            | [ $t.first_track, $t.last_track, $t.leadout_lba + 150 ]
-              + [ range(1;100) as $n
-                  | (first(($t.tracks[]|select(.track==$n).start_lba)) // -150) + 150 ]
-            | .[]' |
-        { read f; read l; s=$(printf '%02X%02X' "$f" "$l")
-          while read o; do s="$s$(printf '%08X' "$o")"; done
-          printf '%s' "$s" | openssl dgst -sha1 -binary | base64 | tr '+/=' '._-'; } ;;
-    dvd|bd) makemkvcon mkv "dev:${dev/disk/rdisk}" all "$HOME/Rips" ;;
+        cd)     # audio CD — compute a MusicBrainz Disc ID from disc.toc, then rip
+                ;;
+        dvd|bd) makemkvcon mkv "dev:${dev/disk/rdisk}" all "$HOME/Rips" ;;
     esac
 done
 ```
 
-That inline `cd` pipeline matches libdiscid's own `discid` byte-for-byte:
-the standard reference disc (track offsets 150, 15363, 32314, 46592,
-63414, 80489; lead-out 95462) yields `49HHV7Eb8UKF3aQiNmu1GR8vKTY-`. Feed it to
-`https://musicbrainz.org/ws/2/discid/<id>?fmt=json` for the release. The
-same shape — `jq` over `disc.toc` plus a hasher — yields the freedb/CDDB
-id or an AccurateRip key; `mos` ships the primitive, the recipe stays
-yours. For a one-shot answer (cron, a `tray` hook), `mos state <drive>
---json` is the same contract in a single document.
-
-The full version of this dispatcher —
-[`examples/disc-ingest.sh`](examples/disc-ingest.sh) — grows the two-line
-stub into a disc-pile router driven by one `mos metadata` read per disc:
-MusicBrainz lookup and byte-perfect `redumper` dumps for audio CDs,
-error-tolerant `ddrescue` imaging for M-DISC and data archives (sized
-against `mos capacity`), `makemkvcon -r` robot mode to confirm a video
-disc has rippable titles and name the rip from the disc title, and a
-"ready to write" report for blank recordables. Mount control is
-`diskutil`, transcode is `HandBrakeCLI`; `mos` is the one piece that says,
-in a single document, which to reach for.
-
-## JSON output
-
-Every `--json` document carries a `schema` field naming its type and
-version — `mos.state.v1`, `mos.list.v1`, `mos.event.v1`,
-`mos.metadata.v1`, `mos.drive.v1`, `mos.features.v1`, `mos.capacity.v1`,
-`mos.tray.v1`, and `mos.error.v1` for failures. Consumers dispatch on
-that field. The documents under [`schemas/`](schemas/) are the
-authoritative field reference: JSON Schema draft 2020-12 with
-`additionalProperties: false`, so a consumer never sees a key the schema
-doesn't name. `watch` is the exception to `--json` — it streams NDJSON
-(`mos.event.v1` per line) unconditionally.
+The full dispatcher — [`examples/disc-ingest.sh`](examples/disc-ingest.sh) —
+routes a disc pile from one `mos metadata` read per disc: MusicBrainz lookup, the
+drive's AccurateRip read offset, and byte-perfect `redumper` dumps for audio CDs;
+error-tolerant `ddrescue` imaging for M-DISC and data archives (sized against
+`mos capacity`); `makemkvcon -r` robot mode for video; and a "ready to write"
+report for blank recordables. See [`examples/`](examples/).
 
 ## Install
 
@@ -551,42 +291,31 @@ brew tap napieraj/tap
 brew install --HEAD napieraj/tap/mos
 ```
 
-HEAD-only until the first tagged release cuts a stable tarball; the
-release flow is in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+HEAD-only until the first tagged release; the release flow is in
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ### From source
 
 ```sh
 git clone https://github.com/napieraj/mos
 cd mos
-make build      # release build of library + CLI (thin wrapper over cmake)
+make build      # release build of library + CLI
 make test       # pure-data unit tests — no drive or hardware needed
 ./build/bin/mos list
 ```
 
-Or drive CMake directly: `cmake -B build -DCMAKE_BUILD_TYPE=Release &&
-cmake --build build`. To embed `mos` in your own project, see
-[Using the library](#using-the-library).
-
-### Man page and shell completions
-
-`cmake --install` (and the Homebrew formula) install a `mos(1)` man page and
-bash/zsh/fish completions for the subcommands, options, and `tray` actions.
-After a Homebrew install they are linked automatically — `man mos` works, and
-completion is live in a new shell. From a manual install they land under the
-install prefix's `share/man/man1`, `share/bash-completion/completions`,
-`share/zsh/site-functions`, and `share/fish/vendor_completions.d`. The raw
-files live in [`completions/`](completions) and [`man/mos.1`](man/mos.1).
+`cmake --install` (and the Homebrew formula) also install a `mos(1)` man page and
+bash/zsh/fish completions; raw files live in [`completions/`](completions) and
+[`man/mos.1`](man/mos.1).
 
 ## Requirements
 
 - macOS 12 Monterey or later (arm64 or x86_64)
 - CMake 3.20+ and a C11 compiler (Xcode Command Line Tools suffice)
-- An optical drive whose Apple-supplied kext attaches
-  `SCSITaskUserClient` — empirically, writer-class drives (CD-R,
-  DVD±R/RW, BD-R/RE) do; pure read-only BD-ROM drives historically did
-  not, and this has shifted across macOS releases. See Known Unknowns in
-  [`ARCHITECTURE.md`](ARCHITECTURE.md).
+- An optical drive whose Apple-supplied kext attaches `SCSITaskUserClient` —
+  empirically, writer-class drives (CD-R, DVD±R/RW, BD-R/RE) do; pure read-only
+  BD-ROM drives historically did not, and this has shifted across macOS releases.
+  See Known Unknowns in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## License
 
@@ -594,24 +323,23 @@ files live in [`completions/`](completions) and [`man/mos.1`](man/mos.1).
 
 ## See also
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — command-by-command spec
-  references, decision tree, sense-code tables, Known Unknowns
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — decision tree, sense-code tables, spec
+  references, Known Unknowns
 - [`schemas/`](schemas/) — the JSON contract, one schema per document
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — code layout and conventions
-- [`INTEGRATION_HARNESS.md`](INTEGRATION_HARNESS.md) — test matrix for
-  contributing hardware fixtures
+- [`examples/`](examples/) — worked consumer integrations
 
-**Prior art:**
+**Prior art** (fuller reference list in [`ARCHITECTURE.md`](ARCHITECTURE.md) §11):
 
-- libaacs `src/file/mmc_device_darwin.c` — live, compiled IOKit MMC
-  backend with DiskArbitration coordination. Closest shipping reference
-  for the pattern we use. (LGPL-2.1; study, don't copy.)
-- cdrtools `libscg/scsi-mac-iokit.c` — older SCSITaskLib consumer;
-  upstream is dormant since 2021 but the reference is correct.
-- libcdio `lib/driver/osx.c` — includes the right headers and names, but
-  the MMC code path is gated by `#ifdef GET_SCSI_FIXED` and is not active
-  in shipping builds. Structural reference only.
-- `DRDevice` / DiscRecording.framework — Apple's public alternative for
-  tray-open queries. No SCSI traffic; smaller scope than `mos`. Kodi's
-  Darwin storage provider acknowledges the same `drutil` papercut in
-  `MediaManager.cpp`.
+- libaacs `src/file/mmc_device_darwin.c` — live, compiled IOKit MMC backend with
+  DiskArbitration coordination; closest shipping reference for the pattern
+  (LGPL-2.1).
+- cdrtools `libscg/scsi-mac-iokit.c` — older SCSITaskLib consumer; dormant since
+  2021 but correct.
+- libcdio `lib/driver/osx.c` — the IOKit platform driver; right headers and
+  names, but the MMC path is gated behind `#ifdef GET_SCSI_FIXED`; structural
+  reference only.
+- libcdio `lib/driver/mmc/` (and `src/cd-info.c`) — the cross-platform MMC
+  command layer mos's metadata side mirrors: READ DISC INFORMATION, GET
+  CONFIGURATION profiles, and media-type detection (CD / DVD±R / DVD±RW /
+  DVD-RAM / BD) — the disc facts `mos metadata` and `mos drive` decode.
