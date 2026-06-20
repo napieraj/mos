@@ -2085,8 +2085,10 @@ static void mos_internal_da_unmount_cb(DADiskRef disk,
 }
 
 /* True when the IOMedia behind `disk` is the exact registry object identified
-   by expected_media_id — the identity bind that keeps a reused "diskN" from
-   sending the force-unmount to the wrong disk. DADiskCopyIOMedia returns the
+   by expected_media_id — the identity bind that NARROWS the window in which a
+   reused "diskN" could send the force-unmount to the wrong disk. It is a LOCAL
+   check and does not close the race (see the KNOWN ISSUE on the unmount below);
+   DADiskCopyIOMedia returns the
    IOMedia io_service_t (owned, released here); its registry entry ID is the
    same value mos_internal_capture_media_snapshot captured (media_id) off
    h->svc's child. */
@@ -6873,8 +6875,10 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
                The refresh derives bsd_unit + media_id from h->svc's live child,
                so the name we format and the identity we bind both describe the
                disc actually in THIS drive now. media gone (bsd_unit < 0) → fail
-               closed; the bind in mos_internal_da_unmount closes the residual
-               BSD-reuse race. */
+               closed; the bind in mos_internal_da_unmount only NARROWS — does
+               not close — the residual BSD-reuse race (a local check;
+               diskarbitrationd re-resolves by name — see its KNOWN ISSUE
+               block), which is why the data-loss path is gated off by default. */
             mos_internal_refresh_media_identity(h);
             char name[24];
             if (h->bsd_unit < 0 ||

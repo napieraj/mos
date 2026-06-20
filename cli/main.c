@@ -199,7 +199,7 @@ int main(int argc, char **argv)
        fflush returns — dropping them reintroduces the kill-on-close bug. */
     signal(SIGPIPE, SIG_IGN);
 
-    /* Bare `mos` is an entry point, not an implicit status: an intent-free
+    /* Bare `mos` is an entry point, not an implicit state: an intent-free
        invocation must not touch hardware (a state probe would ride the
        not-ready GESN branch, which takes the exclusive lock). Usage + hint,
        EX_USAGE. */

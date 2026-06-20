@@ -98,8 +98,10 @@ static void mos_internal_da_unmount_cb(DADiskRef disk,
 }
 
 /* True when the IOMedia behind `disk` is the exact registry object identified
-   by expected_media_id — the identity bind that keeps a reused "diskN" from
-   sending the force-unmount to the wrong disk. DADiskCopyIOMedia returns the
+   by expected_media_id — the identity bind that NARROWS the window in which a
+   reused "diskN" could send the force-unmount to the wrong disk. It is a LOCAL
+   check and does not close the race (see the KNOWN ISSUE on the unmount below);
+   DADiskCopyIOMedia returns the
    IOMedia io_service_t (owned, released here); its registry entry ID is the
    same value mos_internal_capture_media_snapshot captured (media_id) off
    h->svc's child. */

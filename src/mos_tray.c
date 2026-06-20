@@ -134,8 +134,10 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
                The refresh derives bsd_unit + media_id from h->svc's live child,
                so the name we format and the identity we bind both describe the
                disc actually in THIS drive now. media gone (bsd_unit < 0) → fail
-               closed; the bind in mos_internal_da_unmount closes the residual
-               BSD-reuse race. */
+               closed; the bind in mos_internal_da_unmount only NARROWS — does
+               not close — the residual BSD-reuse race (a local check;
+               diskarbitrationd re-resolves by name — see its KNOWN ISSUE
+               block), which is why the data-loss path is gated off by default. */
             mos_internal_refresh_media_identity(h);
             char name[24];
             if (h->bsd_unit < 0 ||
