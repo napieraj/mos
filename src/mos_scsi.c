@@ -71,10 +71,19 @@ static uint64_t mos_internal_cf_number_u64(io_registry_entry_t node,
    results. One node, one generation.) All fields fail closed to their absent
    sentinels (unit -1, id/size/block 0, type NULL, writable -1) when no media
    node is present. Zero SCSI commands, no exclusive access. */
-void mos_internal_capture_media_snapshot(io_service_t svc,
-                                         mos_media_snapshot *s)
+/* One capture attempt. *invalidated is set true iff the registry iterator
+   went stale mid-walk: IOIteratorNext returns IO_OBJECT_NULL for BOTH
+   exhaustion AND invalidation (a topology change — concurrent insert/eject —
+   invalidates a recursive iterator), so IOIteratorIsValid is the only way to
+   tell them apart (IOKitLib). On invalidation the partial walk is untrustworthy
+   — returns false WITHOUT committing, so the caller retries rather than
+   reporting a churn as genuine media absence. Returns true (with s populated or
+   left at its absent sentinels) on a clean walk. */
+static bool mos_internal_capture_media_snapshot_once(io_service_t svc,
+                                                     mos_media_snapshot *s,
+                                                     bool *invalidated)
 {
-    if (!s) return;
+    *invalidated = false;
     s->bsd_unit    = -1;
     s->media_id    = 0;
     s->media_bytes = 0;
@@ -85,7 +94,7 @@ void mos_internal_capture_media_snapshot(io_service_t svc,
     io_iterator_t it MOS_IO_AUTO = IO_OBJECT_NULL;
     if (IORegistryEntryCreateIterator(svc, kIOServicePlane,
             kIORegistryIterateRecursively, &it) != KERN_SUCCESS) {
-        return;
+        return true;   /* no iterator: absent, not an invalidation */
     }
 
     /* Two-pass selection:
@@ -194,10 +203,18 @@ void mos_internal_capture_media_snapshot(io_service_t svc,
         if (whole_name[0] != 0) break; /* Whole found, done */
     }
 
+    /* Distinguish a genuine end-of-walk from an iterator the kernel
+       invalidated under topology churn. On invalidation, refuse to commit
+       (even a found Whole node may be racing an eject) and signal a retry. */
+    if (!IOIteratorIsValid(it)) {
+        *invalidated = true;
+        return false;
+    }
+
     const char *chosen = whole_name[0] ? whole_name
                        : fallback_name[0] ? fallback_name
                        : NULL;
-    if (!chosen) return;   /* no media node: every field keeps its sentinel */
+    if (!chosen) return true;   /* no media node: every field keeps its sentinel */
     /* parse_bsd_unit normalizes any rdisk/ /dev/ prefix, rejects
        partition/non-whole shapes, and returns the unit or -1. Identity is
        an integer from here; "diskN" is reconstructed only at output. */
@@ -211,6 +228,25 @@ void mos_internal_capture_media_snapshot(io_service_t svc,
         s->block_bytes = whole_block;
         s->media_type  = whole_type;
         s->writable    = whole_writable;
+    }
+    return true;
+}
+
+void mos_internal_capture_media_snapshot(io_service_t svc,
+                                         mos_media_snapshot *s)
+{
+    if (!s) return;
+    /* Retry once on iterator invalidation (topology churn). On a second
+       invalidation, fall through leaving the absent sentinels the _once helper
+       wrote — a caller with the S1/S2 guard turns persistent churn into
+       MOS_ERR_BUSY rather than publishing a mix; a caller without it sees
+       "absent", the safe direction. */
+    for (int i = 0; i < 2; ++i) {
+        bool invalidated = false;
+        if (mos_internal_capture_media_snapshot_once(svc, s, &invalidated))
+            return;
+        if (!invalidated)
+            return;
     }
 }
 
@@ -260,9 +296,15 @@ void mos_internal_refresh_media_identity(mos_handle_t *h)
    IORegistry read, no SCSI command and no exclusive access, like the cached
    kIOMediaSize capacity — so it works on mounted media. Returns the bytes
    copied (clamped to cap), 0 when absent. */
-size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap)
+/* One CD-TOC read attempt; *invalidated set true iff the iterator went stale
+   mid-walk (see capture_media_snapshot_once — IOIteratorNext returns NULL for
+   exhaustion AND invalidation). Returns bytes copied, or 0 when absent; on
+   invalidation returns 0 with *invalidated true so the caller retries rather
+   than reporting a churn as an absent TOC. */
+static size_t mos_internal_read_cdtoc_once(io_service_t svc, uint8_t *buf,
+                                           size_t cap, bool *invalidated)
 {
-    if (!buf || cap == 0) return 0;
+    *invalidated = false;
     io_iterator_t it MOS_IO_AUTO = IO_OBJECT_NULL;
     if (IORegistryEntryCreateIterator(svc, kIOServicePlane,
             kIORegistryIterateRecursively, &it) != KERN_SUCCESS) {
@@ -284,7 +326,23 @@ size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap)
         if (n <= 0) continue;
         size_t copy = ((size_t)n < cap) ? (size_t)n : cap;
         CFDataGetBytes((CFDataRef)v, CFRangeMake(0, (CFIndex)copy), buf);
-        return copy;   /* MOS_CF_AUTO / MOS_IO_AUTO release on this return */
+        return copy;   /* found a valid TOC: no retry needed */
+    }
+    /* Exhausted with no TOC: distinguish genuine absence from a stale iterator
+       so an insert/eject during the walk does not masquerade as no-TOC. */
+    if (!IOIteratorIsValid(it)) *invalidated = true;
+    return 0;
+}
+
+size_t mos_internal_read_cdtoc(io_service_t svc, uint8_t *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    /* Retry once on iterator invalidation (topology churn); see
+       mos_internal_capture_media_snapshot. */
+    for (int i = 0; i < 2; ++i) {
+        bool invalidated = false;
+        size_t n = mos_internal_read_cdtoc_once(svc, buf, cap, &invalidated);
+        if (n || !invalidated) return n;
     }
     return 0;
 }

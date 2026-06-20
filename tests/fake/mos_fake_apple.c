@@ -346,6 +346,14 @@ io_object_t IOIteratorNext(io_iterator_t iterator)
     return FAKE_MEDIA;
 }
 
+/* The fake iterator never invalidates (no topology churn modelled here), so a
+   NULL from IOIteratorNext is always genuine exhaustion. Returning true keeps
+   the capture/cdtoc retry path on its non-invalidation branch. */
+boolean_t IOIteratorIsValid(io_iterator_t iterator)
+{
+    return iterator == FAKE_ITER;
+}
+
 CFTypeRef IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
                                           CFStringRef key,
                                           CFAllocatorRef allocator,
@@ -433,6 +441,10 @@ io_service_t IOServiceGetMatchingService(mach_port_t masterPort,
         int64_t id = 0;
         if (n) CFNumberGetValue(n, kCFNumberSInt64Type, &id);
         if (g.present && (uint64_t)id == g.drive_id) result = FAKE_SVC;
+        /* The whole-disk IOMedia resolves by its own registry id (the volume
+           lookup's identity-exact path). Present only when media is loaded. */
+        else if (g.present && g.bsd_unit >= 0 && (uint64_t)id == g.media_id)
+            result = FAKE_MEDIA;
         /* IOServiceGetMatchingService consumes the matching dict ref. */
         CFRelease(matching);
     }
@@ -865,6 +877,14 @@ CFArrayRef DRCopyDeviceArray(void)
     return CFArrayCreate(kCFAllocatorDefault, vals, n, &kCFTypeArrayCallBacks);
 }
 
+/* A held DRDeviceRef is "still usable" while the modelled drive is present.
+   The fake does not model a device going stale mid-call, so this tracks
+   presence (the snapshot/identity guards proceed when the device exists). */
+Boolean DRDeviceIsValid(DRDeviceRef device)
+{
+    return device != NULL && g.present;
+}
+
 CFDictionaryRef DRDeviceCopyInfo(DRDeviceRef device)
 {
     (void)device;
@@ -949,6 +969,18 @@ DADiskRef DADiskCreateFromBSDName(CFAllocatorRef allocator,
     if (!name || !name[0]) return NULL;
     return (DADiskRef)CFStringCreateWithCString(
         allocator, name, kCFStringEncodingUTF8);
+}
+
+/* Registry-id-exact volume lookup (mos_internal_da_volume): the caller resolved
+   `media` by its unique entry id, so any non-null media is the right disc — the
+   description read keys on the disk object, not a reusable name. */
+DADiskRef DADiskCreateFromIOMedia(CFAllocatorRef allocator,
+                                  DASessionRef session, io_service_t media)
+{
+    (void)session;
+    if (media == IO_OBJECT_NULL) return NULL;
+    return (DADiskRef)CFStringCreateWithCString(
+        allocator, "fake-da-disk-from-iomedia", kCFStringEncodingUTF8);
 }
 
 /* The IOMedia behind the disk (mos_da.c's identity bind for the force-unmount).

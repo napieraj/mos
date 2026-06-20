@@ -1251,11 +1251,22 @@ mos_watch_t *mos_watch_open_all(uint32_t stable_poll_ms,
                                 uint32_t transition_poll_ms,
                                 mos_error *err_out);
 
-/* Block until the next event or until timeout_ms elapses with no
-   transition. `out` is REQUIRED (NULL returns MOS_ERR_INVALID_ARG). On
-   event, returns MOS_OK and points *out at a watch-owned event;
-   otherwise a non-OK code (MOS_ERR_TIMEOUT if none in time) with *out
-   set to NULL. A negative timeout_ms blocks indefinitely.
+/* Return the next event, waiting up to timeout_ms while the watch is
+   idle. `out` is REQUIRED (NULL returns MOS_ERR_INVALID_ARG). On event,
+   returns MOS_OK and points *out at a watch-owned event; otherwise a
+   non-OK code (MOS_ERR_TIMEOUT if none in time) with *out set to NULL. A
+   negative timeout_ms blocks indefinitely.
+
+   TIMEOUT SCOPE: timeout_ms bounds the IDLE wait between probes — the
+   run-loop / sleep slices, not an OS/device operation already in flight.
+   A probe issues IOKit / DiscRecording / SCSITaskLib convenience calls
+   (TEST UNIT READY, GET CONFIGURATION, the raw GESN, the opportunistic
+   serial INQUIRY) whose APIs take no caller timeout; a wedged bus or
+   kernel transaction can therefore overrun timeout_ms, and a probe that
+   has already begun runs to completion. timeout_ms == 0 is thus a
+   non-idle-wait bound (drain a ready event, do not sleep), not a hard
+   syscall/device deadline — a hard deadline would need worker/process
+   isolation the current design does not have.
 
    MOS_EVENT_DEVICE_REMOVED is terminal only for SINGLE-TARGET watches:
    close the watch; subsequent calls return MOS_ERR_NO_DEVICE. For
