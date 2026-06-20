@@ -530,6 +530,67 @@ a non-conformant bridge whose IOMedia registry id is unstable across a re-probe
 the safe direction); each such case lands as a fixture + dated note with a
 generic gate, never a per-device special-case.
 
+### Addendum: the identity bind does NOT close the BSD-reuse race — it is a
+### LOCAL check, the daemon re-resolves by name (2026-06-20, rebuts the
+### "closes the residual BSD-reuse race" clause above)
+
+The 2026-06-19 entry's gate 2 claimed `mos_internal_da_unmount` "unmounts only
+when the IOMedia behind `diskN` carries that exact id" and so "closes the
+residual BSD-reuse race." A 2026-06-20 review (sourced to Apple's published
+DiskArbitration at commit `a542bda934211dc3c301bfdcc7f21349c4164a85`:
+`DADisk.c`, `DADiskUnmountCommon`/`__DAQueueRequest`, `diskarbitrationd`'s
+`DADiskListGetDisk`) found that claim **false on the merits**, and this entry
+records it (append-don't-edit; the 06-19 entry stands as the record).
+
+**What is actually bound vs what acts.** `mos_internal_da_disk_is_media`
+checks, *at one instant in this process*, that `DADiskCopyIOMedia(disk)`
+resolves to the expected registry id. But the `DADiskRef` is a **name-backed
+client object** (it stores the `diskN` string), and `DADiskUnmount` transmits
+that **string** to `diskarbitrationd`, which performs a **fresh by-name lookup**
+to select the unmount target. The verified registry id is **not** carried into
+the daemon's selection and is **not** re-checked there. So the bind is a
+**check-by-id-then-act-by-name** sequence: it NARROWS the window (the check sits
+just before the call) but does not close it. A deschedule or hot-plug between
+the local check and the daemon's request-time lookup that reassigns `diskN` to a
+different disk B causes a Force|Whole unmount of **B** — the wrong-target
+data-loss the 06-19 entry believed it had closed. `DADiskCreateFromIOMedia` is
+not a fix: Apple's implementation derives the BSD name from the IOMedia and
+builds the same name-backed ref.
+
+**Sibling finding — the wait can hang (F1).** `DASessionSetDispatchQueue` is
+`void` but internally fallible (port allocation / source creation); a silent
+failure leaves no client callback port, after which `DADiskUnmount` +
+`dispatch_semaphore_wait(..., DISPATCH_TIME_FOREVER)` can block forever. A
+bounded timeout is NOT a sufficient fix on its own: the callback context is
+stack-local, so returning on timeout while a late callback can still fire is a
+use-after-return. A safe bounded design needs a heap-owned context whose
+lifetime spans until callback-or-proven-cancellation, or helper-process
+isolation.
+
+**Feasibility, and why this is not a one-line fix.** Public DiskArbitration
+exposes **no identity-bound unmount** — target selection is the daemon's, keyed
+on the name. So a redesign can (a) fix the hang and (b) MINIMIZE the TOCTOU
+window (re-check identity immediately before `DADiskUnmount`), but it **cannot
+eliminate** the wrong-target race with the public API. Only disabling the
+automatic Force|Whole unmount (fail-closed, as the `MOS_USE_DISKARBITRATION=0`
+build already does) *guarantees* no wrong-target unmount.
+
+**Disposition (2026-06-20, maintainer decision): fail-closed for the first tag.**
+Because a redesign only NARROWS the race (the public API exposes no identity-bound
+unmount target — see "Feasibility" above), `tray eject --force` is **disabled by
+default**: `mos_tray_eject` returns `MOS_ERR_UNSUPPORTED` for `force` unless
+`MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT` (CMake/compile flag, default 0) is set.
+Plain `mos tray eject` is unchanged; a mounted disc reports `MOS_ERR_BUSY` exactly
+as the `MOS_USE_DISKARBITRATION=0` build already does (the consumer unmounts with
+`diskutil` first). The force-unmount code stays COMPILED behind the flag (no
+bitrot, the bitrot-guard pattern of `MOS_CLI_PROBE`), so the post-tag
+guarded-redesign (re-resolve → verify id → callback-side re-verify → bounded wait
+with a heap-owned context → fail on any mismatch) lands against live code. The
+hang (F1) and the ALLOW-propagation (F2) fixes are scoped to that experimental
+path; the bounded-wait/heap-context fix is post-tag since the path is gated off
+for the tag. What hardware can falsify: the exact width of the
+check→daemon-lookup window; it cannot establish that the window is safe.
+
 ## ADR: verb `state` replaces `status`; bare selector is the default subject (2026-06-14)
 
 The default verb was renamed `status` → `state` (clean break, no alias),

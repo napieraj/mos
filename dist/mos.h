@@ -891,7 +891,15 @@ typedef struct mos_drive_perf mos_drive_perf;
  * write-speed list reflects the loaded medium, so an empty or read-only
  * drive may report zero descriptors — mos_drive_perf_have() is then
  * false, which is data, not an error. `out` REQUIRED (NULL =>
- * MOS_ERR_INVALID_ARG); MOS_ERR_IO when the command itself fails.
+ * MOS_ERR_INVALID_ARG); MOS_ERR_IO when the READ command itself fails.
+ *
+ * Read vs write direction. The READ direction is the gate: its command-level
+ * failure (CHECK CONDITION / malformed) returns MOS_ERR_IO. The WRITE direction
+ * is best-effort enrichment — a drive that refuses write GET PERFORMANCE on
+ * read-only media, or answers an empty list, leaves max_write_kbps 0 (absent,
+ * not an error). A TRANSPORT failure on EITHER direction (device lost / exclusive
+ * access lost) is fatal to the whole query and is returned, never flattened to a
+ * zero speed.
  */
 mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out);
 

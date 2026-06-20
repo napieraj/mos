@@ -499,7 +499,16 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
     mos_error e = mos_internal_get_perf(h, 0, &rd_max, &rd_cnt);
     if (e != MOS_OK) return e;
 
-    (void)mos_internal_get_perf(h, 1, &wr_max, &wr_cnt);  /* best-effort */
+    /* Write direction is best-effort ENRICHMENT, with one carve-out. A drive may
+       refuse write GET PERFORMANCE on read-only media (CHECK CONDITION) or answer
+       an empty list — write speed is then simply absent (data, not an error), so
+       a command-level MOS_ERR_IO is tolerated. But a TRANSPORT failure (negative:
+       device lost, or exclusive access lost between the two reads) compromises
+       the whole query and is SURFACED, not silently flattened to
+       max_write_kbps == 0 — the indistinguishable-from-empty case R3 (F3) flagged.
+       This is the specific tolerated-vs-fatal policy the contract now documents. */
+    mos_error we = mos_internal_get_perf(h, 1, &wr_max, &wr_cnt);
+    if (we != MOS_OK && we != MOS_ERR_IO) return we;
 
     p->descriptor_count = rd_cnt;
     p->max_read_kbps    = rd_max;

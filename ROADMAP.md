@@ -65,6 +65,15 @@ These corroborate the spec-derived fixtures; they gate nothing.
   the AGENTS.md probe-default ADR. Pre-tag the default stays ON (HEAD installers
   are developers, and the fixture-capture workflow wants `mos probe --capture`
   present with zero friction).
+- **Force-unmount disabled at tag.** `tray eject --force` is a data-loss-capable
+  path whose DiskArbitration unmount cannot be bound to the exact IOMedia
+  identity end-to-end — the daemon resolves the target by NAME at request time
+  (R3 adapter audit; AGENTS.md "the identity bind does NOT close the BSD-reuse
+  race"). It is **gated off by default** behind `MOS_ENABLE_EXPERIMENTAL_FORCE_UNMOUNT`
+  (compile flag, default 0): `mos_tray_eject` returns `MOS_ERR_UNSUPPORTED` for
+  `force`; plain eject and the `MOS_ERR_BUSY`-on-mounted report are unchanged.
+  The force path stays compiled (only the gate is `#if`'d) so it does not
+  bitrot. Reintroduction is the post-tag item below.
 - **Division of labour.** DR enumerates and hands over cheap coarse status (a
   passive, GESN-fed snapshot "not guaranteed current"); mos owns the
   synchronous, fully-checked state machine and the deep rip-relevant metadata
@@ -86,6 +95,31 @@ it). What remains:
   served moved to the fixed-menu `mos probe --capture` (`mos.capture.v0`).
   Decision record: AGENTS.md. This is the major-version (public-surface)
   reduction the item called for.
+
+- **Force-unmount redesign + R3 hardening follow-ups** (POST-TAG, none a tag
+  blocker). The pre-tag R3 adapter-audit fixes shipped: gate `--force` off;
+  ALLOW transport-failure propagation via `mos_internal_tray_cmd` (tolerating
+  answered refusals); write GET PERFORMANCE transport-failure propagation with
+  command-level write-speed kept best-effort + documented; the `_Static_assert`
+  watch re-home tripwire; and the exclusive-access release fix (#88). The
+  post-tag work:
+    1. Reintroduce `tray eject --force` only behind the experimental gate, with
+       the guarded redesign — re-resolve media → verify registry id → create the
+       DA disk → re-verify `DADiskCopyIOMedia` id → callback-side re-verify →
+       fail on any mismatch. (Narrows the race; the public API still cannot prove
+       the daemon acts on the same registry object — AGENTS.md TOCTOU addendum.)
+    2. Heap-owned, bounded DA callback context with leak-or-reap-on-timeout (the
+       void `DASessionSetDispatchQueue` / `DISPATCH_TIME_FOREVER` hang; a naive
+       timeout over the stack-local context is a use-after-return).
+    3. Consider a descriptor-bound unmount on any platform that exposes a safe
+       identity-bound primitive.
+    4. Write-speed presence/error observability (a `has_write_kbps` tri-state) if
+       the public `mos_drive_perf` struct can change — so a write command-level
+       failure is distinguishable from a legitimately-absent write speed, the gap
+       the pre-tag best-effort carve-out leaves open.
+    5. Replace the `_Static_assert` size tripwire with an X-macro / generated
+       borrowed-field audit (stronger than the size floor; no current bug).
+  Source: R3 macOS adapter audit; AGENTS.md TOCTOU addendum (2026-06-20).
 
 - **`eject_requested` watch event** — the cooperative soft-eject the tray
   `lock --persistent` verb sets up: under Persistent Prevent the operator

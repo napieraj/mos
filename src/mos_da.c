@@ -130,7 +130,20 @@ static bool mos_internal_da_disk_is_media(DADiskRef disk,
    fires. The wait is UNBOUNDED on purpose — the callback is guaranteed exactly
    once when the unmount resolves, so the context cannot outlive a late callback
    (no use-after-free), and a genuinely wedged force-unmount blocks here just as
-   `diskutil` would (the I/O path itself is stuck). */
+   `diskutil` would (the I/O path itself is stuck).
+
+   KNOWN ISSUE (2026-06-20 review; AGENTS.md addendum "the identity bind does NOT
+   close the BSD-reuse race"): two data-loss-path defects are RECORDED here,
+   behavior unchanged pending a maintainer decision (Process rule 2):
+     1. TOCTOU. The identity bind below is a LOCAL read; DADiskUnmount transmits
+        the diskN *name* and diskarbitrationd re-resolves it by name at request
+        time, so a diskN reuse in the check->daemon-lookup window can unmount the
+        wrong disk. Public DA exposes no identity-bound unmount, so the window can
+        be minimized but not closed — only fail-closed guarantees safety.
+     2. Unbounded wait. DASessionSetDispatchQueue is void/fallible; a silent
+        failure leaves no callback port and the DISPATCH_TIME_FOREVER wait can
+        hang. A safe bounded fix needs a heap-owned context (the stack-local ctx
+        makes a naive timeout a use-after-return). */
 bool mos_internal_da_unmount(const char *bsd_name, uint64_t expected_media_id)
 {
     if (!bsd_name || !bsd_name[0]) return false;

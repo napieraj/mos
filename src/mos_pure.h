@@ -57,6 +57,17 @@ struct mos_state_result {
     signed char    writable;
 };
 
+/* DRIFT GUARD (R3 brief 3). The watch re-homes every BORROWED pointer field of
+   this struct (vendor/product/revision/serial) into watch-static storage before
+   mos_close (mos_watch.c watch_probe + watch_slot_probe); a borrowed pointer that
+   escapes un-re-homed is a post-close use-after-free. A size change here usually
+   means a new field: if it is a borrowed `const char *`, add its re-home to BOTH
+   probes and a deref to the ASan lifetime test, THEN bump this number. Static-token
+   (media_type) and scalar fields need no re-home — bump only. */
+_Static_assert(sizeof(struct mos_state_result) == 88,
+    "mos_state_result changed: if the new field is a borrowed pointer, re-home it in "
+    "mos_watch.c (watch_probe + watch_slot_probe) before bumping this size");
+
 struct mos_watch_event {
     mos_event_kind kind;
     uint64_t       seq;
@@ -93,6 +104,13 @@ struct mos_watch_event {
        -1 absent, 0 read-only, 1 writable. Appended: ABI-safe (accessor-only). */
     signed char    writable;
 };
+
+/* DRIFT GUARD (R3 brief 3): same rule as mos_state_result above — a new borrowed
+   `const char *` on the event must be re-homed before mos_close and dereffed in
+   the ASan lifetime test; bump this size only after that. */
+_Static_assert(sizeof(struct mos_watch_event) == 136,
+    "mos_watch_event changed: re-home any new borrowed pointer in mos_watch.c "
+    "before bumping this size");
 
 /* ---- Fixed-buffer capacities -------------------------------------- *
  *
