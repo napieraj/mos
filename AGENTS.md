@@ -1273,8 +1273,8 @@ kernel refreshes its own cache on media change, so there is no stale-handle
 window. (3) *Source-proven, ADR-legitimately* — libcdio's `read_toc_osx`
 (`lib/driver/osx.c`) uses exactly this property; that is **verified platform
 source**, which the hardware-role ADR admits as a design basis (distinct from the
-ADR-forbidden "known good on a drive I ran" — mos has never run on hardware; the
-basis here is the source, not a run). (4) *No migration cost* — pre-first-tag,
+ADR-forbidden "known good on a drive I ran" — the basis here is the source, not a
+hardware run). (4) *No migration cost* — pre-first-tag,
 there are no consumers of the `toc` fingerprint provenance, so re-sourcing it is
 free (the JSON-schema ADR's mutable-in-place clause).
 
@@ -1593,3 +1593,53 @@ THAT capture drives re-adding a serial path through the normal fixture→generic
 flow — mos does not pre-emptively carry an unjustified raw command against the
 possibility. The open evidence gap the survey flagged (first-party 0108h captures on
 a non-LG unit) is a capture target, not a blocker.
+
+## Finding + ADR: macOS arms a tray PREVENT on mount; the default `tray eject`
+## clears that OS mount-lock after its own unmount (2026-06-21, narrows the
+## 2026-06-20 "the DEFAULT returns REFUSED_LOCKED untouched" clause)
+
+A hardware run (LG WH16NS60, libredrive, OWC enclosure) surfaced that a DEFAULT
+`mos tray eject` of a MOUNTED disc fails `refused_locked / 05/53/02` even though
+no `mos tray lock` was issued. Diagnosed: macOS arms a tray PREVENT (PREVENT
+ALLOW MEDIUM REMOVAL) when it MOUNTS a disc, and that lock SURVIVES mos's
+graceful unmount (the unmount issues no ALLOW), so after mos gracefully unmounts
+the disc the re-eject is refused by the lingering OS lock. The dead physical
+eject button on the mounted disc corroborates a persistent-grade Prevent. Only
+`mos tray eject --force` cleared it — which made the common case (eject the disc
+that is currently mounted, the thing Finder/`drutil` do without ceremony) wrongly
+require `--force`.
+
+**Rebuttal of the 2026-06-20 clause "the DEFAULT returns REFUSED_LOCKED
+untouched."** That clause was right that a DELIBERATE lock (a robot's `mos tray
+lock` on an idle drive) must not be silently overridden by a bare eject. But a
+REFUSED_LOCKED that follows mos's OWN graceful unmount is categorically
+different: the lock can only be the OS mount-protection Prevent macOS armed when
+it mounted the disc mos just unmounted — there is no path to that lock except
+through the mount mos just cleared. Clearing it COMPLETES the unmount the way
+Finder/`drutil` do; it is not overriding a user's intent. So `mos_tray_eject`
+now tracks `did_unmount` and, when a REFUSED_LOCKED follows its own unmount,
+clears BOTH Prevent states (basic ALLOW 0x00 then persistent ALLOW 0x02) and
+re-ejects — no `--force` needed. A COLD REFUSED_LOCKED (no preceding unmount — a
+deliberately-locked idle drive) is still returned untouched on the default path
+and still needs `--force`. The basic-vs-persistent distinction is moot for the
+fix: the clear issues both ALLOWs regardless, so it works whichever state macOS
+used.
+
+**Scope unchanged.** No new command surface (the same 0x1B/0x1E raw CDBs on the
+single `mos_internal_raw_cdb` exclusive-access site, one-of-four count
+untouched), no data-loss path (the unmount stays GRACEFUL — `DADiskUnmount`
+Whole, never Force; a busy filesystem still surfaces `MOS_ERR_BUSY`), and the
+loop stays bounded at two passes (mount, then lock). `--force` keeps its
+meaning: clear a COLD deliberate lock. Pinned by
+`adapter_tray_eject_default_clears_os_mountlock` (mounted+locked → DONE on the
+default) and `adapter_tray_eject_cold_lock_needs_force` (cold lock →
+REFUSED_LOCKED on the default, DONE under `--force`), with the headless fake
+modelling the stateful PREVENT lock the real drive holds
+(`mos_fake_set_prevent_locked`).
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+drive/bridge where the OS Prevent does NOT survive the unmount (then the default
+clear is a harmless no-op — both ALLOWs answer GOOD on an unlocked drive), or one
+that refuses the ALLOW (5/24/00) — surfaced as the drive's own answer, the
+re-eject being the real check. Each lands as a fixture + dated note with a
+generic gate, never a per-device special-case.

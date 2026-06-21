@@ -36,7 +36,7 @@
     },
     "force": {
       "type": ["boolean", "null"],
-      "description": "eject only (null on every other action): true when --force was requested. Every eject GRACEFULLY unmounts a mounted disc first (DADiskUnmount, Whole, NOT Force) and then ejects; mos NEVER forces the filesystem, so a busy volume (open file handles) surfaces as mos.error.v1 busy on both the default and --force. --force adds exactly one thing: on a basic Prevent lock (outcome refused_locked without --force) it clears both Prevent states so the eject gets past the lock. The one blocker --force cannot clear is another userland client holding exclusive access (no SCSI preempt): mos.error.v1 code exclusive_access."
+      "description": "eject only (null on every other action): true when --force was requested. Every eject GRACEFULLY unmounts a mounted disc first (DADiskUnmount, Whole, NOT Force) and then ejects; mos NEVER forces the filesystem, so a busy volume (open file handles) surfaces as mos.error.v1 busy on both the default and --force. macOS arms a tray Prevent lock when it mounts a disc and that lock survives the unmount, so the DEFAULT eject clears both Prevent states after its own unmount and ejects (Finder/drutil semantics) — that OS mount-lock is not a deliberate one. --force extends the lock-clearing to a COLD lock: a deliberately-locked idle drive with no mount in play (a robot's tray lock), which the default eject returns as outcome refused_locked. The one blocker neither clears is another userland client holding exclusive access (no SCSI preempt): mos.error.v1 code exclusive_access."
     },
     "persistent": {
       "type": ["boolean", "null"],
@@ -44,7 +44,7 @@
     },
     "outcome": {
       "enum": ["done", "refused_locked", "refused_other"],
-      "description": "done = command completed GOOD. refused_locked = CHECK CONDITION 5/53/02 MEDIA REMOVAL PREVENTED (an eject/close hit a basic Prevent lock — a reported fact, not a CLI failure). refused_other = any other answered CHECK CONDITION (e.g. a drive without Persistent Prevent support rejecting --persistent with 5/24/00)."
+      "description": "done = command completed GOOD. refused_locked = CHECK CONDITION 5/53/02 MEDIA REMOVAL PREVENTED (an eject/close hit a Prevent lock — a reported fact, not a CLI failure; on the default eject this is a COLD deliberate lock, since the OS mount-lock is auto-cleared after the graceful unmount). refused_other = any other answered CHECK CONDITION (e.g. a drive without Persistent Prevent support rejecting --persistent with 5/24/00)."
     },
     "sense": {
       "type": ["object", "null"],

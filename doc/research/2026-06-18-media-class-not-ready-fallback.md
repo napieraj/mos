@@ -34,8 +34,8 @@ Why this needs no `ioreg`/hardware confirmation before building:
   through macOS 26.4 (Tahoe). Per the hardware-role ADR, hardware *falsifies*
   (a capture showing Type absent-when-expected becomes a fixture + note) and
   measures *yield* (how often it is present in the not-ready window) — neither
-  is a build precondition. mos has never run on hardware; it is built to spec
-  and source, and this is source.
+  is a build precondition. This behavior is built to spec and source, not
+  hardware-confirmed, and this is source.
 
 ## The real gate: the profile↔class coupling (a schema decision)
 

@@ -823,6 +823,56 @@ TEST(adapter_tray_eject_busy_fs_surfaces_busy_never_forces)
     return 0;
 }
 
+TEST(adapter_tray_eject_default_clears_os_mountlock)
+{
+    /* macOS arms a tray PREVENT when it MOUNTS a disc; that lock survives mos's
+       graceful unmount, so the re-eject answers 5/53/02. A DEFAULT eject (no
+       --force) of a mounted disc must clear that OS mount-lock after its own
+       unmount and succeed — Finder/`drutil` semantics — because the lock it hit
+       followed mos's unmount and is the OS's, not a deliberate one. */
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    mos_fake_set_mounted_busy(true);    /* a Finder/system mount */
+    mos_fake_set_prevent_locked(true);  /* armed when macOS mounted it */
+
+    mos_tray_outcome out = (mos_tray_outcome)-1;
+    EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/false, &out, NULL));
+    EXPECT_EQ(MOS_TRAY_DONE, out);      /* unmount → clear OS lock → eject */
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_tray_eject_cold_lock_needs_force)
+{
+    /* A COLD Prevent lock — a deliberately-locked idle drive (a robot's `mos
+       tray lock`), no mount in play, so no graceful unmount precedes the eject.
+       The default eject leaves it REFUSED_LOCKED (mos does not clear a lock it
+       did not just cause); --force clears both Prevent states and ejects. */
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    mos_fake_set_prevent_locked(true);  /* locked, but NOT mounted */
+
+    mos_tray_outcome out = (mos_tray_outcome)-1;
+    EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/false, &out, NULL));
+    EXPECT_EQ(MOS_TRAY_REFUSED_LOCKED, out);   /* default leaves it locked */
+    EXPECT_EQ(0, mos_fake_lock_balance());
+
+    /* --force clears the cold lock and ejects. */
+    out = (mos_tray_outcome)-1;
+    EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/true, &out, NULL));
+    EXPECT_EQ(MOS_TRAY_DONE, out);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    mos_close(h);
+    return 0;
+}
+
 TEST(adapter_tray_locked_eject_classifies_refused_locked)
 {
     mos_fake_reset();
@@ -1009,6 +1059,8 @@ int main(void)
     RUN(adapter_tray_cdbs_pinned_byte_for_byte);
     RUN(adapter_tray_eject_graceful_unmounts_and_ejects);
     RUN(adapter_tray_eject_busy_fs_surfaces_busy_never_forces);
+    RUN(adapter_tray_eject_default_clears_os_mountlock);
+    RUN(adapter_tray_eject_cold_lock_needs_force);
     RUN(adapter_da_unmount_is_name_based);
     RUN(adapter_da_unmount_bounded_when_callback_never_fires);
     RUN(adapter_tray_locked_eject_classifies_refused_locked);

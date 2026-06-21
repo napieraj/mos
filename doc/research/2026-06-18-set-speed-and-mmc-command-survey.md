@@ -19,8 +19,8 @@ spec/source derivations a rig could only falsify.
 
 **Confidence per claim:** HIGH = in-repo source, T10/MMC spec, or Apple header
 quoted; MEDIUM = inferred from spec + the convenience inventory but turning on a
-macOS transport detail not separately confirmed (`mos` has never run on real
-hardware — `ROADMAP.md:9`).
+macOS transport detail not separately confirmed on hardware (see
+`ROADMAP.md`).
 
 ---
 

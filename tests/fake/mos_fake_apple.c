@@ -106,6 +106,12 @@ static struct {
                                    bounded-false, not hang */
     bool     release_fail;      /* ReleaseExclusiveAccess returns non-success
                                    AND leaves the lock held (no decrement) */
+    bool     model_prevent_lock;/* model a stateful tray PREVENT lock: a 0x1B
+                                   eject/close while locked answers CHECK
+                                   CONDITION 5/53/02; a 0x1E ALLOW clears it.
+                                   Opt-in so the static raw-reply tests are
+                                   unaffected. */
+    bool     prevent_locked;    /* current lock state (model_prevent_lock only) */
     uint32_t raw_status;        uint8_t raw[64];  size_t raw_len;
     uint64_t raw_realized;      uint8_t raw_sense[18];
 
@@ -316,6 +322,13 @@ void mos_fake_set_unmount_refused(bool refused) { g.unmount_refused = refused; }
 void mos_fake_set_unmount_never_completes(bool never)
 { g.unmount_never_completes = never; }
 void mos_fake_set_release_fail(bool fail) { g.release_fail = fail; }
+/* Model the macOS mount-protection Prevent lock: when macOS mounts a disc it
+   arms a tray PREVENT that survives the unmount, so an eject answers 5/53/02
+   until a PREVENT ALLOW clears it. Enables the stateful model and sets the
+   initial lock state; a 0x1E ALLOW (byte4 bit0 == 0) clears it, a 0x1E PREVENT
+   sets it, a 0x1B eject/close while locked answers refused_locked. */
+void mos_fake_set_prevent_locked(bool locked)
+{ g.model_prevent_lock = true; g.prevent_locked = locked; }
 
 void mos_fake_set_plugin_fail(bool fail) { g.plugin_fail = fail; }
 
@@ -879,6 +892,28 @@ static IOReturn task_ExecuteTaskSync(void *task,
     g_execute_calls++;
     if (g.method_rc[MOS_FAKE_METHOD_EXECUTE]) {
         return (IOReturn)g.method_rc[MOS_FAKE_METHOD_EXECUTE];
+    }
+    /* Stateful tray PREVENT lock (opt-in via mos_fake_set_prevent_locked):
+       a 0x1E PREVENT ALLOW MEDIUM REMOVAL toggles the lock by byte4 bit0
+       (set = lock, clear = allow); a 0x1B eject/close while locked answers
+       CHECK CONDITION 5/53/02; everything else falls through to the generic
+       reply. Models the macOS mount-lock the default eject auto-clears. */
+    if (g.model_prevent_lock) {
+        if (g_task.cdb[0] == 0x1E) {
+            g.prevent_locked = (g_task.cdb[4] & 0x01) != 0;
+            if (senseDataBuffer)       memset(senseDataBuffer, 0, 18);
+            if (outStatus)             *outStatus = (SCSITaskStatus)0; /* GOOD */
+            if (realizedTransferCount) *realizedTransferCount = 0;
+            return kIOReturnSuccess;
+        }
+        if (g_task.cdb[0] == 0x1B && g.prevent_locked) {
+            static const uint8_t locked_sense[18] =
+                { [0] = 0x70, [2] = 0x05, [12] = 0x53, [13] = 0x02 };
+            if (senseDataBuffer)       memcpy(senseDataBuffer, locked_sense, 18);
+            if (outStatus)             *outStatus = (SCSITaskStatus)0x02; /* CHECK COND */
+            if (realizedTransferCount) *realizedTransferCount = 0;
+            return kIOReturnSuccess;
+        }
     }
     if (g_task.buf && g_task.buf_len) {
         size_t n = (g.raw_len < g_task.buf_len) ? g.raw_len : g_task.buf_len;

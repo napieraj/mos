@@ -28,8 +28,7 @@ falsify."
 
 Confidence per claim: HIGH = in-repo source, T10/MMC spec, or Apple kext
 source quoted; MEDIUM = inferred from spec + source but turning on a macOS
-transport detail not separately confirmed (`mos` has never run on real
-hardware — `ROADMAP.md:8`).
+transport detail not separately confirmed on hardware (see `ROADMAP.md`).
 
 ## Verdict
 
@@ -338,9 +337,9 @@ the list is for sizing, and the schema/ADR pieces are the disciplined parts:
 ## Part 6 — Falsification targets (not "open questions"): spec-expected-good, what a rig could break
 
 The design above is derived from spec, headers, and Apple source — it is not
-waiting on hardware to be *decided*. `mos` has never run on a real drive
-(`ROADMAP.md:8`), so each derived behavior is a *falsifiable prediction*; the
-reference rig (BH16NS55 / WH16NS60) earns its keep only by *breaking* one. Per
+waiting on hardware to be *decided* (`ROADMAP.md`): each derived behavior is a
+*falsifiable prediction*, and the reference rig (BH16NS55 / WH16NS60) earns its
+keep only by *breaking* one. Per
 the hardware-role ADR a break lands as a fixture + dated note with a generic
 defense, never a per-device special-case. Reframing §9.9 + ROADMAP "Open
 empirical questions" (`ROADMAP.md:239`) from questions-we-lack-answers-to into

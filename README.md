@@ -193,8 +193,8 @@ The one verb that **changes** drive state; every query path stays reporter-only.
 
 ```sh
 mos tray eject 1                 # graceful unmount (if mounted) + eject
-mos tray eject disk4 --force     # also clear a tray Prevent LOCK in the way,
-                                 #   then eject (never forces the filesystem)
+mos tray eject disk4 --force     # also clear a COLD Prevent LOCK (deliberately
+                                 #   locked, unmounted); never forces the filesystem
 mos tray close 1
 mos tray lock 1                  # prevent removal until an unlock
 mos tray lock 1 --persistent     # survives process exit — an operator eject
@@ -209,12 +209,17 @@ first (exactly like `diskutil unmountDisk diskN` / `drutil eject`) and then
 ejects; if the filesystem is **busy** (open file handles) the unmount fails and
 the eject returns busy (exit 75) — `mos` **never** forces the filesystem, so it
 never kills your open files. (Close the files, or `diskutil unmountDisk` first.)
+macOS arms a tray Prevent lock when it mounts a disc and that lock survives the
+unmount, so a plain eject also **clears that OS mount-lock** after its own
+unmount — ejecting a mounted disc Just Works, no `--force` needed.
 
-`--force` (eject only) adds exactly **one** thing: it clears a tray **Prevent
-LOCK** in the way (both the basic and persistent Prevent states) so a locked
-tray opens. It does **not** touch the filesystem — a busy disc still reports
-busy under `--force`. The one blocker it can't clear is another program holding
-the drive exclusively (`outcome: exclusive_access`).
+`--force` (eject only) extends the lock-clearing to a **COLD** lock — a
+deliberately-locked idle drive (a robot's `mos tray lock`) with no mount in
+play, which a plain eject reports as `refused_locked`. It clears both the basic
+and persistent Prevent states so the locked tray opens. It does **not** touch
+the filesystem — a busy disc still reports busy under `--force`. The one blocker
+neither path can clear is another program holding the drive exclusively
+(`outcome: exclusive_access`).
 
 A lock **persists past the process** — any later
 `mos tray unlock` recovers it. Lock several drives with a loop over `mos list`
