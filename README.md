@@ -202,9 +202,9 @@ mos tray eject 1                 # graceful unmount (if mounted) + eject
 mos tray eject disk4 --force     # also clear a COLD Prevent LOCK (deliberately
                                  #   locked, unmounted); never forces the filesystem
 mos tray close 1
-mos tray lock 1                  # durable (persistent) removal lock on an idle
-                                 #   drive; mounted disc → already_locked (a no-op
-                                 #   success — macOS already locked it on mount)
+mos tray lock 1                  # removal lock on an idle drive (blocks the
+                                 #   front-panel eject button); mounted disc →
+                                 #   already_locked (macOS already locked it)
 mos tray unlock 1                # clear the lock (both Prevent states)
 ```
 
@@ -222,17 +222,18 @@ no `--force` needed.
 
 `--force` (eject only) extends the lock-clearing to a **COLD** lock — a
 deliberately-locked idle drive (a robot's `mos tray lock`) with no mount in
-play, which a plain eject reports as `refused_locked`. It clears both the basic
-and persistent Prevent states so the locked tray opens. It does **not** touch
+play, which a plain eject reports as `refused_locked`. It clears both Prevent
+states so the locked tray opens. It does **not** touch
 the filesystem — a busy disc still reports busy under `--force`. The one blocker
 neither path can clear is another program holding the drive exclusively
 (`outcome: exclusive_access`).
 
-`tray lock` sets the **persistent** Prevent state — the durable lock that
-survives an I/O-nexus loss (e.g. a USB bus reset), which is what a fire-and-
-forget single-shot lock wants; `tray unlock` clears **both** Prevent states so
-the tray ends unlocked. A lock **persists past the process** — any later `mos
-tray unlock` recovers it. Lock/unlock act on **idle or unmounted** drives: on a
+`tray lock` sets the **basic** Prevent state — the hard removal block that
+refuses the front-panel eject button. `tray unlock` clears **both** Prevent
+states so the tray ends unlocked. A lock **persists past the process** — it
+survives a handle close, clearing only on a bus reset or power-cycle — so any
+later `mos tray unlock` recovers it. Lock/unlock act on **idle or unmounted**
+drives: on a
 **mounted** disc the PREVENT command can't take exclusive access, but the disc
 is already removal-locked by macOS — so `lock` reports `already_locked` (a
 success), and `unlock` reports busy with a hint to `tray eject` (which releases

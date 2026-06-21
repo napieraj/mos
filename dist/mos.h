@@ -1054,15 +1054,17 @@ mos_error mos_tray_eject (mos_handle_t *h, bool force,
 mos_error mos_tray_close (mos_handle_t *h,
                           mos_tray_outcome *out, uint8_t sense[3]);
 
-/* Prevent medium removal (PREVENT ALLOW MEDIUM REMOVAL 0x1E, byte4 0x03 — the
-   PERSISTENT Prevent state). The persistent state is the durable, robot-grade
-   lock: it survives an I_T-nexus loss (e.g. a USB bus reset) that would clear a
-   basic Prevent, which is what a fire-and-forget single-initiator lock wants.
-   A drive that does not implement Persistent Prevent answers REFUSED_OTHER
-   (5/24/00). On a MOUNTED disc the lock CDB cannot issue (media still mounted),
-   but a mounted disc is already removal-locked by macOS, so this returns MOS_OK
-   / ALREADY_LOCKED rather than MOS_ERR_BUSY. (mos issues only the persistent
-   state; the basic-only Prevent is not exposed.) */
+/* Prevent medium removal (PREVENT ALLOW MEDIUM REMOVAL 0x1E, byte4 0x01 — the
+   basic Prevent state). Basic Prevent is the HARD removal block: it refuses a
+   front-panel eject at the drive. mos does NOT use the Persistent Prevent
+   (0x03): on macOS the optical stack honors a level-2/3 lock's cooperative
+   soft-eject (a button press raises a GESN EjectRequest the OS acts on), so the
+   persistent lock does not block the button. Basic Prevent survives a handle
+   close / process exit (it clears only on a real nexus loss — bus reset, power),
+   so the fire-and-forget lock outlives the process; release with mos_tray_unlock.
+   On a MOUNTED disc the lock CDB cannot issue (media still mounted), but a
+   mounted disc is already removal-locked by macOS, so this returns MOS_OK /
+   ALREADY_LOCKED rather than MOS_ERR_BUSY. */
 mos_error mos_tray_lock  (mos_handle_t *h,
                           mos_tray_outcome *out, uint8_t sense[3]);
 

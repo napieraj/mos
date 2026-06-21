@@ -747,16 +747,18 @@ TEST(adapter_tray_cdbs_pinned_byte_for_byte)
     static const uint8_t eject[6]  = { 0x1B, 0, 0, 0, 0x02, 0 };
     static const uint8_t close_[6] = { 0x1B, 0, 0, 0, 0x03, 0 };
     /* PREVENT ALLOW 0x1E byte4 {PERSISTENT,PREVENT} (04-349r1 Table 8). lock
-       sets the PERSISTENT Prevent (0x03); unlock clears BOTH (0x00 then 0x02),
-       so its LAST CDB — the one mos_fake_last_cdb returns — is the persistent
-       ALLOW 0x02 (unlock-issues-both is pinned separately). */
-    static const uint8_t lock_p[6]      = { 0x1E, 0, 0, 0, 0x03, 0 };
+       sets the BASIC Prevent (0x01 — the hard removal block; the Persistent
+       Prevent 0x03 is retired, it does not block the button on macOS); unlock
+       clears BOTH (0x00 then 0x02), so its LAST CDB — the one mos_fake_last_cdb
+       returns — is the persistent ALLOW 0x02 (unlock-issues-both is pinned
+       separately). */
+    static const uint8_t lock_basic[6]  = { 0x1E, 0, 0, 0, 0x01, 0 };
     static const uint8_t unlock_last[6] = { 0x1E, 0, 0, 0, 0x02, 0 };
 
     int rc = 0;
     rc |= pin_tray_cdb(h, call_eject,    eject,       MOS_TRAY_DONE);
     rc |= pin_tray_cdb(h, call_close,    close_,      MOS_TRAY_DONE);
-    rc |= pin_tray_cdb(h, call_lock,     lock_p,      MOS_TRAY_DONE);
+    rc |= pin_tray_cdb(h, call_lock,     lock_basic,  MOS_TRAY_DONE);
     rc |= pin_tray_cdb(h, call_unlock,   unlock_last, MOS_TRAY_DONE);
     mos_close(h);
     return rc;
@@ -900,9 +902,9 @@ TEST(adapter_tray_refused_other_carries_its_sense)
     mos_handle_t *h = mos_open_by_index(1, &err);
     EXPECT(h != NULL);
 
-    /* A drive without Persistent Prevent rejects the lock's 0x03 with 5/24/00
-       (INVALID FIELD IN CDB) — refused_other, and the sense triple must reach
-       the caller (the gap Plan A closed). */
+    /* A drive that rejects the lock's basic Prevent 0x01 with 5/24/00 (INVALID
+       FIELD IN CDB) — refused_other, and the sense triple must reach the caller
+       (the gap Plan A closed). */
     uint8_t sense[18] = {0};
     sense[0] = 0x70; sense[2] = 0x05; sense[12] = 0x24; sense[13] = 0x00;
     mos_fake_set_raw_reply(0x02 /*CHECK CONDITION*/, NULL, 0, 0, sense);

@@ -39,7 +39,7 @@
     },
     "outcome": {
       "enum": ["done", "refused_locked", "refused_other", "already_locked"],
-      "description": "done = command completed GOOD. refused_locked = CHECK CONDITION 53/02 MEDIA REMOVAL PREVENTED — an eject/close hit a Prevent lock (a reported fact, not a CLI failure; on the default eject this is a COLD deliberate lock, since the OS mount-lock is auto-cleared after the graceful unmount). The sense KEY is contextual and does not gate this: 05 (ILLEGAL REQUEST) with media present, 02 (NOT READY) on an empty drive. refused_other = any other answered CHECK CONDITION (e.g. a drive without Persistent Prevent support rejecting the persistent state with 5/24/00). already_locked = `lock` on a MOUNTED disc: the lock CDB can't issue (media still mounted) but a mounted disc is already removal-locked by macOS, so the requested state already holds — a success, not a busy error."
+      "description": "done = command completed GOOD. refused_locked = CHECK CONDITION 53/02 MEDIA REMOVAL PREVENTED — an eject/close hit a Prevent lock (a reported fact, not a CLI failure; on the default eject this is a COLD deliberate lock, since the OS mount-lock is auto-cleared after the graceful unmount). The sense KEY is contextual and does not gate this: 05 (ILLEGAL REQUEST) with media present, 02 (NOT READY) on an empty drive. refused_other = any other answered CHECK CONDITION (e.g. a drive rejecting the command with 5/24/00 INVALID FIELD IN CDB). already_locked = `lock` on a MOUNTED disc: the lock CDB can't issue (media still mounted) but a mounted disc is already removal-locked by macOS, so the requested state already holds — a success, not a busy error."
     },
     "sense": {
       "type": ["object", "null"],

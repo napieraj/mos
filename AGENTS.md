@@ -1736,6 +1736,72 @@ over-claim) — but a mounted optical disc cannot be operator-ejected under macO
 so the tray is held regardless; if a capture ever shows a mounted disc with an
 ejectable tray, that lands as a fixture + dated note here before any change.
 
+### Addendum: `lock` sets the BASIC Prevent, not persistent — persistent does
+### NOT block the physical button on macOS (2026-06-21, supersedes the
+### "lock sets the PERSISTENT Prevent (0x03) only" decision above)
+
+The ADR above made `mos tray lock` issue the Persistent Prevent (0x03) ONLY, on
+the claim that basic Prevent "has no CLI use case that persistent doesn't cover."
+A hardware run (maintainer, LG WH16NS60 / MT1959HWDN rig) falsified that claim
+directly: with a persistent-only lock the **physical front-panel eject button
+still ejects the disc**. This entry records the rebuttal + the redesign;
+append-don't-edit (the entry above stands as the record, this supersedes it on
+the merits).
+
+**Why persistent doesn't block the button (the rebuttal).** The
+tray-control feasibility doc already derived it and flagged it as the weakest,
+most-worth-a-capture prediction (`doc/research/2026-06-13-tray-control-feasibility.md`
+Part 3 L200-210 and Part 6 #3/#4; ROADMAP "cooperative-button matrix" open
+question): at Prevent level 2/3 the drive runs the **cooperative soft-eject**
+protocol — a front-panel press is converted into a host-visible GESN
+**EjectRequest** rather than hard-refused. On macOS the kernel optical stack
+(`IOSCSIMultimediaCommandsDevice`, polling events) acts as the orchestrator and
+**honors** that request: it issues the unlock-then-eject and the tray opens. So
+persistent prevent provides "no stray eject without a host unlock" — but on
+macOS the host ITSELF is the cooperating party and unlocks+ejects on the button.
+The **basic Prevent (0x01)** is the HARD removal block that refuses the button at
+the drive, which is exactly the robot-safety use case `lock` exists for ("a stray
+operator eject can't fire the tray into a moving arm", ROADMAP). The prior ADR's
+"no use case basic covers that persistent doesn't" is false: basic covers
+physical-button-blocking, which persistent does not on macOS.
+
+**The decision (maintainer, 2026-06-21).** `mos tray lock` issues the **basic
+Prevent (0x01)**; the Persistent Prevent (0x03) is **retired** as a lock
+mechanism, and every user-facing mention of "persistent" / the old `--persistent`
+flag is purged (the usage text, README, man page, the `mos_tray_lock` header
+doc). The basic Prevent is per-I_T-nexus and survives a handle close / process
+exit (the SCSITaskUserClient close is none of SPC-4's five clearing events), so
+the fire-and-forget "lock and walk away" property is **unchanged** — it clears
+only on a real nexus loss (bus reset, power), which is the durability the prior
+ADR reached for persistent to get and which basic already has across the cases
+that matter (process exit, handle close). `lock` on a MOUNTED disc still reports
+`already_locked` (macOS armed the lock on mount); that part of the ADR above is
+untouched.
+
+**unlock / eject still CLEAR both Prevent states** (basic ALLOW 0x00 then
+persistent ALLOW 0x02). This is release, not persistent *locking*: mos must be
+able to clear the OS mount-lock macOS arms on mount (whose basic-vs-persistent
+nature the 2026-06-21 mount-lock finding left unresolved — clearing both is the
+safe superset) and any persistent lock left by an older mos. An ANSWERED refusal
+of the persistent ALLOW on a PDTE-less drive (5/24/00) stays tolerated; a
+transport failure stays surfaced. Unchanged from the ADR above.
+
+**Scope / footprint unchanged.** Same opcodes (0x1E PREVENT ALLOW, byte4 now 0x01
+for lock instead of 0x03; 0x00/0x02 for the clears), `mos_internal_raw_cdb` stays
+the sole exclusive-access site, the one-of-four raw-CDB count is untouched, no new
+command surface, same console-user privilege footprint. `mos.tray.v1` is
+unchanged (the `outcome` enum and field set are the same — this is a CDB byte and
+documentation change, not a schema change). Pinned by
+`adapter_tray_cdbs_pinned_byte_for_byte` (lock now pins byte4 0x01).
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+drive on which basic Prevent ALSO fails to block the button (a firmware that
+ignores prevent and retracts anyway — feasibility #3, the prevent *state* still
+reads back) — that lands as a fixture + dated note, never a per-device
+special-case; and whether the macOS mount-lock is basic or persistent (if a
+capture ever shows a mounted-disc eject that the basic ALLOW alone cannot clear,
+the both-state clear above is already the defense).
+
 ## ADR: drive speeds (GET PERFORMANCE) move from `mos drive` to `mos state` +
 ## `mos watch` — they are disc-bound, not drive-static (2026-06-21)
 
