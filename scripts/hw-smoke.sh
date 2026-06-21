@@ -19,10 +19,14 @@
 #   MOS=/path/to/mos scripts/hw-smoke.sh        # override the binary; otherwise
 #                                                 an installed `mos` on PATH is
 #                                                 preferred, then build/bin/mos
+#   SMOKE_INSTALL_DEPS=0 scripts/hw-smoke.sh     # don't auto-install python3/jsonschema
 #
-# Designed for macOS (bash 3.2 / zsh both fine). Needs python3 for --json schema
-# checks and JSON parsing; without it those steps SKIP with a note (everything
-# else still runs). No jq dependency.
+# Designed for macOS (bash 3.2 / zsh both fine). Needs python3 + the jsonschema
+# module for the --json schema checks and JSON parsing; when missing, the script
+# installs them best-effort (python3 via brew, jsonschema via pip — the hash-
+# pinned schemas/requirements-ci.txt the CI schema job uses) unless
+# SMOKE_INSTALL_DEPS=0. If install isn't possible those steps SKIP with a note
+# (everything else still runs). No jq dependency.
 
 set -u
 
@@ -81,9 +85,49 @@ want_rc()   { if [ "$LAST_RC" = "$1" ]; then ok "$2 (exit $1)"; else bad "$2 (ex
 want_text() { if printf '%s' "$LAST_OUT" | grep -q -- "$1"; then ok "$2"; else bad "$2 (missing: $1)"; fi; }
 want_one_of(){ d="$1"; shift; for p in "$@"; do if printf '%s' "$LAST_OUT" | grep -q -- "$p"; then ok "$d ($p)"; return; fi; done; bad "$d (none of: $*)"; }
 
+# ---- dependency bootstrap (python3 + jsonschema via brew/pip) ----------------
+# The --json schema checks need python3 with the jsonschema module. When either
+# is missing, install them best-effort: python3 via Homebrew, then the same
+# hash-pinned jsonschema stack the CI schema job uses (schemas/requirements-ci.txt)
+# via that python's pip. Opt out with SMOKE_INSTALL_DEPS=0; if brew is absent or
+# an install step fails, the schema checks fall back to SKIP exactly as before —
+# everything else still runs.
+have_schema_deps() { command -v python3 >/dev/null 2>&1 && python3 -c 'import jsonschema' >/dev/null 2>&1; }
+
+bootstrap_schema_deps() {
+    [ "${SMOKE_INSTALL_DEPS:-1}" = 1 ] || return 0
+    have_schema_deps && return 0
+    if ! command -v brew >/dev/null 2>&1; then
+        note "brew not found — skipping python3/jsonschema install (schema checks will SKIP; set SMOKE_INSTALL_DEPS=0 to silence)"
+        return 0
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        note "installing python3 via brew (SMOKE_INSTALL_DEPS=0 to skip)..."
+        brew install python3 || note "brew install python3 failed — schema checks will SKIP"
+    fi
+    if command -v python3 >/dev/null 2>&1 && ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
+        req="$HERE/schemas/requirements-ci.txt"
+        note "installing jsonschema via pip (hash-pinned: schemas/requirements-ci.txt)..."
+        # brew's python is PEP 668 externally-managed, so fall back to --user
+        # then --break-system-packages if a plain install is refused.
+        pip_install() {
+            python3 -m pip install "$@" \
+                || python3 -m pip install --user "$@" \
+                || python3 -m pip install --break-system-packages "$@"
+        }
+        if [ -f "$req" ]; then
+            pip_install --require-hashes -r "$req" || pip_install jsonschema \
+                || note "jsonschema install failed — schema checks will SKIP"
+        else
+            pip_install jsonschema || note "jsonschema install failed — schema checks will SKIP"
+        fi
+    fi
+}
+
 # ---- schema validation (best-effort, python3 + jsonschema) -------------------
+bootstrap_schema_deps
 HAVE_SCHEMA=0
-if command -v python3 >/dev/null 2>&1 && python3 -c 'import jsonschema' >/dev/null 2>&1; then HAVE_SCHEMA=1; fi
+have_schema_deps && HAVE_SCHEMA=1
 
 schema_one() { # $1 schema name, stdin = one JSON object; rc 0 ok / 1 fail / 2 skip
     [ "$HAVE_SCHEMA" = 1 ] || return 2

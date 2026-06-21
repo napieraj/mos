@@ -464,9 +464,11 @@ above records the six core states, the smoke script EXERCISES every verb,
 selector form, error path, and `--json` document type against a real drive —
 asserting exit codes / output / schema conformance where deterministic and
 PROMPTING for the disc/tray changes the media-dependent branches need. It honors
-an installed `mos` on `PATH` (override with `MOS=`), needs `python3` +
-`jsonschema` for the `--json` schema checks (those SKIP without it), and never
-leaves the tray locked (cleanup trap).
+an installed `mos` on `PATH` (override with `MOS=`), and never leaves the tray
+locked (cleanup trap). The `--json` schema checks need `python3` + `jsonschema`;
+when they're missing the script installs them best-effort (python3 via brew,
+jsonschema via pip from the hash-pinned `schemas/requirements-ci.txt`) unless
+`SMOKE_INSTALL_DEPS=0`, falling back to SKIP if install isn't possible.
 
 ```sh
 scripts/hw-smoke.sh            # all phases (prompts for disc swaps)
