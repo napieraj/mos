@@ -710,6 +710,17 @@ bool mos_internal_profile_is_formattable(uint16_t profile);
    doc/research/2026-06-18-media-class-not-ready-fallback.md. */
 const char *mos_internal_media_type_token(const char *kernel_type);
 
+/* DiscRecording physical-interconnect tokens (pure). The DR adapter
+   (mos_dr.c) maps the kDRDevicePhysicalInterconnect{,Location}Key CFString
+   values to these small int codes; this function names them. Kept pure +
+   here so the schema's interconnect enums are drift-guarded against the C
+   token set (schemas/validate.py). NULL for code 0 (absent / unrecognized) so
+   an unknown bus omits the field rather than inventing a token.
+     interconnect: 1 atapi, 2 fibre_channel, 3 firewire, 4 usb, 5 scsi
+     location:     1 internal, 2 external, 3 unknown                       */
+const char *mos_internal_interconnect_token(int code);
+const char *mos_internal_interconnect_location_token(int code);
+
 /* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *
  *
  * The drive's read/write performance from GET PERFORMANCE (0xAC, Type 00h

@@ -95,6 +95,7 @@ static void common_drive_setup(void)
     mos_fake_reset();
     mos_fake_set_bsd_unit(4);
     mos_fake_set_identity("HL-DT-ST", "BD-RE WH16NS40", "1.05");
+    mos_fake_set_interconnect(4, 2);   /* usb, external */
     mos_fake_set_tur(0x00, NULL);   /* GOOD => READY */
 }
 

@@ -244,6 +244,24 @@ def check_cli_enum_drift(here: Path) -> int:
                      enum_at(here / "mos.drive.v1.json",
                              "mechanical", "loading_mechanism") - {None}),)))
 
+    # DR physical-interconnect tokens (pure string tables; the schema enums
+    # carry an extra null, so compare against the enum set minus None).
+    c_interconnect = fn_returns(root / "src" / "mos_strings.c",
+                                "mos_internal_interconnect_token")
+    checks.append(("interconnect", c_interconnect,
+                   "src/mos_strings.c mos_internal_interconnect_token()",
+                   (("mos.drive.v1.interconnect",
+                     enum_at(here / "mos.drive.v1.json", "interconnect")
+                     - {None}),)))
+
+    c_interconnect_loc = fn_returns(root / "src" / "mos_strings.c",
+                                    "mos_internal_interconnect_location_token")
+    checks.append(("interconnect_location", c_interconnect_loc,
+                   "src/mos_strings.c mos_internal_interconnect_location_token()",
+                   (("mos.drive.v1.interconnect_location",
+                     enum_at(here / "mos.drive.v1.json", "interconnect_location")
+                     - {None}),)))
+
     # Tray outcome (src/mos_strings.c mos_tray_outcome_description, with a
     # `case MOS_TRAY_REFUSED_OTHER: default:` fallback) and the tray action
     # word (cli/tray.c action_word, same fallback shape) — both pure string

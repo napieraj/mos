@@ -6,6 +6,8 @@
   "product": "BD-RW BDR-XS07",
   "revision": "1.01",
   "serial": "KL2G7942618WL",
+  "interconnect": "usb",
+  "interconnect_location": "external",
   "protection": {
     "aacs": null,
     "css": {"version": 1},

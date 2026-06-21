@@ -56,6 +56,19 @@ const CFStringRef kDRDeviceDisappearedNotification = CFSTR("mos.fake.Disappeared
 const CFStringRef kDRDeviceIsTrayOpenKey        = CFSTR("mos.fake.IsTrayOpen");
 const CFStringRef kDRDeviceMediaStateKey        = CFSTR("mos.fake.MediaState");
 
+/* Physical-interconnect keys + values (real ones come from DiscRecording; the
+   fake build needs its own so mos_dr.c's CFEqual mapping links and resolves). */
+const CFStringRef kDRDevicePhysicalInterconnectKey         = CFSTR("mos.fake.Interconnect");
+const CFStringRef kDRDevicePhysicalInterconnectLocationKey = CFSTR("mos.fake.InterconnectLocation");
+const CFStringRef kDRDevicePhysicalInterconnectATAPI        = CFSTR("mos.fake.IC.ATAPI");
+const CFStringRef kDRDevicePhysicalInterconnectFibreChannel = CFSTR("mos.fake.IC.FibreChannel");
+const CFStringRef kDRDevicePhysicalInterconnectFireWire     = CFSTR("mos.fake.IC.FireWire");
+const CFStringRef kDRDevicePhysicalInterconnectUSB          = CFSTR("mos.fake.IC.USB");
+const CFStringRef kDRDevicePhysicalInterconnectSCSI         = CFSTR("mos.fake.IC.SCSI");
+const CFStringRef kDRDevicePhysicalInterconnectLocationInternal = CFSTR("mos.fake.ICL.Internal");
+const CFStringRef kDRDevicePhysicalInterconnectLocationExternal = CFSTR("mos.fake.ICL.External");
+const CFStringRef kDRDevicePhysicalInterconnectLocationUnknown  = CFSTR("mos.fake.ICL.Unknown");
+
 /* ---- Object handles (io_object_t == mach_port_t == unsigned int) --- */
 #define FAKE_SVC    ((io_service_t)1)        /* the drive service          */
 #define FAKE_MEDIA  ((io_object_t)2)         /* whole-disk IOMedia child   */
@@ -75,6 +88,8 @@ static struct {
     char     vendor[16];
     char     product[24];
     char     revision[8];
+    int      ic_code;           /* interconnect code (mos_internal_interconnect_token); 0 = absent */
+    int      icloc_code;        /* interconnect-location code; 0 = absent */
     char     path[128];
     uint32_t tur_status;        uint8_t tur_sense[18];
     uint32_t cfg_status;        uint8_t cfg[64];  size_t cfg_len;
@@ -220,6 +235,15 @@ void mos_fake_set_identity(const char *vendor, const char *product,
     if (vendor)   { strncpy(g.vendor,   vendor,   sizeof g.vendor   - 1);   g.vendor[sizeof g.vendor - 1] = 0; }
     if (product)  { strncpy(g.product,  product,  sizeof g.product  - 1);   g.product[sizeof g.product - 1] = 0; }
     if (revision) { strncpy(g.revision, revision, sizeof g.revision - 1);   g.revision[sizeof g.revision - 1] = 0; }
+}
+
+/* Physical interconnect / location, by the same int codes the pure
+   mos_internal_interconnect_token uses (1 atapi..5 scsi; loc 1 internal,
+   2 external, 3 unknown; 0 = key absent). */
+void mos_fake_set_interconnect(int ic_code, int loc_code)
+{
+    g.ic_code = ic_code;
+    g.icloc_code = loc_code;
 }
 
 void mos_fake_set_tur(uint32_t task_status, const uint8_t sense[18])
@@ -973,6 +997,20 @@ CFDictionaryRef DRDeviceCopyInfo(DRDeviceRef device)
     dict_set_str(d, kDRDeviceProductNameKey,        g.product);
     dict_set_str(d, kDRDeviceFirmwareRevisionKey,   g.revision);
     dict_set_str(d, kDRDeviceIORegistryEntryPathKey, g.path);
+    const CFStringRef ic_map[] = { NULL,
+        kDRDevicePhysicalInterconnectATAPI,        /* 1 */
+        kDRDevicePhysicalInterconnectFibreChannel, /* 2 */
+        kDRDevicePhysicalInterconnectFireWire,     /* 3 */
+        kDRDevicePhysicalInterconnectUSB,          /* 4 */
+        kDRDevicePhysicalInterconnectSCSI };       /* 5 */
+    const CFStringRef loc_map[] = { NULL,
+        kDRDevicePhysicalInterconnectLocationInternal, /* 1 */
+        kDRDevicePhysicalInterconnectLocationExternal, /* 2 */
+        kDRDevicePhysicalInterconnectLocationUnknown };/* 3 */
+    if (g.ic_code >= 1 && g.ic_code <= 5)
+        CFDictionarySetValue(d, kDRDevicePhysicalInterconnectKey, ic_map[g.ic_code]);
+    if (g.icloc_code >= 1 && g.icloc_code <= 3)
+        CFDictionarySetValue(d, kDRDevicePhysicalInterconnectLocationKey, loc_map[g.icloc_code]);
     return d;
 }
 

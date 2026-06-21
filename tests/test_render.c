@@ -13,6 +13,7 @@
 
 #include "test_harness.h"
 #include "mos.h"
+#include "../src/mos_pure.h"   /* mos_internal_interconnect_token */
 #include <string.h>
 #include <stddef.h>
 
@@ -317,6 +318,41 @@ TEST(safe_realistic_inquiry_payload)
     return 0;
 }
 
+/* ---- DR interconnect tokens ----------------------------------------- */
+
+TEST(interconnect_token_maps_each_code)
+{
+    EXPECT(strcmp(mos_internal_interconnect_token(1), "atapi") == 0);
+    EXPECT(strcmp(mos_internal_interconnect_token(2), "fibre_channel") == 0);
+    EXPECT(strcmp(mos_internal_interconnect_token(3), "firewire") == 0);
+    EXPECT(strcmp(mos_internal_interconnect_token(4), "usb") == 0);
+    EXPECT(strcmp(mos_internal_interconnect_token(5), "scsi") == 0);
+    return 0;
+}
+
+TEST(interconnect_token_unknown_code_is_null)
+{
+    EXPECT(mos_internal_interconnect_token(0) == NULL);
+    EXPECT(mos_internal_interconnect_token(6) == NULL);
+    EXPECT(mos_internal_interconnect_token(-1) == NULL);
+    return 0;
+}
+
+TEST(interconnect_location_token_maps_each_code)
+{
+    EXPECT(strcmp(mos_internal_interconnect_location_token(1), "internal") == 0);
+    EXPECT(strcmp(mos_internal_interconnect_location_token(2), "external") == 0);
+    EXPECT(strcmp(mos_internal_interconnect_location_token(3), "unknown") == 0);
+    return 0;
+}
+
+TEST(interconnect_location_token_unknown_code_is_null)
+{
+    EXPECT(mos_internal_interconnect_location_token(0) == NULL);
+    EXPECT(mos_internal_interconnect_location_token(4) == NULL);
+    return 0;
+}
+
 /* ---- Registration ---------------------------------------------------- */
 
 void register_render_tests(void);
@@ -355,4 +391,10 @@ void register_render_tests(void)
     RUN(safe_truncation_returns_required_length);
     RUN(safe_zero_capacity_no_write_accurate_length);
     RUN(safe_realistic_inquiry_payload);
+
+    /* DR interconnect tokens */
+    RUN(interconnect_token_maps_each_code);
+    RUN(interconnect_token_unknown_code_is_null);
+    RUN(interconnect_location_token_maps_each_code);
+    RUN(interconnect_location_token_unknown_code_is_null);
 }

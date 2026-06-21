@@ -159,6 +159,7 @@ $ mos drive 1
        Product:  BD-RE WH16NS60
       Firmware:  1.00 (2019-01-07T13:20:43Z)
         Serial:  KL2G7942618WL
+  Interconnect:  usb (external)
     Protection:  AACS (v68, bus encryption), CSS (v1)
       Profiles:  cd_rom, cd_r, cd_rw, dvd_rom, dvd_minus_r, ..., bd_rom, bd_r, bd_re
      Standards:  spc_4 — mmc_6, sbc_3, sam_5, spc_4
@@ -167,8 +168,10 @@ Error Recovery:  retry 20, PER
 ```
 
 Disc-independent facts: identity, `serial` (the durable inventory key that
-survives replug where `registry_id` does not), content-protection *capability*,
-the supported-profile set, and the mechanical and error-recovery configuration.
+survives replug where `registry_id` does not), the physical `interconnect`
+(bus + internal/external, from DiscRecording — zero commands),
+content-protection *capability*, the supported-profile set, and the mechanical
+and error-recovery configuration.
 Read-only — `mos` reports these, never changes them. (Read/write **speeds** are
 media-dependent, so they live on [`state`](#state-default--what-the-drive-is-doing-now)
 and [`watch`](#watch), not here.)

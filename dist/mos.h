@@ -533,6 +533,17 @@ const char *mos_handle_product(const mos_handle_t *h);
 const char *mos_handle_revision(const mos_handle_t *h);
 uint64_t    mos_handle_registry_id(const mos_handle_t *h);
 
+/* Physical interconnect (bus) and its location, from the same open-time
+   DiscRecording directory data (kDRDevicePhysicalInterconnect{,Location}Key).
+   Zero commands. Borrowed from the handle (valid until mos_close); NULL when
+   DR does not report the key.
+     interconnect          : "atapi" | "usb" | "firewire" | "fibre_channel"
+                             | "scsi" — the bus the drive attaches over
+                             (internal SATA/PATA optical reports "atapi").
+     interconnect_location : "internal" | "external" | "unknown". */
+const char *mos_handle_interconnect(const mos_handle_t *h);
+const char *mos_handle_interconnect_location(const mos_handle_t *h);
+
 /* The drive serial is read from the Logical Unit Serial Number feature (0108h)
    via mos_drive_caps_serial() — the non-exclusive GET CONFIGURATION path. There
    is no raw VPD-0x80 serial entry point: VPD page 0x80 is the SPC/block-storage

@@ -5,6 +5,8 @@
   "vendor": "PIONEER",
   "product": "BD-RW BDR-XS07",
   "revision": "1.01",
+  "interconnect": "usb",
+  "interconnect_location": "external",
   "protection": {
     "aacs": null,
     "css": null,

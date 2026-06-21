@@ -6,6 +6,8 @@
   "product": "BD-RW BDR-XS07",
   "revision": "1.01",
   "serial": null,
+  "interconnect": "usb",
+  "interconnect_location": "external",
   "protection": {
     "aacs": {"version": 68, "bus_encryption": false},
     "css": null,

@@ -346,7 +346,12 @@ uses). Verified against `DiscRecording.framework/Headers/DRCoreDevice.h`; all
 `kDRDeviceProductNameKey` / `kDRDeviceFirmwareRevisionKey` (the pre-parsed INQUIRY
 identity mos caches at open), `kDRDeviceIORegistryEntryPathKey` (→ registry id, the
 probe authority), and `kDRDeviceMediaInfoKey` (a SUBDICTIONARY; mos reads its
-`kDRDeviceMediaBSDNameKey`). No commands, no exclusive access, no entitlement.
+`kDRDeviceMediaBSDNameKey`). `mos drive` additionally reads
+`kDRDevicePhysicalInterconnectKey` (→ `interconnect`: ATAPI/FibreChannel/FireWire/
+USB/SCSI) and `kDRDevicePhysicalInterconnectLocationKey` (→ `interconnect_location`:
+Internal/External/Unknown) off the same dict, mapped to stable tokens by CFEqual
+against the SDK value constants (`mos_dr.c` → `mos_internal_interconnect_token`).
+No commands, no exclusive access, no entitlement.
 
 ### Watch-wake surface — IOKit interest + DiscRecording doorbell (`mos_watch.c`)
 

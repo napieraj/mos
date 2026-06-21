@@ -4,6 +4,7 @@
        Product:  BD-RE WH16NS40
       Firmware:  1.05
         Serial:  -
+  Interconnect:  usb (external)
     Protection:  AACS (v68, bus encryption)
       Profiles:  -
      Standards:  -

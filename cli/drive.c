@@ -26,6 +26,8 @@ typedef struct {
     const char *product;
     const char *revision;
     const char *serial;       /* borrowed; NULL = unavailable (see header) */
+    const char *interconnect;          /* borrowed DR token; NULL = absent */
+    const char *interconnect_location; /* borrowed DR token; NULL = absent */
     const mos_drive_caps *caps;  /* borrowed; protection + supported-profile list */
     const mos_drive_inquiry *inquiry;  /* borrowed; NULL = unreadable (BUSY) */
     const mos_mode_caps      *caps_2a;  /* NULL = page 0x2A unavailable */
@@ -54,6 +56,15 @@ static void emit_json(const drive_doc *d)
     fputs(",\n  \"serial\": ", stdout);
     if (d->serial)   mos_cli_json_str(stdout, d->serial);
     else             fputs("null", stdout);
+
+    /* interconnect: the bus the drive attaches over + its location, from the
+       DiscRecording directory (zero commands). null when DR omits the key. */
+    fputs(",\n  \"interconnect\": ", stdout);
+    if (d->interconnect) mos_cli_json_str(stdout, d->interconnect);
+    else                 fputs("null", stdout);
+    fputs(",\n  \"interconnect_location\": ", stdout);
+    if (d->interconnect_location) mos_cli_json_str(stdout, d->interconnect_location);
+    else                          fputs("null", stdout);
 
     /* protection: copy/content-protection schemes the drive CAN authenticate
        (capability, not per-disc state — see the mos.drive.v1 schema). Version-
@@ -210,6 +221,18 @@ static void emit_human(const drive_doc *d)
     pairs[n++] = (mos_cli_human_pair){ "Firmware", d->revision ? fw_row : NULL };
 
     pairs[n++] = (mos_cli_human_pair){ "Serial",  d->serial   ? s_esc : NULL };
+
+    /* Interconnect: bus, with the location in parens when known
+       ("usb (external)"); just the bus when location is absent. Fixed token
+       vocabulary — no hostile bytes. */
+    char ic_row[32];
+    if (d->interconnect && d->interconnect_location)
+        snprintf(ic_row, sizeof ic_row, "%s (%s)",
+                 d->interconnect, d->interconnect_location);
+    else if (d->interconnect)
+        snprintf(ic_row, sizeof ic_row, "%s", d->interconnect);
+    pairs[n++] = (mos_cli_human_pair){ "Interconnect",
+                                       d->interconnect ? ic_row : NULL };
 
     /* Protection: the schemes the drive can authenticate, comma-joined; the
        version (and AACS bus-encryption notes) ride in parentheses. A modern BD
@@ -394,6 +417,11 @@ int mos_cli_run_drive(void)
        command, no lock), so it reads even on mounted media. null when the drive
        does not implement the feature or programs no serial (firmware-dependent). */
     d.serial = mos_drive_caps_serial(c);
+
+    /* Interconnect (bus + location) from the open-time DR directory — zero
+       commands, null when DR omits the key. */
+    d.interconnect          = mos_handle_interconnect(h);
+    d.interconnect_location = mos_handle_interconnect_location(h);
 
     /* MODE SENSE pages 0x2A / 0x01 — best-effort, each null on failure. */
     const mos_mode_caps *caps2a = NULL;

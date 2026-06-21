@@ -12,6 +12,8 @@
     "product",
     "revision",
     "serial",
+    "interconnect",
+    "interconnect_location",
     "protection",
     "profiles",
     "version",
@@ -51,6 +53,16 @@
     "serial": {
       "type": ["string", "null"],
       "description": "Drive serial — the durable drive-inventory key that survives replug and machine moves (registry_id is attachment identity, replug mints a new one). Read from the Logical Unit Serial Number feature (0108h) in the non-exclusive GET CONFIGURATION walk: no raw command and no exclusive access, so it is read even while a disc is mounted (design: AGENTS.md serial-source ADR). null when the drive does not implement the feature or programs no serial — it is OPTIONAL in MMC and population is firmware-dependent. (VPD page 0x80, the SPC/block-storage serial carrier, is NOT used: wrong abstraction for an MMC drive, and empirically empty on the optical drives surveyed.)"
+    },
+    "interconnect": {
+      "type": ["string", "null"],
+      "enum": ["atapi", "usb", "firewire", "fibre_channel", "scsi", null],
+      "description": "Physical bus the drive attaches over, from the DiscRecording directory (kDRDevicePhysicalInterconnectKey) — zero commands, read at open. Internal SATA/PATA optical reports \"atapi\" (the DR value covers ATA/ATAPI); an external enclosure reports \"usb\" or \"firewire\". null when DR does not report the key. Closed enum: an unrecognized DR value reads as null, never a new token. (Whether DR populates the key for a given USB-SATA bridge is hardware-falsifiable per the hardware-role ADR; null degrades cleanly.)"
+    },
+    "interconnect_location": {
+      "type": ["string", "null"],
+      "enum": ["internal", "external", "unknown", null],
+      "description": "Whether the drive is internal or external (kDRDevicePhysicalInterconnectLocationKey), from the same zero-command DR read. \"unknown\" is the DR-reported value Unknown; null means DR omitted the key entirely. Closed enum."
     },
     "protection": {
       "type": "object",

@@ -1863,3 +1863,40 @@ a real capture — that lands as a fixture + dated note and at most refines the
 parser's bounds, never a per-device special-case. The descriptor layout is still
 spec-built (no in-repo capture yet), the standing falsifier the perf parser
 already carries.
+
+## ADR: physical interconnect surfaced on `mos drive` — zero-command DR read
+## (2026-06-21, pre-tag enrichment)
+
+`mos.drive.v1` gains two nullable fields — `interconnect` (atapi / usb / firewire
+/ fibre_channel / scsi) and `interconnect_location` (internal / external /
+unknown) — read at open from the DiscRecording directory
+(`kDRDevicePhysicalInterconnectKey` / `…LocationKey`, `mos_dr.c`). This records
+why the enrichment is in-doctrine and additive.
+
+**Why it earns a field.** The bus a drive attaches over — and whether it is
+internal or external — is the USB-SATA-bridge axis mos's own hardware reasoning
+leans on constantly (the GESN under-report waiver, the bridge-quirk falsifiers)
+yet never *reported*. The pre-tag review found it corroborated three independent
+ways: the registry-key audit, the FOSS-peer comparison (every peer surfaces it —
+`drutil info` `Interconnect:`, `lsscsi --transport`), and the repo's own
+`doc/dr-field-mapping.md` ("interconnect — not currently exposed … if wanted").
+It is the single strongest missed identity field, and `mos drive` (the "what IS
+this drive" verb) is its home.
+
+**Scope-doctrine compliance.** No command-surface change: this is a registry/DR
+*dictionary* read, the SAME zero-command, non-exclusive modality mos already uses
+for the vendor/product/revision identity at open — not an MMC command, so the
+one-raw-CDB count (one-of-four) and layer-1 are untouched. Privilege footprint
+(layer 3) unchanged: no entitlement, no exclusive access, console-user grant only.
+The CFString values are mapped to stable tokens by CFEqual against the SDK value
+constants (no string parsing); the token set is a pure function
+(`mos_internal_interconnect_token`, `mos_strings.c`) drift-guarded against the
+schema enum, so the two cannot diverge. Both enums are CLOSED: an unrecognized DR
+value reads as null, never an invented token.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR):
+whether DR actually populates `kDRDevicePhysicalInterconnectKey` for a given
+USB-SATA bridge (it may omit it). The field is nullable, so an absent value
+degrades cleanly to null — no per-device branch. A capture showing a populated
+key that maps to none of the five SDK values lands as a dated note here and, at
+most, widens the closed enum; it never special-cases the device.

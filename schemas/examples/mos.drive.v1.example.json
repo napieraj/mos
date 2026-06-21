@@ -6,6 +6,8 @@
   "product": "BD-RE WH16NS40",
   "revision": "1.05",
   "serial": null,
+  "interconnect": "usb",
+  "interconnect_location": "external",
   "protection": {
     "aacs": {"version": 78, "bus_encryption": true, "write_bus_encryption": true},
     "css": {"version": 1},

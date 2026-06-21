@@ -794,6 +794,17 @@ bool mos_internal_profile_is_formattable(uint16_t profile);
    doc/research/2026-06-18-media-class-not-ready-fallback.md. */
 const char *mos_internal_media_type_token(const char *kernel_type);
 
+/* DiscRecording physical-interconnect tokens (pure). The DR adapter
+   (mos_dr.c) maps the kDRDevicePhysicalInterconnect{,Location}Key CFString
+   values to these small int codes; this function names them. Kept pure +
+   here so the schema's interconnect enums are drift-guarded against the C
+   token set (schemas/validate.py). NULL for code 0 (absent / unrecognized) so
+   an unknown bus omits the field rather than inventing a token.
+     interconnect: 1 atapi, 2 fibre_channel, 3 firewire, 4 usb, 5 scsi
+     location:     1 internal, 2 external, 3 unknown                       */
+const char *mos_internal_interconnect_token(int code);
+const char *mos_internal_interconnect_location_token(int code);
+
 /* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *
  *
  * The drive's read/write performance from GET PERFORMANCE (0xAC, Type 00h
@@ -1174,6 +1185,8 @@ struct mos_handle {
     char                      vendor_str[9];   /* 8 chars + NUL */
     char                      product_str[17]; /* 16 chars + NUL */
     char                      revision_str[5]; /* 4 chars + NUL */
+    char                      interconnect_str[16];           /* DR physical-interconnect token, "" = absent */
+    char                      interconnect_location_str[12];  /* DR interconnect-location token, "" = absent */
 
     /* Handle-owned result object returned (by borrowed pointer) from
        mos_query_state. Overwritten each query; its string fields point
@@ -1305,7 +1318,9 @@ bool mos_internal_dr_device_snapshot(CFTypeRef device_ref,
 bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                                                char *vendor, size_t vcap,
                                                char *product, size_t pcap,
-                                               char *revision, size_t rcap);
+                                               char *revision, size_t rcap,
+                                               char *interconnect, size_t iccap,
+                                               char *location, size_t loccap);
 
 /* ---- IOKit-linked internal prototypes ------------------------------ *
  *
@@ -2512,6 +2527,7 @@ bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
 #include <DiscRecording/DRCoreDevice.h>
 #include <IOKit/IOKitLib.h>
 
+#include <stdio.h>
 #include <string.h>
 
 /* Strict CFString → C-buffer copy: COMPLETE-OR-EMPTY, the mos_vpd80 identity
@@ -2730,13 +2746,62 @@ uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name)
     return id;
 }
 
+/* kDRDevicePhysicalInterconnectKey CFString value -> the small int code
+   mos_internal_interconnect_token names. 0 (absent / unrecognized) -> the
+   field is omitted. CFEqual against the SDK constants, not string parsing. */
+static int mos_internal_dr_interconnect_code(CFTypeRef v)
+{
+    if (!v || CFGetTypeID(v) != CFStringGetTypeID()) return 0;
+    CFStringRef s = (CFStringRef)v;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectATAPI))        return 1;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectFibreChannel)) return 2;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectFireWire))     return 3;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectUSB))          return 4;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectSCSI))         return 5;
+    return 0;
+}
+
+/* kDRDevicePhysicalInterconnectLocationKey CFString value -> int code. */
+static int mos_internal_dr_location_code(CFTypeRef v)
+{
+    if (!v || CFGetTypeID(v) != CFStringGetTypeID()) return 0;
+    CFStringRef s = (CFStringRef)v;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectLocationInternal)) return 1;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectLocationExternal)) return 2;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectLocationUnknown))  return 3;
+    return 0;
+}
+
+/* Physical interconnect (bus) + location tokens from a DR info dict, into
+   caller buffers; empty string when the key is absent / unrecognized. */
+static void mos_internal_dr_read_interconnect(CFDictionaryRef info,
+                                              char *ic, size_t iccap,
+                                              char *loc, size_t loccap)
+{
+    if (ic && iccap) ic[0] = 0;
+    if (loc && loccap) loc[0] = 0;
+    if (!info) return;
+    const char *t = mos_internal_interconnect_token(
+        mos_internal_dr_interconnect_code(
+            CFDictionaryGetValue(info, kDRDevicePhysicalInterconnectKey)));
+    if (t && ic && iccap) snprintf(ic, iccap, "%s", t);
+    const char *lt = mos_internal_interconnect_location_token(
+        mos_internal_dr_location_code(
+            CFDictionaryGetValue(info, kDRDevicePhysicalInterconnectLocationKey)));
+    if (lt && loc && loccap) snprintf(loc, loccap, "%s", lt);
+}
+
 bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                                                char *vendor, size_t vcap,
                                                char *product, size_t pcap,
-                                               char *revision, size_t rcap)
+                                               char *revision, size_t rcap,
+                                               char *interconnect, size_t iccap,
+                                               char *location, size_t loccap)
 {
     if (vendor && vcap) vendor[0] = 0;
     if (product && pcap) product[0] = 0;
+    if (interconnect && iccap) interconnect[0] = 0;
+    if (location && loccap) location[0] = 0;
     if (revision && rcap) revision[0] = 0;
     if (svc == IO_OBJECT_NULL) return false;
 
@@ -2777,6 +2842,8 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                 mos_internal_dr_copy_identity_from_info(info, vendor, vcap,
                                                         product, pcap,
                                                         revision, rcap);
+                mos_internal_dr_read_interconnect(info, interconnect, iccap,
+                                                  location, loccap);
                 ok = true;
             }
             CFRelease(info);
@@ -5546,7 +5613,9 @@ static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
         h->svc,
         h->vendor_str,   sizeof h->vendor_str,
         h->product_str,  sizeof h->product_str,
-        h->revision_str, sizeof h->revision_str);
+        h->revision_str, sizeof h->revision_str,
+        h->interconnect_str,          sizeof h->interconnect_str,
+        h->interconnect_location_str, sizeof h->interconnect_location_str);
 
     if (err) *err = MOS_OK;
     return h;
@@ -5905,6 +5974,17 @@ const char *mos_handle_product(const mos_handle_t *h)
 const char *mos_handle_revision(const mos_handle_t *h)
 {
     return (h && h->revision_str[0]) ? h->revision_str : NULL;
+}
+
+const char *mos_handle_interconnect(const mos_handle_t *h)
+{
+    return (h && h->interconnect_str[0]) ? h->interconnect_str : NULL;
+}
+
+const char *mos_handle_interconnect_location(const mos_handle_t *h)
+{
+    return (h && h->interconnect_location_str[0])
+               ? h->interconnect_location_str : NULL;
 }
 
 uint64_t mos_handle_registry_id(const mos_handle_t *h)
@@ -6438,6 +6518,33 @@ const char *mos_state_description(mos_state s)
         case MOS_STATE_DEVICE_FAULT:     return "device_fault";
         case MOS_STATE_EMPTY_OR_OPEN:    return "empty_or_open";
         case MOS_STATE_UNKNOWN: default: return "unknown";
+    }
+}
+
+/* DiscRecording physical-interconnect tokens. Contract in mos_pure.h; the
+   code set is fixed by the kDRDevicePhysicalInterconnect* constants the DR
+   adapter maps (mos_dr.c). Code 0 (absent / unrecognized) returns NULL so the
+   field is omitted, never a guessed token. The returned literals are the
+   schema's interconnect enums, drift-guarded in schemas/validate.py. */
+const char *mos_internal_interconnect_token(int code)
+{
+    switch (code) {
+        case 1:  return "atapi";
+        case 2:  return "fibre_channel";
+        case 3:  return "firewire";
+        case 4:  return "usb";
+        case 5:  return "scsi";
+        default: return NULL;
+    }
+}
+
+const char *mos_internal_interconnect_location_token(int code)
+{
+    switch (code) {
+        case 1:  return "internal";
+        case 2:  return "external";
+        case 3:  return "unknown";
+        default: return NULL;
     }
 }
 
