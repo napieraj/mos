@@ -121,12 +121,13 @@ What remains — none a tag blocker:
   against bridge behavior — evidence either retires the waiver (bound by realized
   count, fall back to TUR sense on a short transfer) or pins it with a fixture.
 
-- **`eject_requested` watch event** — the cooperative soft-eject the tray
-  `lock --persistent` verb sets up: under Persistent Prevent the operator
-  button raises a GESN EjectRequest instead of ejecting. Surfacing it on
-  `--watch` needs an edge-triggered GESN event-drain distinct from the
-  state-diff machinery, and is hardware-gated on whether the event survives
-  the kernel's own GESN poll. Design + the rig-check-first build order:
+- **`eject_requested` watch event** — surface the GESN EjectRequest media event
+  on `--watch`: when a Prevent lock is held (the OS mount-lock, a `mos tray
+  lock`, or a drive running the cooperative soft-eject protocol), an operator
+  button press can raise a GESN EjectRequest instead of ejecting. Surfacing it
+  needs an edge-triggered GESN event-drain distinct from the state-diff
+  machinery, and is hardware-gated on whether the event survives the kernel's
+  own GESN poll. Design + the rig-check-first build order:
   `doc/research/2026-06-13-eject-request-watch-event.md`.
 
 - **Watch one-shot Appeared recovery** — known limitation, deferred to v0.next
