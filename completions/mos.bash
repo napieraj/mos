@@ -40,7 +40,7 @@ _mos()
     fi
 
     if [[ "$sub" == "tray" && $cword -eq $((subidx + 1)) && "$cur" != -* ]]; then
-        COMPREPLY=( $(compgen -W "eject close lock unlock" -- "$cur") )
+        COMPREPLY=( $(compgen -W "eject open close lock unlock" -- "$cur") )
         return
     fi
 

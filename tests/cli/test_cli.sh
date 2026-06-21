@@ -464,6 +464,15 @@ assert_contains "tray unknown action diagnostic"     "$ERR" "Recognized: eject"
 # unknown option, still EX_USAGE.
 run_mos tray lock --persistent --bsd disk0
 assert_ec       "retired --persistent is unknown (64)" "64"  "$EC"
+# `open` is an input alias of eject: it must NOT hit the unknown-action
+# diagnostic, and it inherits eject's flag rules — --force is an eject-only
+# flag, so `open --force` clears parse_action and fails later at drive-open
+# (66), proving it parsed as eject; a non-eject verb rejects --force at usage
+# time (64, the `tray lock --force` control just below).
+run_mos tray open --bsd disk0
+assert_not_contains "tray open is not an unknown action" "$ERR" "unknown tray action"
+run_mos tray open --force --index 99
+assert_ec       "tray open (alias) accepts --force like eject (66)" "66" "$EC"
 run_mos tray lock --force --bsd disk0
 assert_ec       "tray lock + --force rejected"        "64"  "$EC"
 run_mos state --force

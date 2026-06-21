@@ -41,7 +41,7 @@ complete -c mos -f -n __fish_mos_no_subcommand -a capacity -d 'Disc capacity (me
 complete -c mos -f -n __fish_mos_no_subcommand -a probe -d 'Diagnostic notification stream (mos.probe.v0)'
 
 # tray actions (only right after `tray`).
-complete -c mos -f -n '__fish_mos_using_subcommand tray' -a 'eject close lock unlock' -d 'tray action'
+complete -c mos -f -n '__fish_mos_using_subcommand tray' -a 'eject open close lock unlock' -d 'tray action'
 
 # Global options.
 complete -c mos -s i -l index   -d '1-based drive index' -x
