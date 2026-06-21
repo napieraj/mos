@@ -61,10 +61,14 @@ static void emit_json(const feat_collect *c, int64_t bsd_unit,
     fputs("\n  ]\n}\n", stdout);
 }
 
-static void emit_human(const feat_collect *c)
+static void emit_human(const feat_collect *c, int64_t bsd_unit)
 {
     /* Fixed vocabulary (hex codes, yes/no) — no hostile bytes, plain
-       fprintf is fine. */
+       fprintf is fine. A BSD line first so the table says which drive it is
+       (parity with every other verb's identity row). */
+    char bsd_buf[24];
+    bool have_bsd = mos_bsd_dev_node(bsd_unit, bsd_buf, sizeof bsd_buf);
+    fprintf(stdout, "  BSD:  %s\n", have_bsd ? bsd_buf : "-");
     fputs("  Code    Cur  Persist  Ver\n", stdout);
     for (int i = 0; i < c->n; i++) {
         fprintf(stdout, "  0x%04x  %-3s  %-7s  %u\n",
@@ -101,13 +105,8 @@ int mos_cli_run_features(void)
     } else {
         int total = 0;
         h = mos_cli_open_sole_drive(&err, &total);
-        if (total > 1) {
-            fprintf(stderr,
-                    "%s: %d drives present; select one, e.g. "
-                    "`%s features 2`.\n",
-                    progname, total, progname);
-            return EX_USAGE;
-        }
+        if (total > 1)
+            return mos_cli_emit_drives_present(total, "features 2");
     }
     if (!h) return mos_cli_emit_unknown_and_fail("could not open drive", err, NULL);
 
@@ -126,7 +125,7 @@ int mos_cli_run_features(void)
 
     if (flag_json) emit_json(&c, mos_handle_bsd_unit(h),
                              mos_handle_registry_id(h));
-    else           emit_human(&c);
+    else           emit_human(&c, mos_handle_bsd_unit(h));
 
     mos_close(h);
     return mos_cli_finalize_oneshot_stdout(EX_OK);

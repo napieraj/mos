@@ -451,6 +451,19 @@ int mos_cli_collect_and_query(mos_cli_list_row *rows, int *out_n)
     return c.total;
 }
 
+int mos_cli_emit_drives_present(int total, const char *example)
+{
+    /* Re-enumerate to render the choices (error path, not the hot path —
+       the same second walk `mos` alone already does). */
+    static mos_cli_list_row rows[MOS_CLI_LIST_CAP];
+    int n = 0;
+    (void)mos_cli_collect_and_query(rows, &n);
+    fprintf(stderr, "%s: %d drives present; select one, e.g. `%s %s`:\n",
+            progname, total, progname, example);
+    mos_cli_emit_list_table(stderr, rows, n, false);
+    return EX_USAGE;
+}
+
 /* state's no-selector path: with exactly one drive, return an open handle
    from the same enumeration that counted (no reopen). *total carries the
    count; the handle is non-NULL only when *total == 1 and the open

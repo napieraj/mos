@@ -34,8 +34,8 @@ mos state
 
 ```
 $ mos state 1
-Registry ID:  4295032831
         BSD:  /dev/disk4
+Registry ID:  4295032831
       State:  ready
       Media:  bd — bd_rom
    Writable:  no

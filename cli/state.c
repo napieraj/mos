@@ -15,17 +15,14 @@ static void emit_human(const mos_state_result *r, int index1,
     mos_cli_human_pair pairs[14];
     size_t n = 0;
 
-    /* Index, Registry ID, BSD. The selector the caller typed is dropped;
-       BSD always stays — the pasteable, downstream-useful handle. */
-    char idx_buf[12];
-    if (!invoked_by_index) {
-        if (index1 > 0) {
-            snprintf(idx_buf, sizeof idx_buf, "%d", index1);
-            pairs[n++] = (mos_cli_human_pair){ "Index", idx_buf };
-        } else {
-            pairs[n++] = (mos_cli_human_pair){ "Index", NULL };
-        }
-    }
+    /* BSD, Registry ID, Index — BSD leads, matching `mos drive` and every
+       other verb (identity-row order is uniform across the CLI). BSD always
+       stays — the pasteable, downstream-useful handle; the selector the caller
+       typed (index / registry) is dropped as redundant. */
+    char bsd_buf[24];
+    bool have_bsd = mos_bsd_dev_node(mos_state_result_bsd_unit(r),
+                                           bsd_buf, sizeof bsd_buf);
+    pairs[n++] = (mos_cli_human_pair){ "BSD", have_bsd ? bsd_buf : NULL };
 
     char reg_buf[24];
     uint64_t reg = mos_state_result_registry_id(r);
@@ -39,10 +36,15 @@ static void emit_human(const mos_state_result *r, int index1,
         }
     }
 
-    char bsd_buf[24];
-    bool have_bsd = mos_bsd_dev_node(mos_state_result_bsd_unit(r),
-                                           bsd_buf, sizeof bsd_buf);
-    pairs[n++] = (mos_cli_human_pair){ "BSD", have_bsd ? bsd_buf : NULL };
+    char idx_buf[12];
+    if (!invoked_by_index) {
+        if (index1 > 0) {
+            snprintf(idx_buf, sizeof idx_buf, "%d", index1);
+            pairs[n++] = (mos_cli_human_pair){ "Index", idx_buf };
+        } else {
+            pairs[n++] = (mos_cli_human_pair){ "Index", NULL };
+        }
+    }
 
     const char *state = mos_state_description(mos_state_result_state(r));
     pairs[n++] = (mos_cli_human_pair){ "State", state };
@@ -289,16 +291,8 @@ int mos_cli_run_state(void)
            multi-drive mini-list runs only on this error path. */
         int total = 0;
         h = mos_cli_open_sole_drive(&err, &total);
-        if (total > 1) {
-            static mos_cli_list_row rows[MOS_CLI_LIST_CAP];
-            int n = 0;
-            (void)mos_cli_collect_and_query(rows, &n);
-            fprintf(stderr,
-                    "%s: %d drives present; select one, e.g. `%s 2`:\n",
-                    progname, total, progname);
-            mos_cli_emit_list_table(stderr, rows, n, false);
-            return EX_USAGE;
-        }
+        if (total > 1)
+            return mos_cli_emit_drives_present(total, "2");
         index1 = 1;
     }
 

@@ -1,5 +1,5 @@
-Registry ID:  4294967587
         BSD:  /dev/disk4
+Registry ID:  4294967587
       State:  ready
       Media:  cd — cd_rom
      Speeds:  read ~50.0× CD (7.7 MB/s), write ~50.0× CD (7.7 MB/s) (max)

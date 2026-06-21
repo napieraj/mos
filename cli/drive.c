@@ -349,12 +349,8 @@ int mos_cli_run_drive(void)
     } else {
         int total = 0;
         h = mos_cli_open_sole_drive(&err, &total);
-        if (total > 1) {
-            fprintf(stderr,
-                    "%s: %d drives present; select one, e.g. `%s drive 2`.\n",
-                    progname, total, progname);
-            return EX_USAGE;
-        }
+        if (total > 1)
+            return mos_cli_emit_drives_present(total, "drive 2");
     }
     if (!h) return mos_cli_emit_unknown_and_fail("could not open drive", err, NULL);
 
