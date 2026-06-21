@@ -6363,10 +6363,15 @@ mos_error mos_internal_query_state_core(const mos_state_env_t *env,
 
     /* ---- 2. Not ready ⇒ not mounted ⇒ lock is free. Tray bit. ---- *
      * get_tray_state issues a RAW GESN under exclusive access. MOS_OK ⇒
-     * door_open is authoritative; any failure ⇒ fall back to the TUR sense.
-     * The sense never overturns a GESN open/closed verdict. */
+     * door_open is authoritative for open/closed, with ONE exception: a 04/xx
+     * LOGICAL UNIT NOT READY sense (becoming-ready / init / format / writing) is
+     * positive proof a disc is ENGAGED, which an open tray cannot be — so a
+     * transient door_open=true seen mid-load is the lie, and the disc-engaged
+     * sense wins (tray reads closed, the sense classifier below names loading /
+     * formatting / busy). On GESN failure, fall back to the TUR sense fork. See
+     * AGENTS.md "GESN door bit vs a 04/xx disc-engaged sense". */
     if (env->ops->get_tray_state(env->ctx, &door_open) == MOS_OK) {
-        tray_open = door_open;                     /* authoritative */
+        tray_open = door_open && asc != 0x04;      /* 04/xx ⇒ disc engaged ⇒ closed */
     } else if (asc == 0x3A && ascq == 0x02) {
         tray_open = true;                          /* sense fork: tray open */
     } else if (asc == 0x3A && ascq == 0x01) {

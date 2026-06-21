@@ -457,6 +457,30 @@ no UA survives to mos's first TUR on any drive in the matrix. If
 one ever does, that evidence goes through the AGENTS.md append
 process before any retry is reintroduced.
 
+## Smoke test (full CLI-surface walk)
+
+`scripts/hw-smoke.sh` is the runnable companion to this doc: where the matrix
+above records the six core states, the smoke script EXERCISES every verb,
+selector form, error path, and `--json` document type against a real drive —
+asserting exit codes / output / schema conformance where deterministic and
+PROMPTING for the disc/tray changes the media-dependent branches need. It honors
+an installed `mos` on `PATH` (override with `MOS=`), needs `python3` +
+`jsonschema` for the `--json` schema checks (those SKIP without it), and never
+leaves the tray locked (cleanup trap).
+
+```sh
+scripts/hw-smoke.sh            # all phases (prompts for disc swaps)
+scripts/hw-smoke.sh static     # build/pure-suite/schema/usage — no hardware
+scripts/hw-smoke.sh empty      # no-disc verbs + selectors + probe
+scripts/hw-smoke.sh tray       # eject/close/lock/unlock/persistent/force
+scripts/hw-smoke.sh disc       # per-media-type: state/metadata/capacity/eject
+scripts/hw-smoke.sh watch      # event stream + watch-vs-eject contention
+```
+
+A FAIL or a surprise it surfaces is a deliverable, not a patch target: capture
+it with `mos probe --capture <drive>` and file it as a fixture + dated note (per
+the hardware-role ADR), exactly as for the falsification runs below.
+
 ## How to run
 
 ```sh
