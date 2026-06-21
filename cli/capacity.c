@@ -105,6 +105,19 @@ static void emit_json(const capacity_doc *d)
 
 static void emit_human(const capacity_doc *d)
 {
+    /* No disc, or the media isn't readable yet: all three views are null and
+       the aligned block would be four bare dashes with no explanation. Print
+       a one-line note instead. (JSON is unchanged — the null mos.capacity.v1
+       document is a successful, fixtured result; an empty drive is a state,
+       not a query failure.) capacity does not consult the tray, so it cannot
+       tell an empty slot from a not-yet-ready disc — the wording says both,
+       and points at the verb that can. */
+    if (!d->have_media && !d->have_recordable && !d->have_formattable) {
+        fputs("No disc loaded, or media not ready "
+              "— run `mos state` to check the drive.\n", stdout);
+        return;
+    }
+
     mos_cli_human_pair pairs[4];
     size_t n = 0;
 
