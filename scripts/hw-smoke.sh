@@ -265,8 +265,8 @@ phase_empty() {
     info "  Serial       feature 0108h (GET CONFIGURATION); reads empty AND mounted, null if unprogrammed"
     info "  Interconnect bus + internal/external from DiscRecording (atapi / usb / firewire; null if DR omits)"
     info "  Protection   content schemes the drive can authenticate; Profiles = supported media classes"
-    info "  Standards / Mechanical / Error Recovery round out the static facts"
-    for row in Serial Interconnect Protection Profiles Standards Mechanical; do
+    info "  Standards / Mechanical / Error Recovery / Write Protect round out the static facts"
+    for row in Serial Interconnect Protection Profiles Standards Mechanical "Write Protect"; do
         if printf '%s' "$OUT" | grep -q "$row:"; then info "  ✓ $row present"
         else info "  · $row absent (null/omitted — acceptable)"; fi
     done
