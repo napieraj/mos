@@ -134,9 +134,39 @@ TEST(cli_json_str_uses_malloc_path_beyond_stack)
     return bad;
 }
 
+TEST(cli_safe_ascii_renders_human_escapes)
+{
+    /* mos_cli_safe_ascii is the HUMAN-output escaper (unquoted \xNN form);
+       the macOS emit-validate harness drives only the --json path, so it
+       never reaches this writer — the combined coverage shows its body red.
+       Pin it on the platform-independent suite: NULL writes nothing, plain
+       passes through, control bytes render as \xNN. */
+    static const struct { const char *in, *expect; } cases[] = {
+        { NULL,           ""             },   /* NULL → nothing written */
+        { "plain",        "plain"        },
+        { "a\x01\x1f" "b", "a\\x01\\x1fb" },  /* control bytes → \xNN */
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        char *buf = NULL;
+        size_t len = 0;
+        FILE *f = open_memstream(&buf, &len);
+        if (!f) { fprintf(stderr, "\n    open_memstream failed\n"); return 1; }
+        mos_cli_safe_ascii(f, cases[i].in);
+        fclose(f);
+        int bad = (buf == NULL) || strcmp(buf, cases[i].expect) != 0;
+        if (bad)
+            fprintf(stderr, "\n    safe_ascii[%zu]: expected \"%s\", got \"%s\"\n",
+                    i, cases[i].expect, buf ? buf : "(null)");
+        free(buf);
+        if (bad) return 1;
+    }
+    return 0;
+}
+
 void register_io_tests(void)
 {
     RUN(stdout_finalize_epipe_classifies_pipe_closed);
     RUN(stdout_finalize_other_error_classifies_write_error);
     RUN(cli_json_str_uses_malloc_path_beyond_stack);
+    RUN(cli_safe_ascii_renders_human_escapes);
 }

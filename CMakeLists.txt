@@ -330,6 +330,7 @@ if(MOS_BUILD_TESTS)
         cli/io.c
         tests/test_main.c
         tests/test_sense.c
+        tests/test_strings.c
         tests/test_bsd_name.c
         tests/test_scsi_status.c
         tests/test_ioreturn.c
