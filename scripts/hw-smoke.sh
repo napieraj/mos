@@ -392,8 +392,18 @@ phase_disc() {
         run drive;    expect_text 'Vendor|Product' "drive identity while mounted"
         info "Serial (0108h) + Interconnect read even while mounted — no exclusive-access back-off."
 
-        # lock on a MOUNTED disc → already_locked (macOS armed the removal lock)
-        run tray lock; expect_text 'already_locked' "lock on a mounted disc → already_locked"
+        # lock on a ready disc: if it's MOUNTED, macOS already armed the removal
+        # lock and the CDB can't take exclusive access → already_locked (a no-op
+        # success); if it's ready-but-UNMOUNTED, the CDB issues and sets the basic
+        # Prevent → done. Both are correct — accept either, and release a lock we
+        # actually set so the tray is left clean for the eject step / next pass.
+        run tray lock
+        case "$OUT" in
+            *already_locked*) ok "tray lock on a mounted disc → already_locked" ;;
+            *done*) ok "tray lock on a ready (unmounted) disc → done (basic Prevent set)"
+                    "$MOS" tray unlock >/dev/null 2>&1; info "released it again to leave the tray unlocked" ;;
+            *) bad "tray lock on a ready disc: expected already_locked or done ($(printf '%s' "$OUT" | grep -i outcome | tr -s ' '))" ;;
+        esac
 
         # 3) selector equivalence with media (diskN exists): every form must resolve
         # to the same registry_id (compare identity, not selector-dependent output).
