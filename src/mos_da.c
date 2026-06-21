@@ -156,19 +156,16 @@ static void mos_internal_da_unmount_cb(DADiskRef disk,
    (kDADiskUnmountOptionWhole — NOT Force). True only when the unmount is
    accepted; FALSE (a non-NULL dissenter) when a volume is busy (open file
    handles). mos NEVER forces: a busy volume surfaces as MOS_ERR_BUSY to the
-   caller, exactly as `diskutil unmountDisk diskN` fails on a busy disc. So mos
-   never destroys filesystem state — the contrast with the old data-loss
-   `--force` is gone; `--force` now only clears Prevent LOCKS (mos_tray.c), it
-   does not fight the filesystem.
+   caller, exactly as `diskutil unmountDisk diskN` fails on a busy disc, so mos
+   never destroys filesystem state. `--force` (mos_tray.c) only clears Prevent
+   LOCKS; it does not touch this unmount.
 
    By NAME (diskutil semantics): DADiskUnmount transmits "diskN" and
-   diskarbitrationd re-resolves it by name at request time. With a GRACEFUL
-   unmount the old wrong-target TOCTOU is HARMLESS — a `diskN` reassigned in the
-   window resolves to a different disc that the unmount either (a) cleanly
-   unmounts if idle, or (b) refuses if busy; neither destroys data. That is why
-   the identity bind, the selector gate, and the veto/funmount machinery are no
-   longer needed (history: AGENTS.md force-unmount ADR chain +
-   doc/research/2026-06-20-force-unmount-veto-funmount-investigation.md).
+   diskarbitrationd re-resolves it by name at request time. A graceful unmount
+   makes that name reuse HARMLESS — a `diskN` reassigned in the window resolves to
+   a different disc the unmount either (a) cleanly unmounts if idle, or (b)
+   refuses if busy; neither destroys data. So no identity bind is needed; rationale
+   in the AGENTS.md force-unmount ADR chain.
 
    DADiskUnmount is asynchronous (returns void, delivers via callback — verified
    against DADisk.h: takes the disk, not a session; option Whole=0x1; success =
@@ -179,8 +176,7 @@ static void mos_internal_da_unmount_cb(DADiskRef disk,
    KNOWN ISSUE (unbounded wait, post-tag): DASessionSetDispatchQueue is
    void/fallible; a silent failure leaves no callback port and the
    DISPATCH_TIME_FOREVER wait can hang. A bounded fix needs a heap-owned context
-   (a stack-local ctx makes a naive timeout a use-after-return). This is now an
-   ISOLATED hang (the data-loss veto coupling is gone with the force-unmount). */
+   (a stack-local ctx makes a naive timeout a use-after-return). */
 bool mos_internal_da_unmount(const char *bsd_name)
 {
     if (!bsd_name || !bsd_name[0]) return false;

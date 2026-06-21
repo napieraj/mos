@@ -64,9 +64,8 @@ static const uint8_t cdb_lock_persist  [6] = { 0x1E, 0x00, 0x00, 0x00, 0x03, 0x0
    The unmount is by NAME (DiskArbitration resolves the target by BSD name at
    request time — DADisk.c). With a GRACEFUL unmount that name reuse is HARMLESS:
    a reassigned `diskN` either cleanly unmounts an idle disc or fails on a busy
-   one — no data loss either way. That is why there is no identity bind and no CLI
-   selector gate (both retired with the data-loss force-unmount). See the AGENTS.md
-   force-unmount ADR chain (the "graceful eject; --force clears locks" addendum). */
+   one — no data loss either way, so no identity bind and no CLI selector gate are
+   needed. Rationale: the AGENTS.md force-unmount ADR chain. */
 
 mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
                                 mos_tray_outcome *outcome, uint8_t sense_out[3])

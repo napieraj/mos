@@ -801,7 +801,7 @@ TEST(adapter_tray_eject_busy_fs_surfaces_busy_never_forces)
     /* A BUSY filesystem (open handles): the graceful DADiskUnmount DISSENTS, the
        mount stays, and mos surfaces MOS_ERR_BUSY — it NEVER forces. True for BOTH
        the default and --force (--force clears LOCKS, never fights the fs). This is
-       the whole point of the redesign: no data-loss path exists. */
+       the whole point: mos has no data-loss path. */
     mos_fake_reset();
     mos_error err = MOS_ERR_IO;
     mos_handle_t *h = mos_open_by_index(1, &err);

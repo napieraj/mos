@@ -186,12 +186,11 @@ int mos_cli_run_tray(void)
     d.persistent  = flag_persistent;
     d.outcome     = MOS_TRAY_DONE;
 
-    /* No selector gate. `tray eject --force` clears Prevent LOCKS and unmounts
-       GRACEFULLY (it never forces the filesystem — mos_tray.c / mos_da.c), so a
-       diskN that names a different disc than intended can at worst cleanly
-       unmount an idle volume or fail on a busy one — no data loss, nothing to
-       gate. (The old data-loss force-unmount and its MOS_FORCE_BY_IDENTITY gate
-       are gone; AGENTS.md force-unmount ADR chain.) */
+    /* No selector gate is needed: `tray eject --force` clears Prevent LOCKS and
+       unmounts GRACEFULLY (it never forces the filesystem — mos_tray.c /
+       mos_da.c), so a diskN that names a different disc than intended can at worst
+       cleanly unmount an idle volume or fail on a busy one — no data loss, nothing
+       to gate. Rationale: AGENTS.md force-unmount ADR chain. */
 
     /* The verbs return the drive's sense triple via the out-param: all-zero
        on DONE, the real {key,asc,ascq} on any refusal (5/53/02 for
