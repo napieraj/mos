@@ -347,9 +347,22 @@ typedef struct mos_drive_protection {
     bool    vcps;                 /* feature 0110h present (legacy, MMC-5)   */
 } mos_drive_protection;
 
+/* Write Protect Feature (0004h) CAPABILITY bits — what the drive can
+   report/change, NOT per-disc write-protect state (that is mode page 1Dh /
+   MECHANISM STATUS, which mos does not read). MMC-6 r02g §5.3.5 Table 101,
+   descriptor payload byte 0: bit0 SSWPP, bit1 SPWP, bit2 WDCB, bit3 DWP. */
+typedef struct mos_write_protect {
+    bool present;   /* feature 0004h present in the RT=0 walk                 */
+    bool sswpp;     /* supports the SWPP bit of the Timeout & Protect page    */
+    bool spwp;      /* supports set/release of Persistent Write Protect       */
+    bool wdcb;      /* supports the Write Inhibit DCB on DVD+RW               */
+    bool dwp;       /* supports the Disc Write Protect PAC on BD-R/-RE        */
+} mos_write_protect;
+
 /* Drive-static facts from a full (RT=0) GET CONFIGURATION response. */
 typedef struct mos_drive_caps {
     mos_drive_protection protection;
+    mos_write_protect    write_protect;
     /* Supported-profile set from the Profile List feature (0x0000), drive-
        static (the per-descriptor CurrentP bit is media-dependent, ignored).
        64 covers a conformant max (one-byte Additional Length ⇒ ≤63 codes). */
@@ -380,6 +393,17 @@ typedef struct mos_drive_caps {
    an absent feature leaves its fields false/0. Pure, no-OOB — fuzz/ASan-gated. */
 void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
                                          mos_drive_caps *out);
+
+/* Decode the Write Protect Feature (0004h) CAPABILITY bits into
+   out->write_protect from a full (RT=0) GET CONFIGURATION reply. Does NOT
+   zero-init (called after mos_internal_protection_from_config, which does).
+   MMC-6 r02g §5.3.5 Table 101: descriptor payload byte 0 carries SSWPP/SPWP/
+   WDCB/DWP; a present-but-truncated payload (data_len < 1) reads as absent
+   (fail closed, like the protection decoders). These are capability bits — a
+   drive's ability to report/change write protect — NOT per-disc write-protect
+   state. Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
+                                            mos_drive_caps *out);
 
 /* Decode the Profile List feature (0x0000) into out_codes[0..cap), setting
    *out_count. Each descriptor is 4 bytes: [0..1] Profile Number (BE),

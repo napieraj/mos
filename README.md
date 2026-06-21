@@ -170,8 +170,10 @@ Error Recovery:  retry 20, PER
 Disc-independent facts: identity, `serial` (the durable inventory key that
 survives replug where `registry_id` does not), the physical `interconnect`
 (bus + internal/external, from DiscRecording — zero commands),
-content-protection *capability*, the supported-profile set, and the mechanical
-and error-recovery configuration.
+content-protection *capability*, `write_protect` *capability* (the drive's
+Write Protect Feature 0004h bits — what it can report/change, not per-disc
+state), the supported-profile set, and the mechanical and error-recovery
+configuration.
 Read-only — `mos` reports these, never changes them. (Read/write **speeds** are
 media-dependent, so they live on [`state`](#state-default--what-the-drive-is-doing-now)
 and [`watch`](#watch), not here.)

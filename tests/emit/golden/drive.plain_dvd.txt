@@ -6,6 +6,7 @@
         Serial:  -
   Interconnect:  usb (external)
     Protection:  none
+ Write Protect:  -
       Profiles:  -
      Standards:  -
     Mechanical:  -

@@ -140,6 +140,14 @@ code; this table is the citation, not the parse.
     Presence-only (Additional Length 0): **SecurDisc 0113h** (§5.3.46),
     **VCPS 0110h** (legacy, MMC-5 — designated Legacy in MMC-6 Annex E.6).
     Enforcement/region/key state behind REPORT KEY is out of scope.
+  - **Write Protect Feature (0004h):** MMC-6 r02g §5.3.5, Table 101 — payload
+    byte 0 carries the CAPABILITY bits SSWPP (bit 0), SPWP (bit 1), WDCB
+    (bit 2), DWP (bit 3). These say what the drive can REPORT/CHANGE about
+    write protection, not whether the loaded disc IS write-protected (the
+    Timeout & Protect mode page 1Dh / MECHANISM STATUS carry per-disc state,
+    which mos does not read). Decoded into `mos.drive.v1.write_protect`,
+    null when absent. NB: 0026h is the *Restricted Overwrite* feature, NOT
+    write protect — a libcdio/MS-DDK naming trap the spec corrects.
   - **Firmware Information (010Ch):** MMC-6 r02g §5.3.43, Table 197 — payload
     Century[2] Year[2] Month[2] Day[2] Hour[2] Minute[2] Second[2]
     Reserved[2], decimal ASCII, GMT; Additional Length 0x10. Emitted as an

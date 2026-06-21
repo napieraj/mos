@@ -163,6 +163,28 @@ void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
         p->vcps = true;
 }
 
+/* Contract in mos_pure.h. Write Protect Feature (0004h), MMC-6 r02g §5.3.5
+   Table 101: the descriptor payload byte 0 (f.data[0], after the 4-byte
+   feature header) carries SSWPP (bit 0), SPWP (bit 1), WDCB (bit 2), DWP
+   (bit 3). Presence alone (find) sets `present`; a truncated payload
+   (data_len < 1) leaves the bits false (fail closed, like the protection
+   decoders). Does NOT zero-init out (protection_from_config did). */
+void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
+                                            mos_drive_caps *out)
+{
+    if (!out) return;
+    mos_write_protect *w = &out->write_protect;
+
+    mos_config_feature f;
+    if (!mos_internal_config_find_feature(buf, len, 0x0004, &f)) return;
+    w->present = true;
+    if (!f.data || f.data_len < 1) return;        /* present, no capability byte */
+    w->sswpp = (f.data[0] & 0x01u) != 0;
+    w->spwp  = (f.data[0] & 0x02u) != 0;
+    w->wdcb  = (f.data[0] & 0x04u) != 0;
+    w->dwp   = (f.data[0] & 0x08u) != 0;
+}
+
 /* Contract in mos_pure.h. The Profile List feature (0x0000) payload is a
    sequence of 4-byte Profile Descriptors; we keep the drive-static set of
    Profile Numbers and ignore the per-descriptor CurrentP bit (which reflects

@@ -15,6 +15,7 @@
     "interconnect",
     "interconnect_location",
     "protection",
+    "write_protect",
     "profiles",
     "version",
     "version_descriptors",
@@ -127,6 +128,30 @@
         "vcps": {
           "type": "boolean",
           "description": "VCPS feature (0110h) present — legacy (MMC-5), presence-only (no version)."
+        }
+      }
+    },
+    "write_protect": {
+      "type": ["object", "null"],
+      "description": "Write Protect Feature (0004h) CAPABILITY bits, from the same RT=0 GET CONFIGURATION walk (MMC-6 §5.3.5, Table 101). This is what the drive can REPORT/CHANGE about write protection — NOT whether the loaded disc IS write-protected (that is the Timeout & Protect mode page 1Dh / MECHANISM STATUS, which mos does not read). An object when the feature is present, null when absent. Closed field set.",
+      "required": ["sswpp", "spwp", "wdcb", "dwp"],
+      "additionalProperties": false,
+      "properties": {
+        "sswpp": {
+          "type": "boolean",
+          "description": "Drive supports the SWPP (Software Write Protect Until Power-down) bit of the Timeout & Protect mode page."
+        },
+        "spwp": {
+          "type": "boolean",
+          "description": "Drive supports set/release of Persistent Write Protect (PWP) status."
+        },
+        "wdcb": {
+          "type": "boolean",
+          "description": "Drive supports writing the Write Inhibit DCB on DVD+RW media (READ/SEND DISC STRUCTURE format 30h, Media Type 0)."
+        },
+        "dwp": {
+          "type": "boolean",
+          "description": "Drive supports reading/writing the Disc Write Protect PAC on BD-R/-RE media (READ/SEND DISC STRUCTURE format 30h, Media Type 1)."
         }
       }
     },

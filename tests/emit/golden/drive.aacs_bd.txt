@@ -6,6 +6,7 @@
         Serial:  -
   Interconnect:  usb (external)
     Protection:  AACS (v68, bus encryption)
+ Write Protect:  -
       Profiles:  -
      Standards:  -
     Mechanical:  -

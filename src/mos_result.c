@@ -307,6 +307,31 @@ bool mos_drive_caps_vcps(const mos_drive_caps *c)
     return c ? c->protection.vcps : false;
 }
 
+bool mos_drive_caps_write_protect(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.present : false;
+}
+
+bool mos_drive_caps_wp_sswpp(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.sswpp : false;
+}
+
+bool mos_drive_caps_wp_spwp(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.spwp : false;
+}
+
+bool mos_drive_caps_wp_wdcb(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.wdcb : false;
+}
+
+bool mos_drive_caps_wp_dwp(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.dwp : false;
+}
+
 uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)
 {
     return c ? c->profile_count : 0;

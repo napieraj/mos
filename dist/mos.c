@@ -431,9 +431,22 @@ typedef struct mos_drive_protection {
     bool    vcps;                 /* feature 0110h present (legacy, MMC-5)   */
 } mos_drive_protection;
 
+/* Write Protect Feature (0004h) CAPABILITY bits — what the drive can
+   report/change, NOT per-disc write-protect state (that is mode page 1Dh /
+   MECHANISM STATUS, which mos does not read). MMC-6 r02g §5.3.5 Table 101,
+   descriptor payload byte 0: bit0 SSWPP, bit1 SPWP, bit2 WDCB, bit3 DWP. */
+typedef struct mos_write_protect {
+    bool present;   /* feature 0004h present in the RT=0 walk                 */
+    bool sswpp;     /* supports the SWPP bit of the Timeout & Protect page    */
+    bool spwp;      /* supports set/release of Persistent Write Protect       */
+    bool wdcb;      /* supports the Write Inhibit DCB on DVD+RW               */
+    bool dwp;       /* supports the Disc Write Protect PAC on BD-R/-RE        */
+} mos_write_protect;
+
 /* Drive-static facts from a full (RT=0) GET CONFIGURATION response. */
 typedef struct mos_drive_caps {
     mos_drive_protection protection;
+    mos_write_protect    write_protect;
     /* Supported-profile set from the Profile List feature (0x0000), drive-
        static (the per-descriptor CurrentP bit is media-dependent, ignored).
        64 covers a conformant max (one-byte Additional Length ⇒ ≤63 codes). */
@@ -464,6 +477,17 @@ typedef struct mos_drive_caps {
    an absent feature leaves its fields false/0. Pure, no-OOB — fuzz/ASan-gated. */
 void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
                                          mos_drive_caps *out);
+
+/* Decode the Write Protect Feature (0004h) CAPABILITY bits into
+   out->write_protect from a full (RT=0) GET CONFIGURATION reply. Does NOT
+   zero-init (called after mos_internal_protection_from_config, which does).
+   MMC-6 r02g §5.3.5 Table 101: descriptor payload byte 0 carries SSWPP/SPWP/
+   WDCB/DWP; a present-but-truncated payload (data_len < 1) reads as absent
+   (fail closed, like the protection decoders). These are capability bits — a
+   drive's ability to report/change write protect — NOT per-disc write-protect
+   state. Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
+                                            mos_drive_caps *out);
 
 /* Decode the Profile List feature (0x0000) into out_codes[0..cap), setting
    *out_count. Each descriptor is 4 bytes: [0..1] Profile Number (BE),
@@ -1942,6 +1966,28 @@ void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
     /* VCPS (0110h): legacy (MMC-5), presence only. */
     if (mos_internal_config_find_feature(buf, len, 0x0110, &f))
         p->vcps = true;
+}
+
+/* Contract in mos_pure.h. Write Protect Feature (0004h), MMC-6 r02g §5.3.5
+   Table 101: the descriptor payload byte 0 (f.data[0], after the 4-byte
+   feature header) carries SSWPP (bit 0), SPWP (bit 1), WDCB (bit 2), DWP
+   (bit 3). Presence alone (find) sets `present`; a truncated payload
+   (data_len < 1) leaves the bits false (fail closed, like the protection
+   decoders). Does NOT zero-init out (protection_from_config did). */
+void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
+                                            mos_drive_caps *out)
+{
+    if (!out) return;
+    mos_write_protect *w = &out->write_protect;
+
+    mos_config_feature f;
+    if (!mos_internal_config_find_feature(buf, len, 0x0004, &f)) return;
+    w->present = true;
+    if (!f.data || f.data_len < 1) return;        /* present, no capability byte */
+    w->sswpp = (f.data[0] & 0x01u) != 0;
+    w->spwp  = (f.data[0] & 0x02u) != 0;
+    w->wdcb  = (f.data[0] & 0x04u) != 0;
+    w->dwp   = (f.data[0] & 0x08u) != 0;
 }
 
 /* Contract in mos_pure.h. The Profile List feature (0x0000) payload is a
@@ -3849,6 +3895,10 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
     }
 
     mos_internal_protection_from_config(buf, sizeof(buf), &h->caps);
+    /* Same RT=0 reply carries the Write Protect Feature (0004h) capability bits
+       (protection_from_config zeroed the struct first, so write_protect stays
+       all-false if the feature is absent). */
+    mos_internal_write_protect_from_config(buf, sizeof(buf), &h->caps);
     /* Same RT=0 reply carries the Profile List feature (0x0000); decode the
        drive-static supported-profile set from it (protection_from_config zeroed
        the struct first, so profile_count stays 0 if the feature is absent). */
@@ -4647,6 +4697,31 @@ bool mos_drive_caps_securdisc(const mos_drive_caps *c)
 bool mos_drive_caps_vcps(const mos_drive_caps *c)
 {
     return c ? c->protection.vcps : false;
+}
+
+bool mos_drive_caps_write_protect(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.present : false;
+}
+
+bool mos_drive_caps_wp_sswpp(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.sswpp : false;
+}
+
+bool mos_drive_caps_wp_spwp(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.spwp : false;
+}
+
+bool mos_drive_caps_wp_wdcb(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.wdcb : false;
+}
+
+bool mos_drive_caps_wp_dwp(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.dwp : false;
 }
 
 uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)

@@ -15,6 +15,7 @@
     "securdisc": false,
     "vcps": false
   },
+  "write_protect": {"sswpp": true, "spwp": true, "wdcb": false, "dwp": true},
   "profiles": [
     {"code": "0x0008", "name": "cd_rom"},
     {"code": "0x0009", "name": "cd_r"},

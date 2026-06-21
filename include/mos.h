@@ -489,6 +489,19 @@ bool    mos_drive_caps_write_bus_encryption(const mos_drive_caps *c);
 bool    mos_drive_caps_securdisc(const mos_drive_caps *c);
 bool    mos_drive_caps_vcps(const mos_drive_caps *c);
 
+/* Write Protect Feature (0004h) CAPABILITY bits — whether the drive can
+   report/change write-protect status, NOT whether the loaded disc IS
+   write-protected (that is mode page 1Dh / MECHANISM STATUS, which mos does
+   not read). From the same RT=0 GET CONFIGURATION walk. _write_protect is the
+   feature's presence; the four bits are SSWPP (supports the SWPP mode-page
+   bit), SPWP (supports set/release of Persistent Write Protect), WDCB
+   (Write Inhibit DCB on DVD+RW), DWP (Disc Write Protect PAC on BD-R/-RE). */
+bool    mos_drive_caps_write_protect(const mos_drive_caps *c);
+bool    mos_drive_caps_wp_sswpp(const mos_drive_caps *c);
+bool    mos_drive_caps_wp_spwp(const mos_drive_caps *c);
+bool    mos_drive_caps_wp_wdcb(const mos_drive_caps *c);
+bool    mos_drive_caps_wp_dwp(const mos_drive_caps *c);
+
 /* Supported-profile set from the Profile List feature (0x0000) — the
    drive-static disc types this drive handles (the modern, BD-aware "what can
    this drive read/write", superseding the legacy page-0x2A media bits). The

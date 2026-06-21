@@ -100,6 +100,24 @@ static void emit_json(const drive_doc *d)
                 mos_drive_caps_vcps(c) ? "true" : "false");
     }
 
+    /* write_protect: the Write Protect Feature (0004h) CAPABILITY bits — what
+       the drive can report/change, not per-disc state. Object when the feature
+       is present, null when absent (like the version-carrying protection
+       schemes). */
+    {
+        const mos_drive_caps *c = d->caps;
+        fputs(",\n  \"write_protect\": ", stdout);
+        if (mos_drive_caps_write_protect(c))
+            fprintf(stdout,
+                    "{\"sswpp\": %s, \"spwp\": %s, \"wdcb\": %s, \"dwp\": %s}",
+                    mos_drive_caps_wp_sswpp(c) ? "true" : "false",
+                    mos_drive_caps_wp_spwp(c)  ? "true" : "false",
+                    mos_drive_caps_wp_wdcb(c)  ? "true" : "false",
+                    mos_drive_caps_wp_dwp(c)   ? "true" : "false");
+        else
+            fputs("null", stdout);
+    }
+
     /* Supported-profile list: array of {code, name}. Empty array when the
        Profile List feature was absent — a present-but-empty set, not null. */
     fputs(",\n  \"profiles\": [", stdout);
@@ -186,7 +204,7 @@ static void emit_json(const drive_doc *d)
 
 static void emit_human(const drive_doc *d)
 {
-    mos_cli_human_pair pairs[14];
+    mos_cli_human_pair pairs[16];
     size_t n = 0;
 
     char bsd_buf[24];
@@ -280,6 +298,30 @@ static void emit_human(const drive_doc *d)
         if (off == 0) snprintf(prot_buf, sizeof prot_buf, "none");
     }
     pairs[n++] = (mos_cli_human_pair){ "Protection", prot_buf };
+
+    /* Write Protect (0004h) capability: the supported flags, comma-joined;
+       "supported" when the feature is present with no change-capability flags;
+       NULL ("-") when the feature is absent. Capability, not per-disc state. */
+    char wp_buf[48];
+    if (mos_drive_caps_write_protect(d->caps)) {
+        size_t wo = 0;
+        const struct { bool on; const char *tag; } wpf[] = {
+            { mos_drive_caps_wp_sswpp(d->caps), "SSWPP" },
+            { mos_drive_caps_wp_spwp(d->caps),  "SPWP"  },
+            { mos_drive_caps_wp_wdcb(d->caps),  "WDCB"  },
+            { mos_drive_caps_wp_dwp(d->caps),   "DWP"   },
+        };
+        for (size_t i = 0; i < 4; i++) {
+            if (!wpf[i].on) continue;
+            int w = snprintf(wp_buf + wo, sizeof wp_buf - wo, "%s%s",
+                             wo ? ", " : "", wpf[i].tag);
+            if (w > 0 && (size_t)w < sizeof wp_buf - wo) wo += (size_t)w;
+        }
+        if (wo == 0) snprintf(wp_buf, sizeof wp_buf, "supported");
+    }
+    pairs[n++] = (mos_cli_human_pair){ "Write Protect",
+                                       mos_drive_caps_write_protect(d->caps)
+                                           ? wp_buf : NULL };
 
     /* Supported profiles, comma-joined names (unknown code → hex). 768 holds
        the realistic set several times over; a pathological overflow stops at

@@ -16,6 +16,7 @@
     "securdisc": false,
     "vcps": false
   },
+  "write_protect": null,
   "profiles": [
     {"code": "0x0040", "name": "bd_rom"}
   ],

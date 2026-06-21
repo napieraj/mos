@@ -1900,3 +1900,46 @@ USB-SATA bridge (it may omit it). The field is nullable, so an absent value
 degrades cleanly to null — no per-device branch. A capture showing a populated
 key that maps to none of the five SDK values lands as a dated note here and, at
 most, widens the closed enum; it never special-cases the device.
+
+## ADR: Write Protect Feature (0004h) capability surfaced on `mos drive`; the
+## audit's "0026h write protect" was a wrong feature number (2026-06-21)
+
+`mos.drive.v1` gains a nullable `write_protect` object — the SSWPP/SPWP/WDCB/DWP
+CAPABILITY bits of the Write Protect Feature (0004h), decoded from the existing
+RT=0 GET CONFIGURATION walk (`mos_config.c`
+`mos_internal_write_protect_from_config`, built to MMC-6 r02g §5.3.5 Table 101).
+This entry records the decision AND a spec-grounded correction to the pre-tag
+review.
+
+**The correction (lookup-before-assertion, of record).** The pre-tag MMC-surface
+audit proposed decoding "feature 0026h Write Protect (PWP/SWPP)" from the walk.
+Reading the maintainer-supplied MMC-6 r02g directly falsified that on two points:
+(1) **0026h is the *Restricted Overwrite* feature**, not write protect — the
+Write Protect Feature is **0004h**; and (2) the bits are a drive **capability**
+(can the drive report/change write protect), not the per-disc write-protect
+*state* the audit implied (that state lives in the Timeout & Protect mode page
+1Dh / MECHANISM STATUS, which mos does not read). The audit's framing came from a
+libcdio/MS-DDK-shaped memory; the spec is the authority. Building "0026h" would
+have decoded the wrong feature.
+
+**Why it earns a field, as capability.** Same class as the `protection` block:
+a drive-static CAPABILITY read from the walk mos already issues — zero new
+command, no raw CDB, no exclusive access, no privilege change. It answers "can
+this drive report/change software/persistent write protect, and write the DVD+RW
+/ BD Disc-Write-Protect structures" — a real drive fact for a rip/burn
+orchestrator. Null when the feature is absent; fail-closed (present-but-truncated
+payload leaves the bits false), like the protection decoders.
+
+**Scope-doctrine compliance.** Layer 1 untouched (convenience GET CONFIGURATION,
+one-of-four raw-CDB count unchanged); layer 2 honored — this is a read-only
+optical MMC feature decode, NOT MODE SELECT and NOT the per-disc mode-page state
+(no SPC ambition); layer 3 unchanged. The decline of the per-disc write-protect
+*state* (mode page 1Dh) is deliberate: it would be a separate read with its own
+argument, not folded in here.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+drive whose 0004h payload is shorter than Table 101 (caught by the data_len<1
+fail-closed → bits false) or a bridge that mis-sets the bits — each lands as a
+fixture + dated note, never a per-device special-case. The layout is spec-built
+(no in-repo capture yet); a real GET CONFIGURATION capture carrying 0004h is the
+standing falsifier.

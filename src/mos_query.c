@@ -163,6 +163,10 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
     }
 
     mos_internal_protection_from_config(buf, sizeof(buf), &h->caps);
+    /* Same RT=0 reply carries the Write Protect Feature (0004h) capability bits
+       (protection_from_config zeroed the struct first, so write_protect stays
+       all-false if the feature is absent). */
+    mos_internal_write_protect_from_config(buf, sizeof(buf), &h->caps);
     /* Same RT=0 reply carries the Profile List feature (0x0000); decode the
        drive-static supported-profile set from it (protection_from_config zeroed
        the struct first, so profile_count stays 0 if the feature is absent). */
