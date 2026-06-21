@@ -461,22 +461,32 @@ process before any retry is reintroduced.
 
 `scripts/hw-smoke.sh` is the runnable companion to this doc: where the matrix
 above records the six core states, the smoke script EXERCISES every verb,
-selector form, error path, and `--json` document type against a real drive —
-asserting exit codes / output / schema conformance where deterministic and
-PROMPTING for the disc/tray changes the media-dependent branches need. It honors
-an installed `mos` on `PATH` (override with `MOS=`), and never leaves the tray
-locked (cleanup trap). The `--json` schema checks need `python3` + `jsonschema`;
-when they're missing the script installs them best-effort (python3 via brew,
-jsonschema via pip from the hash-pinned `schemas/requirements-ci.txt`) unless
-`SMOKE_INSTALL_DEPS=0`, falling back to SKIP if install isn't possible.
+selector form, error path, and `--json` document type against a real drive. Run
+with no argument it presents an interactive MENU — you pick a section, it tells
+you exactly what to set up physically (empty the tray, insert a CD, …), and its
+assertions ADAPT to whatever disc/tray state it actually finds (it reads
+`state`, then runs the checks that fit, rather than demanding a fixed script).
+Each `--json` document is validated against the schema it DECLARES (its own
+`schema` field), so an error envelope where a state document was expected reads
+"got mos.error.v1" rather than a cryptic validation failure.
+
+It prefers the freshly-built `build/bin/mos` (what you are validating for a tag)
+over an installed `mos` on `PATH`, surfacing the alternative in the banner;
+override with `MOS=`. It never leaves the tray locked (cleanup trap). The
+`--json` schema checks use the same stack CI uses — `python3` + `jsonschema` +
+`rfc3339-validator` (`schemas/requirements-ci.txt`); when missing the script
+installs them best-effort via pip unless `SMOKE_INSTALL_DEPS=0`, falling back to
+SKIP if install isn't possible.
 
 ```sh
-scripts/hw-smoke.sh            # all phases (prompts for disc swaps)
+scripts/hw-smoke.sh            # interactive menu (recommended)
 scripts/hw-smoke.sh static     # build/pure-suite/schema/usage — no hardware
-scripts/hw-smoke.sh empty      # no-disc verbs + selectors + probe
+scripts/hw-smoke.sh empty      # no-disc verbs + identity/serial + selectors
 scripts/hw-smoke.sh tray       # eject/close/lock/unlock/force
 scripts/hw-smoke.sh disc       # per-media-type: state/metadata/capacity/eject
 scripts/hw-smoke.sh watch      # event stream + watch-vs-eject contention
+scripts/hw-smoke.sh errors     # selector + usage error paths
+SMOKE_NONINTERACTIVE=1 scripts/hw-smoke.sh all   # assume "ready" at every prompt
 ```
 
 A FAIL or a surprise it surfaces is a deliverable, not a patch target: capture
