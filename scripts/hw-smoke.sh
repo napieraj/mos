@@ -263,6 +263,8 @@ phase_empty() {
     run drive;    expect_text 'Vendor|Product' "drive identity (vendor/product)"
     info "Serial is read from feature 0108h (GET CONFIGURATION, no exclusive access):"
     info "it reads on an empty drive AND while mounted; null only if the firmware programs none."
+    info "Interconnect (bus + internal/external) comes zero-command from the DiscRecording"
+    info "directory — internal SATA/PATA reads 'atapi', an enclosure 'usb'/'firewire'; null if DR omits it."
     check_doc mos.drive.v1 "drive --json" "$("$MOS" drive --json 2>/dev/null)"
 
     run features; expect_rc 0 "features"
