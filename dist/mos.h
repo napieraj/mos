@@ -1180,6 +1180,16 @@ const char    *mos_watch_event_media_type(const mos_watch_event *e);
    like media_type; the kernel's mechanism bit, not a blank/appendable claim. */
 int            mos_watch_event_writable(const mos_watch_event *e);
 
+/* GET PERFORMANCE max read / max write speed (kB/s) and the read-direction
+   descriptor count for the loaded disc (see mos_query_drive_perf). MEDIA-
+   DEPENDENT and grabbed once per media identity, then cached for the session:
+   speed_count is 0 (and the rates 0) in early lines until the first ready poll
+   for a disc lands the read, then stable until the next media change. Absent on
+   error / device_removed events. speed_count == 0 ⇒ no speeds known. */
+uint32_t       mos_watch_event_max_read_kbps(const mos_watch_event *e);
+uint32_t       mos_watch_event_max_write_kbps(const mos_watch_event *e);
+uint16_t       mos_watch_event_speed_count(const mos_watch_event *e);
+
 /* Current and previous state (prev is MOS_STATE_UNKNOWN on snapshot), and
    the current profile — meaningful for snapshot and state_changed events. */
 mos_state mos_watch_event_state(const mos_watch_event *e);

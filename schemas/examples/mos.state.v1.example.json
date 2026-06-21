@@ -7,6 +7,11 @@
   "media_class": "bd",
   "media_type": "bd_rom",
   "writable": false,
+  "speeds": {
+    "descriptor_count": 1,
+    "max_read_kbps": 35980,
+    "max_write_kbps": 0
+  },
   "vendor": "HL-DT-ST",
   "product": "BD-RE BH16NS55",
   "firmware": "1.00",

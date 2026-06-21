@@ -28,10 +28,6 @@ typedef struct {
     const char *serial;       /* borrowed; NULL = unavailable (see header) */
     const mos_drive_caps *caps;  /* borrowed; protection + supported-profile list */
     const mos_drive_inquiry *inquiry;  /* borrowed; NULL = unreadable (BUSY) */
-    bool        have_speeds;   /* GET PERFORMANCE returned >= 1 descriptor */
-    uint16_t    speed_count;
-    uint32_t    max_read_kbps;
-    uint32_t    max_write_kbps;
     const mos_mode_caps      *caps_2a;  /* NULL = page 0x2A unavailable */
     const mos_error_recovery *erec;     /* NULL = page 0x01 unavailable */
 } drive_doc;
@@ -143,15 +139,6 @@ static void emit_json(const drive_doc *d)
         const char *fw = mos_drive_caps_firmware_date(d->caps);
         if (fw) mos_cli_json_str(stdout, fw); else fputs("null", stdout);
     }
-
-    fputs(",\n  \"speeds\": ", stdout);
-    if (d->have_speeds)
-        fprintf(stdout,
-                "{\"descriptor_count\": %u, \"max_read_kbps\": %u, "
-                "\"max_write_kbps\": %u}",
-                d->speed_count, d->max_read_kbps, d->max_write_kbps);
-    else
-        fputs("null", stdout);
 
     fputs(",\n  \"mechanical\": ", stdout);
     if (d->caps_2a) {
@@ -316,21 +303,6 @@ static void emit_human(const drive_doc *d)
     }
     pairs[n++] = (mos_cli_human_pair){ "Standards", d->inquiry ? std_buf : NULL };
 
-    /* Speeds scaled to the loaded medium's native 1x multiple (headline),
-       absolute rate in parens: "read ~16.0× BD (72.0 MB/s)". The class comes
-       from the loaded disc's current profile; with no/unknown class the helper
-       degrades to the absolute rate alone. JSON keeps the raw kbps integers. */
-    char spd_buf[96];
-    if (d->have_speeds) {
-        const char *mcls = mos_profile_class(
-                               mos_drive_caps_current_profile(d->caps));
-        char rd[40], wr[40];
-        snprintf(spd_buf, sizeof spd_buf, "read %s, write %s (max)",
-                 mos_cli_human_rate_x(d->max_read_kbps, mcls, rd, sizeof rd),
-                 mos_cli_human_rate_x(d->max_write_kbps, mcls, wr, sizeof wr));
-    }
-    pairs[n++] = (mos_cli_human_pair){ "Speeds", d->have_speeds ? spd_buf : NULL };
-
     char mech_buf[64];
     if (d->caps_2a) {
         const char *lm = mos_loading_mechanism_name(
@@ -426,17 +398,6 @@ int mos_cli_run_drive(void)
        command, no lock), so it reads even on mounted media. null when the drive
        does not implement the feature or programs no serial (firmware-dependent). */
     d.serial = mos_drive_caps_serial(c);
-
-    /* Speeds are best-effort and media-dependent: a failed command or
-       empty descriptor list leaves them null (have_speeds false). */
-    const mos_drive_perf *perf = NULL;
-    if (mos_query_drive_perf(h, &perf) == MOS_OK &&
-        mos_drive_perf_have(perf)) {
-        d.have_speeds    = true;
-        d.speed_count    = mos_drive_perf_descriptor_count(perf);
-        d.max_read_kbps  = mos_drive_perf_max_read_kbps(perf);
-        d.max_write_kbps = mos_drive_perf_max_write_kbps(perf);
-    }
 
     /* MODE SENSE pages 0x2A / 0x01 — best-effort, each null on failure. */
     const mos_mode_caps *caps2a = NULL;

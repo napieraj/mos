@@ -123,6 +123,21 @@ int mos_watch_event_writable(const mos_watch_event *e)
     return e ? e->writable : -1;
 }
 
+uint32_t mos_watch_event_max_read_kbps(const mos_watch_event *e)
+{
+    return e ? e->max_read_kbps : 0;
+}
+
+uint32_t mos_watch_event_max_write_kbps(const mos_watch_event *e)
+{
+    return e ? e->max_write_kbps : 0;
+}
+
+uint16_t mos_watch_event_speed_count(const mos_watch_event *e)
+{
+    return e ? e->speed_count : 0;
+}
+
 mos_state mos_watch_event_state(const mos_watch_event *e)
 {
     return e ? e->state : MOS_STATE_UNKNOWN;

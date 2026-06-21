@@ -55,6 +55,18 @@ struct mos_state_result {
        blank/appendable/complete tri-state needs READ DISC INFORMATION, off the
        poll path by design. Appended: ABI-safe (accessor-only). */
     signed char    writable;
+    /* GET PERFORMANCE (0xAC, Type 00h) read/write speeds (kB/s) and the read-
+       direction descriptor count — MEDIA-DEPENDENT (the loaded disc's nominal
+       performance). The state core (mos_query_state) NEVER fills these: like
+       serial they stay zero there, so the no-lock-on-READY core query issues no
+       GetPerformance. They are filled by the watch adapter (mos_watch.c, grabbed
+       once per media identity and cached) as the conduit into the event; the
+       one-shot `mos state` CLI reads mos_query_drive_perf directly. GetPerformance
+       is a NON-exclusive convenience method, so no lock, no raw CDB. speed_count
+       == 0 ⇒ absent. Plain scalars (no re-home). Appended: ABI-safe. */
+    uint32_t       max_read_kbps;
+    uint32_t       max_write_kbps;
+    uint16_t       speed_count;
 };
 
 /* DRIFT GUARD (R3 brief 3). The watch re-homes every BORROWED pointer field of
@@ -64,7 +76,7 @@ struct mos_state_result {
    means a new field: if it is a borrowed `const char *`, add its re-home to BOTH
    probes and a deref to the ASan lifetime test, THEN bump this number. Static-token
    (media_type) and scalar fields need no re-home — bump only. */
-_Static_assert(sizeof(struct mos_state_result) == 88,
+_Static_assert(sizeof(struct mos_state_result) == 96,
     "mos_state_result changed: if the new field is a borrowed pointer, re-home it in "
     "mos_watch.c (watch_probe + watch_slot_probe) before bumping this size");
 
@@ -103,12 +115,21 @@ struct mos_watch_event {
     /* Kernel IOMedia Writable flag (see mos_state_result.writable). Tri-state:
        -1 absent, 0 read-only, 1 writable. Appended: ABI-safe (accessor-only). */
     signed char    writable;
+    /* GET PERFORMANCE read/write speeds (see mos_state_result). MEDIA-DEPENDENT;
+       the watch grabs them once per media identity and caches (mos_watch.c), so
+       they are NULL in early lines until the first ready poll for a disc lands
+       the read, then stable until the next media change. Forbidden on
+       error/device_removed events (like the other media fields). speed_count
+       == 0 ⇒ absent. Plain scalars (no re-home). Appended: ABI-safe. */
+    uint32_t       max_read_kbps;
+    uint32_t       max_write_kbps;
+    uint16_t       speed_count;
 };
 
 /* DRIFT GUARD (R3 brief 3): same rule as mos_state_result above — a new borrowed
    `const char *` on the event must be re-homed before mos_close and dereffed in
    the ASan lifetime test; bump this size only after that. */
-_Static_assert(sizeof(struct mos_watch_event) == 136,
+_Static_assert(sizeof(struct mos_watch_event) == 144,
     "mos_watch_event changed: re-home any new borrowed pointer in mos_watch.c "
     "before bumping this size");
 

@@ -127,6 +127,29 @@
       "type": "string",
       "description": "Drive Unit Serial Number (raw INQUIRY VPD page 0x80) — the durable inventory key that survives replug, where registry_id does not. Present only on the identity-carrying kinds (snapshot, state_changed, media_changed, device_appeared) and only once grabbed: it is absent in early event lines until a free (empty / not-ready) poll lands the read (it self-gates on exclusive access, so it backs off while a disc is mounted), then present and stable for the session."
     },
+    "speeds": {
+      "type": "object",
+      "description": "Loaded disc's read/write performance from GET PERFORMANCE (0xAC, Type 00h) via the non-exclusive GetPerformance convenience method (no raw CDB, no exclusive lock). MEDIA-DEPENDENT: it describes the disc, not a static drive fact. Grabbed once per media identity and cached, so it is absent in early lines until the first ready poll for a disc lands the read, then present and stable until the next media change. Present only on the identity-carrying kinds (snapshot, state_changed, media_changed) for a READY disc; forbidden on error / device_removed like the other media fields.",
+      "required": ["descriptor_count", "max_read_kbps", "max_write_kbps"],
+      "additionalProperties": false,
+      "properties": {
+        "descriptor_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of performance descriptors in the read-direction reply."
+        },
+        "max_read_kbps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum read performance (kB/s) across the WRITE=0 descriptors."
+        },
+        "max_write_kbps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum write performance (kB/s) across the WRITE=1 descriptors (0 on a read-only drive / non-writable medium)."
+        }
+      }
+    },
     "sense": {
       "type": "object",
       "required": [
@@ -401,6 +424,11 @@
             "required": [
               "serial"
             ]
+          },
+          {
+            "required": [
+              "speeds"
+            ]
           }
         ]
       }
@@ -472,6 +500,11 @@
           {
             "required": [
               "serial"
+            ]
+          },
+          {
+            "required": [
+              "speeds"
             ]
           }
         ]

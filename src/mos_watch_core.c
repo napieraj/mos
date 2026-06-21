@@ -209,6 +209,9 @@ static void fill_event_state_fields(mos_watch_event *e,
     e->serial          = r->serial;   /* NULL until a free poll grabs it (mos_watch.c) */
     e->media_type      = r->media_type;  /* static token storage or NULL — no re-home */
     e->writable        = r->writable;    /* tri-state -1/0/1, plain scalar */
+    e->max_read_kbps   = r->max_read_kbps;   /* 0 until a ready poll grabs perf (mos_watch.c) */
+    e->max_write_kbps  = r->max_write_kbps;
+    e->speed_count     = r->speed_count;     /* 0 ⇒ absent */
     e->sense_key       = r->sense_key;
     e->asc             = r->asc;
     e->ascq            = r->ascq;

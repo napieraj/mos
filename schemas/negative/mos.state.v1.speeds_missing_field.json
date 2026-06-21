@@ -5,11 +5,10 @@
   "current_profile": "0x0041",
   "current_profile_name": "bd_r",
   "media_class": "bd",
-  "volume_name": "FAMILY_ARCHIVE_2026",
+  "writable": true,
   "speeds": {
     "descriptor_count": 4,
-    "max_read_kbps": 35980,
-    "max_write_kbps": 17996
+    "max_read_kbps": 35980
   },
   "vendor": "HL-DT-ST",
   "product": "BD-RE WH16NS60",

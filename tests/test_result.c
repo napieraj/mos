@@ -79,6 +79,9 @@ TEST(watch_event_accessors_return_fields)
         .serial          = "KL2G7942618WL",
         .media_type      = "bd_rom",
         .writable        = 0,
+        .max_read_kbps   = 35980,
+        .max_write_kbps  = 0,
+        .speed_count     = 1,
         .state           = MOS_STATE_READY,
         .prev_state      = MOS_STATE_LOADING,
         .current_profile = 0x0040,
@@ -101,6 +104,9 @@ TEST(watch_event_accessors_return_fields)
     EXPECT_STREQ(mos_watch_event_serial(&e), "KL2G7942618WL");
     EXPECT_STREQ(mos_watch_event_media_type(&e), "bd_rom");
     EXPECT_EQ(mos_watch_event_writable(&e), 0);
+    EXPECT_EQ(mos_watch_event_max_read_kbps(&e), 35980u);
+    EXPECT_EQ(mos_watch_event_max_write_kbps(&e), 0u);
+    EXPECT_EQ(mos_watch_event_speed_count(&e), 1u);
     EXPECT_EQ(mos_watch_event_state(&e), MOS_STATE_READY);
     EXPECT_EQ(mos_watch_event_prev_state(&e), MOS_STATE_LOADING);
     EXPECT_EQ(mos_watch_event_current_profile(&e), 0x0040);
@@ -125,6 +131,9 @@ TEST(watch_event_accessors_tolerate_null)
     EXPECT(mos_watch_event_serial(NULL) == NULL);
     EXPECT(mos_watch_event_media_type(NULL) == NULL);
     EXPECT_EQ(mos_watch_event_writable(NULL), -1);
+    EXPECT_EQ(mos_watch_event_max_read_kbps(NULL), 0u);
+    EXPECT_EQ(mos_watch_event_max_write_kbps(NULL), 0u);
+    EXPECT_EQ(mos_watch_event_speed_count(NULL), 0u);
     EXPECT_EQ(mos_watch_event_current_profile(NULL), 0);
     EXPECT_EQ(mos_watch_event_error(NULL), MOS_OK);
     EXPECT_EQ(mos_watch_event_latency_ms(NULL), 0);

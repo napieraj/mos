@@ -107,6 +107,20 @@ struct mos_watch {
     char serial[64];
     bool serial_resolved;
 
+    /* Drive speeds (GET PERFORMANCE, the non-exclusive GetPerformance convenience
+       method — no lock, no raw CDB) for the LOADED disc. Unlike the serial (a
+       per-SESSION drive fact, resolved once), speeds are per-DISC, so the cache
+       is keyed on media_id and re-grabbed on a disc swap (a new media_id). Only
+       a READY disc with a whole-disk media node is probed; a not-ready/empty poll
+       leaves the rates 0. Terminal vs transient is classified like the serial
+       (probe_grab_terminal): a successful read or an answered absence resolves the
+       disc; a transient transport failure retries next poll. speeds_media_id == 0
+       means "not yet grabbed for any disc"; cached_speed_count == 0 means absent. */
+    uint64_t speeds_media_id;
+    uint32_t cached_max_read_kbps;
+    uint32_t cached_max_write_kbps;
+    uint16_t cached_speed_count;
+
     /* ---- Watch-all mode -------------------------------------------- *
      * all_mode selects the multiplexer: `all` is the pure fan-in over
      * per-slot cores, `slots` is the per-device probe context (registry id
@@ -128,6 +142,14 @@ struct mos_watch {
            prevents the prior device's serial from carrying over. */
         char     serial[64];
         bool     serial_resolved;
+        /* Per-slot drive speeds: same media-keyed cache as the single-target
+           fields above. Slots are RECYCLED, and watch_all_add_device memsets the
+           slot on claim, which resets speeds_media_id to 0 so a prior device's
+           speeds never carry over. */
+        uint64_t speeds_media_id;
+        uint32_t cached_max_read_kbps;
+        uint32_t cached_max_write_kbps;
+        uint16_t cached_speed_count;
     }                    slots[MOS_WATCH_ALL_CAP];
     uint32_t             stable_poll_ms;
     uint32_t             transition_poll_ms;
@@ -211,16 +233,18 @@ static uint64_t stream_epoch_wall_ms(void)
    pointer, so "forgot one" is the default. A new borrowed pointer on
    mos_watch_event / mos_state_result needs watch-lifetime backing and a
    replacement below. (bsd_unit is a value, never replaced.) */
-/* Should the serial probe stop retrying after this mos_query_drive_caps outcome?
-   A serial is a STATIC drive fact, so a config walk that SUCCEEDED (MOS_OK)
-   resolves whether or not feature 0108h carried a serial — an answered absence
-   is permanent. Only a TRANSIENT transport failure (another client holds
-   exclusive access, timeout, media mid-swap, resource pressure) is worth
-   retrying, so the serial isn't re-queried every stable poll for nothing. MOS_OK
-   falls to the default (terminal). The MOS_ERR_IO default arm of the IOReturn
-   mapper means a rare unmapped transient is also taken as terminal (a benign
-   null serial for the session) — accepted over the alternative of forever-churn. */
-static bool serial_probe_terminal(mos_error e)
+/* Should a once-per-thing probe (serial, drive speeds) stop retrying after this
+   outcome? Shared by the serial grab (mos_query_drive_caps) and the speed grab
+   (mos_query_drive_perf): both read through non-exclusive convenience methods, so
+   a SUCCEEDED query (MOS_OK) resolves the fact whether or not the value was
+   present — an answered absence is permanent for that subject (a session for the
+   serial, a disc for the speeds). Only a TRANSIENT transport failure (another
+   client holds exclusive access, timeout, media mid-swap, resource pressure) is
+   worth retrying, so the value isn't re-queried every stable poll for nothing.
+   MOS_OK falls to the default (terminal). The MOS_ERR_IO default arm of the
+   IOReturn mapper means a rare unmapped transient is also taken as terminal (a
+   benign absent value) — accepted over the alternative of forever-churn. */
+static bool probe_grab_terminal(mos_error e)
 {
     switch (e) {
         case MOS_ERR_BUSY:
@@ -231,6 +255,36 @@ static bool serial_probe_terminal(mos_error e)
             return false;   /* transient: retry on a later poll */
         default:
             return true;    /* MOS_OK (present), or an answered absence */
+    }
+}
+
+/* Grab the loaded disc's speeds once per media identity and fill `out`. The
+   cache (*media_id + the three cached_* values) lives in the watch/slot struct;
+   shared by the single-target and all-mode probes. Only a READY disc with a
+   whole-disk media node is probed; a not-ready/empty poll leaves out's speeds 0.
+   On a new disc (media_id changed) the stale cache is cleared before the grab so
+   a transient failure shows absent, not the previous disc's numbers. */
+static void watch_grab_speeds(mos_handle_t *h, mos_state_result *out,
+                              uint64_t *media_id,
+                              uint32_t *max_read, uint32_t *max_write,
+                              uint16_t *count)
+{
+    if (out->state == MOS_STATE_READY && out->media_id != 0) {
+        if (*media_id != out->media_id) {
+            *max_read = 0; *max_write = 0; *count = 0;   /* forget prior disc */
+            const mos_drive_perf *perf = NULL;
+            mos_error pe = mos_query_drive_perf(h, &perf);
+            if (pe == MOS_OK && perf) {
+                *max_read  = mos_drive_perf_max_read_kbps(perf);
+                *max_write = mos_drive_perf_max_write_kbps(perf);
+                *count     = mos_drive_perf_descriptor_count(perf);
+            }
+            if (probe_grab_terminal(pe))
+                *media_id = out->media_id;   /* resolved for this disc */
+        }
+        out->max_read_kbps  = *max_read;
+        out->max_write_kbps = *max_write;
+        out->speed_count    = *count;
     }
 }
 
@@ -275,7 +329,7 @@ static mos_error watch_probe(void *ctx, mos_state_result *out)
        command and no exclusive access, so it reads regardless of mount state and
        never contends with a one-shot control verb (eject). An answered absence
        (feature absent / empty) resolves so it stops re-querying; only a transient
-       transport failure retries (serial_probe_terminal). Re-home into watch-
+       transport failure retries (probe_grab_terminal). Re-home into watch-
        static storage (the pointer borrows the handle we close). */
     if (!w->serial_resolved) {
         const mos_drive_caps *caps = NULL;
@@ -283,10 +337,18 @@ static mos_error watch_probe(void *ctx, mos_state_result *out)
         const char *sn = (se == MOS_OK && caps) ? mos_drive_caps_serial(caps) : NULL;
         if (sn && sn[0])
             strlcpy(w->serial, sn, sizeof w->serial);
-        if (serial_probe_terminal(se))
+        if (probe_grab_terminal(se))
             w->serial_resolved = true;
     }
     out->serial = w->serial[0] ? w->serial : NULL;
+
+    /* Grab drive speeds ONCE per loaded disc (keyed on media_id). A disc's
+       nominal performance is constant, so re-querying every poll is waste; a disc
+       swap (new media_id) re-grabs. GetPerformance is non-exclusive (no lock, no
+       raw CDB), so this never contends with a one-shot eject — the same clean
+       profile as the serial grab. Speeds are plain scalars, no re-home. */
+    watch_grab_speeds(h, out, &w->speeds_media_id, &w->cached_max_read_kbps,
+                      &w->cached_max_write_kbps, &w->cached_speed_count);
 
     mos_close(h);
     return MOS_OK;
@@ -347,10 +409,14 @@ static mos_error watch_slot_probe(void *ctx, mos_state_result *out)
         const char *sn = (se == MOS_OK && caps) ? mos_drive_caps_serial(caps) : NULL;
         if (sn && sn[0])
             strlcpy(s->serial, sn, sizeof s->serial);
-        if (serial_probe_terminal(se))
+        if (probe_grab_terminal(se))
             s->serial_resolved = true;
     }
     out->serial = s->serial[0] ? s->serial : NULL;
+
+    /* Grab drive speeds once per loaded disc (media-keyed), same as watch_probe. */
+    watch_grab_speeds(h, out, &s->speeds_media_id, &s->cached_max_read_kbps,
+                      &s->cached_max_write_kbps, &s->cached_speed_count);
 
     mos_close(h);
     return MOS_OK;

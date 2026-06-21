@@ -7,6 +7,5 @@
     Protection:  AACS (v68, bus encryption)
       Profiles:  -
      Standards:  -
-        Speeds:  -
     Mechanical:  -
 Error Recovery:  -
