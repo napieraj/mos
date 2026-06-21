@@ -1,9 +1,10 @@
 /* cli/tray.c — the tray command: `mos tray <action> [selector] [flags]`.
  *
- * action ∈ {eject, close, lock, unlock}. eject takes --force (open no matter
- * what: force-unmount a mount + clear a Prevent lock in the way, then eject;
- * see mos_tray_eject); lock/unlock take --persistent (the Persistent Prevent
- * state). Emits one mos.tray.v1 document or a human line.
+ * action ∈ {eject, close, lock, unlock}. eject GRACEFULLY unmounts a mount
+ * then ejects; --force additionally clears a Prevent LOCK in the way (it never
+ * forces the filesystem — a busy disc surfaces BUSY; see mos_tray_eject).
+ * lock/unlock take --persistent (the Persistent Prevent state). Emits one
+ * mos.tray.v1 document or a human line.
  *
  * A control verb (START STOP UNIT / PREVENT ALLOW MEDIUM REMOVAL), not a
  * query. A command the drive ANSWERED — including a 5/53/02 locked-eject
@@ -14,7 +15,6 @@
  */
 #include "common.h"
 
-#include <stdlib.h>   /* getenv: the MOS_FORCE_BY_IDENTITY opt-in */
 #include <string.h>
 #include <sysexits.h>
 
@@ -186,29 +186,12 @@ int mos_cli_run_tray(void)
     d.persistent  = flag_persistent;
     d.outcome     = MOS_TRAY_DONE;
 
-    /* Selector gate for the data-loss force-unmount. `tray eject --force`
-       operates by NAME (diskutil semantics — mos_tray.c). For an explicit
-       bsd-node selector, or the sole drive, the user named the disc, so force is
-       the default. For an EPHEMERAL positional index or an identity registry-id
-       — where mos derives the name and the position/id can mismatch the disc you
-       mean — refuse by default when media is present and point at the bsd-node
-       form, unless MOS_FORCE_BY_IDENTITY is set. (No media ⇒ nothing to unmount,
-       so force is harmless and not gated.) */
-    if (act == ACT_EJECT && flag_force && (opt_index || opt_registry) &&
-        d.bsd_unit >= 0 && !getenv("MOS_FORCE_BY_IDENTITY")) {
-        char dev[24];
-        (void)mos_bsd_dev_node(d.bsd_unit, dev, sizeof dev);
-        fprintf(stderr,
-            "%s: refusing `tray eject --force` via a %s selector — it can name "
-            "the wrong disc, and force-unmount is data-loss-capable.\n"
-            "The disc in this drive is %s; run:\n"
-            "    %s %s tray eject --force\n"
-            "or set MOS_FORCE_BY_IDENTITY=1 to force by %s anyway.\n",
-            progname, opt_index ? "positional-index" : "registry-id",
-            dev, progname, dev, opt_index ? "index" : "registry id");
-        mos_close(h);
-        return EX_USAGE;
-    }
+    /* No selector gate. `tray eject --force` clears Prevent LOCKS and unmounts
+       GRACEFULLY (it never forces the filesystem — mos_tray.c / mos_da.c), so a
+       diskN that names a different disc than intended can at worst cleanly
+       unmount an idle volume or fail on a busy one — no data loss, nothing to
+       gate. (The old data-loss force-unmount and its MOS_FORCE_BY_IDENTITY gate
+       are gone; AGENTS.md force-unmount ADR chain.) */
 
     /* The verbs return the drive's sense triple via the out-param: all-zero
        on DONE, the real {key,asc,ascq} on any refusal (5/53/02 for

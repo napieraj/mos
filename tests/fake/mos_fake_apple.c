@@ -98,6 +98,8 @@ static struct {
     bool     exclusive_denied;
     bool     mounted_busy;      /* ObtainExclusiveAccess returns BUSY (a mount)
                                    until a successful DADiskUnmount clears it */
+    bool     unmount_refused;   /* a GRACEFUL DADiskUnmount dissents (busy FS,
+                                   open handles): mount stays, mos surfaces BUSY */
     bool     release_fail;      /* ReleaseExclusiveAccess returns non-success
                                    AND leaves the lock held (no decrement) */
     uint32_t raw_status;        uint8_t raw[64];  size_t raw_len;
@@ -299,8 +301,11 @@ void mos_fake_set_raw_reply(uint32_t task_status,
 void mos_fake_set_exclusive_denied(bool denied) { g.exclusive_denied = denied; }
 
 /* Model a mounted volume: ObtainExclusiveAccess returns BUSY until a successful
-   DADiskUnmount clears it (so `tray eject --force` unmounts then re-ejects). */
+   GRACEFUL DADiskUnmount clears it (so `tray eject` unmounts then re-ejects). */
 void mos_fake_set_mounted_busy(bool busy) { g.mounted_busy = busy; }
+/* Model a BUSY filesystem (open handles): the graceful DADiskUnmount DISSENTS,
+   the mount stays, mos surfaces MOS_ERR_BUSY (never forces). */
+void mos_fake_set_unmount_refused(bool refused) { g.unmount_refused = refused; }
 void mos_fake_set_release_fail(bool fail) { g.release_fail = fail; }
 
 void mos_fake_set_plugin_fail(bool fail) { g.plugin_fail = fail; }
@@ -1063,9 +1068,15 @@ void DASessionSetDispatchQueue(DASessionRef session, dispatch_queue_t queue)
 void DADiskUnmount(DADiskRef disk, DADiskUnmountOptions options,
                    DADiskUnmountCallback callback, void *context)
 {
-    (void)options;
-    /* A successful force-unmount clears the Finder/system mount, so the
-       subsequent eject's ObtainExclusiveAccess no longer returns BUSY. */
+    (void)options;   /* graceful (Whole, no Force): mos never sets Force */
+    if (g.unmount_refused) {
+        /* Busy filesystem: the daemon DISSENTS, the mount stays. mos surfaces
+           MOS_ERR_BUSY (it never forces). Non-NULL dissenter = failure. */
+        if (callback) callback(disk, (DADissenterRef)&g, context);
+        return;
+    }
+    /* Idle volume: the graceful unmount succeeds, clearing the Finder/system
+       mount so the subsequent eject's ObtainExclusiveAccess no longer BUSYs. */
     g.mounted_busy = false;
     if (callback) callback(disk, NULL, context);   /* NULL dissenter = success */
 }

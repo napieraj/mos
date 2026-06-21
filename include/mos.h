@@ -1001,11 +1001,12 @@ mos_error mos_enumerate_features(mos_handle_t *h,
  * acquires and RELEASES exclusive access within the call:
  *
  *   - MOS_ERR_BUSY / MOS_ERR_EXCLUSIVE_ACCESS when the drive is mounted as a
- *     volume or held by another client — on the DEFAULT path unmount/quiesce is
- *     the CONSUMER's call (the deliberate contrast with `drutil tray eject`).
- *     The one exception is mos_tray_eject(force=true), which force-unmounts a
- *     mount to open no matter what; it still cannot preempt another client
- *     (MOS_ERR_EXCLUSIVE_ACCESS). A robot orchestrator locks/ejects between stages.
+ *     volume or held by another client. For lock/close/unlock the consumer
+ *     quiesces first. mos_tray_eject is the exception: it GRACEFULLY unmounts a
+ *     mounted disc before ejecting (both default and --force — matching `drutil
+ *     tray eject`), but NEVER forces, so a BUSY filesystem (open file handles)
+ *     surfaces MOS_ERR_BUSY rather than being destroyed. Neither path preempts
+ *     another userland client (MOS_ERR_EXCLUSIVE_ACCESS).
  *   - On a command the drive ANSWERED, MOS_OK and *out carries the outcome
  *     (DONE / REFUSED_LOCKED / REFUSED_OTHER) — mechanism facts only.
  *
@@ -1025,20 +1026,21 @@ mos_error mos_enumerate_features(mos_handle_t *h,
  */
 
 /* Eject the tray / unload the medium (START STOP UNIT 0x1B, LoEj=1 START=0).
-   `force` means OPEN NO MATTER WHAT, as ONE flow: the eject is attempted, and
-   force then clears whichever blocker the failure names and re-ejects —
-     - MOS_ERR_BUSY (a Finder/system mount) -> FORCE-UNMOUNT the volume
-       (DADiskUnmount, kDADiskUnmountOptionForce — DATA-LOSS CAPABLE: it kills
-       open file handles; that is the contract of --force) and re-eject;
-     - REFUSED_LOCKED (a basic Prevent lock) -> clear both Prevent states (so
-       nothing is left locked) and re-eject.
-   The one blocker force cannot clear is another userland client holding
-   exclusive access (no SCSI preempt): that returns MOS_ERR_EXCLUSIVE_ACCESS and
-   the tray stays closed. force-unmount needs DiskArbitration; in an opt-out
-   build (MOS_USE_DISKARBITRATION=0) a mounted disc reports MOS_ERR_BUSY instead.
-   Without force, a basic-locked drive answers REFUSED_LOCKED and a mounted disc
-   MOS_ERR_BUSY — both reported facts, nothing cleared. (`sense` reflects the
-   final eject, not the prevent-clears.) */
+   GRACEFUL by design — mos NEVER forces the filesystem:
+     - A mounted disc is GRACEFULLY unmounted first (DADiskUnmount, Whole, NO
+       Force), then ejected. If a volume is BUSY (open file handles) the unmount
+       fails and mos returns MOS_ERR_BUSY — exactly like `diskutil unmountDisk
+       diskN`; nothing is destroyed. This happens on the default AND with --force.
+     - `force` adds ONE thing: it clears a Prevent LOCK in the way. On
+       REFUSED_LOCKED (a basic Prevent) --force clears both Prevent states (so
+       nothing is left locked) and re-ejects. WITHOUT force a basic-locked drive
+       answers REFUSED_LOCKED, untouched. `--force` means "open past the LOCK",
+       never past the filesystem.
+   Neither path can preempt another userland client holding exclusive access
+   (no SCSI preempt) -> MOS_ERR_EXCLUSIVE_ACCESS, tray closed. The graceful
+   unmount needs DiskArbitration; in an opt-out build (MOS_USE_DISKARBITRATION=0)
+   a mounted disc reports MOS_ERR_BUSY (the consumer unmounts with `diskutil`
+   first). (`sense` reflects the final eject, not the prevent-clears.) */
 mos_error mos_tray_eject (mos_handle_t *h, bool force,
                           mos_tray_outcome *out, uint8_t sense[3]);
 

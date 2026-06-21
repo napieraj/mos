@@ -2150,35 +2150,35 @@ static void mos_internal_da_unmount_cb(DADiskRef disk,
     dispatch_semaphore_signal(c->sem);
 }
 
-/* Force-unmount EVERY volume on whole-disk "diskN"
-   (kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole). True on success.
-   ONLY the `tray eject --force` path calls this: a forced unmount kills open
-   file handles (data-loss capable) — the "open no matter what" contract,
-   strictly opt-in behind --force and gated by selector in cli/tray.c.
+/* GRACEFUL unmount of every volume on whole-disk "diskN"
+   (kDADiskUnmountOptionWhole — NOT Force). True only when the unmount is
+   accepted; FALSE (a non-NULL dissenter) when a volume is busy (open file
+   handles). mos NEVER forces: a busy volume surfaces as MOS_ERR_BUSY to the
+   caller, exactly as `diskutil unmountDisk diskN` fails on a busy disc. So mos
+   never destroys filesystem state — the contrast with the old data-loss
+   `--force` is gone; `--force` now only clears Prevent LOCKS (mos_tray.c), it
+   does not fight the filesystem.
 
-   NAME SEMANTICS, by design. mos unmounts the disc currently named `bsd_name`,
-   exactly as `diskutil unmountDisk` does — there is NO identity bind, because
-   the public DA API cannot provide one: DADiskUnmount transmits the NAME and
-   diskarbitrationd re-resolves it by name at request time. (DADiskCreateFromIOMedia
-   is no escape — first-hand in DADisk.c it reads kIOBSDNameKey and delegates to
-   DADiskCreateFromBSDName; the DADiskRef stores only the name.) A `diskN`
-   reassigned in the request window is unmounted as-named, the same residual
-   diskutil ships; the CLI selector gate is the consent mechanism (explicit
-   bsd-node / sole-drive by default, identity selectors opt-in).
+   By NAME (diskutil semantics): DADiskUnmount transmits "diskN" and
+   diskarbitrationd re-resolves it by name at request time. With a GRACEFUL
+   unmount the old wrong-target TOCTOU is HARMLESS — a `diskN` reassigned in the
+   window resolves to a different disc that the unmount either (a) cleanly
+   unmounts if idle, or (b) refuses if busy; neither destroys data. That is why
+   the identity bind, the selector gate, and the veto/funmount machinery are no
+   longer needed (history: AGENTS.md force-unmount ADR chain +
+   doc/research/2026-06-20-force-unmount-veto-funmount-investigation.md).
 
    DADiskUnmount is asynchronous (returns void, delivers via callback — verified
-   against DADisk.h: takes the disk, not a session; options Force=0x00080000,
-   Whole=0x1; success = NULL dissenter). We make it synchronous-from-our-side:
-   deliver the callback on a background queue and block on a semaphore until it
-   fires. The wait is UNBOUNDED on purpose — the callback fires exactly once when
-   the unmount resolves, so the context cannot outlive a late callback (no
-   use-after-free), and a genuinely wedged force-unmount blocks here just as
-   `diskutil` would (the I/O path itself is stuck).
+   against DADisk.h: takes the disk, not a session; option Whole=0x1; success =
+   NULL dissenter, busy = non-NULL dissenter). We make it synchronous-from-our-
+   side: deliver the callback on a background queue and block on a semaphore until
+   it fires.
 
-   KNOWN ISSUE (unbounded wait): DASessionSetDispatchQueue is void/fallible; a
-   silent failure leaves no callback port and the DISPATCH_TIME_FOREVER wait can
-   hang. A bounded fix needs a heap-owned context (a stack-local ctx makes a
-   naive timeout a use-after-return) — a post-tag refinement. */
+   KNOWN ISSUE (unbounded wait, post-tag): DASessionSetDispatchQueue is
+   void/fallible; a silent failure leaves no callback port and the
+   DISPATCH_TIME_FOREVER wait can hang. A bounded fix needs a heap-owned context
+   (a stack-local ctx makes a naive timeout a use-after-return). This is now an
+   ISOLATED hang (the data-loss veto coupling is gone with the force-unmount). */
 bool mos_internal_da_unmount(const char *bsd_name)
 {
     if (!bsd_name || !bsd_name[0]) return false;
@@ -2194,8 +2194,7 @@ bool mos_internal_da_unmount(const char *bsd_name)
         mos_da_unmount_ctx   ctx = { sem, false };
         DASessionSetDispatchQueue(session,
             dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
-        DADiskUnmount(disk,
-                      kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole,
+        DADiskUnmount(disk, kDADiskUnmountOptionWhole,   /* graceful — no Force */
                       mos_internal_da_unmount_cb, &ctx);
         dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
         DASessionSetDispatchQueue(session, NULL);   /* detach before release */
@@ -2223,11 +2222,11 @@ bool mos_internal_da_volume(uint64_t media_id,
     return false;
 }
 
-/* No DiskArbitration linked: there is no unmount path, so a forced eject cannot
+/* No DiskArbitration linked: there is no unmount path, so `tray eject` cannot
    clear a Finder/system mount. Returns false (capability absent), which leaves
-   `tray eject --force` reporting the mount as MOS_ERR_BUSY rather than opening
-   it — the honest degradation for the opt-out build (the consumer unmounts
-   with `diskutil unmountDisk` first, exactly as without --force). */
+   the eject reporting the mount as MOS_ERR_BUSY rather than opening it — the
+   honest degradation for the opt-out build (the consumer unmounts with
+   `diskutil unmountDisk` first). */
 bool mos_internal_da_unmount(const char *bsd_name)
 {
     (void)bsd_name;
@@ -7056,18 +7055,23 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
 
-    /* ONE flow. Every eject grabs exclusive access (in mos_internal_raw_cdb) and issues
-       the CDB; a plain eject reports the result verbatim. --force diverges only
-       on a CLEARABLE failure and then RECONVERGES on the same eject CDB:
+    /* ONE flow, GRACEFUL by design. Every eject grabs exclusive access (in
+       mos_internal_raw_cdb) and issues the CDB. On a CLEARABLE failure the flow
+       clears the blocker and RECONVERGES on the same eject CDB:
 
          - MOS_ERR_BUSY = a Finder/system mount holds exclusive access
            (SCSITaskLib: "media is still mounted"; mos_pure.c maps it,
-           mos_scsi.c static-asserts the constant) -> force-unmount, re-eject.
-         - REFUSED_LOCKED = a basic Prevent lock refused the eject CDB -> clear
-           BOTH Prevent states (basic then persistent, so nothing is left
-           locked when a lock was in the way), re-eject.
+           mos_scsi.c static-asserts the constant) -> GRACEFUL unmount, re-eject.
+           BOTH the default and --force do this; the unmount is NEVER forced, so a
+           busy filesystem (open handles) leaves the mount and surfaces
+           MOS_ERR_BUSY, exactly like `diskutil unmountDisk diskN`. mos never
+           fights the filesystem — it only surfaces the error.
+         - REFUSED_LOCKED = a basic Prevent lock refused the eject CDB. --force
+           ONLY: clear BOTH Prevent states (basic then persistent, so nothing is
+           left locked), re-eject. The DEFAULT returns REFUSED_LOCKED untouched —
+           `--force` means "open past the LOCK", never past the filesystem.
 
-       The one failure --force cannot clear is MOS_ERR_EXCLUSIVE_ACCESS = another
+       The one failure nothing here clears is MOS_ERR_EXCLUSIVE_ACCESS = another
        userland client (no SCSI preempt exists): it falls through and surfaces,
        tray shut. At most two blockers (mount, lock) stack, so the loop is
        bounded at two passes. Each CDB grabs/releases exclusive access per call
@@ -7078,24 +7082,26 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
        only when a lock actually blocked, never issuing a command it can't know
        it needs.) */
     mos_error e = mos_internal_tray_cmd(h, cdb_eject, out, sense);
-    if (!force) return e;
 
     for (int pass = 0; pass < 2; pass++) {
         if (e == MOS_ERR_BUSY) {                          /* Finder/system mount */
-            /* Re-resolve the CURRENT media under h->svc so we unmount the disc
-               actually in THIS drive now — the cached bsd_unit can be stale
-               (opened empty, or a swap since the last query). media gone
-               (bsd_unit < 0) → fail closed (nothing to clear). The unmount is by
-               NAME (diskutil semantics; see the header) — no identity bind,
-               because the daemon re-resolves by name regardless, and the
-               selector gate in cli/tray.c is where the policy lives. */
+            /* GRACEFUL unmount (both default and --force). Re-resolve the CURRENT
+               media under h->svc so we unmount the disc actually in THIS drive
+               now — the cached bsd_unit can be stale (opened empty, or a swap
+               since the last query). media gone (bsd_unit < 0) → fail closed.
+               The unmount is by NAME (diskutil semantics; see mos_da.c) and is
+               NEVER forced, so a busy filesystem or an uncleared mount breaks out
+               and surfaces the original MOS_ERR_BUSY. With a graceful unmount the
+               wrong-target diskN-reuse race is harmless (fails on a busy disc,
+               cleanly unmounts an idle one — no data loss), so no identity bind
+               or selector gate is needed. */
             mos_internal_refresh_media_identity(h);
             char name[24];
             if (h->bsd_unit < 0 ||
                 !mos_bsd_name_format(h->bsd_unit, name, sizeof name) ||
                 !mos_internal_da_unmount(name))
-                break;                                    /* mount uncleared */
-        } else if (e == MOS_OK && *out == MOS_TRAY_REFUSED_LOCKED) {  /* basic Prevent */
+                break;                                    /* busy/uncleared → surface BUSY */
+        } else if (force && e == MOS_OK && *out == MOS_TRAY_REFUSED_LOCKED) {  /* --force: basic Prevent */
             /* Clear both Prevent states so nothing is left locked. A TRANSPORT
                failure (negative) clearing either state means the clear did NOT
                happen, so the "nothing left locked" contract cannot be met —
@@ -7114,7 +7120,7 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
                 break;
             }
         } else {
-            break;   /* DONE, EXCLUSIVE_ACCESS (peer client), or transport — stop */
+            break;   /* DONE; REFUSED_LOCKED on the default path; EXCLUSIVE_ACCESS; transport */
         }
         e = mos_internal_tray_cmd(h, cdb_eject, out, sense);   /* reconverge */
     }

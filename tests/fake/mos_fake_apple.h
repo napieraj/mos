@@ -135,8 +135,12 @@ void mos_fake_set_method_ioreturn(mos_fake_method m, uint32_t io_return);
 void mos_fake_set_exclusive_denied(bool denied);
 
 /* Model a Finder/system mount: ObtainExclusiveAccess returns BUSY until a
-   successful DADiskUnmount clears it — exercises `tray eject --force`. */
+   successful GRACEFUL DADiskUnmount clears it — exercises `tray eject`. */
 void mos_fake_set_mounted_busy(bool busy);
+
+/* Model a BUSY filesystem (open handles): the graceful DADiskUnmount DISSENTS,
+   the mount is NOT cleared, mos surfaces MOS_ERR_BUSY (it never forces). */
+void mos_fake_set_unmount_refused(bool refused);
 
 /* Make ReleaseExclusiveAccess return non-success AND keep the lock held
    (lock_balance is NOT decremented) — models a kernel that does not confirm
