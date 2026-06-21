@@ -167,8 +167,8 @@ check_doc() {
     expected="$1"; desc="$2"; doc="$3"
     got="$(printf '%s' "$doc" | python3 "$FIELD" schema 2>/dev/null)"
     if [ -z "$got" ]; then
-        [ "$HAVE_SCHEMA" = 1 ] && bad "$desc: output is not a JSON document with a schema field" \
-                               || skp "$desc schema" "no validator"
+        if [ "$HAVE_SCHEMA" = 1 ]; then bad "$desc: output is not a JSON document with a schema field"
+        else skp "$desc schema" "no validator"; fi
         return 1
     fi
     if [ "$HAVE_SCHEMA" != 1 ]; then skp "$desc schema ($got)" "no validator"; return 0; fi
@@ -181,10 +181,11 @@ check_doc() {
     else bad "$desc: expected $expected, got $got (a valid but unexpected document type)"; return 1; fi
 }
 
-# pull a field from the first drive of `mos list --json`
+# pull a field from the first drive of `mos list --json`. Uses python3 -c so the
+# piped JSON reaches stdin (a heredoc here would override the pipe — SC2259).
 list_field() {
     [ -n "$FIELD" ] || return 1
-    "$MOS" list --json 2>/dev/null | python3 - "$1" <<'PY' 2>/dev/null
+    "$MOS" list --json 2>/dev/null | python3 -c '
 import sys, json
 try: d = json.load(sys.stdin)
 except Exception: sys.exit(1)
@@ -192,7 +193,7 @@ ds = d.get("drives", [])
 if not ds: sys.exit(1)
 v = ds[0].get(sys.argv[1])
 print("" if v is None else v)
-PY
+' "$1" 2>/dev/null
 }
 
 # ---- cleanup: never leave the tray locked or open ----------------------------
