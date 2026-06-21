@@ -23,10 +23,16 @@ TEST(tray_good_status_is_done)
 
 TEST(tray_locked_eject_is_refused_locked)
 {
-    /* CHECK CONDITION + 5/53/02 MEDIA REMOVAL PREVENTED: a basic Prevent
-       lock refusing an eject/close (T10 04-349r1 Table 9). */
+    /* CHECK CONDITION + 53/02 MEDIA REMOVAL PREVENTED: a tray Prevent lock
+       refusing an eject/close (T10 04-349r1 Table 9). The sense KEY is
+       contextual and does NOT gate the verdict — 05 (ILLEGAL REQUEST) with
+       media present, 02 (NOT READY) on an EMPTY drive (LG WH16NS60 hardware,
+       2026-06-21). Both classify refused_locked on the ASC/ASCQ alone. */
     EXPECT_EQ(mos_internal_tray_classify(MOS_SCSI_STATUS_CHECK_CONDITION,
                                          0x05, 0x53, 0x02),
+              MOS_TRAY_REFUSED_LOCKED);
+    EXPECT_EQ(mos_internal_tray_classify(MOS_SCSI_STATUS_CHECK_CONDITION,
+                                         0x02, 0x53, 0x02),   /* empty drive */
               MOS_TRAY_REFUSED_LOCKED);
     return 0;
 }
@@ -70,6 +76,7 @@ TEST(tray_outcome_tokens_are_stable)
     EXPECT_STREQ(mos_tray_outcome_description(MOS_TRAY_DONE),           "done");
     EXPECT_STREQ(mos_tray_outcome_description(MOS_TRAY_REFUSED_LOCKED), "refused_locked");
     EXPECT_STREQ(mos_tray_outcome_description(MOS_TRAY_REFUSED_OTHER),  "refused_other");
+    EXPECT_STREQ(mos_tray_outcome_description(MOS_TRAY_ALREADY_LOCKED), "already_locked");
     return 0;
 }
 

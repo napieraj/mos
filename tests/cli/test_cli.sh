@@ -460,8 +460,10 @@ assert_contains "tray no-action names the verbs"    "$ERR" "eject"
 run_mos tray bogus --bsd disk0
 assert_ec       "tray unknown action exits 64"       "64"   "$EC"
 assert_contains "tray unknown action diagnostic"     "$ERR" "Recognized: eject"
-run_mos tray eject --persistent --bsd disk0
-assert_ec       "tray eject + --persistent rejected"  "64"  "$EC"
+# --persistent was retired (lock is persistent by default); it is now an
+# unknown option, still EX_USAGE.
+run_mos tray lock --persistent --bsd disk0
+assert_ec       "retired --persistent is unknown (64)" "64"  "$EC"
 run_mos tray lock --force --bsd disk0
 assert_ec       "tray lock + --force rejected"        "64"  "$EC"
 run_mos state --force

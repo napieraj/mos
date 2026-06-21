@@ -472,7 +472,7 @@ leaves the tray locked (cleanup trap).
 scripts/hw-smoke.sh            # all phases (prompts for disc swaps)
 scripts/hw-smoke.sh static     # build/pure-suite/schema/usage — no hardware
 scripts/hw-smoke.sh empty      # no-disc verbs + selectors + probe
-scripts/hw-smoke.sh tray       # eject/close/lock/unlock/persistent/force
+scripts/hw-smoke.sh tray       # eject/close/lock/unlock/force
 scripts/hw-smoke.sh disc       # per-media-type: state/metadata/capacity/eject
 scripts/hw-smoke.sh watch      # event stream + watch-vs-eject contention
 ```

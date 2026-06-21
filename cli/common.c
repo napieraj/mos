@@ -10,7 +10,6 @@ uint64_t    opt_registry = 0;     /* 0 = unset; >= 2^32+256 when set */
 const char *opt_tray_action = NULL; /* tray sub-verb; NULL = missing */
 bool        flag_json   = false;
 bool        flag_force  = false;  /* tray eject --force */
-bool        flag_persistent = false; /* tray lock/unlock --persistent */
 bool        flag_dump   = false;  /* probe --dump one-shot DR capture */
 bool        flag_capture = false; /* probe --capture fixed-menu raw MMC capture */
 

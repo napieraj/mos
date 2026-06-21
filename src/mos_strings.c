@@ -46,6 +46,7 @@ const char *mos_tray_outcome_description(mos_tray_outcome o)
     switch (o) {
         case MOS_TRAY_DONE:           return "done";
         case MOS_TRAY_REFUSED_LOCKED: return "refused_locked";
+        case MOS_TRAY_ALREADY_LOCKED: return "already_locked";
         /* REFUSED_OTHER also the default; -Wswitch still fires on a new one. */
         case MOS_TRAY_REFUSED_OTHER: default: return "refused_other";
     }

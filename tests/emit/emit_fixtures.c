@@ -212,20 +212,28 @@ int main(int argc, char **argv)
     }
 
     /* tray: control verbs. No query — just open + issue the raw CDB, whose
-       outcome the fake scripts. Covers the three schema conditionals:
-       eject (force boolean, persistent null), lock --persistent (persistent
-       boolean), and a refused_locked outcome carrying a sense object. */
+       outcome the fake scripts. Covers the schema conditionals: eject (force
+       boolean), lock (force null, outcome done), `lock` on a mounted disc
+       (already_locked), and a refused_locked / refused_other outcome carrying a
+       sense object. */
     if (strcmp(verb, "tray") == 0 && strcmp(scn, "eject_done") == 0) {
         mos_fake_reset();
         opt_tray_action = "eject";
         mos_fake_set_raw_reply(0x00 /*GOOD*/, NULL, 0, 0, NULL);
         return mos_cli_run_tray();
     }
-    if (strcmp(verb, "tray") == 0 && strcmp(scn, "lock_persistent") == 0) {
+    if (strcmp(verb, "tray") == 0 && strcmp(scn, "lock") == 0) {
         mos_fake_reset();
-        opt_tray_action   = "lock";
-        flag_persistent = true;
+        opt_tray_action = "lock";
         mos_fake_set_raw_reply(0x00 /*GOOD*/, NULL, 0, 0, NULL);
+        return mos_cli_run_tray();
+    }
+    if (strcmp(verb, "tray") == 0 && strcmp(scn, "already_locked") == 0) {
+        /* `lock` on a MOUNTED disc: ObtainExclusiveAccess BUSY, but a mounted
+           disc is already removal-locked by macOS — already_locked, a success. */
+        mos_fake_reset();
+        opt_tray_action = "lock";
+        mos_fake_set_mounted_busy(true);
         return mos_cli_run_tray();
     }
     if (strcmp(verb, "tray") == 0 && strcmp(scn, "refused_locked") == 0) {
@@ -237,11 +245,10 @@ int main(int argc, char **argv)
         return mos_cli_run_tray();
     }
     if (strcmp(verb, "tray") == 0 && strcmp(scn, "refused_other") == 0) {
-        /* A drive without Persistent Prevent rejecting 0x03 with 5/24/00 —
-           exercises the now-populated sense object on a non-lock refusal. */
+        /* A drive without Persistent Prevent rejecting the lock's 0x03 with
+           5/24/00 — exercises the populated sense object on a non-lock refusal. */
         mos_fake_reset();
-        opt_tray_action   = "lock";
-        flag_persistent = true;
+        opt_tray_action = "lock";
         uint8_t sense[18] = {0};
         sense[0] = 0x70; sense[2] = 0x05; sense[12] = 0x24; sense[13] = 0x00;
         mos_fake_set_raw_reply(0x02 /*CHECK CONDITION*/, NULL, 0, 0, sense);

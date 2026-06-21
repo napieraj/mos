@@ -4,7 +4,6 @@
   "registry_id": 4295021843,
   "action": "lock",
   "force": true,
-  "persistent": true,
   "outcome": "done",
   "sense": null
 }

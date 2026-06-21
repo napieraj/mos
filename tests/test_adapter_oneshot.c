@@ -730,13 +730,9 @@ static int pin_tray_cdb(mos_handle_t *h, mos_error (*call)(mos_handle_t *,
 static mos_error call_close(mos_handle_t *h, mos_tray_outcome *o)
 { return mos_tray_close(h, o, NULL); }
 static mos_error call_lock(mos_handle_t *h, mos_tray_outcome *o)
-{ return mos_tray_lock(h, false, o, NULL); }
-static mos_error call_lock_p(mos_handle_t *h, mos_tray_outcome *o)
-{ return mos_tray_lock(h, true, o, NULL); }
+{ return mos_tray_lock(h, o, NULL); }
 static mos_error call_unlock(mos_handle_t *h, mos_tray_outcome *o)
-{ return mos_tray_unlock(h, false, o, NULL); }
-static mos_error call_unlock_p(mos_handle_t *h, mos_tray_outcome *o)
-{ return mos_tray_unlock(h, true, o, NULL); }
+{ return mos_tray_unlock(h, o, NULL); }
 static mos_error call_eject(mos_handle_t *h, mos_tray_outcome *o)
 { return mos_tray_eject(h, false, o, NULL); }
 
@@ -750,19 +746,18 @@ TEST(adapter_tray_cdbs_pinned_byte_for_byte)
     /* START STOP UNIT 0x1B: eject LoEj1 START0 -> 0x02, close -> 0x03. */
     static const uint8_t eject[6]  = { 0x1B, 0, 0, 0, 0x02, 0 };
     static const uint8_t close_[6] = { 0x1B, 0, 0, 0, 0x03, 0 };
-    /* PREVENT ALLOW 0x1E byte4 {PERSISTENT,PREVENT} (04-349r1 Table 8). */
-    static const uint8_t lock_[6]    = { 0x1E, 0, 0, 0, 0x01, 0 };
-    static const uint8_t lock_p[6]   = { 0x1E, 0, 0, 0, 0x03, 0 };
-    static const uint8_t unlock_[6]  = { 0x1E, 0, 0, 0, 0x00, 0 };
-    static const uint8_t unlock_p[6] = { 0x1E, 0, 0, 0, 0x02, 0 };
+    /* PREVENT ALLOW 0x1E byte4 {PERSISTENT,PREVENT} (04-349r1 Table 8). lock
+       sets the PERSISTENT Prevent (0x03); unlock clears BOTH (0x00 then 0x02),
+       so its LAST CDB — the one mos_fake_last_cdb returns — is the persistent
+       ALLOW 0x02 (unlock-issues-both is pinned separately). */
+    static const uint8_t lock_p[6]      = { 0x1E, 0, 0, 0, 0x03, 0 };
+    static const uint8_t unlock_last[6] = { 0x1E, 0, 0, 0, 0x02, 0 };
 
     int rc = 0;
-    rc |= pin_tray_cdb(h, call_eject,    eject,    MOS_TRAY_DONE);
-    rc |= pin_tray_cdb(h, call_close,    close_,   MOS_TRAY_DONE);
-    rc |= pin_tray_cdb(h, call_lock,     lock_,    MOS_TRAY_DONE);
-    rc |= pin_tray_cdb(h, call_lock_p,   lock_p,   MOS_TRAY_DONE);
-    rc |= pin_tray_cdb(h, call_unlock,   unlock_,  MOS_TRAY_DONE);
-    rc |= pin_tray_cdb(h, call_unlock_p, unlock_p, MOS_TRAY_DONE);
+    rc |= pin_tray_cdb(h, call_eject,    eject,       MOS_TRAY_DONE);
+    rc |= pin_tray_cdb(h, call_close,    close_,      MOS_TRAY_DONE);
+    rc |= pin_tray_cdb(h, call_lock,     lock_p,      MOS_TRAY_DONE);
+    rc |= pin_tray_cdb(h, call_unlock,   unlock_last, MOS_TRAY_DONE);
     mos_close(h);
     return rc;
 }
@@ -905,16 +900,16 @@ TEST(adapter_tray_refused_other_carries_its_sense)
     mos_handle_t *h = mos_open_by_index(1, &err);
     EXPECT(h != NULL);
 
-    /* A drive without Persistent Prevent rejects 0x03 with 5/24/00 (INVALID
-       FIELD IN CDB) — refused_other, and the sense triple must reach the
-       caller (the gap Plan A closed). */
+    /* A drive without Persistent Prevent rejects the lock's 0x03 with 5/24/00
+       (INVALID FIELD IN CDB) — refused_other, and the sense triple must reach
+       the caller (the gap Plan A closed). */
     uint8_t sense[18] = {0};
     sense[0] = 0x70; sense[2] = 0x05; sense[12] = 0x24; sense[13] = 0x00;
     mos_fake_set_raw_reply(0x02 /*CHECK CONDITION*/, NULL, 0, 0, sense);
 
     mos_tray_outcome out = (mos_tray_outcome)-1;
     uint8_t triple[3] = {0};
-    EXPECT_EQ(MOS_OK, mos_tray_lock(h, /*persistent=*/true, &out, triple));
+    EXPECT_EQ(MOS_OK, mos_tray_lock(h, &out, triple));
     EXPECT_EQ(MOS_TRAY_REFUSED_OTHER, out);
     EXPECT_EQ(0x05, triple[0]);
     EXPECT_EQ(0x24, triple[1]);
@@ -960,17 +955,63 @@ TEST(adapter_tray_exclusive_denied_is_negative_error)
     EXPECT(h != NULL);
 
     /* Another client holds the drive: ObtainExclusiveAccess fails, so the
-       verb is a transport failure (negative), not an answered refusal. */
+       verb is a transport failure (negative), not an answered refusal. A peer
+       client (EXCLUSIVE_ACCESS) is NOT translated to already_locked — only a
+       mount (BUSY) is, since only a mount implies the OS removal lock. */
     mos_fake_set_exclusive_denied(true);
     mos_tray_outcome out = MOS_TRAY_DONE;
     uint8_t triple[3] = { 0xFF, 0xFF, 0xFF };
-    mos_error e = mos_tray_lock(h, false, &out, triple);
+    mos_error e = mos_tray_lock(h, &out, triple);
     EXPECT(e != MOS_OK);
     EXPECT_EQ(MOS_ERR_EXCLUSIVE_ACCESS, e);
     /* Transport failure zeroes the sense out-param (no command answered). */
     EXPECT_EQ(0, triple[0]);
     EXPECT_EQ(0, triple[1]);
     EXPECT_EQ(0, triple[2]);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_tray_lock_on_mounted_is_already_locked)
+{
+    /* `lock` on a MOUNTED disc: ObtainExclusiveAccess returns BUSY (media still
+       mounted), but a mounted disc is already removal-locked by macOS — the
+       requested state already holds, so report ALREADY_LOCKED (a success), not
+       MOS_ERR_BUSY. */
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    mos_fake_set_mounted_busy(true);
+    mos_tray_outcome out = (mos_tray_outcome)-1;
+    EXPECT_EQ(MOS_OK, mos_tray_lock(h, &out, NULL));
+    EXPECT_EQ(MOS_TRAY_ALREADY_LOCKED, out);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_tray_unlock_clears_both_states)
+{
+    /* unlock issues basic ALLOW 0x00 then persistent ALLOW 0x02, so the tray
+       ends unlocked whichever state held it. Model a locked drive, unlock, then
+       confirm an eject is no longer refused. */
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    mos_fake_set_prevent_locked(true);
+    mos_tray_outcome out = (mos_tray_outcome)-1;
+    EXPECT_EQ(MOS_OK, mos_tray_unlock(h, &out, NULL));
+    EXPECT_EQ(MOS_TRAY_DONE, out);
+
+    /* The lock is cleared: an eject now succeeds instead of refused_locked. */
+    out = (mos_tray_outcome)-1;
+    EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/false, &out, NULL));
+    EXPECT_EQ(MOS_TRAY_DONE, out);
     EXPECT_EQ(0, mos_fake_lock_balance());
     mos_close(h);
     return 0;
@@ -1066,6 +1107,8 @@ int main(void)
     RUN(adapter_tray_locked_eject_classifies_refused_locked);
     RUN(adapter_tray_refused_other_carries_its_sense);
     RUN(adapter_tray_exclusive_denied_is_negative_error);
+    RUN(adapter_tray_lock_on_mounted_is_already_locked);
+    RUN(adapter_tray_unlock_clears_both_states);
     RUN(adapter_raw_cdb_release_failure_poisons_handle);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);

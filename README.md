@@ -196,22 +196,23 @@ mos tray eject 1                 # graceful unmount (if mounted) + eject
 mos tray eject disk4 --force     # also clear a COLD Prevent LOCK (deliberately
                                  #   locked, unmounted); never forces the filesystem
 mos tray close 1
-mos tray lock 1                  # prevent removal until an unlock
-mos tray lock 1 --persistent     # survives process exit — an operator eject
-                                 #   becomes an event, not a retraction
-mos tray unlock 1                # add --persistent to release a persistent lock
+mos tray lock 1                  # durable (persistent) removal lock on an idle
+                                 #   drive; mounted disc → already_locked (a no-op
+                                 #   success — macOS already locked it on mount)
+mos tray unlock 1                # clear the lock (both Prevent states)
 ```
 
 `--json` emits `mos.tray.v1` with an `outcome`: `done`, `refused_locked` (an
-eject hit a lock — a reported fact, still exit 0), or `refused_other` (carries
-the SCSI `sense` triple). A plain eject **gracefully unmounts** a mounted disc
-first (exactly like `diskutil unmountDisk diskN` / `drutil eject`) and then
-ejects; if the filesystem is **busy** (open file handles) the unmount fails and
-the eject returns busy (exit 75) — `mos` **never** forces the filesystem, so it
-never kills your open files. (Close the files, or `diskutil unmountDisk` first.)
-macOS arms a tray Prevent lock when it mounts a disc and that lock survives the
-unmount, so a plain eject also **clears that OS mount-lock** after its own
-unmount — ejecting a mounted disc Just Works, no `--force` needed.
+eject hit a lock — a reported fact, still exit 0), `refused_other` (carries the
+SCSI `sense` triple), or `already_locked` (see `lock` below). A plain eject
+**gracefully unmounts** a mounted disc first (exactly like `diskutil unmountDisk
+diskN` / `drutil eject`) and then ejects; if the filesystem is **busy** (open
+file handles) the unmount fails and the eject returns busy (exit 75) — `mos`
+**never** forces the filesystem, so it never kills your open files. (Close the
+files, or `diskutil unmountDisk` first.) macOS arms a tray Prevent lock when it
+mounts a disc and that lock survives the unmount, so a plain eject also **clears
+that OS mount-lock** after its own unmount — ejecting a mounted disc Just Works,
+no `--force` needed.
 
 `--force` (eject only) extends the lock-clearing to a **COLD** lock — a
 deliberately-locked idle drive (a robot's `mos tray lock`) with no mount in
@@ -221,13 +222,20 @@ the filesystem — a busy disc still reports busy under `--force`. The one block
 neither path can clear is another program holding the drive exclusively
 (`outcome: exclusive_access`).
 
-A lock **persists past the process** — any later
-`mos tray unlock` recovers it. Lock several drives with a loop over `mos list`
-(one `outcome` and exit code per drive):
+`tray lock` sets the **persistent** Prevent state — the durable lock that
+survives an I/O-nexus loss (e.g. a USB bus reset), which is what a fire-and-
+forget single-shot lock wants; `tray unlock` clears **both** Prevent states so
+the tray ends unlocked. A lock **persists past the process** — any later `mos
+tray unlock` recovers it. Lock/unlock act on **idle or unmounted** drives: on a
+**mounted** disc the PREVENT command can't take exclusive access, but the disc
+is already removal-locked by macOS — so `lock` reports `already_locked` (a
+success), and `unlock` reports busy with a hint to `tray eject` (which releases
+it). Lock several idle drives with a loop over `mos list` (one `outcome` and
+exit code per drive):
 
 ```sh
 for id in $(mos list --json | jq '.drives[].registry_id'); do
-    mos tray lock "$id" --persistent
+    mos tray lock "$id"
 done
 ```
 

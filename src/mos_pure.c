@@ -99,8 +99,15 @@ bool mos_internal_status_is_contended(uint32_t status)
 mos_tray_outcome mos_internal_tray_classify(uint32_t scsi_status,
                                             uint8_t sk, uint8_t asc, uint8_t ascq)
 {
+    (void)sk;   /* the sense KEY is deliberately not consulted — see below */
     if (scsi_status == MOS_SCSI_STATUS_GOOD)        return MOS_TRAY_DONE;
-    if (sk == 0x05 && asc == 0x53 && ascq == 0x02)  return MOS_TRAY_REFUSED_LOCKED;
+    /* 53/02 = MEDIUM REMOVAL PREVENTED: a tray Prevent lock refused the
+       eject/close. The sense KEY is contextual and must NOT gate this — the
+       drive reports 05 (ILLEGAL REQUEST) when media is present but 02 (NOT
+       READY) on an EMPTY drive (LG WH16NS60, 2026-06-21: a `tray lock` then
+       `tray eject` with no media answered 02/53/02). So key refused_locked on
+       the ASC/ASCQ alone, the spec's unambiguous "removal prevented" code. */
+    if (asc == 0x53 && ascq == 0x02)                return MOS_TRAY_REFUSED_LOCKED;
     return MOS_TRAY_REFUSED_OTHER;
 }
 

@@ -10,7 +10,6 @@
     "registry_id",
     "action",
     "force",
-    "persistent",
     "outcome",
     "sense"
   ],
@@ -38,17 +37,13 @@
       "type": ["boolean", "null"],
       "description": "eject only (null on every other action): true when --force was requested. Every eject GRACEFULLY unmounts a mounted disc first (DADiskUnmount, Whole, NOT Force) and then ejects; mos NEVER forces the filesystem, so a busy volume (open file handles) surfaces as mos.error.v1 busy on both the default and --force. macOS arms a tray Prevent lock when it mounts a disc and that lock survives the unmount, so the DEFAULT eject clears both Prevent states after its own unmount and ejects (Finder/drutil semantics) — that OS mount-lock is not a deliberate one. --force extends the lock-clearing to a COLD lock: a deliberately-locked idle drive with no mount in play (a robot's tray lock), which the default eject returns as outcome refused_locked. The one blocker neither clears is another userland client holding exclusive access (no SCSI preempt): mos.error.v1 code exclusive_access."
     },
-    "persistent": {
-      "type": ["boolean", "null"],
-      "description": "lock/unlock only (null on every other action): selects the PERSISTENT bit (04-349r1 Table 8). lock true sets the Persistent Prevent state (byte4 0x03 — the robot-grade lock: operator eject button becomes a GESN EjectRequest event); false sets the basic Prevent state (0x01). unlock must match the lock being released — the two prevent states are independent (0x00 clears basic, 0x02 clears persistent)."
-    },
     "outcome": {
-      "enum": ["done", "refused_locked", "refused_other"],
-      "description": "done = command completed GOOD. refused_locked = CHECK CONDITION 5/53/02 MEDIA REMOVAL PREVENTED (an eject/close hit a Prevent lock — a reported fact, not a CLI failure; on the default eject this is a COLD deliberate lock, since the OS mount-lock is auto-cleared after the graceful unmount). refused_other = any other answered CHECK CONDITION (e.g. a drive without Persistent Prevent support rejecting --persistent with 5/24/00)."
+      "enum": ["done", "refused_locked", "refused_other", "already_locked"],
+      "description": "done = command completed GOOD. refused_locked = CHECK CONDITION 53/02 MEDIA REMOVAL PREVENTED — an eject/close hit a Prevent lock (a reported fact, not a CLI failure; on the default eject this is a COLD deliberate lock, since the OS mount-lock is auto-cleared after the graceful unmount). The sense KEY is contextual and does not gate this: 05 (ILLEGAL REQUEST) with media present, 02 (NOT READY) on an empty drive. refused_other = any other answered CHECK CONDITION (e.g. a drive without Persistent Prevent support rejecting the persistent state with 5/24/00). already_locked = `lock` on a MOUNTED disc: the lock CDB can't issue (media still mounted) but a mounted disc is already removal-locked by macOS, so the requested state already holds — a success, not a busy error."
     },
     "sense": {
       "type": ["object", "null"],
-      "description": "SCSI sense triple the drive returned on a refusal, or null. Populated for any answered refusal — refused_locked is always 5/53/02; refused_other carries whatever the drive reported (e.g. 5/24/00 INVALID FIELD IN CDB for a drive without Persistent Prevent support), so a consumer can diagnose a non-lock refusal. Always null on done.",
+      "description": "SCSI sense triple the drive returned on a refusal, or null. Populated for any answered refusal — refused_locked is always asc/ascq 53/02 (the sense key is 05 with media present, 02 on an empty drive); refused_other carries whatever the drive reported (e.g. 5/24/00 INVALID FIELD IN CDB for a drive without Persistent Prevent support), so a consumer can diagnose a non-lock refusal. Always null on done.",
       "required": ["key", "asc", "ascq"],
       "additionalProperties": false,
       "properties": {
@@ -65,22 +60,13 @@
         "properties": { "action": { "const": "eject" } },
         "required": ["action"]
       },
-      "then": { "properties": { "force": { "type": "boolean" }, "persistent": { "const": null } } },
+      "then": { "properties": { "force": { "type": "boolean" } } },
       "else": { "properties": { "force": { "const": null } } }
     },
     {
-      "title": "persistent is a boolean only for lock/unlock",
+      "title": "done / already_locked carry no sense",
       "if": {
-        "properties": { "action": { "enum": ["lock", "unlock"] } },
-        "required": ["action"]
-      },
-      "then": { "properties": { "persistent": { "type": "boolean" } } },
-      "else": { "properties": { "persistent": { "const": null } } }
-    },
-    {
-      "title": "done carries no sense",
-      "if": {
-        "properties": { "outcome": { "const": "done" } },
+        "properties": { "outcome": { "enum": ["done", "already_locked"] } },
         "required": ["outcome"]
       },
       "then": { "properties": { "sense": { "const": null } } }

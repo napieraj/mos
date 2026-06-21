@@ -26,7 +26,6 @@ extern const char *opt_tray_action; /* tray sub-verb eject|close|lock|unlock;
 extern bool        flag_json;
 extern bool        flag_force;     /* tray eject --force: also clear a Prevent
                                       LOCK in the way (never forces the fs) */
-extern bool        flag_persistent;/* tray lock/unlock --persistent */
 extern bool        flag_dump;     /* probe --dump one-shot DR capture */
 extern bool        flag_capture;  /* probe --capture: fixed-menu raw MMC capture */
 extern const char *progname;

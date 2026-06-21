@@ -1643,3 +1643,95 @@ clear is a harmless no-op — both ALLOWs answer GOOD on an unlocked drive), or 
 that refuses the ALLOW (5/24/00) — surfaced as the drive's own answer, the
 re-eject being the real check. Each lands as a fixture + dated note with a
 generic gate, never a per-device special-case.
+
+## Finding + ADR: a locked-eject refusal is 53/02 under sense key 02 (empty) as
+## well as 05 (media present) — the tray classifier keys on ASC/ASCQ, not the
+## sense key (2026-06-21, third hardware run: WH16NS60 empty-drive lock)
+
+`mos_internal_tray_classify` (`src/mos_pure.c`) read `sk == 0x05 && asc == 0x53 &&
+ascq == 0x02 → REFUSED_LOCKED`, i.e. it required sense key 05 (ILLEGAL REQUEST).
+A hardware run (LG WH16NS60, libredrive, OWC enclosure) with NO media falsified
+the key requirement: `mos tray lock` (DONE on the empty drive — exclusive access
+is free with no mount) then `mos tray eject` answered CHECK CONDITION **02/53/02**
+(NOT READY / MEDIA REMOVAL PREVENTED), which fell through to `refused_other` —
+wrong: the tray WAS locked (the user just locked it; `unlock` then `eject`
+succeeded). The drive reports the SAME removal-prevented ASC/ASCQ (53/02) but
+under sense key **02 (NOT READY)** because the drive is empty, vs **05 (ILLEGAL
+REQUEST)** when media is present.
+
+**Rebuttal (narrow, spec-grounded).** 53/02 = MEDIUM REMOVAL PREVENTED is the
+spec's unambiguous "the Prevent lock refused removal" signal; the sense KEY is
+contextual (NOT READY when empty, ILLEGAL REQUEST with media) and must not gate
+the verdict. The classifier now keys `refused_locked` on `asc == 0x53 && ascq ==
+0x02` alone — a generic ASC/ASCQ gate, not the observed device's key. Near-miss
+codes stay `refused_other` (53/01, 53/00, 5/24/00, 02/3A/00 — pinned in
+`tests/test_tray.c`), and a GOOD status still short-circuits to DONE before any
+sense is read. This also matters for `tray eject --force` on an empty locked
+drive: the force path clears the lock only when the outcome is `refused_locked`,
+so before this fix `--force` could not clear an empty-drive lock either.
+
+**Scope unchanged.** Pure classifier only — no command surface, no new CDB, no
+privilege change. Pinned by `tray_locked_eject_is_refused_locked` (now asserts
+both 05/53/02 and 02/53/02).
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+drive that reports a locked eject under yet another ASC/ASCQ (not 53/02) — that
+would land as a fixture + dated note, and the gate would widen to the new code,
+never to a per-device sense-key special-case.
+
+## ADR: `--persistent` retired — `lock` is the persistent Prevent, `unlock`
+## clears both; `lock` on a mounted disc is `already_locked` (2026-06-21)
+
+Hardware exploration of the tray verbs surfaced that the basic/persistent
+`--persistent` flag carried no real CLI use, and that `lock`/`unlock` on a
+MOUNTED disc were unhelpful (BUSY). This entry records the resulting
+simplification (maintainer decision, 2026-06-21). It narrows the tray-control
+feasibility design (`doc/research/2026-06-13-tray-control-feasibility.md`, which
+specified a `--persistent` flag and a basic-default lock) on the merits.
+
+**What changed.**
+- **`mos tray lock` sets the PERSISTENT Prevent (0x03) only**; the basic Prevent
+  (0x01) is no longer issued, and the `--persistent` flag is removed. Rationale:
+  a single-shot, fire-and-forget CLI lock wants the durable state that survives
+  an I_T-nexus loss (e.g. a USB bus reset on an external enclosure) — basic
+  Prevent does not, and has no CLI use case that persistent doesn't cover. A
+  drive without the Persistent Prevent state answers `refused_other` (5/24/00),
+  reported honestly (no silent downgrade to basic — that would be the
+  device-special-casing the hardware-role ADR forbids; basic-as-fallback is a
+  fresh argument if a PDTE-less drive ever shows up).
+- **`mos tray unlock` clears BOTH Prevent states** (basic ALLOW 0x00 then
+  persistent ALLOW 0x02) so the tray ends unlocked whichever state held it. A
+  transport failure on either is surfaced; an ANSWERED refusal on the persistent
+  ALLOW (a PDTE-less drive's 5/24/00) is tolerated — the basic ALLOW already
+  cleared what such a drive can hold. The `--persistent` flag is removed here
+  too (it is now unconditional).
+- **`mos tray lock` on a MOUNTED disc returns `already_locked` (a SUCCESS), not
+  `MOS_ERR_BUSY`.** The lock CDB can't take exclusive access while mounted
+  (`ObtainExclusiveAccess` → BUSY = "media is still mounted", SCSITaskLib.h), but
+  macOS arms a tray Prevent when it mounts a disc (the 2026-06-21 mount-lock
+  finding), so the requested state already holds. A new `MOS_TRAY_ALREADY_LOCKED`
+  outcome / `already_locked` token carries this. A peer client holding exclusive
+  access (`MOS_ERR_EXCLUSIVE_ACCESS`) is NOT translated — only a mount (BUSY)
+  implies the OS lock. `mos tray unlock` on a mounted disc stays `MOS_ERR_BUSY`
+  (it genuinely can't unlock) with a CLI hint to `tray eject` (which releases it).
+
+**Why lock/unlock retain a point (the question this answers).** They are for
+IDLE and UNMOUNTED drives — lock an empty tray or a blank/unmounted disc so a
+stray operator eject can't fire the tray (the ripping-robot case, ROADMAP). For
+MOUNTED discs the OS owns the lock and `tray eject` releases it, so the verbs
+correctly defer there (`already_locked` for lock, the eject hint for unlock).
+
+**Surface / API.** Public: `mos_tray_lock(h,out,sense)` and
+`mos_tray_unlock(h,out,sense)` drop the `bool persistent` parameter (pre-tag,
+mutable). Schema: `mos.tray.v1` drops the `persistent` field (and its `allOf`
+clause) and adds `already_locked` to the `outcome` enum — pre-tag mutable-in-
+place, the C↔schema drift guard keeps the enum in lockstep with
+`mos_tray_outcome_description()`. No new command surface, no new CDB: the
+opcodes are unchanged (0x1E ALLOW 0x00/0x02, LOCK 0x03), `mos_internal_raw_cdb`
+stays the sole exclusive-access site, one-of-four count untouched.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+drive whose mounted-disc Prevent does NOT hold (then `already_locked` would
+over-claim) — but a mounted optical disc cannot be operator-ejected under macOS,
+so the tray is held regardless; if a capture ever shows a mounted disc with an
+ejectable tray, that lands as a fixture + dated note here before any change.
