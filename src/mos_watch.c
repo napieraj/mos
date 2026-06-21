@@ -93,14 +93,19 @@ struct mos_watch {
     char revision[5];
 
     /* Drive Unit Serial Number (INQUIRY VPD 0x80), grabbed ONCE per session
-       on a probe handle and cached for the watch's life. serial_grabbed flips
-       true on the first successful read so later probes stop trying. serial[64]
-       matches mos_handle's serial_str width (SPC max is 255; 64 truncates
-       safely — the chosen buffer everywhere). Empty (serial[0]==0) until the
-       first free/not-ready poll lands the read; events carry NULL until then,
-       the cached string after. */
+       on a probe handle and cached for the watch's life. serial_resolved flips
+       true once the probe reaches a TERMINAL outcome — a successful read OR an
+       answered absence (the drive replied and has no serial page; a STATIC
+       fact). A TRANSIENT failure (lock contended, timeout, media mid-swap)
+       leaves it false to retry, so the first free/not-ready poll still lands a
+       real serial. Resolving an answered absence is what stops the optional
+       exclusive INQUIRY from re-firing every poll (serial_probe_terminal).
+       serial[64] matches mos_handle's serial_str width (SPC max is 255; 64
+       truncates safely — the chosen buffer everywhere). Empty (serial[0]==0)
+       until a read lands; events carry NULL until then, the cached string
+       after. */
     char serial[64];
-    bool serial_grabbed;
+    bool serial_resolved;
 
     /* ---- Watch-all mode -------------------------------------------- *
      * all_mode selects the multiplexer: `all` is the pure fan-in over
@@ -115,14 +120,14 @@ struct mos_watch {
         char     vendor[9];
         char     product[17];
         char     revision[5];
-        /* Per-slot serial: same grab-once-per-session contract as the
+        /* Per-slot serial: same resolve-once-per-session contract as the
            single-target fields above. Slots are RECYCLED — a removed device
            frees its slot and watch_all_add_device reclaims any inactive one —
            so these are NOT fresh per device by themselves; that function
-           memsets the slot on claim, which is what resets serial_grabbed and
+           memsets the slot on claim, which is what resets serial_resolved and
            prevents the prior device's serial from carrying over. */
         char     serial[64];
-        bool     serial_grabbed;
+        bool     serial_resolved;
     }                    slots[MOS_WATCH_ALL_CAP];
     uint32_t             stable_poll_ms;
     uint32_t             transition_poll_ms;
@@ -206,6 +211,31 @@ static uint64_t stream_epoch_wall_ms(void)
    pointer, so "forgot one" is the default. A new borrowed pointer on
    mos_watch_event / mos_state_result needs watch-lifetime backing and a
    replacement below. (bsd_unit is a value, never replaced.) */
+/* Should the serial probe stop retrying after this mos_query_serial outcome?
+   A serial is a STATIC drive fact, so an ANSWERED absence (the drive replied,
+   no VPD 0x80 / no serial -> MOS_ERR_IO or MOS_ERR_UNSUPPORTED) is permanent
+   and resolves; only a TRANSIENT failure (lock contended by a mount or another
+   client, transport timeout, media mid-swap, resource pressure) is worth
+   retrying. Resolving an answered absence is what stops the optional exclusive
+   INQUIRY from re-firing every stable poll — exclusive-access traffic a
+   concurrent control verb (mos tray eject) contends with. MOS_OK falls to the
+   default (terminal). The MOS_ERR_IO default arm of the IOReturn mapper means a
+   rare unmapped transient is also taken as terminal-absent (a benign null
+   serial for the session) — accepted over the alternative of forever-churn. */
+static bool serial_probe_terminal(mos_error e)
+{
+    switch (e) {
+        case MOS_ERR_BUSY:
+        case MOS_ERR_EXCLUSIVE_ACCESS:
+        case MOS_ERR_TIMEOUT:
+        case MOS_ERR_NO_DEVICE:
+        case MOS_ERR_OOM:
+            return false;   /* transient: retry on a later poll */
+        default:
+            return true;    /* MOS_OK (present), or an answered absence */
+    }
+}
+
 static mos_error watch_probe(void *ctx, mos_state_result *out)
 {
     mos_watch_t *w = (mos_watch_t *)ctx;
@@ -242,19 +272,21 @@ static mos_error watch_probe(void *ctx, mos_state_result *out)
     out->product  = w->product[0]  ? w->product  : NULL;
     out->revision = w->revision[0] ? w->revision : NULL;
 
-    /* Grab the serial ONCE per session, piggybacked on this same handle (no
+    /* Resolve the serial ONCE per session, piggybacked on this same handle (no
        extra open). mos_query_serial self-gates on exclusive access, so a
-       mounted/ready disc makes it BUSY and the CDB never issues — leave it
-       ungrabbed and retry next poll; the first empty/not-ready poll lands it
-       (the walk's lock is already free then and the serial needs no disc).
-       Re-home into watch-static storage like the identity strings (the
-       returned pointer borrows the handle we're about to close). */
-    if (!w->serial_grabbed) {
+       mounted/ready disc makes it BUSY and the CDB never issues — that stays
+       unresolved and retries next poll; the first empty/not-ready poll lands it
+       (the walk's lock is already free then and the serial needs no disc). An
+       ANSWERED absence resolves so the optional INQUIRY stops re-firing every
+       poll (serial_probe_terminal). Re-home into watch-static storage like the
+       identity strings (the returned pointer borrows the handle we close). */
+    if (!w->serial_resolved) {
         const char *sn = NULL;
-        if (mos_query_serial(h, &sn) == MOS_OK && sn && sn[0]) {
+        mos_error se = mos_query_serial(h, &sn);
+        if (se == MOS_OK && sn && sn[0])
             strlcpy(w->serial, sn, sizeof w->serial);
-            w->serial_grabbed = true;
-        }
+        if (serial_probe_terminal(se))
+            w->serial_resolved = true;
     }
     out->serial = w->serial[0] ? w->serial : NULL;
 
@@ -307,15 +339,16 @@ static mos_error watch_slot_probe(void *ctx, mos_state_result *out)
     out->product  = s->product[0]  ? s->product  : NULL;
     out->revision = s->revision[0] ? s->revision : NULL;
 
-    /* Grab the serial once per slot (per session), same contract as
-       watch_probe above — piggyback the open handle, BUSY-back-off, re-home
-       into slot storage before close. */
-    if (!s->serial_grabbed) {
+    /* Resolve the serial once per slot (per session), same contract as
+       watch_probe above — piggyback the open handle, transient-back-off,
+       answered-absence resolves, re-home into slot storage before close. */
+    if (!s->serial_resolved) {
         const char *sn = NULL;
-        if (mos_query_serial(h, &sn) == MOS_OK && sn && sn[0]) {
+        mos_error se = mos_query_serial(h, &sn);
+        if (se == MOS_OK && sn && sn[0])
             strlcpy(s->serial, sn, sizeof s->serial);
-            s->serial_grabbed = true;
-        }
+        if (serial_probe_terminal(se))
+            s->serial_resolved = true;
     }
     out->serial = s->serial[0] ? s->serial : NULL;
 
@@ -351,8 +384,8 @@ static void watch_all_add_device(mos_watch_t *w,
        device that was removed (the core freed it: mos_watch_core.c active[best]
        = false on DEVICE_REMOVED). Reset every cached per-device field before
        claiming it. The identity strings below are unconditionally overwritten,
-       but the grab-once serial cache (serial / serial_grabbed) is NOT — a
-       recycled slot with serial_grabbed still true would skip the re-query and
+       but the resolve-once serial cache (serial / serial_resolved) is NOT — a
+       recycled slot with serial_resolved still true would skip the re-query and
        emit the PRIOR device's serial (durable-identity corruption). memset
        clears all of it, and stays correct if another cached slot field is
        added later. (Initial-snapshot slots are already zero from the calloc'd
