@@ -229,12 +229,11 @@ neither path can clear is another program holding the drive exclusively
 (`outcome: exclusive_access`).
 
 `tray lock` sets the **basic** Prevent state — the hard removal block that
-refuses the front-panel eject button. (mos does **not** use the *persistent*
-Prevent: on macOS a level-2/3 lock runs the cooperative soft-eject, which the
-system honors and ejects — so it would not actually block the button.) `tray
-unlock` clears **both** Prevent states so the tray ends unlocked. A lock
-**persists past the process** — it survives a handle close, clearing only on a
-bus reset or power-cycle — so any later `mos tray unlock` recovers it. Lock/unlock act on **idle or unmounted** drives: on a
+refuses the front-panel eject button. `tray unlock` clears **both** Prevent
+states so the tray ends unlocked. A lock **persists past the process** — it
+survives a handle close, clearing only on a bus reset or power-cycle — so any
+later `mos tray unlock` recovers it. Lock/unlock act on **idle or unmounted**
+drives: on a
 **mounted** disc the PREVENT command can't take exclusive access, but the disc
 is already removal-locked by macOS — so `lock` reports `already_locked` (a
 success), and `unlock` reports busy with a hint to `tray eject` (which releases
