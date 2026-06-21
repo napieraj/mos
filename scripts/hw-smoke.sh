@@ -243,10 +243,11 @@ phase_tray() {
     run tray close;  want_text 'done\|outcome' "tray close → done"
     want_schema mos.tray.v1 "tray close --json" tray close --json
 
-    # lock is the durable PERSISTENT Prevent; unlock clears BOTH states. On an
-    # empty drive the lock takes hold (exclusive access is free), the default
-    # eject is refused (a COLD lock — needs --force), and unlock releases it.
-    run tray lock;   want_text 'done\|outcome' "tray lock (persistent) → done"
+    # lock is the basic Prevent (the hard removal block); unlock clears BOTH
+    # states. On an empty drive the lock takes hold (exclusive access is free),
+    # the default eject is refused (a COLD lock — needs --force), and unlock
+    # releases it.
+    run tray lock;   want_text 'done\|outcome' "tray lock (basic) → done"
     run tray eject;  want_one_of "eject while locked → refused_locked" 'refused_locked' '53/02'
     run tray unlock; want_text 'done\|outcome' "tray unlock (clears both) → done"
     run tray eject;  want_text 'done\|outcome' "eject after unlock → done"

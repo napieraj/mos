@@ -12,8 +12,8 @@
  * then ejects, clearing the OS mount-protection Prevent lock macOS arms on
  * mount; --force extends the lock-clearing to a COLD deliberate lock (no mount
  * in play). It never forces the filesystem — a busy disc surfaces BUSY; see
- * mos_tray_eject. lock sets the durable PERSISTENT Prevent; unlock clears both
- * Prevent states. Emits one mos.tray.v1 document or a human line.
+ * mos_tray_eject. lock sets the basic Prevent (the hard removal block); unlock
+ * clears both Prevent states. Emits one mos.tray.v1 document or a human line.
  *
  * A control verb (START STOP UNIT / PREVENT ALLOW MEDIUM REMOVAL), not a
  * query. A command the drive ANSWERED — including a 53/02 locked-eject refusal,
@@ -190,7 +190,7 @@ int mos_cli_run_tray(void)
 
     /* The verbs return the drive's sense triple via the out-param: all-zero
        on DONE / ALREADY_LOCKED, the real {key,asc,ascq} on any refusal (53/02
-       for refused_locked, e.g. 5/24/00 for an unsupported Persistent Prevent). */
+       for refused_locked, e.g. 5/24/00 INVALID FIELD IN CDB for refused_other). */
     uint8_t sense[3] = {0};
     mos_error op;
     switch (act) {

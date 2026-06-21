@@ -15,15 +15,16 @@
  * §9.7/§9.9) — the layer-1 "no convenience method carries the information"
  * showing (AGENTS.md scope doctrine).
  *
- * Lock lifetime: the PREVENT state is per-I_T-nexus and survives a handle
+ * Lock lifetime: the basic PREVENT state is per-I_T-nexus and survives a handle
  * close / process exit (T10 04-349r1 §6.18; the SCSITaskUserClient close is
  * none of the SPC-4 clearing events, and Apple's
  * IOSCSIMultimediaCommandsDevice issues no voluntary ALLOW on exclusive-
- * access release). mos holds nothing for the lock window — the verbs are
- * fire-and-forget, recovery is a later mos_tray_unlock on the same single
- * initiator. No atexit ALLOW on the lock path: a single-shot lock that
- * released itself on return would be a no-op, and a persistent lock is
- * exactly what a ripping-robot orchestrator wants to outlive the process.
+ * access release). It clears only on an actual nexus loss (bus reset, power).
+ * mos holds nothing for the lock window — the verbs are fire-and-forget,
+ * recovery is a later mos_tray_unlock on the same single initiator. No atexit
+ * ALLOW on the lock path: a single-shot lock that released itself on return
+ * would be a no-op, and an outliving lock is exactly what a ripping-robot
+ * orchestrator wants.
  */
 
 #include "mos_internal.h"
@@ -41,14 +42,17 @@
      0x00 clear basic Prevent (unlock)        0x01 set basic Prevent (lock)
      0x02 clear Persistent Prevent (p-allow)  0x03 set Persistent Prevent (p-lock)
    The two states are INDEPENDENT — 0x00 does not clear a 0x03 lock, 0x02 does
-   (04-349r1 §6.18.2 / §6.18.3.2). */
+   (04-349r1 §6.18.2 / §6.18.3.2). mos LOCKS with the basic Prevent (0x01) — the
+   hard removal block; the Persistent Prevent (0x03) is retired (see
+   mos_tray_lock). It still CLEARS both states (0x00 then 0x02) on unlock/eject,
+   so it can release a basic lock, the OS mount-lock macOS arms on mount
+   (basic-vs-persistent unresolved — clearing both is the safe superset), or a
+   persistent lock left by an older mos. */
 static const uint8_t cdb_eject [6] = { 0x1B, 0x00, 0x00, 0x00, 0x02, 0x00 };
 static const uint8_t cdb_close [6] = { 0x1B, 0x00, 0x00, 0x00, 0x03, 0x00 };
+static const uint8_t cdb_lock          [6] = { 0x1E, 0x00, 0x00, 0x00, 0x01, 0x00 };
 static const uint8_t cdb_unlock        [6] = { 0x1E, 0x00, 0x00, 0x00, 0x00, 0x00 };
 static const uint8_t cdb_unlock_persist[6] = { 0x1E, 0x00, 0x00, 0x00, 0x02, 0x00 };
-static const uint8_t cdb_lock_persist  [6] = { 0x1E, 0x00, 0x00, 0x00, 0x03, 0x00 };
-/* basic LOCK (byte4 0x01) is intentionally not issued — mos locks with the
-   durable PERSISTENT Prevent (0x03); see mos_tray_lock. */
 
 /* Prevent/allow is electronic (instant); eject/close drives the tray motor
    and needs time for mechanical travel. GESN uses 2000 ms; eject/close start
@@ -189,15 +193,24 @@ mos_error mos_tray_close(mos_handle_t *h, mos_tray_outcome *out, uint8_t sense[3
 mos_error mos_tray_lock(mos_handle_t *h, mos_tray_outcome *out, uint8_t sense[3])
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
-    /* Persistent Prevent (0x03) — the durable lock that survives an I_T-nexus
-       loss (e.g. a USB bus reset), which a fire-and-forget single-initiator
-       lock wants. On a MOUNTED disc the CDB can't issue (ObtainExclusiveAccess
-       returns BUSY = "media is still mounted", SCSITaskLib.h), but a mounted
-       disc is ALREADY removal-locked by macOS — the requested state already
-       holds, so report ALREADY_LOCKED, a success, not a BUSY error. A peer
-       client holding exclusive access (MOS_ERR_EXCLUSIVE_ACCESS) is NOT
-       translated — we cannot know that means locked. */
-    mos_error e = mos_internal_tray_cmd(h, cdb_lock_persist, out, sense);
+    /* Basic Prevent (0x01) — the HARD medium-removal block that refuses a
+       front-panel eject at the drive, which is the whole point of `lock` (a
+       stray operator press can't fire the tray into a moving robot arm). mos
+       does NOT use the Persistent Prevent (0x03): on macOS the optical stack
+       polls drive events, so a level-2/3 lock runs the COOPERATIVE soft-eject
+       protocol — a button press raises a GESN EjectRequest the OS HONORS and
+       ejects, i.e. the persistent lock does not block the button at all
+       (hardware finding 2026-06-21; AGENTS.md tray ADR). Basic Prevent is
+       per-I_T-nexus and survives a handle close / process exit (the
+       SCSITaskUserClient close is not a nexus loss), so the fire-and-forget
+       lock outlives the process; recover with `mos tray unlock`. On a MOUNTED
+       disc the CDB can't issue (ObtainExclusiveAccess returns BUSY = "media is
+       still mounted", SCSITaskLib.h), but a mounted disc is ALREADY
+       removal-locked by macOS — the requested state already holds, so report
+       ALREADY_LOCKED, a success, not a BUSY error. A peer client holding
+       exclusive access (MOS_ERR_EXCLUSIVE_ACCESS) is NOT translated — we cannot
+       know that means locked. */
+    mos_error e = mos_internal_tray_cmd(h, cdb_lock, out, sense);
     if (e == MOS_ERR_BUSY) {
         *out = MOS_TRAY_ALREADY_LOCKED;
         if (sense) { sense[0] = sense[1] = sense[2] = 0; }
@@ -211,9 +224,12 @@ mos_error mos_tray_unlock(mos_handle_t *h, mos_tray_outcome *out, uint8_t sense[
     if (!h || !out) return MOS_ERR_INVALID_ARG;
     /* Clear BOTH Prevent states so the tray ends UNLOCKED whichever was set:
        basic ALLOW 0x00 then persistent ALLOW 0x02 (the two states are
-       independent — 04-349r1 §6.18.2 — and mos doesn't know which a lock used).
-       The basic ALLOW is mandatory and idempotent (GOOD even if nothing was
-       locked); BUSY here means the disc is mounted (eject to release). */
+       independent — 04-349r1 §6.18.2). mos's own `lock` sets only the basic
+       Prevent, but unlock still clears persistent too — to release the OS
+       mount-lock macOS arms (basic-vs-persistent unresolved) or a persistent
+       lock left by an older mos. The basic ALLOW is mandatory and idempotent
+       (GOOD even if nothing was locked); BUSY here means the disc is mounted
+       (eject to release). */
     mos_error e = mos_internal_tray_cmd(h, cdb_unlock, out, sense);
     if (e != MOS_OK) return e;            /* BUSY (mounted) / transport — surface */
 

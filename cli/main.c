@@ -78,9 +78,9 @@ void mos_cli_print_usage(FILE *f)
         "                    'mos list'); explicit form of the positional\n"
         "      --bsd NAME    BSD form; explicit form of the positional\n"
         "      --force       tray eject: also clear a COLD tray Prevent LOCK in\n"
-        "                    the way (basic + persistent), then eject. NEVER\n"
-        "                    forces the filesystem — a busy disc reports busy. (A\n"
-        "                    plain eject already unmounts gracefully, like drutil.)\n"
+        "                    the way, then eject. NEVER forces the filesystem —\n"
+        "                    a busy disc reports busy. (A plain eject already\n"
+        "                    unmounts gracefully, like drutil.)\n"
 #ifdef MOS_CLI_PROBE
         "      --dump        With probe: one-shot DR dictionary capture\n"
         "                    (text + XML plists; takes no drive argument)\n"
