@@ -1017,7 +1017,9 @@ mos_error mos_enumerate_features(mos_handle_t *h,
  * mos_tray_unlock on the same host. The lock is therefore FIRE-AND-FORGET:
  * mos holds nothing for the lock window and there is no held-session variant.
  *
- * `out` is REQUIRED (the outcome is the whole point of the call). `sense` is
+ * `out` is REQUIRED (the outcome is the whole point of the call) and is written
+ * ONLY on MOS_OK; on a negative return *out is unspecified (a caller must read it
+ * only when the call returned MOS_OK). `sense` is
  * OPTIONAL (NULL to ignore): on MOS_OK it receives the {key, asc, ascq} the
  * drive returned — meaningful on a refusal (REFUSED_LOCKED is always 5/53/02;
  * REFUSED_OTHER is whatever the drive reported, e.g. 5/24/00 for an

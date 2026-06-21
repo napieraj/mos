@@ -88,7 +88,9 @@ field reference is its schema under [`schemas/`](schemas/).
 
 ### `state` (default) — what the drive is doing now
 
-States: `open`, `empty`, `loading`, `ready`, `busy`, `unknown`. An **open** tray
+States: `open`, `empty`, `empty_or_open`, `loading`, `ready`, `busy`,
+`formatting`, `device_fault`, `media_unreadable`, `unknown` (the full
+`mos.state.v1` enum; the first six cover everyday use). An **open** tray
 resolves as `open` with no media and no BSD node — the case `drutil` can't
 distinguish from a closed empty slot. A loaded disc adds the `Media:` and
 `Writable:` rows shown in the [Quickstart](#quickstart); an empty tray has
