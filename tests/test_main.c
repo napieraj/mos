@@ -21,6 +21,7 @@ int test_summary(void)
 
 /* Declared in the corresponding test_*.c files. */
 void register_sense_tests       (void);
+void register_strings_tests     (void);
 void register_bsd_name_tests    (void);
 void register_scsi_status_tests (void);
 void register_ioreturn_tests    (void);
@@ -49,6 +50,9 @@ int main(void)
 
     printf("Sense parsing and state mapping:\n");
     register_sense_tests();
+
+    printf("\nString tables (enum→token totality + fallback arms):\n");
+    register_strings_tests();
 
     printf("\nBSD name normalization:\n");
     register_bsd_name_tests();

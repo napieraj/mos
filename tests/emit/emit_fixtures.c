@@ -210,6 +210,17 @@ int main(int argc, char **argv)
         mos_fake_set_perf_reply(0x00, perf, sizeof perf);
         return mos_cli_run_state();
     }
+    if (strcmp(verb, "state") == 0 && strcmp(scn, "not_ready") == 0) {
+        /* No media: TUR CHECK CONDITION 02/3A/00 (medium not present). Exercises
+           the non-ready mos.state.v1 emit (state empty/empty_or_open, the media
+           fields absent) — the ready_mounted scenario only covers the READY
+           shape. Mirrors metadata/not_ready's setup on the state verb. */
+        mos_fake_reset();
+        mos_fake_set_bsd_unit(-1);
+        uint8_t sense[18] = {0}; sense[2] = 0x02; sense[12] = 0x3A;
+        mos_fake_set_tur(0x02 /*CHECK COND*/, sense);
+        return mos_cli_run_state();
+    }
     if (strcmp(verb, "list") == 0 && strcmp(scn, "one_drive") == 0) {
         common_drive_setup();
         mos_fake_set_getconfig_reply(0x00, cfg,
@@ -244,6 +255,23 @@ int main(int argc, char **argv)
         mos_fake_reset();
         opt_tray_action = "lock";
         mos_fake_set_mounted_busy(true);
+        return mos_cli_run_tray();
+    }
+    if (strcmp(verb, "tray") == 0 && strcmp(scn, "unlock_done") == 0) {
+        /* unlock clears both Prevent states (basic + persistent ALLOW); the
+           fake answers GOOD to each raw CDB → outcome done. Covers the
+           ACT_UNLOCK dispatch + done rendering the lock/eject scenarios miss. */
+        mos_fake_reset();
+        opt_tray_action = "unlock";
+        mos_fake_set_raw_reply(0x00 /*GOOD*/, NULL, 0, 0, NULL);
+        return mos_cli_run_tray();
+    }
+    if (strcmp(verb, "tray") == 0 && strcmp(scn, "close_done") == 0) {
+        /* close issues START STOP UNIT (load); GOOD → outcome done. Covers the
+           ACT_CLOSE dispatch. */
+        mos_fake_reset();
+        opt_tray_action = "close";
+        mos_fake_set_raw_reply(0x00 /*GOOD*/, NULL, 0, 0, NULL);
         return mos_cli_run_tray();
     }
     if (strcmp(verb, "tray") == 0 && strcmp(scn, "refused_locked") == 0) {

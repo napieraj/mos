@@ -1076,6 +1076,154 @@ TEST(adapter_raw_cdb_release_failure_poisons_handle)
     return 0;
 }
 
+/* kIOReturnTimeout — the raw transport IOReturn the fake injects; the adapter
+   maps it to MOS_ERR_TIMEOUT (mapping static-asserted in mos_scsi.c). */
+#define FAKE_IORETURN_TIMEOUT 0xE00002D6u
+
+static bool features_cb_noop(const mos_feature_info_t *f, void *ctx)
+{
+    (void)f; if (ctx) (*(int *)ctx)++; return true;
+}
+
+/* The query verbs share one error contract: a TRANSPORT failure (negative
+   IOReturn) maps through mos_internal_ioreturn_to_mos_error; a command that
+   reached the drive but answered non-GOOD (or unparseably) is MOS_ERR_IO.
+   These pin the error-return arms the success-path scenarios never reach. */
+
+TEST(adapter_disc_info_transport_failure_maps_timeout)
+{
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL && err == MOS_OK);
+
+    mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_READDISCINFO,
+                                 FAKE_IORETURN_TIMEOUT);
+    const mos_disc_info *d = (const mos_disc_info *)0x1;
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_query_disc_info(h, &d));
+    EXPECT(d == NULL);                 /* out cleared on the error path */
+
+    mos_close(h);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    return 0;
+}
+
+TEST(adapter_cdtext_transport_failure_maps_timeout)
+{
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL && err == MOS_OK);
+
+    /* CD-TEXT issues READ TOC format 0101b; the default DVD fake has no cached
+       IOCDMedia TOC, so the read is the issued one the injection fails. */
+    mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_READTOC,
+                                 FAKE_IORETURN_TIMEOUT);
+    const mos_cdtext *c = (const mos_cdtext *)0x1;
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_query_cdtext(h, &c));
+    EXPECT(c == NULL);
+
+    mos_close(h);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    return 0;
+}
+
+TEST(adapter_feature_enumeration_transport_failure_maps_timeout)
+{
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL && err == MOS_OK);
+
+    mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_GETCONFIG,
+                                 FAKE_IORETURN_TIMEOUT);
+    int seen = 0;
+    EXPECT_EQ(MOS_ERR_TIMEOUT,
+              mos_enumerate_features(h, features_cb_noop, &seen));
+    EXPECT_EQ(0, seen);                /* callback never fired on the failure */
+
+    mos_close(h);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    return 0;
+}
+
+TEST(adapter_physical_structure_transport_failure_maps_timeout)
+{
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL && err == MOS_OK);
+
+    /* A negative IOReturn on the first READ DISC STRUCTURE compromises the
+       compound (format 0 + format 1) observation and is surfaced, not folded
+       into a half result. */
+    mos_fake_set_method_ioreturn(MOS_FAKE_METHOD_READDISCSTRUCT,
+                                 FAKE_IORETURN_TIMEOUT);
+    const mos_physical_structure *p = (const mos_physical_structure *)0x1;
+    EXPECT_EQ(MOS_ERR_TIMEOUT, mos_query_physical_structure(h, &p));
+    EXPECT(p == NULL);
+
+    mos_close(h);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    return 0;
+}
+
+TEST(adapter_physical_structure_neither_format_is_io_error)
+{
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL && err == MOS_OK);
+
+    /* No disc_structure reply set: both formats answer empty, neither parses,
+       so the compound read yields nothing → MOS_ERR_IO (non-DVD / refused). */
+    const mos_physical_structure *p = (const mos_physical_structure *)0x1;
+    EXPECT_EQ(MOS_ERR_IO, mos_query_physical_structure(h, &p));
+    EXPECT(p == NULL);
+
+    mos_close(h);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    return 0;
+}
+
+TEST(adapter_track_info_non_good_status_is_io_error)
+{
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL && err == MOS_OK);
+
+    /* A command that reached the drive but answered non-GOOD (CHECK CONDITION)
+       is MOS_ERR_IO, distinct from a transport failure's mapped IOReturn. */
+    mos_fake_set_readtrackinfo_reply(0x02 /*CHECK CONDITION*/, NULL, 0);
+    const mos_track_info *t = (const mos_track_info *)0x1;
+    EXPECT_EQ(MOS_ERR_IO, mos_query_track_info(h, &t));
+    EXPECT(t == NULL);
+
+    mos_close(h);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    return 0;
+}
+
+TEST(adapter_drive_perf_non_good_status_is_io_error)
+{
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL && err == MOS_OK);
+
+    /* The READ direction is the gate: a non-GOOD GET PERFORMANCE there fails
+       the whole query with MOS_ERR_IO. */
+    mos_fake_set_perf_reply(0x02 /*CHECK CONDITION*/, NULL, 0);
+    const mos_drive_perf *pf = (const mos_drive_perf *)0x1;
+    EXPECT_EQ(MOS_ERR_IO, mos_query_drive_perf(h, &pf));
+    EXPECT(pf == NULL);
+
+    mos_close(h);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+    return 0;
+}
+
 int main(void)
 {
     printf("adapter one-shot (headless, link-seam fake):\n");
@@ -1112,6 +1260,13 @@ int main(void)
     RUN(adapter_tray_lock_on_mounted_is_already_locked);
     RUN(adapter_tray_unlock_clears_both_states);
     RUN(adapter_raw_cdb_release_failure_poisons_handle);
+    RUN(adapter_disc_info_transport_failure_maps_timeout);
+    RUN(adapter_cdtext_transport_failure_maps_timeout);
+    RUN(adapter_feature_enumeration_transport_failure_maps_timeout);
+    RUN(adapter_physical_structure_transport_failure_maps_timeout);
+    RUN(adapter_physical_structure_neither_format_is_io_error);
+    RUN(adapter_track_info_non_good_status_is_io_error);
+    RUN(adapter_drive_perf_non_good_status_is_io_error);
     printf("\n%d run, %d passed, %d failed\n",
            mos_tests_run, mos_tests_run - mos_tests_failed, mos_tests_failed);
     return mos_tests_failed ? 1 : 0;

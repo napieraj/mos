@@ -307,6 +307,26 @@ TEST(state_empty_or_open_when_gesn_silent_and_sense_3A00)
     return 0;
 }
 
+TEST(state_loading_from_0401_sense_fork_when_gesn_silent)
+{
+    /* GESN silent AND the not-ready sense is NOT 3A (here 04/01 becoming-
+       ready): none of the 3A sense-fork arms match, so the fork falls to
+       its non-3A default — disc engaged ⇒ tray closed — and the closed
+       classifier maps 04/01 → LOADING. Pins the non-3A else of the fork,
+       distinct from state_loading_from_0401_gesn_closed (GESN answered). */
+    fake_mmc f = {0};
+    f.tur_err    = MOS_OK;
+    f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;
+    fake_set_fixed_sense(&f, 0x02, 0x04, 0x01);
+    f.tray_err = MOS_ERR_IO;                          /* GESN silent */
+
+    mos_state_env_t env = make_env(&f);
+    mos_state_result r;
+    EXPECT_EQ(mos_internal_query_state_core(&env, &r), MOS_OK);
+    EXPECT_EQ(r.state, MOS_STATE_LOADING);
+    return 0;
+}
+
 TEST(state_loading_from_0401_gesn_closed)
 {
     fake_mmc f = {0};
@@ -726,6 +746,7 @@ void register_state_core_tests(void)
     RUN(state_empty_from_3A01_sense_fork_when_gesn_silent);
     RUN(state_open_from_3A02_sense_fork_when_gesn_silent);
     RUN(state_empty_or_open_when_gesn_silent_and_sense_3A00);
+    RUN(state_loading_from_0401_sense_fork_when_gesn_silent);
     RUN(state_loading_from_0401_gesn_closed);
     RUN(state_loading_from_0402_gesn_closed);
     RUN(state_formatting_from_0404_gesn_closed);

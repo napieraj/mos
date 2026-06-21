@@ -137,71 +137,65 @@ TEST(null_output_pointers_are_safe)
  * verdict belongs to GESN, not here. Codes per T10 ASC/ASCQ and MMC-6.
  */
 
-TEST(sense_closed_3A_02_maps_to_empty_not_open)
+/* One row per (ASC,ASCQ)→state mapping. Table-driven because each case is
+   the same call with the same assertion shape, differing only in the ASCQ
+   constant and expected state; one TEST frame per row was pure boilerplate.
+   The `note` preserves the per-case rationale and is printed on a failure so
+   a mismatch still localizes to the exact row. */
+struct sense_closed_case {
+    uint8_t  asc, ascq;
+    mos_state expected;
+    const char *note;
+};
+
+static int run_sense_closed_cases(const struct sense_closed_case *cases,
+                                  size_t n)
 {
-    /* 3A/02 is "medium not present, tray open", but GESN already said
-       CLOSED, so the ASCQ tray hint is discarded: no medium + closed
-       = EMPTY (enrich, don't invalidate). */
-    EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x3A, 0x02), MOS_STATE_EMPTY);
+    for (size_t i = 0; i < n; i++) {
+        mos_state got = mos_internal_state_from_sense_closed(
+            0x02, cases[i].asc, cases[i].ascq);
+        if (got != cases[i].expected) {
+            fprintf(stderr,
+                "\n    %02X/%02X expected state %d, got %d — %s\n",
+                cases[i].asc, cases[i].ascq, cases[i].expected, got,
+                cases[i].note);
+            return 1;
+        }
+    }
     return 0;
 }
 
-TEST(sense_closed_3A_01_maps_to_empty)
+TEST(sense_closed_3A_no_medium_maps_to_empty)
 {
-    EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x3A, 0x01), MOS_STATE_EMPTY);
-    return 0;
+    /* Closed + ASC 0x3A = no medium; EVERY ASCQ flavor collapses to EMPTY.
+       3A/02 ("medium not present, tray open") included: GESN already settled
+       the tray, so the ASCQ tray hint is discarded — enrich, don't invalidate.
+       The qualifier's tray meaning is GESN's job, never this function's. */
+    static const struct sense_closed_case cases[] = {
+        { 0x3A, 0x02, MOS_STATE_EMPTY, "tray-open hint discarded; closed+no-medium=EMPTY" },
+        { 0x3A, 0x01, MOS_STATE_EMPTY, "tray-closed flavor" },
+        { 0x3A, 0x00, MOS_STATE_EMPTY, "generic no-medium" },
+        { 0x3A, 0x55, MOS_STATE_EMPTY, "any other ASCQ still EMPTY" },
+    };
+    return run_sense_closed_cases(cases, sizeof cases / sizeof cases[0]);
 }
 
-TEST(sense_closed_3A_00_maps_to_empty)
+TEST(sense_closed_04_not_ready_maps_by_ascq)
 {
-    EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x3A, 0x00), MOS_STATE_EMPTY);
-    return 0;
-}
-
-TEST(sense_closed_3A_any_ascq_maps_to_empty)
-{
-    /* Closed + ASC 0x3A = no medium; every ASCQ flavor collapses to
-       EMPTY (the qualifier's tray hint is GESN's job, not ours). */
-    EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x3A, 0x55), MOS_STATE_EMPTY);
-    return 0;
-}
-
-TEST(sense_closed_04_01_maps_to_loading)
-{
-    /* "becoming ready" — self-resolving by waiting. */
-    EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x04, 0x01), MOS_STATE_LOADING);
-    return 0;
-}
-
-TEST(sense_closed_04_02_maps_to_loading)
-{
-    /* "initialize command required", tray known CLOSED: disc present
-       but stopped. The open-tray-as-04/02 case is caught upstream by
-       GESN, so here it is unambiguously LOADING. */
-    EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x04, 0x02), MOS_STATE_LOADING);
-    return 0;
-}
-
-TEST(sense_closed_04_07_maps_to_loading)
-{
-    /* "operation in progress" — transient, self-resolving. */
-    EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x04, 0x07), MOS_STATE_LOADING);
-    return 0;
-}
-
-TEST(sense_closed_04_04_maps_to_formatting)
-{
-    /* "format in progress" is its own state, not folded into LOADING:
-       a rip pipeline waits on it differently than a spin-up. */
-    EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x04, 0x04), MOS_STATE_FORMATTING);
-    return 0;
-}
-
-TEST(sense_closed_04_08_maps_to_busy)
-{
-    /* "long write in progress" — drive actively writing; back off. */
-    EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x04, 0x08), MOS_STATE_BUSY);
-    return 0;
+    /* 04/xx LOGICAL UNIT NOT READY: a disc is engaged; the ASCQ names why it
+       isn't ready, and each maps to a distinct state. The open-tray-as-04/02
+       case is caught upstream by GESN, so here 04/02 is unambiguously LOADING.
+       An ASCQ the switch doesn't name falls through to UNKNOWN — engaged, but
+       the reason isn't one mos classifies, so it doesn't guess. */
+    static const struct sense_closed_case cases[] = {
+        { 0x04, 0x01, MOS_STATE_LOADING,    "becoming ready — self-resolving" },
+        { 0x04, 0x02, MOS_STATE_LOADING,    "init required — present but stopped" },
+        { 0x04, 0x07, MOS_STATE_LOADING,    "operation in progress — transient" },
+        { 0x04, 0x04, MOS_STATE_FORMATTING, "format in progress — its own state" },
+        { 0x04, 0x08, MOS_STATE_BUSY,       "long write in progress — back off" },
+        { 0x04, 0xFF, MOS_STATE_UNKNOWN,    "unnamed ASCQ — default, no guess" },
+    };
+    return run_sense_closed_cases(cases, sizeof cases / sizeof cases[0]);
 }
 
 TEST(sense_closed_hardware_error_maps_to_device_fault)
@@ -402,15 +396,8 @@ void register_sense_tests(void)
     RUN(unknown_response_code_yields_zeros);
     RUN(null_pointer_is_safe);
     RUN(null_output_pointers_are_safe);
-    RUN(sense_closed_3A_02_maps_to_empty_not_open);
-    RUN(sense_closed_3A_01_maps_to_empty);
-    RUN(sense_closed_3A_00_maps_to_empty);
-    RUN(sense_closed_3A_any_ascq_maps_to_empty);
-    RUN(sense_closed_04_01_maps_to_loading);
-    RUN(sense_closed_04_02_maps_to_loading);
-    RUN(sense_closed_04_07_maps_to_loading);
-    RUN(sense_closed_04_04_maps_to_formatting);
-    RUN(sense_closed_04_08_maps_to_busy);
+    RUN(sense_closed_3A_no_medium_maps_to_empty);
+    RUN(sense_closed_04_not_ready_maps_by_ascq);
     RUN(sense_closed_hardware_error_maps_to_device_fault);
     RUN(sense_closed_medium_error_maps_to_media_unreadable);
     RUN(sense_closed_57_00_maps_to_media_unreadable);
