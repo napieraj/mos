@@ -742,17 +742,23 @@ static IOReturn mmc_ReadTableOfContents(void *self, SCSICmdField1Bit MSF,
     if (g.method_rc[MOS_FAKE_METHOD_READTOC]) {
         return (IOReturn)g.method_rc[MOS_FAKE_METHOD_READTOC];
     }
-    /* Format 0100b (ATIP) returns its own canned reply when a scenario set one;
-       otherwise it falls through to the default (the TOC bytes), which the ATIP
-       parser rejects → atip null, the pressed-CD behavior. Other formats
-       (TOC 0000b, CD-TEXT 0101b) keep the historical single-reply behavior. */
-    if (FORMAT == 0x04 && g.atip_len) {
-        if (buffer && bufferSize) {
-            size_t n = (g.atip_len < (size_t)bufferSize) ? g.atip_len : (size_t)bufferSize;
-            memset(buffer, 0, bufferSize);
-            if (n) memcpy(buffer, g.atip, n);
+    /* Format 0100b (ATIP) is its own reply. A scenario that set one gets it;
+       otherwise the read answers CHECK CONDITION — the pressed-CD / DVD / BD
+       behavior (no ATIP), so mos_query_atip returns an error → atip null. It
+       must NOT fall through to the TOC bytes: the ATIP parser would accept them
+       and synthesize a bogus descriptor. Other formats (TOC 0000b, CD-TEXT
+       0101b) keep the historical single-reply behavior below. */
+    if (FORMAT == 0x04) {
+        if (buffer && bufferSize) memset(buffer, 0, bufferSize);
+        if (g.atip_len) {
+            if (buffer && bufferSize) {
+                size_t n = (g.atip_len < (size_t)bufferSize) ? g.atip_len : (size_t)bufferSize;
+                if (n) memcpy(buffer, g.atip, n);
+            }
+            if (taskStatus) *taskStatus = (SCSITaskStatus)g.atip_status;
+        } else {
+            if (taskStatus) *taskStatus = (SCSITaskStatus)0x02; /* CHECK CONDITION */
         }
-        if (taskStatus) *taskStatus = (SCSITaskStatus)g.atip_status;
         return kIOReturnSuccess;
     }
     if (buffer && bufferSize) {
