@@ -4,7 +4,9 @@
        Product:  BD-RW BDR-XS07
       Firmware:  1.01
         Serial:  -
+  Interconnect:  usb (external)
     Protection:  none
+ Write Protect:  -
       Profiles:  -
      Standards:  -
     Mechanical:  -

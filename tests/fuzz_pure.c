@@ -617,6 +617,33 @@ static void fuzz_trackinfo(uint64_t iters)
     }
 }
 
+/* READ TOC/PMA/ATIP format 0100b decode. No-OOB: the ATIP Data Length
+   (bytes 0-1) may only shrink the trusted region; the fixed-offset reads
+   through byte 14 must never read past [buf, buf+len). */
+static void fuzz_atip(uint64_t iters)
+{
+    for (uint64_t i = 0; i < iters; i++) {
+        size_t   len = rng_below(40);                  /* 0..39: spans the 15/28 region */
+        uint8_t *buf = (uint8_t *)malloc(len ? len : 1);
+        for (size_t b = 0; b < len; b++) buf[b] = (uint8_t)rng();
+
+        if (len >= 2 && rng_below(2)) {                /* sometimes plant a length */
+            uint16_t dl = (uint16_t)rng_below((uint64_t)len + 64);
+            buf[0] = (uint8_t)(dl >> 8);
+            buf[1] = (uint8_t)(dl & 0xFF);
+        }
+
+        mos_atip a;
+        memset(&a, 0xA5, sizeof a);
+        (void)mos_internal_atip_parse(buf, len, &a);
+        if ((i & 0xFFFF) == 0) {
+            (void)mos_internal_atip_parse(NULL, len, &a);
+            (void)mos_internal_atip_parse(buf, len, NULL);
+        }
+        free(buf);
+    }
+}
+
 /* GET PERFORMANCE (0xAC Type 00h) decode. No strings; the property is no-OOB
    — the descriptor walk (8-byte header + N*16) must never read past
    [buf, buf+len) whatever the planted data length / count claims. */
@@ -696,6 +723,7 @@ int main(int argc, char **argv)
     uint64_t n_ct    = env_u64("MOS_FUZZ_CDTEXT", 500000);
     uint64_t n_ps    = env_u64("MOS_FUZZ_PHYSSTRUCT", 500000);
     uint64_t n_ti    = env_u64("MOS_FUZZ_TRACKINFO", 500000);
+    uint64_t n_atip  = env_u64("MOS_FUZZ_ATIP", 500000);
     uint64_t n_perf  = env_u64("MOS_FUZZ_PERF", 500000);
     uint64_t n_mp    = env_u64("MOS_FUZZ_MODEPAGE", 500000);
     uint64_t n_inq   = env_u64("MOS_FUZZ_INQDATA", 500000);
@@ -724,11 +752,12 @@ int main(int argc, char **argv)
     fuzz_cdtext(n_ct);
     fuzz_physstruct(n_ps);
     fuzz_trackinfo(n_ti);
+    fuzz_atip(n_atip);
     fuzz_perf(n_perf);
     fuzz_modepage(n_mp);
     fuzz_inqdata(n_inq);
 
     fprintf(stderr, "OK: fuzz_pure clean (%llu iterations total)\n",
-            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc + n_ds + n_ct + n_ps + n_ti + n_perf + n_mp + n_inq));
+            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc + n_ds + n_ct + n_ps + n_ti + n_atip + n_perf + n_mp + n_inq));
     return 0;
 }

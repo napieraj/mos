@@ -46,6 +46,7 @@ complete -c mos -f -n '__fish_mos_using_subcommand tray' -a 'eject open close lo
 # Global options.
 complete -c mos -s i -l index   -d '1-based drive index' -x
 complete -c mos      -l bsd     -d 'BSD form selector' -x
+complete -c mos      -l registry -d 'registry_id selector' -x
 complete -c mos -s j -l json    -d 'Emit JSON output'
 complete -c mos -s h -l help    -d 'Show help'
 complete -c mos      -l version -d 'Show version'

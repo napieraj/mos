@@ -26,6 +26,8 @@ typedef struct {
     const char *product;
     const char *revision;
     const char *serial;       /* borrowed; NULL = unavailable (see header) */
+    const char *interconnect;          /* borrowed DR token; NULL = absent */
+    const char *interconnect_location; /* borrowed DR token; NULL = absent */
     const mos_drive_caps *caps;  /* borrowed; protection + supported-profile list */
     const mos_drive_inquiry *inquiry;  /* borrowed; NULL = unreadable (BUSY) */
     const mos_mode_caps      *caps_2a;  /* NULL = page 0x2A unavailable */
@@ -47,13 +49,22 @@ static void emit_json(const drive_doc *d)
     fputs(",\n  \"product\": ", stdout);
     if (d->product)  mos_cli_json_str(stdout, d->product);
     else             fputs("null", stdout);
-    fputs(",\n  \"firmware\": ", stdout);
+    fputs(",\n  \"revision\": ", stdout);
     if (d->revision) mos_cli_json_str(stdout, d->revision);
     else             fputs("null", stdout);
 
     fputs(",\n  \"serial\": ", stdout);
     if (d->serial)   mos_cli_json_str(stdout, d->serial);
     else             fputs("null", stdout);
+
+    /* interconnect: the bus the drive attaches over + its location, from the
+       DiscRecording directory (zero commands). null when DR omits the key. */
+    fputs(",\n  \"interconnect\": ", stdout);
+    if (d->interconnect) mos_cli_json_str(stdout, d->interconnect);
+    else                 fputs("null", stdout);
+    fputs(",\n  \"interconnect_location\": ", stdout);
+    if (d->interconnect_location) mos_cli_json_str(stdout, d->interconnect_location);
+    else                          fputs("null", stdout);
 
     /* protection: copy/content-protection schemes the drive CAN authenticate
        (capability, not per-disc state — see the mos.drive.v1 schema). Version-
@@ -87,6 +98,24 @@ static void emit_json(const drive_doc *d)
         fprintf(stdout, ", \"securdisc\": %s, \"vcps\": %s}",
                 mos_drive_caps_securdisc(c) ? "true" : "false",
                 mos_drive_caps_vcps(c) ? "true" : "false");
+    }
+
+    /* write_protect: the Write Protect Feature (0004h) CAPABILITY bits — what
+       the drive can report/change, not per-disc state. Object when the feature
+       is present, null when absent (like the version-carrying protection
+       schemes). */
+    {
+        const mos_drive_caps *c = d->caps;
+        fputs(",\n  \"write_protect\": ", stdout);
+        if (mos_drive_caps_write_protect(c))
+            fprintf(stdout,
+                    "{\"sswpp\": %s, \"spwp\": %s, \"wdcb\": %s, \"dwp\": %s}",
+                    mos_drive_caps_wp_sswpp(c) ? "true" : "false",
+                    mos_drive_caps_wp_spwp(c)  ? "true" : "false",
+                    mos_drive_caps_wp_wdcb(c)  ? "true" : "false",
+                    mos_drive_caps_wp_dwp(c)   ? "true" : "false");
+        else
+            fputs("null", stdout);
     }
 
     /* Supported-profile list: array of {code, name}. Empty array when the
@@ -175,7 +204,7 @@ static void emit_json(const drive_doc *d)
 
 static void emit_human(const drive_doc *d)
 {
-    mos_cli_human_pair pairs[14];
+    mos_cli_human_pair pairs[16];
     size_t n = 0;
 
     char bsd_buf[24];
@@ -210,6 +239,18 @@ static void emit_human(const drive_doc *d)
     pairs[n++] = (mos_cli_human_pair){ "Firmware", d->revision ? fw_row : NULL };
 
     pairs[n++] = (mos_cli_human_pair){ "Serial",  d->serial   ? s_esc : NULL };
+
+    /* Interconnect: bus, with the location in parens when known
+       ("usb (external)"); just the bus when location is absent. Fixed token
+       vocabulary — no hostile bytes. */
+    char ic_row[32];
+    if (d->interconnect && d->interconnect_location)
+        snprintf(ic_row, sizeof ic_row, "%s (%s)",
+                 d->interconnect, d->interconnect_location);
+    else if (d->interconnect)
+        snprintf(ic_row, sizeof ic_row, "%s", d->interconnect);
+    pairs[n++] = (mos_cli_human_pair){ "Interconnect",
+                                       d->interconnect ? ic_row : NULL };
 
     /* Protection: the schemes the drive can authenticate, comma-joined; the
        version (and AACS bus-encryption notes) ride in parentheses. A modern BD
@@ -257,6 +298,30 @@ static void emit_human(const drive_doc *d)
         if (off == 0) snprintf(prot_buf, sizeof prot_buf, "none");
     }
     pairs[n++] = (mos_cli_human_pair){ "Protection", prot_buf };
+
+    /* Write Protect (0004h) capability: the supported flags, comma-joined;
+       "supported" when the feature is present with no change-capability flags;
+       NULL ("-") when the feature is absent. Capability, not per-disc state. */
+    char wp_buf[48];
+    if (mos_drive_caps_write_protect(d->caps)) {
+        size_t wo = 0;
+        const struct { bool on; const char *tag; } wpf[] = {
+            { mos_drive_caps_wp_sswpp(d->caps), "SSWPP" },
+            { mos_drive_caps_wp_spwp(d->caps),  "SPWP"  },
+            { mos_drive_caps_wp_wdcb(d->caps),  "WDCB"  },
+            { mos_drive_caps_wp_dwp(d->caps),   "DWP"   },
+        };
+        for (size_t i = 0; i < 4; i++) {
+            if (!wpf[i].on) continue;
+            int w = snprintf(wp_buf + wo, sizeof wp_buf - wo, "%s%s",
+                             wo ? ", " : "", wpf[i].tag);
+            if (w > 0 && (size_t)w < sizeof wp_buf - wo) wo += (size_t)w;
+        }
+        if (wo == 0) snprintf(wp_buf, sizeof wp_buf, "supported");
+    }
+    pairs[n++] = (mos_cli_human_pair){ "Write Protect",
+                                       mos_drive_caps_write_protect(d->caps)
+                                           ? wp_buf : NULL };
 
     /* Supported profiles, comma-joined names (unknown code → hex). 768 holds
        the realistic set several times over; a pathological overflow stops at
@@ -349,12 +414,8 @@ int mos_cli_run_drive(void)
     } else {
         int total = 0;
         h = mos_cli_open_sole_drive(&err, &total);
-        if (total > 1) {
-            fprintf(stderr,
-                    "%s: %d drives present; select one, e.g. `%s drive 2`.\n",
-                    progname, total, progname);
-            return EX_USAGE;
-        }
+        if (total > 1)
+            return mos_cli_emit_drives_present(total, "drive 2");
     }
     if (!h) return mos_cli_emit_unknown_and_fail("could not open drive", err, NULL);
 
@@ -398,6 +459,11 @@ int mos_cli_run_drive(void)
        command, no lock), so it reads even on mounted media. null when the drive
        does not implement the feature or programs no serial (firmware-dependent). */
     d.serial = mos_drive_caps_serial(c);
+
+    /* Interconnect (bus + location) from the open-time DR directory — zero
+       commands, null when DR omits the key. */
+    d.interconnect          = mos_handle_interconnect(h);
+    d.interconnect_location = mos_handle_interconnect_location(h);
 
     /* MODE SENSE pages 0x2A / 0x01 — best-effort, each null on failure. */
     const mos_mode_caps *caps2a = NULL;

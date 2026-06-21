@@ -30,6 +30,7 @@
 #include <DiscRecording/DRCoreDevice.h>
 #include <IOKit/IOKitLib.h>
 
+#include <stdio.h>
 #include <string.h>
 
 /* Strict CFString → C-buffer copy: COMPLETE-OR-EMPTY, the mos_vpd80 identity
@@ -248,13 +249,62 @@ uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name)
     return id;
 }
 
+/* kDRDevicePhysicalInterconnectKey CFString value -> the small int code
+   mos_internal_interconnect_token names. 0 (absent / unrecognized) -> the
+   field is omitted. CFEqual against the SDK constants, not string parsing. */
+static int mos_internal_dr_interconnect_code(CFTypeRef v)
+{
+    if (!v || CFGetTypeID(v) != CFStringGetTypeID()) return 0;
+    CFStringRef s = (CFStringRef)v;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectATAPI))        return 1;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectFibreChannel)) return 2;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectFireWire))     return 3;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectUSB))          return 4;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectSCSI))         return 5;
+    return 0;
+}
+
+/* kDRDevicePhysicalInterconnectLocationKey CFString value -> int code. */
+static int mos_internal_dr_location_code(CFTypeRef v)
+{
+    if (!v || CFGetTypeID(v) != CFStringGetTypeID()) return 0;
+    CFStringRef s = (CFStringRef)v;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectLocationInternal)) return 1;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectLocationExternal)) return 2;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectLocationUnknown))  return 3;
+    return 0;
+}
+
+/* Physical interconnect (bus) + location tokens from a DR info dict, into
+   caller buffers; empty string when the key is absent / unrecognized. */
+static void mos_internal_dr_read_interconnect(CFDictionaryRef info,
+                                              char *ic, size_t iccap,
+                                              char *loc, size_t loccap)
+{
+    if (ic && iccap) ic[0] = 0;
+    if (loc && loccap) loc[0] = 0;
+    if (!info) return;
+    const char *t = mos_internal_interconnect_token(
+        mos_internal_dr_interconnect_code(
+            CFDictionaryGetValue(info, kDRDevicePhysicalInterconnectKey)));
+    if (t && ic && iccap) snprintf(ic, iccap, "%s", t);
+    const char *lt = mos_internal_interconnect_location_token(
+        mos_internal_dr_location_code(
+            CFDictionaryGetValue(info, kDRDevicePhysicalInterconnectLocationKey)));
+    if (lt && loc && loccap) snprintf(loc, loccap, "%s", lt);
+}
+
 bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                                                char *vendor, size_t vcap,
                                                char *product, size_t pcap,
-                                               char *revision, size_t rcap)
+                                               char *revision, size_t rcap,
+                                               char *interconnect, size_t iccap,
+                                               char *location, size_t loccap)
 {
     if (vendor && vcap) vendor[0] = 0;
     if (product && pcap) product[0] = 0;
+    if (interconnect && iccap) interconnect[0] = 0;
+    if (location && loccap) location[0] = 0;
     if (revision && rcap) revision[0] = 0;
     if (svc == IO_OBJECT_NULL) return false;
 
@@ -295,6 +345,8 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                 mos_internal_dr_copy_identity_from_info(info, vendor, vcap,
                                                         product, pcap,
                                                         revision, rcap);
+                mos_internal_dr_read_interconnect(info, interconnect, iccap,
+                                                  location, loccap);
                 ok = true;
             }
             CFRelease(info);

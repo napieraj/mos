@@ -1,0 +1,32 @@
+{
+  "schema": "mos.metadata.v1",
+  "bsd_node": null,
+  "captured_at": "2026-06-21T20:14:05.000Z",
+  "volume_path": null,
+  "disc": {
+    "profile": "0x0009",
+    "class": "cd",
+    "toc": null,
+    "disc_info": {
+      "status": "blank",
+      "erasable": false,
+      "sessions": 1,
+      "tracks": 1,
+      "bg_format": 0,
+      "bg_format_name": "none"
+    },
+    "disc_structure": null,
+    "volume_name": null,
+    "track_info": null,
+    "cdtext": null,
+    "session_layout": null,
+    "atip": {
+      "disc_type": 0,
+      "disc_sub_type": 2,
+      "uru": true,
+      "reference_speed": 1,
+      "lead_in": { "min": 97, "sec": 24, "frame": 1 },
+      "lead_out": { "min": 79, "sec": 59, "frame": 74 }
+    }
+  }
+}

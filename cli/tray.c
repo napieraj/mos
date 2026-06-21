@@ -166,11 +166,10 @@ int mos_cli_run_tray(void)
         int total = 0;
         h = mos_cli_open_sole_drive(&err, &total);
         if (total > 1) {
-            fprintf(stderr,
-                    "%s: %d drives present; select one, e.g. `%s tray %s 2`.\n",
-                    progname, total, progname, action_word(act));
+            char example[32];
+            snprintf(example, sizeof example, "tray %s 2", action_word(act));
             if (h) mos_close(h);
-            return EX_USAGE;
+            return mos_cli_emit_drives_present(total, example);
         }
     }
     if (!h) return mos_cli_emit_unknown_and_fail("could not open drive", err, NULL);

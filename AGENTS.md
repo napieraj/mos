@@ -1863,3 +1863,124 @@ a real capture — that lands as a fixture + dated note and at most refines the
 parser's bounds, never a per-device special-case. The descriptor layout is still
 spec-built (no in-repo capture yet), the standing falsifier the perf parser
 already carries.
+
+## ADR: physical interconnect surfaced on `mos drive` — zero-command DR read
+## (2026-06-21, pre-tag enrichment)
+
+`mos.drive.v1` gains two nullable fields — `interconnect` (atapi / usb / firewire
+/ fibre_channel / scsi) and `interconnect_location` (internal / external /
+unknown) — read at open from the DiscRecording directory
+(`kDRDevicePhysicalInterconnectKey` / `…LocationKey`, `mos_dr.c`). This records
+why the enrichment is in-doctrine and additive.
+
+**Why it earns a field.** The bus a drive attaches over — and whether it is
+internal or external — is the USB-SATA-bridge axis mos's own hardware reasoning
+leans on constantly (the GESN under-report waiver, the bridge-quirk falsifiers)
+yet never *reported*. The pre-tag review found it corroborated three independent
+ways: the registry-key audit, the FOSS-peer comparison (every peer surfaces it —
+`drutil info` `Interconnect:`, `lsscsi --transport`), and the repo's own
+`doc/dr-field-mapping.md` ("interconnect — not currently exposed … if wanted").
+It is the single strongest missed identity field, and `mos drive` (the "what IS
+this drive" verb) is its home.
+
+**Scope-doctrine compliance.** No command-surface change: this is a registry/DR
+*dictionary* read, the SAME zero-command, non-exclusive modality mos already uses
+for the vendor/product/revision identity at open — not an MMC command, so the
+one-raw-CDB count (one-of-four) and layer-1 are untouched. Privilege footprint
+(layer 3) unchanged: no entitlement, no exclusive access, console-user grant only.
+The CFString values are mapped to stable tokens by CFEqual against the SDK value
+constants (no string parsing); the token set is a pure function
+(`mos_internal_interconnect_token`, `mos_strings.c`) drift-guarded against the
+schema enum, so the two cannot diverge. Both enums are CLOSED: an unrecognized DR
+value reads as null, never an invented token.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR):
+whether DR actually populates `kDRDevicePhysicalInterconnectKey` for a given
+USB-SATA bridge (it may omit it). The field is nullable, so an absent value
+degrades cleanly to null — no per-device branch. A capture showing a populated
+key that maps to none of the five SDK values lands as a dated note here and, at
+most, widens the closed enum; it never special-cases the device.
+
+## ADR: Write Protect Feature (0004h) capability surfaced on `mos drive`; the
+## audit's "0026h write protect" was a wrong feature number (2026-06-21)
+
+`mos.drive.v1` gains a nullable `write_protect` object — the SSWPP/SPWP/WDCB/DWP
+CAPABILITY bits of the Write Protect Feature (0004h), decoded from the existing
+RT=0 GET CONFIGURATION walk (`mos_config.c`
+`mos_internal_write_protect_from_config`, built to MMC-6 r02g §5.3.5 Table 101).
+This entry records the decision AND a spec-grounded correction to the pre-tag
+review.
+
+**The correction (lookup-before-assertion, of record).** The pre-tag MMC-surface
+audit proposed decoding "feature 0026h Write Protect (PWP/SWPP)" from the walk.
+Reading the maintainer-supplied MMC-6 r02g directly falsified that on two points:
+(1) **0026h is the *Restricted Overwrite* feature**, not write protect — the
+Write Protect Feature is **0004h**; and (2) the bits are a drive **capability**
+(can the drive report/change write protect), not the per-disc write-protect
+*state* the audit implied (that state lives in the Timeout & Protect mode page
+1Dh / MECHANISM STATUS, which mos does not read). The audit's framing came from a
+libcdio/MS-DDK-shaped memory; the spec is the authority. Building "0026h" would
+have decoded the wrong feature.
+
+**Why it earns a field, as capability.** Same class as the `protection` block:
+a drive-static CAPABILITY read from the walk mos already issues — zero new
+command, no raw CDB, no exclusive access, no privilege change. It answers "can
+this drive report/change software/persistent write protect, and write the DVD+RW
+/ BD Disc-Write-Protect structures" — a real drive fact for a rip/burn
+orchestrator. Null when the feature is absent; fail-closed (present-but-truncated
+payload leaves the bits false), like the protection decoders.
+
+**Scope-doctrine compliance.** Layer 1 untouched (convenience GET CONFIGURATION,
+one-of-four raw-CDB count unchanged); layer 2 honored — this is a read-only
+optical MMC feature decode, NOT MODE SELECT and NOT the per-disc mode-page state
+(no SPC ambition); layer 3 unchanged. The decline of the per-disc write-protect
+*state* (mode page 1Dh) is deliberate: it would be a separate read with its own
+argument, not folded in here.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+drive whose 0004h payload is shorter than Table 101 (caught by the data_len<1
+fail-closed → bits false) or a bridge that mis-sets the bits — each lands as a
+fixture + dated note, never a per-device special-case. The layout is spec-built
+(no in-repo capture yet); a real GET CONFIGURATION capture carrying 0004h is the
+standing falsifier.
+
+## ADR: CD-R/RW ATIP surfaced on `mos metadata` — raw pre-groove identity, the
+## CD analog of `disc_structure`; the manufacturer NAME stays consumer-side
+## (2026-06-21)
+
+`mos.metadata.v1.disc` gains a nullable `atip` object — the Absolute Time In
+Pre-groove of a CD-R/RW, read via READ TOC/PMA/ATIP **Format=0100b** (the
+convenience `ReadTableOfContents` mos already issues; built to MMC-6 r02g §6.25
+Table 488, `mos_atip.c`). This records why it is in-doctrine and where the line
+is drawn.
+
+**Why it earns a block.** mos surfaces a disc-maker identity for DVD/BD
+(`disc_structure.manufacturer_id` / `media_type_id`) but had **no CD-R/RW
+equivalent** — an asymmetric coverage hole every CD tool fills (`cdrecord
+-atip`, cdrdao). ATIP carries the CD-R/RW manufacturer/media identity in the
+lead-in start time, the disc type/sub-type, the unrestricted-use bit, and the
+last-possible lead-out (nominal capacity). It completes the per-media-class
+identity story symmetrically. Per-disc → `mos metadata` (the disc fingerprint),
+CD-only, null on pressed CD / DVD / BD.
+
+**The hard line: raw fields only, no manufacturer NAME.** The spec is explicit
+(§6.25.3.6.2 "For specific field values and meanings, see [CD-Ref6-9]") that the
+MID→manufacturer mapping lives in the Orange Book, not MMC — it is a curated
+per-device table, exactly the kind the hardware-role ADR keeps out of mos and
+ROADMAP marks permanently consumer-side (like MusicBrainz/dvdid). mos emits the
+raw lead-in M:S:F; a consumer keys the Orange Book table off it. Same posture as
+the DVD/BD `disc_structure` (raw maker code, no name table).
+
+**Scope-doctrine compliance.** Layer 1 untouched — Format=0100b rides the
+**convenience** `ReadTableOfContents` (the same method the CD TOC and CD-TEXT
+reads use), so NO new raw CDB; the one-of-four count is unchanged, no exclusive
+access. CD-only, gated on the cd profile class so other media never eat a
+guaranteed-failing read (a pressed CD answers CHECK CONDITION → `atip` null).
+Layer 2/3 unchanged.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): the
+exact field encodings on a real CD-R (the layout is spec-built to Table 488 with
+no in-repo capture yet) — a `mos probe --capture` ATIP reply is the standing
+falsifier, landing as a fixture + dated note, never a per-device special-case.
+The pure parser fails closed on a short/hostile reply (atip null), so a
+non-conformant bridge degrades cleanly.

@@ -62,6 +62,8 @@ struct mos_handle {
     char                      vendor_str[9];   /* 8 chars + NUL */
     char                      product_str[17]; /* 16 chars + NUL */
     char                      revision_str[5]; /* 4 chars + NUL */
+    char                      interconnect_str[16];           /* DR physical-interconnect token, "" = absent */
+    char                      interconnect_location_str[12];  /* DR interconnect-location token, "" = absent */
 
     /* Handle-owned result object returned (by borrowed pointer) from
        mos_query_state. Overwritten each query; its string fields point
@@ -96,6 +98,9 @@ struct mos_handle {
        per-session boundaries decoded from the kernel-cached full-TOC. Same
        terms; plain values, no borrowed pointers. */
     struct mos_session_layout session_layout;
+
+    /* Handle-owned ATIP result (mos_query_atip), CD-R/RW only. */
+    struct mos_atip           atip;
 
     /* Handle-owned capacity result (mos_query_capacity). Assembled from
        the per-call-refreshed IOMedia size above + a fresh track_info read +
@@ -193,7 +198,9 @@ bool mos_internal_dr_device_snapshot(CFTypeRef device_ref,
 bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                                                char *vendor, size_t vcap,
                                                char *product, size_t pcap,
-                                               char *revision, size_t rcap);
+                                               char *revision, size_t rcap,
+                                               char *interconnect, size_t iccap,
+                                               char *location, size_t loccap);
 
 /* ---- IOKit-linked internal prototypes ------------------------------ *
  *

@@ -30,6 +30,33 @@ const char *mos_state_description(mos_state s)
     }
 }
 
+/* DiscRecording physical-interconnect tokens. Contract in mos_pure.h; the
+   code set is fixed by the kDRDevicePhysicalInterconnect* constants the DR
+   adapter maps (mos_dr.c). Code 0 (absent / unrecognized) returns NULL so the
+   field is omitted, never a guessed token. The returned literals are the
+   schema's interconnect enums, drift-guarded in schemas/validate.py. */
+const char *mos_internal_interconnect_token(int code)
+{
+    switch (code) {
+        case 1:  return "atapi";
+        case 2:  return "fibre_channel";
+        case 3:  return "firewire";
+        case 4:  return "usb";
+        case 5:  return "scsi";
+        default: return NULL;
+    }
+}
+
+const char *mos_internal_interconnect_location_token(int code)
+{
+    switch (code) {
+        case 1:  return "internal";
+        case 2:  return "external";
+        case 3:  return "unknown";
+        default: return NULL;
+    }
+}
+
 const char *mos_disc_status_description(mos_disc_status s)
 {
     switch (s) {

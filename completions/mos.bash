@@ -15,10 +15,10 @@ _mos()
     fi
 
     local subcommands="state list watch metadata drive features tray capacity probe"
-    local global_opts="-i --index --bsd -j --json -h --help --version"
+    local global_opts="-i --index --bsd --registry -j --json -h --help --version"
 
     case "$prev" in
-        -i|--index) return ;;
+        -i|--index|--registry) return ;;
         --bsd) COMPREPLY=( $(compgen -W "disk" -- "$cur") ); return ;;
     esac
 
@@ -46,8 +46,8 @@ _mos()
 
     local opts="$global_opts"
     case "$sub" in
-        tray)  opts="-i --index --bsd -j --json -h --help --version --force" ;;
-        probe) opts="-i --index --bsd -j --json -h --help --version --dump --capture" ;;
+        tray)  opts="-i --index --bsd --registry -j --json -h --help --version --force" ;;
+        probe) opts="-i --index --bsd --registry -j --json -h --help --version --dump --capture" ;;
     esac
 
     if [[ "$cur" == -* ]]; then

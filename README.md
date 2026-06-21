@@ -34,8 +34,8 @@ mos state
 
 ```
 $ mos state 1
-Registry ID:  4295032831
         BSD:  /dev/disk4
+Registry ID:  4295032831
       State:  ready
       Media:  bd — bd_rom
    Writable:  no
@@ -59,10 +59,10 @@ $ mos state 1 --json
   "media_class": "bd",
   "media_type": "bd_rom",
   "writable": false,
-  "speeds": {"descriptor_count": 1, "max_read_kbps": 35980, "max_write_kbps": 0},
+  "speeds": {"speed_count": 1, "max_read_kbps": 35980, "max_write_kbps": 0},
   "vendor": "HL-DT-ST",
   "product": "BD-RE WH16NS60",
-  "firmware": "1.00"
+  "revision": "1.00"
 }
 ```
 
@@ -145,9 +145,11 @@ $ mos metadata 1
 
 Profile and media class, completion state (`blank` / `appendable` / `complete`),
 TOC, the registered disc-maker identity (e.g. `MILLEN`/`MR1` for Millenniata
-M-DISC), CD-TEXT, and a CD `session_layout`. In `--json`, the `disc` object is a
-closed, hashable fingerprint subtree — third-party IDs (MusicBrainz, AccurateRip,
-dvdid) derive from it client-side (see [Shell integration](#shell-integration)).
+M-DISC; for CD-R/RW the raw `atip` pre-groove identity — lead-in M:S:F, disc
+type, capacity), CD-TEXT, and a CD `session_layout`. In `--json`, the `disc`
+object is a closed, hashable fingerprint subtree — third-party IDs (MusicBrainz,
+AccurateRip, dvdid) derive from it client-side (see
+[Shell integration](#shell-integration)).
 
 ### `drive` — static drive facts
 
@@ -159,6 +161,7 @@ $ mos drive 1
        Product:  BD-RE WH16NS60
       Firmware:  1.00 (2019-01-07T13:20:43Z)
         Serial:  KL2G7942618WL
+  Interconnect:  usb (external)
     Protection:  AACS (v68, bus encryption), CSS (v1)
       Profiles:  cd_rom, cd_r, cd_rw, dvd_rom, dvd_minus_r, ..., bd_rom, bd_r, bd_re
      Standards:  spc_4 — mmc_6, sbc_3, sam_5, spc_4
@@ -167,8 +170,12 @@ Error Recovery:  retry 20, PER
 ```
 
 Disc-independent facts: identity, `serial` (the durable inventory key that
-survives replug where `registry_id` does not), content-protection *capability*,
-the supported-profile set, and the mechanical and error-recovery configuration.
+survives replug where `registry_id` does not), the physical `interconnect`
+(bus + internal/external, from DiscRecording — zero commands),
+content-protection *capability*, `write_protect` *capability* (the drive's
+Write Protect Feature 0004h bits — what it can report/change, not per-disc
+state), the supported-profile set, and the mechanical and error-recovery
+configuration.
 Read-only — `mos` reports these, never changes them. (Read/write **speeds** are
 media-dependent, so they live on [`state`](#state-default--what-the-drive-is-doing-now)
 and [`watch`](#watch), not here.)
@@ -225,8 +232,10 @@ deliberately-locked idle drive (a robot's `mos tray lock`) with no mount in
 play, which a plain eject reports as `refused_locked`. It clears both Prevent
 states so the locked tray opens. It does **not** touch
 the filesystem — a busy disc still reports busy under `--force`. The one blocker
-neither path can clear is another program holding the drive exclusively
-(`outcome: exclusive_access`).
+neither path can clear is another program holding the drive exclusively, which
+surfaces as a `mos.error.v1` error with code `exclusive_access` — not a tray
+`outcome` (the outcome enum is `done` / `refused_locked` / `refused_other` /
+`already_locked`).
 
 `tray lock` sets the **basic** Prevent state — the hard removal block that
 refuses the front-panel eject button. `tray unlock` clears **both** Prevent

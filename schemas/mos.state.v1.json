@@ -66,7 +66,7 @@
         "hd_dvd_rom", "hd_dvd_r", "hd_dvd_rw", "hd_dvd_ram",
         "bd_rom", "bd_r", "bd_re"
       ],
-      "description": "Kernel optical-media type token (the IORegistry kIO{CD,DVD,BD}MediaTypeKey \"Type\" string mapped to a stable token by mos_internal_media_type_token). Read with ZERO MMC commands off the media node, so \u2014 UNLIKE current_profile/media_class \u2014 it is present even when the drive is not READY (a loading/busy/media_unreadable disc can still be named); and it is finer than media_class (ROM vs recordable: bd_r/bd_re/bd_rom, not just bd). NOT coupled to current_profile: it may be present with current_profile 0x0000. Absent (key omitted) when no optical media node carries a Type, or the string is unknown (fail-closed). The token set mirrors the C map in mos_strings.c (drift-guarded in validate.py)."
+      "description": "Kernel optical-media type token (the IORegistry kIO{CD,DVD,BD}MediaTypeKey \"Type\" string mapped to a stable token by mos_internal_media_type_token). Read with ZERO MMC commands off the media node, so \u2014 UNLIKE current_profile/media_class \u2014 it is present even when the drive is not READY (a loading/busy/media_unreadable disc can still be named); and it is finer than media_class (ROM vs recordable: bd_r/bd_re/bd_rom, not just bd). NOT coupled to current_profile: it may be present with current_profile 0x0000. Absent (key omitted) when no optical media node carries a Type, or the string is unknown (fail-closed). The token set mirrors the C map in mos_strings.c (drift-guarded in validate.py). Unlike `state`, this is a CLOSED enum (the optical media families are a fixed historical set); an unrecognized kernel Type fails closed to key-absent rather than emitting a new token, so a consumer never sees a value outside this set within mos.state.v1."
     },
     "writable": {
       "type": "boolean",
@@ -79,24 +79,24 @@
     },
     "speeds": {
       "type": "object",
-      "description": "Loaded disc's read/write performance from GET PERFORMANCE (0xAC, Type 00h Performance Data) via the GetPerformance convenience method \u2014 a NON-exclusive convenience method (no raw CDB, no exclusive lock), so it never contends with a one-shot control verb. MEDIA-DEPENDENT: this describes the loaded medium, not a static drive fact, which is why it lives on state/event rather than `mos drive`. Present only when the drive is READY and reported at least one read-direction descriptor; key absent otherwise (no media, not ready, or an empty reply \u2014 zero is data, not error). One-shot `mos state` reads it per invocation; `mos watch` grabs it once per disc and caches. Spec-derived descriptor layout (no in-repo capture yet); a real GET PERFORMANCE capture is a falsifier per the hardware ADR.",
-      "required": ["descriptor_count", "max_read_kbps", "max_write_kbps"],
+      "description": "Loaded disc's read/write performance from GET PERFORMANCE (0xAC, Type 00h Performance Data) via the GetPerformance convenience method \u2014 a NON-exclusive convenience method (no raw CDB, no exclusive lock), so it never contends with a one-shot control verb. MEDIA-DEPENDENT: this describes the loaded medium, not a static drive fact, which is why it lives on state/event rather than `mos drive`. Present only when the drive is READY and reported at least one read-direction descriptor; key absent otherwise (no media, not ready, or an empty reply \u2014 zero is data, not error). One-shot `mos state` reads it per invocation; `mos watch` grabs it once per disc and caches. The max_*_kbps integers are kilobytes per second where kB = 1000 bytes (the MMC GET PERFORMANCE unit) — kilo-BYTES not kilo-bits, 1000-based not 1024-based. Spec-derived descriptor layout (no in-repo capture yet); a real GET PERFORMANCE capture is a falsifier per the hardware ADR.",
+      "required": ["speed_count", "max_read_kbps", "max_write_kbps"],
       "additionalProperties": false,
       "properties": {
-        "descriptor_count": {
+        "speed_count": {
           "type": "integer",
           "minimum": 0,
-          "description": "Number of performance descriptors in the read-direction reply."
+          "description": "Count of read-direction (WRITE=0) performance descriptors in the GET PERFORMANCE reply."
         },
         "max_read_kbps": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum read performance (kB/s) across the WRITE=0 descriptors."
+          "description": "Maximum read performance across the WRITE=0 descriptors, in kB/s (kB = 1000 bytes)."
         },
         "max_write_kbps": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum write performance (kB/s) across the WRITE=1 descriptors (0 on a read-only drive / non-writable medium)."
+          "description": "Maximum write performance across the WRITE=1 descriptors, in kB/s (kB = 1000 bytes); 0 on a read-only drive / non-writable medium."
         }
       }
     },
@@ -108,7 +108,7 @@
       "type": "string",
       "description": "Product identity, same delivery boundary and byte-faithful emission rules as vendor. Field present only when non-empty."
     },
-    "firmware": {
+    "revision": {
       "type": "string",
       "description": "INQUIRY PRODUCT_REVISION_LEVEL (firmware revision, up to 4 chars per SPC-4 \u00a76.4.2). Same sanitization rules as vendor. Field present only when non-empty."
     },

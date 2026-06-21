@@ -276,6 +276,34 @@ typedef struct mos_session_layout {  /* tagged: mos.h forward-declares opaquely 
 bool mos_internal_cdtoc_parse(const uint8_t *buf, size_t len,
                               mos_session_layout *out);
 
+/* ---- ATIP decode (mos_atip.c) ------------------------------------- *
+ *
+ * Absolute Time In Pre-groove — the CD-R/RW manufacturer/media identity in
+ * the disc's pre-groove, read via READ TOC/PMA/ATIP Format=0100b (the
+ * convenience ReadTableOfContents mos already issues for the TOC). CD
+ * recordable only; ROM/DVD/BD carry no ATIP. mos surfaces the RAW spec fields
+ * only — the MID-to-manufacturer NAME table is the Orange Book's, curated and
+ * consumer-side (the per-device table the hardware-role ADR forbids).
+ * MMC-6 r02g §6.25, Table 488. */
+typedef struct mos_atip {        /* tagged: mos.h forward-declares opaquely */
+    bool    uru;            /* Unrestricted Use Disc bit (byte5 bit6)          */
+    uint8_t disc_type;      /* byte6 bit6 (0 = CD-R, 1 = CD-RW)                */
+    uint8_t disc_sub_type;  /* byte6 bits5-3 (speed/class subdivision)         */
+    uint8_t reference_speed;/* byte4 bits2-0                                   */
+    /* ATIP Start Time of Lead-in (M:S:F) — the manufacturer/MID identity. */
+    uint8_t lead_in_min, lead_in_sec, lead_in_frame;
+    /* Last Possible Start Time of Lead-out (M:S:F) — nominal capacity. */
+    uint8_t lead_out_min, lead_out_sec, lead_out_frame;
+} mos_atip;
+
+/* Parse a READ TOC/PMA/ATIP Format=0100b reply (MMC-6 §6.25 Table 488) into
+   *out. Returns true iff the reply is long enough to carry the ATIP descriptor
+   through the lead-out time (response byte 14). The device-reported ATIP Data
+   Length (bytes 0-1, BE) may only SHRINK the trusted region (dual-length rule);
+   no payload byte is used as an offset. Fail-closed: a short/hostile reply
+   returns false and leaves *out zeroed. Pure, no-OOB — fuzz/ASan-gated. */
+bool mos_internal_atip_parse(const uint8_t *buf, size_t len, mos_atip *out);
+
 /* Decode the SAME CDTOC blob into the per-track mos_toc (format-0000b's shape):
    first/last track, lead-out (the highest session's A2), and {track, adr,
    control, start_lba} per track. This is what lets the cached full-TOC be the
@@ -347,9 +375,22 @@ typedef struct mos_drive_protection {
     bool    vcps;                 /* feature 0110h present (legacy, MMC-5)   */
 } mos_drive_protection;
 
+/* Write Protect Feature (0004h) CAPABILITY bits — what the drive can
+   report/change, NOT per-disc write-protect state (that is mode page 1Dh /
+   MECHANISM STATUS, which mos does not read). MMC-6 r02g §5.3.5 Table 101,
+   descriptor payload byte 0: bit0 SSWPP, bit1 SPWP, bit2 WDCB, bit3 DWP. */
+typedef struct mos_write_protect {
+    bool present;   /* feature 0004h present in the RT=0 walk                 */
+    bool sswpp;     /* supports the SWPP bit of the Timeout & Protect page    */
+    bool spwp;      /* supports set/release of Persistent Write Protect       */
+    bool wdcb;      /* supports the Write Inhibit DCB on DVD+RW               */
+    bool dwp;       /* supports the Disc Write Protect PAC on BD-R/-RE        */
+} mos_write_protect;
+
 /* Drive-static facts from a full (RT=0) GET CONFIGURATION response. */
 typedef struct mos_drive_caps {
     mos_drive_protection protection;
+    mos_write_protect    write_protect;
     /* Supported-profile set from the Profile List feature (0x0000), drive-
        static (the per-descriptor CurrentP bit is media-dependent, ignored).
        64 covers a conformant max (one-byte Additional Length ⇒ ≤63 codes). */
@@ -380,6 +421,17 @@ typedef struct mos_drive_caps {
    an absent feature leaves its fields false/0. Pure, no-OOB — fuzz/ASan-gated. */
 void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
                                          mos_drive_caps *out);
+
+/* Decode the Write Protect Feature (0004h) CAPABILITY bits into
+   out->write_protect from a full (RT=0) GET CONFIGURATION reply. Does NOT
+   zero-init (called after mos_internal_protection_from_config, which does).
+   MMC-6 r02g §5.3.5 Table 101: descriptor payload byte 0 carries SSWPP/SPWP/
+   WDCB/DWP; a present-but-truncated payload (data_len < 1) reads as absent
+   (fail closed, like the protection decoders). These are capability bits — a
+   drive's ability to report/change write protect — NOT per-disc write-protect
+   state. Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
+                                            mos_drive_caps *out);
 
 /* Decode the Profile List feature (0x0000) into out_codes[0..cap), setting
    *out_count. Each descriptor is 4 bytes: [0..1] Profile Number (BE),
@@ -710,6 +762,17 @@ bool mos_internal_profile_is_formattable(uint16_t profile);
    doc/research/2026-06-18-media-class-not-ready-fallback.md. */
 const char *mos_internal_media_type_token(const char *kernel_type);
 
+/* DiscRecording physical-interconnect tokens (pure). The DR adapter
+   (mos_dr.c) maps the kDRDevicePhysicalInterconnect{,Location}Key CFString
+   values to these small int codes; this function names them. Kept pure +
+   here so the schema's interconnect enums are drift-guarded against the C
+   token set (schemas/validate.py). NULL for code 0 (absent / unrecognized) so
+   an unknown bus omits the field rather than inventing a token.
+     interconnect: 1 atapi, 2 fibre_channel, 3 firewire, 4 usb, 5 scsi
+     location:     1 internal, 2 external, 3 unknown                       */
+const char *mos_internal_interconnect_token(int code);
+const char *mos_internal_interconnect_location_token(int code);
+
 /* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *
  *
  * The drive's read/write performance from GET PERFORMANCE (0xAC, Type 00h
@@ -721,7 +784,7 @@ const char *mos_internal_media_type_token(const char *kernel_type);
  * per the hardware ADR. New fields append at the END. */
 struct mos_drive_perf {
     bool     have;              /* >= 1 descriptor in either direction */
-    uint16_t descriptor_count;  /* from the read-direction reply       */
+    uint16_t speed_count;       /* read-direction descriptor count      */
     uint32_t max_read_kbps;     /* max performance, WRITE=0 reply       */
     uint32_t max_write_kbps;    /* max performance, WRITE=1 reply       */
 };

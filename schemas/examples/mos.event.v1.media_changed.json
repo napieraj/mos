@@ -15,7 +15,7 @@
   "writable": false,
   "vendor": "HL-DT-ST",
   "product": "BD-RE BH16NS55",
-  "firmware": "1.00",
+  "revision": "1.00",
   "serial": "KL2G7942618WL",
   "latency_ms": 38
 }

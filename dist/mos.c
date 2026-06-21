@@ -360,6 +360,34 @@ typedef struct mos_session_layout {  /* tagged: mos.h forward-declares opaquely 
 bool mos_internal_cdtoc_parse(const uint8_t *buf, size_t len,
                               mos_session_layout *out);
 
+/* ---- ATIP decode (mos_atip.c) ------------------------------------- *
+ *
+ * Absolute Time In Pre-groove — the CD-R/RW manufacturer/media identity in
+ * the disc's pre-groove, read via READ TOC/PMA/ATIP Format=0100b (the
+ * convenience ReadTableOfContents mos already issues for the TOC). CD
+ * recordable only; ROM/DVD/BD carry no ATIP. mos surfaces the RAW spec fields
+ * only — the MID-to-manufacturer NAME table is the Orange Book's, curated and
+ * consumer-side (the per-device table the hardware-role ADR forbids).
+ * MMC-6 r02g §6.25, Table 488. */
+typedef struct mos_atip {        /* tagged: mos.h forward-declares opaquely */
+    bool    uru;            /* Unrestricted Use Disc bit (byte5 bit6)          */
+    uint8_t disc_type;      /* byte6 bit6 (0 = CD-R, 1 = CD-RW)                */
+    uint8_t disc_sub_type;  /* byte6 bits5-3 (speed/class subdivision)         */
+    uint8_t reference_speed;/* byte4 bits2-0                                   */
+    /* ATIP Start Time of Lead-in (M:S:F) — the manufacturer/MID identity. */
+    uint8_t lead_in_min, lead_in_sec, lead_in_frame;
+    /* Last Possible Start Time of Lead-out (M:S:F) — nominal capacity. */
+    uint8_t lead_out_min, lead_out_sec, lead_out_frame;
+} mos_atip;
+
+/* Parse a READ TOC/PMA/ATIP Format=0100b reply (MMC-6 §6.25 Table 488) into
+   *out. Returns true iff the reply is long enough to carry the ATIP descriptor
+   through the lead-out time (response byte 14). The device-reported ATIP Data
+   Length (bytes 0-1, BE) may only SHRINK the trusted region (dual-length rule);
+   no payload byte is used as an offset. Fail-closed: a short/hostile reply
+   returns false and leaves *out zeroed. Pure, no-OOB — fuzz/ASan-gated. */
+bool mos_internal_atip_parse(const uint8_t *buf, size_t len, mos_atip *out);
+
 /* Decode the SAME CDTOC blob into the per-track mos_toc (format-0000b's shape):
    first/last track, lead-out (the highest session's A2), and {track, adr,
    control, start_lba} per track. This is what lets the cached full-TOC be the
@@ -431,9 +459,22 @@ typedef struct mos_drive_protection {
     bool    vcps;                 /* feature 0110h present (legacy, MMC-5)   */
 } mos_drive_protection;
 
+/* Write Protect Feature (0004h) CAPABILITY bits — what the drive can
+   report/change, NOT per-disc write-protect state (that is mode page 1Dh /
+   MECHANISM STATUS, which mos does not read). MMC-6 r02g §5.3.5 Table 101,
+   descriptor payload byte 0: bit0 SSWPP, bit1 SPWP, bit2 WDCB, bit3 DWP. */
+typedef struct mos_write_protect {
+    bool present;   /* feature 0004h present in the RT=0 walk                 */
+    bool sswpp;     /* supports the SWPP bit of the Timeout & Protect page    */
+    bool spwp;      /* supports set/release of Persistent Write Protect       */
+    bool wdcb;      /* supports the Write Inhibit DCB on DVD+RW               */
+    bool dwp;       /* supports the Disc Write Protect PAC on BD-R/-RE        */
+} mos_write_protect;
+
 /* Drive-static facts from a full (RT=0) GET CONFIGURATION response. */
 typedef struct mos_drive_caps {
     mos_drive_protection protection;
+    mos_write_protect    write_protect;
     /* Supported-profile set from the Profile List feature (0x0000), drive-
        static (the per-descriptor CurrentP bit is media-dependent, ignored).
        64 covers a conformant max (one-byte Additional Length ⇒ ≤63 codes). */
@@ -464,6 +505,17 @@ typedef struct mos_drive_caps {
    an absent feature leaves its fields false/0. Pure, no-OOB — fuzz/ASan-gated. */
 void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
                                          mos_drive_caps *out);
+
+/* Decode the Write Protect Feature (0004h) CAPABILITY bits into
+   out->write_protect from a full (RT=0) GET CONFIGURATION reply. Does NOT
+   zero-init (called after mos_internal_protection_from_config, which does).
+   MMC-6 r02g §5.3.5 Table 101: descriptor payload byte 0 carries SSWPP/SPWP/
+   WDCB/DWP; a present-but-truncated payload (data_len < 1) reads as absent
+   (fail closed, like the protection decoders). These are capability bits — a
+   drive's ability to report/change write protect — NOT per-disc write-protect
+   state. Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
+                                            mos_drive_caps *out);
 
 /* Decode the Profile List feature (0x0000) into out_codes[0..cap), setting
    *out_count. Each descriptor is 4 bytes: [0..1] Profile Number (BE),
@@ -794,6 +846,17 @@ bool mos_internal_profile_is_formattable(uint16_t profile);
    doc/research/2026-06-18-media-class-not-ready-fallback.md. */
 const char *mos_internal_media_type_token(const char *kernel_type);
 
+/* DiscRecording physical-interconnect tokens (pure). The DR adapter
+   (mos_dr.c) maps the kDRDevicePhysicalInterconnect{,Location}Key CFString
+   values to these small int codes; this function names them. Kept pure +
+   here so the schema's interconnect enums are drift-guarded against the C
+   token set (schemas/validate.py). NULL for code 0 (absent / unrecognized) so
+   an unknown bus omits the field rather than inventing a token.
+     interconnect: 1 atapi, 2 fibre_channel, 3 firewire, 4 usb, 5 scsi
+     location:     1 internal, 2 external, 3 unknown                       */
+const char *mos_internal_interconnect_token(int code);
+const char *mos_internal_interconnect_location_token(int code);
+
 /* ---- GET PERFORMANCE performance-data decode (mos_perf.c) ---------- *
  *
  * The drive's read/write performance from GET PERFORMANCE (0xAC, Type 00h
@@ -805,7 +868,7 @@ const char *mos_internal_media_type_token(const char *kernel_type);
  * per the hardware ADR. New fields append at the END. */
 struct mos_drive_perf {
     bool     have;              /* >= 1 descriptor in either direction */
-    uint16_t descriptor_count;  /* from the read-direction reply       */
+    uint16_t speed_count;       /* read-direction descriptor count      */
     uint32_t max_read_kbps;     /* max performance, WRITE=0 reply       */
     uint32_t max_write_kbps;    /* max performance, WRITE=1 reply       */
 };
@@ -1174,6 +1237,8 @@ struct mos_handle {
     char                      vendor_str[9];   /* 8 chars + NUL */
     char                      product_str[17]; /* 16 chars + NUL */
     char                      revision_str[5]; /* 4 chars + NUL */
+    char                      interconnect_str[16];           /* DR physical-interconnect token, "" = absent */
+    char                      interconnect_location_str[12];  /* DR interconnect-location token, "" = absent */
 
     /* Handle-owned result object returned (by borrowed pointer) from
        mos_query_state. Overwritten each query; its string fields point
@@ -1208,6 +1273,9 @@ struct mos_handle {
        per-session boundaries decoded from the kernel-cached full-TOC. Same
        terms; plain values, no borrowed pointers. */
     struct mos_session_layout session_layout;
+
+    /* Handle-owned ATIP result (mos_query_atip), CD-R/RW only. */
+    struct mos_atip           atip;
 
     /* Handle-owned capacity result (mos_query_capacity). Assembled from
        the per-call-refreshed IOMedia size above + a fresh track_info read +
@@ -1305,7 +1373,9 @@ bool mos_internal_dr_device_snapshot(CFTypeRef device_ref,
 bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                                                char *vendor, size_t vcap,
                                                char *product, size_t pcap,
-                                               char *revision, size_t rcap);
+                                               char *revision, size_t rcap,
+                                               char *interconnect, size_t iccap,
+                                               char *location, size_t loccap);
 
 /* ---- IOKit-linked internal prototypes ------------------------------ *
  *
@@ -1443,6 +1513,75 @@ static inline void mos_internal_cleanup_io_object(io_object_t *p)
 #define MOS_IO_AUTO __attribute__((cleanup(mos_internal_cleanup_io_object)))
 
 #endif /* MOS_INTERNAL_H */
+
+/* ==== src/mos_atip.c ==== */
+/*
+ * mos_atip.c — pure, bounds-safe decode of a READ TOC/PMA/ATIP Format=0100b
+ * reply (the CD-R/RW Absolute Time In Pre-groove). No IOKit: the shell hands
+ * us the reply buffer + the trusted byte count.
+ *
+ * Layout (MMC-6 r02g §6.25, Table 488 — "READ TOC/PMA/ATIP response data
+ * (Format = 0100b)"):
+ *
+ *   [0..1] ATIP Data Length (BE) — bytes AFTER this field; total = 2 + value.
+ *   [2..3] Reserved
+ *   ATIP Descriptor (Special Information 1..3 + Additional Information):
+ *   [4]    Indicative Target Writing Power[7:4] | Reserved[3] | RefSpeed[2:0]
+ *   [5]    bit7=0 | URU[6] | Reserved[5:0]
+ *   [6]    bit7=1 | DiscType[6] | DiscSubType[5:3] | A1V[2] | A2V[1] | A3V[0]
+ *   [7]    Reserved
+ *   [8..10]  ATIP Start Time of Lead-in   (Min, Sec, Frame) — the MID identity
+ *   [11]   Reserved
+ *   [12..14] Last Possible Start Time of Lead-out (Min, Sec, Frame) — capacity
+ *   [15..]  A1/A2/A3/S4 values (not decoded)
+ *
+ * Safety contract (the device controls the length):
+ *   - The reply must be at least 15 bytes to carry the descriptor through the
+ *     lead-out frame (byte 14); shorter ⇒ fail closed (false, out zeroed).
+ *   - The ATIP Data Length field may only SHRINK the trusted region, never
+ *     extend it past `len` (dual-length rule).
+ *   - No payload byte is used as an offset — fixed-offset reads only.
+ *
+ * mos surfaces the RAW spec fields; the MID→manufacturer NAME table is the
+ * Orange Book's, curated and consumer-side (per the hardware-role ADR, mos
+ * does not ship per-device identity tables).
+ */
+
+
+#include <string.h>
+
+bool mos_internal_atip_parse(const uint8_t *buf, size_t len, mos_atip *out)
+{
+    if (out) memset(out, 0, sizeof *out);
+    if (!buf || !out) return false;
+
+    /* Trusted end: start at the buffer ceiling, then let the device's ATIP
+       Data Length pull it IN iff it claims less. 64-bit so +2 cannot wrap. */
+    size_t end = len;
+    if (len >= 2) {
+        uint64_t dlen = ((uint64_t)buf[0] << 8) | (uint64_t)buf[1];
+        uint64_t declared = dlen + 2u;          /* total incl. the length field */
+        if (declared < (uint64_t)end) end = (size_t)declared;
+    }
+
+    /* Need the descriptor through the lead-out frame at byte 14. */
+    if (end < 15u) return false;
+
+    out->reference_speed = (uint8_t)(buf[4] & 0x07u);
+    out->uru             = (buf[5] & 0x40u) != 0;
+    out->disc_type       = (uint8_t)((buf[6] >> 6) & 0x01u);
+    out->disc_sub_type   = (uint8_t)((buf[6] >> 3) & 0x07u);
+
+    out->lead_in_min   = buf[8];
+    out->lead_in_sec   = buf[9];
+    out->lead_in_frame = buf[10];
+
+    out->lead_out_min   = buf[12];
+    out->lead_out_sec   = buf[13];
+    out->lead_out_frame = buf[14];
+
+    return true;
+}
 
 /* ==== src/mos_cdtext.c ==== */
 /*
@@ -1927,6 +2066,28 @@ void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
     /* VCPS (0110h): legacy (MMC-5), presence only. */
     if (mos_internal_config_find_feature(buf, len, 0x0110, &f))
         p->vcps = true;
+}
+
+/* Contract in mos_pure.h. Write Protect Feature (0004h), MMC-6 r02g §5.3.5
+   Table 101: the descriptor payload byte 0 (f.data[0], after the 4-byte
+   feature header) carries SSWPP (bit 0), SPWP (bit 1), WDCB (bit 2), DWP
+   (bit 3). Presence alone (find) sets `present`; a truncated payload
+   (data_len < 1) leaves the bits false (fail closed, like the protection
+   decoders). Does NOT zero-init out (protection_from_config did). */
+void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
+                                            mos_drive_caps *out)
+{
+    if (!out) return;
+    mos_write_protect *w = &out->write_protect;
+
+    mos_config_feature f;
+    if (!mos_internal_config_find_feature(buf, len, 0x0004, &f)) return;
+    w->present = true;
+    if (!f.data || f.data_len < 1) return;        /* present, no capability byte */
+    w->sswpp = (f.data[0] & 0x01u) != 0;
+    w->spwp  = (f.data[0] & 0x02u) != 0;
+    w->wdcb  = (f.data[0] & 0x04u) != 0;
+    w->dwp   = (f.data[0] & 0x08u) != 0;
 }
 
 /* Contract in mos_pure.h. The Profile List feature (0x0000) payload is a
@@ -2512,6 +2673,7 @@ bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
 #include <DiscRecording/DRCoreDevice.h>
 #include <IOKit/IOKitLib.h>
 
+#include <stdio.h>
 #include <string.h>
 
 /* Strict CFString → C-buffer copy: COMPLETE-OR-EMPTY, the mos_vpd80 identity
@@ -2730,13 +2892,62 @@ uint64_t mos_internal_dr_registry_id_for_bsd_name(const char *disk_name)
     return id;
 }
 
+/* kDRDevicePhysicalInterconnectKey CFString value -> the small int code
+   mos_internal_interconnect_token names. 0 (absent / unrecognized) -> the
+   field is omitted. CFEqual against the SDK constants, not string parsing. */
+static int mos_internal_dr_interconnect_code(CFTypeRef v)
+{
+    if (!v || CFGetTypeID(v) != CFStringGetTypeID()) return 0;
+    CFStringRef s = (CFStringRef)v;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectATAPI))        return 1;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectFibreChannel)) return 2;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectFireWire))     return 3;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectUSB))          return 4;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectSCSI))         return 5;
+    return 0;
+}
+
+/* kDRDevicePhysicalInterconnectLocationKey CFString value -> int code. */
+static int mos_internal_dr_location_code(CFTypeRef v)
+{
+    if (!v || CFGetTypeID(v) != CFStringGetTypeID()) return 0;
+    CFStringRef s = (CFStringRef)v;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectLocationInternal)) return 1;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectLocationExternal)) return 2;
+    if (CFEqual(s, kDRDevicePhysicalInterconnectLocationUnknown))  return 3;
+    return 0;
+}
+
+/* Physical interconnect (bus) + location tokens from a DR info dict, into
+   caller buffers; empty string when the key is absent / unrecognized. */
+static void mos_internal_dr_read_interconnect(CFDictionaryRef info,
+                                              char *ic, size_t iccap,
+                                              char *loc, size_t loccap)
+{
+    if (ic && iccap) ic[0] = 0;
+    if (loc && loccap) loc[0] = 0;
+    if (!info) return;
+    const char *t = mos_internal_interconnect_token(
+        mos_internal_dr_interconnect_code(
+            CFDictionaryGetValue(info, kDRDevicePhysicalInterconnectKey)));
+    if (t && ic && iccap) snprintf(ic, iccap, "%s", t);
+    const char *lt = mos_internal_interconnect_location_token(
+        mos_internal_dr_location_code(
+            CFDictionaryGetValue(info, kDRDevicePhysicalInterconnectLocationKey)));
+    if (lt && loc && loccap) snprintf(loc, loccap, "%s", lt);
+}
+
 bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                                                char *vendor, size_t vcap,
                                                char *product, size_t pcap,
-                                               char *revision, size_t rcap)
+                                               char *revision, size_t rcap,
+                                               char *interconnect, size_t iccap,
+                                               char *location, size_t loccap)
 {
     if (vendor && vcap) vendor[0] = 0;
     if (product && pcap) product[0] = 0;
+    if (interconnect && iccap) interconnect[0] = 0;
+    if (location && loccap) location[0] = 0;
     if (revision && rcap) revision[0] = 0;
     if (svc == IO_OBJECT_NULL) return false;
 
@@ -2777,6 +2988,8 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
                 mos_internal_dr_copy_identity_from_info(info, vendor, vcap,
                                                         product, pcap,
                                                         revision, rcap);
+                mos_internal_dr_read_interconnect(info, interconnect, iccap,
+                                                  location, loccap);
                 ok = true;
             }
             CFRelease(info);
@@ -3754,6 +3967,37 @@ mos_error mos_query_cdtext(mos_handle_t *h, const mos_cdtext **out)
     return MOS_OK;
 }
 
+mos_error mos_query_atip(mos_handle_t *h, const mos_atip **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* READ TOC/PMA/ATIP format 0100b (ATIP). The descriptor is small and
+       fixed; 64 bytes holds it with the A1/A2/A3/S4 tail, and the reply's own
+       ATIP Data Length only shrinks the parse (O-4). CD-R/RW only — a pressed
+       CD / DVD / BD answers CHECK CONDITION, surfaced as MOS_ERR_IO. The
+       track/session parameter is reserved here — passed 0. */
+    uint8_t         buf[64] = {0};
+    SCSITaskStatus  st      = 0;
+    SCSI_Sense_Data sd      = {0};
+
+    IOReturn rc = (*h->mmc)->ReadTableOfContents(
+        h->mmc, 0 /*LBA*/, 0x04 /*ATIP*/, 0 /*reserved*/,
+        buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_atip_parse(buf, sizeof(buf), &h->atip)) {
+        return MOS_ERR_IO;   /* no ATIP / reply too short */
+    }
+    *out = &h->atip;
+    return MOS_OK;
+}
+
 mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
 {
     if (out) *out = NULL;
@@ -3782,6 +4026,10 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
     }
 
     mos_internal_protection_from_config(buf, sizeof(buf), &h->caps);
+    /* Same RT=0 reply carries the Write Protect Feature (0004h) capability bits
+       (protection_from_config zeroed the struct first, so write_protect stays
+       all-false if the feature is absent). */
+    mos_internal_write_protect_from_config(buf, sizeof(buf), &h->caps);
     /* Same RT=0 reply carries the Profile List feature (0x0000); decode the
        drive-static supported-profile set from it (protection_from_config zeroed
        the struct first, so profile_count stays 0 if the feature is absent). */
@@ -4197,7 +4445,7 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
         if (we != MOS_OK && we != MOS_ERR_IO) return we;
 
         struct mos_drive_perf tmp = {0};
-        tmp.descriptor_count = rd_cnt;
+        tmp.speed_count      = rd_cnt;
         tmp.max_read_kbps    = rd_max;
         tmp.max_write_kbps   = wr_max;
         tmp.have             = (rd_cnt > 0);
@@ -4582,6 +4830,31 @@ bool mos_drive_caps_vcps(const mos_drive_caps *c)
     return c ? c->protection.vcps : false;
 }
 
+bool mos_drive_caps_write_protect(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.present : false;
+}
+
+bool mos_drive_caps_wp_sswpp(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.sswpp : false;
+}
+
+bool mos_drive_caps_wp_spwp(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.spwp : false;
+}
+
+bool mos_drive_caps_wp_wdcb(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.wdcb : false;
+}
+
+bool mos_drive_caps_wp_dwp(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.dwp : false;
+}
+
 uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)
 {
     return c ? c->profile_count : 0;
@@ -4924,6 +5197,19 @@ uint32_t mos_session_layout_leadout_lba(const mos_session_layout *s, uint8_t i)
     return (e && e->have_leadout) ? e->leadout_lba : 0;
 }
 
+/* ---- mos_atip accessors (mos_query_atip) -------------------------- */
+
+bool    mos_atip_uru(const mos_atip *a)             { return a ? a->uru : false; }
+uint8_t mos_atip_disc_type(const mos_atip *a)       { return a ? a->disc_type : 0; }
+uint8_t mos_atip_disc_sub_type(const mos_atip *a)   { return a ? a->disc_sub_type : 0; }
+uint8_t mos_atip_reference_speed(const mos_atip *a) { return a ? a->reference_speed : 0; }
+uint8_t mos_atip_lead_in_min(const mos_atip *a)     { return a ? a->lead_in_min : 0; }
+uint8_t mos_atip_lead_in_sec(const mos_atip *a)     { return a ? a->lead_in_sec : 0; }
+uint8_t mos_atip_lead_in_frame(const mos_atip *a)   { return a ? a->lead_in_frame : 0; }
+uint8_t mos_atip_lead_out_min(const mos_atip *a)    { return a ? a->lead_out_min : 0; }
+uint8_t mos_atip_lead_out_sec(const mos_atip *a)    { return a ? a->lead_out_sec : 0; }
+uint8_t mos_atip_lead_out_frame(const mos_atip *a)  { return a ? a->lead_out_frame : 0; }
+
 /* ---- mos_capacity accessors (mos_query_capacity) ------------------- *
  * Plain values, NULL-tolerant. Two independent halves: have_media_size
  * gates the kernel IOMedia size; have_recordable gates the READ TRACK
@@ -5035,9 +5321,9 @@ bool mos_drive_perf_have(const mos_drive_perf *p)
     return p ? p->have : false;
 }
 
-uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p)
+uint16_t mos_drive_perf_speed_count(const mos_drive_perf *p)
 {
-    return p ? p->descriptor_count : 0;
+    return p ? p->speed_count : 0;
 }
 
 uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p)
@@ -5546,7 +5832,9 @@ static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
         h->svc,
         h->vendor_str,   sizeof h->vendor_str,
         h->product_str,  sizeof h->product_str,
-        h->revision_str, sizeof h->revision_str);
+        h->revision_str, sizeof h->revision_str,
+        h->interconnect_str,          sizeof h->interconnect_str,
+        h->interconnect_location_str, sizeof h->interconnect_location_str);
 
     if (err) *err = MOS_OK;
     return h;
@@ -5905,6 +6193,17 @@ const char *mos_handle_product(const mos_handle_t *h)
 const char *mos_handle_revision(const mos_handle_t *h)
 {
     return (h && h->revision_str[0]) ? h->revision_str : NULL;
+}
+
+const char *mos_handle_interconnect(const mos_handle_t *h)
+{
+    return (h && h->interconnect_str[0]) ? h->interconnect_str : NULL;
+}
+
+const char *mos_handle_interconnect_location(const mos_handle_t *h)
+{
+    return (h && h->interconnect_location_str[0])
+               ? h->interconnect_location_str : NULL;
 }
 
 uint64_t mos_handle_registry_id(const mos_handle_t *h)
@@ -6438,6 +6737,33 @@ const char *mos_state_description(mos_state s)
         case MOS_STATE_DEVICE_FAULT:     return "device_fault";
         case MOS_STATE_EMPTY_OR_OPEN:    return "empty_or_open";
         case MOS_STATE_UNKNOWN: default: return "unknown";
+    }
+}
+
+/* DiscRecording physical-interconnect tokens. Contract in mos_pure.h; the
+   code set is fixed by the kDRDevicePhysicalInterconnect* constants the DR
+   adapter maps (mos_dr.c). Code 0 (absent / unrecognized) returns NULL so the
+   field is omitted, never a guessed token. The returned literals are the
+   schema's interconnect enums, drift-guarded in schemas/validate.py. */
+const char *mos_internal_interconnect_token(int code)
+{
+    switch (code) {
+        case 1:  return "atapi";
+        case 2:  return "fibre_channel";
+        case 3:  return "firewire";
+        case 4:  return "usb";
+        case 5:  return "scsi";
+        default: return NULL;
+    }
+}
+
+const char *mos_internal_interconnect_location_token(int code)
+{
+    switch (code) {
+        case 1:  return "internal";
+        case 2:  return "external";
+        case 3:  return "unknown";
+        default: return NULL;
     }
 }
 
@@ -7508,7 +7834,7 @@ static void watch_grab_speeds(mos_handle_t *h, mos_state_result *out,
             if (pe == MOS_OK && perf) {
                 *max_read  = mos_drive_perf_max_read_kbps(perf);
                 *max_write = mos_drive_perf_max_write_kbps(perf);
-                *count     = mos_drive_perf_descriptor_count(perf);
+                *count     = mos_drive_perf_speed_count(perf);
             }
             if (probe_grab_terminal(pe))
                 *media_id = out->media_id;   /* resolved for this disc */

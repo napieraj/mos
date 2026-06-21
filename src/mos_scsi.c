@@ -441,7 +441,9 @@ static mos_handle_t *mos_internal_open_service(io_service_t svc, mos_error *err)
         h->svc,
         h->vendor_str,   sizeof h->vendor_str,
         h->product_str,  sizeof h->product_str,
-        h->revision_str, sizeof h->revision_str);
+        h->revision_str, sizeof h->revision_str,
+        h->interconnect_str,          sizeof h->interconnect_str,
+        h->interconnect_location_str, sizeof h->interconnect_location_str);
 
     if (err) *err = MOS_OK;
     return h;
@@ -800,6 +802,17 @@ const char *mos_handle_product(const mos_handle_t *h)
 const char *mos_handle_revision(const mos_handle_t *h)
 {
     return (h && h->revision_str[0]) ? h->revision_str : NULL;
+}
+
+const char *mos_handle_interconnect(const mos_handle_t *h)
+{
+    return (h && h->interconnect_str[0]) ? h->interconnect_str : NULL;
+}
+
+const char *mos_handle_interconnect_location(const mos_handle_t *h)
+{
+    return (h && h->interconnect_location_str[0])
+               ? h->interconnect_location_str : NULL;
 }
 
 uint64_t mos_handle_registry_id(const mos_handle_t *h)

@@ -77,6 +77,8 @@ void mos_cli_print_usage(FILE *f)
         "  -i, --index N     1-based drive index (the Index column in\n"
         "                    'mos list'); explicit form of the positional\n"
         "      --bsd NAME    BSD form; explicit form of the positional\n"
+        "      --registry ID registry_id (the durable selector for scripts);\n"
+        "                    explicit form of the positional\n"
         "      --force       tray eject: also clear a COLD tray Prevent LOCK in\n"
         "                    the way, then eject. NEVER forces the filesystem —\n"
         "                    a busy disc reports busy. (A plain eject already\n"
@@ -114,6 +116,7 @@ static void print_version(void)
 
 enum {
     OPT_BSD = 1000,
+    OPT_REGISTRY,
     OPT_VERSION,
     OPT_FORCE,
 #ifdef MOS_CLI_PROBE
@@ -125,6 +128,7 @@ enum {
 static const struct option long_options[] = {
     { "index",   required_argument, 0, 'i' },
     { "bsd",     required_argument, 0, OPT_BSD },
+    { "registry", required_argument, 0, OPT_REGISTRY },
     /* tray-only; the verb match is enforced below. */
     { "force",      no_argument,    0, OPT_FORCE },
 #ifdef MOS_CLI_PROBE
@@ -299,6 +303,24 @@ int main(int argc, char **argv)
             case OPT_BSD:
                 opt_bsd = optarg;
                 break;
+            case OPT_REGISTRY: {
+                /* Explicit form of the positional registry-id selector, for
+                   symmetry with --index/--bsd. Must be all-digits and at or
+                   above the xnu registry-id floor (an index-range value here
+                   is a mistake, not a silent reinterpretation). */
+                errno = 0;
+                char *end = NULL;
+                unsigned long long big = strtoull(optarg, &end, 10);
+                if (errno == ERANGE || end == optarg || *end != 0 ||
+                    !mos_internal_value_is_registry_id(big)) {
+                    fprintf(stderr, "%s: invalid --registry: ", progname);
+                    mos_cli_safe_ascii(stderr, optarg);
+                    fputc('\n', stderr);
+                    return EX_USAGE;
+                }
+                opt_registry = (uint64_t)big;
+                break;
+            }
             case OPT_FORCE:      flag_force = true; break;
 #ifdef MOS_CLI_PROBE
             case OPT_DUMP:    flag_dump = true; break;
@@ -331,10 +353,11 @@ int main(int argc, char **argv)
             mos_cli_print_usage(stderr);
             return EX_USAGE;
         }
-        if (opt_index || opt_bsd) {
+        if (opt_index || opt_bsd || opt_registry) {
             fprintf(stderr,
                     "%s: drive given both positionally and via %s\n",
-                    progname, opt_index ? "--index" : "--bsd");
+                    progname,
+                    opt_index ? "--index" : opt_bsd ? "--bsd" : "--registry");
             return EX_USAGE;
         }
         bool all_digits = (*subject != 0);
@@ -378,8 +401,9 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 
-    if (opt_index && opt_bsd) {
-        fprintf(stderr, "%s: --index and --bsd are mutually exclusive\n",
+    if ((opt_index != 0) + (opt_bsd != NULL) + (opt_registry != 0) > 1) {
+        fprintf(stderr,
+                "%s: --index, --bsd, and --registry are mutually exclusive\n",
                 progname);
         return EX_USAGE;
     }

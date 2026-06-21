@@ -4,8 +4,10 @@
   "registry_id": 4295021843,
   "vendor": "PIONEER",
   "product": "BD-RW BDR-XS07",
-  "firmware": "1.01",
+  "revision": "1.01",
   "serial": null,
+  "interconnect": "usb",
+  "interconnect_location": "external",
   "protection": {
     "aacs": {"version": 68, "bus_encryption": false, "write_bus_encryption": false},
     "css": null,
@@ -14,6 +16,7 @@
     "vcps": false,
     "libredrive": true
   },
+  "write_protect": null,
   "profiles": [{"code": "0x0008", "name": "cd_rom"}],
   "version": {"code": 6, "name": "spc_4"},
   "version_descriptors": [{"code": "0x04e0", "name": "mmc_6"}],

@@ -4,7 +4,7 @@
   "bsd_node": null,
   "current_profile": "0x0000",
   "speeds": {
-    "descriptor_count": 1,
+    "speed_count": 1,
     "max_read_kbps": 35980,
     "max_write_kbps": 0
   },

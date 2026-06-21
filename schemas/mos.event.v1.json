@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/napieraj/mos/schemas/mos.event.v1.json",
   "title": "mos.event.v1",
-  "description": "Watch-mode event line. Emitted as NDJSON (one JSON object per line) by `mos watch`. The first successful observation is emitted as a snapshot; a transient error during initial polling may appear before it, so the first line is not guaranteed to be the snapshot. Subsequent lines are state transitions, errors during polling, or the terminal device_removed event.\n\nThe field set varies by `event` kind, enforced as a oneOf union:\n  - snapshot, state_changed: state + prev_state + current_profile required; no error field permitted.\n  - media_changed: same field set as snapshot/state_changed, with state and prev_state both 'ready' \u2014 a same-state disc swap (the whole-disk media identity changed while the drive stayed ready).\n  - error: state + prev_state + error required; no media fields (current_profile, sense, vendor, product, firmware, serial) permitted.\n  - device_removed: only prev_state; no current-side fields, no error field. Terminal event; consumer should expect no more lines after this one.",
+  "description": "Watch-mode event line. Emitted as NDJSON (one JSON object per line) by `mos watch`. The first successful observation is emitted as a snapshot; a transient error during initial polling may appear before it, so the first line is not guaranteed to be the snapshot. Subsequent lines are state transitions, errors during polling, or the terminal device_removed event.\n\nThe field set varies by `event` kind, enforced as a oneOf union:\n  - snapshot, state_changed: state + prev_state + current_profile required; no error field permitted.\n  - media_changed: same field set as snapshot/state_changed, with state and prev_state both 'ready' \u2014 a same-state disc swap (the whole-disk media identity changed while the drive stayed ready).\n  - error: state + prev_state + error required; no media fields (current_profile, sense, vendor, product, revision, serial) permitted.\n  - device_removed: only prev_state; no current-side fields, no error field. Terminal event; consumer should expect no more lines after this one.",
   "type": "object",
   "required": [
     "schema",
@@ -108,7 +108,7 @@
         "hd_dvd_rom", "hd_dvd_r", "hd_dvd_rw", "hd_dvd_ram",
         "bd_rom", "bd_r", "bd_re"
       ],
-      "description": "Kernel optical-media type token (kIO{CD,DVD,BD}MediaTypeKey via mos_internal_media_type_token), zero MMC off the media node. NOT profile-gated: present even on a not-ready identity event (loading / media_changed) where current_profile is 0x0000, naming the disc class the profile cannot yet, and finer than media_class. Absent when no Type is published. Token set mirrors the C map (drift-guarded)."
+      "description": "Kernel optical-media type token (kIO{CD,DVD,BD}MediaTypeKey via mos_internal_media_type_token), zero MMC off the media node. NOT profile-gated: present even on a not-ready identity event (loading / media_changed) where current_profile is 0x0000, naming the disc class the profile cannot yet, and finer than media_class. Absent when no Type is published. Token set mirrors the C map (drift-guarded). Unlike `state`, this is a CLOSED enum: an unrecognized kernel Type fails closed to key-absent rather than emitting a new token."
     },
     "writable": {
       "type": "boolean",
@@ -120,33 +120,33 @@
     "product": {
       "type": "string"
     },
-    "firmware": {
+    "revision": {
       "type": "string"
     },
     "serial": {
       "type": "string",
-      "description": "Drive Unit Serial Number (raw INQUIRY VPD page 0x80) — the durable inventory key that survives replug, where registry_id does not. Present only on the identity-carrying kinds (snapshot, state_changed, media_changed, device_appeared) and only once grabbed: it is absent in early event lines until a free (empty / not-ready) poll lands the read (it self-gates on exclusive access, so it backs off while a disc is mounted), then present and stable for the session."
+      "description": "Drive serial from the Logical Unit Serial Number feature (0108h) in the non-exclusive GET CONFIGURATION walk — the durable inventory key that survives replug, where registry_id does not. The read takes no raw command and no exclusive access, so it is grabbed even while a disc is mounted. Present only on the identity-carrying kinds (snapshot, state_changed, media_changed, device_appeared) and only once grabbed: it is absent in early event lines until the probe reaches a terminal outcome (a read, or an answered absence), then present and stable for the session. (VPD page 0x80, the SPC/block-storage serial carrier, is NOT used: wrong abstraction for an MMC drive.)"
     },
     "speeds": {
       "type": "object",
-      "description": "Loaded disc's read/write performance from GET PERFORMANCE (0xAC, Type 00h) via the non-exclusive GetPerformance convenience method (no raw CDB, no exclusive lock). MEDIA-DEPENDENT: it describes the disc, not a static drive fact. Grabbed once per media identity and cached, so it is absent in early lines until the first ready poll for a disc lands the read, then present and stable until the next media change. Present only on the identity-carrying kinds (snapshot, state_changed, media_changed) for a READY disc; forbidden on error / device_removed like the other media fields.",
-      "required": ["descriptor_count", "max_read_kbps", "max_write_kbps"],
+      "description": "Loaded disc's read/write performance from GET PERFORMANCE (0xAC, Type 00h) via the non-exclusive GetPerformance convenience method (no raw CDB, no exclusive lock). MEDIA-DEPENDENT: it describes the disc, not a static drive fact. Grabbed once per media identity and cached, so it is absent in early lines until the first ready poll for a disc lands the read, then present and stable until the next media change. Present only on the identity-carrying kinds (snapshot, state_changed, media_changed) for a READY disc; forbidden on error / device_removed like the other media fields. The max_*_kbps integers are kilobytes per second where kB = 1000 bytes (the MMC GET PERFORMANCE unit) — kilo-BYTES not kilo-bits, 1000-based not 1024-based.",
+      "required": ["speed_count", "max_read_kbps", "max_write_kbps"],
       "additionalProperties": false,
       "properties": {
-        "descriptor_count": {
+        "speed_count": {
           "type": "integer",
           "minimum": 0,
-          "description": "Number of performance descriptors in the read-direction reply."
+          "description": "Count of read-direction (WRITE=0) performance descriptors in the GET PERFORMANCE reply."
         },
         "max_read_kbps": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum read performance (kB/s) across the WRITE=0 descriptors."
+          "description": "Maximum read performance across the WRITE=0 descriptors, in kB/s (kB = 1000 bytes)."
         },
         "max_write_kbps": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum write performance (kB/s) across the WRITE=1 descriptors (0 on a read-only drive / non-writable medium)."
+          "description": "Maximum write performance across the WRITE=1 descriptors, in kB/s (kB = 1000 bytes); 0 on a read-only drive / non-writable medium."
         }
       }
     },
@@ -417,7 +417,7 @@
           },
           {
             "required": [
-              "firmware"
+              "revision"
             ]
           },
           {
@@ -494,7 +494,7 @@
           },
           {
             "required": [
-              "firmware"
+              "revision"
             ]
           },
           {

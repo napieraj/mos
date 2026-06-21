@@ -11,6 +11,7 @@ _mos() {
     global_opts=(
         '(-i --index)'{-i,--index}'[1-based drive index]:index:'
         '--bsd[BSD form selector]:bsd name:_files -g "disk*" -W /dev'
+        '--registry[registry_id selector]:registry id:'
         '(-j --json)'{-j,--json}'[emit JSON output]'
         '(-h --help)'{-h,--help}'[show help]'
         '--version[show version]'

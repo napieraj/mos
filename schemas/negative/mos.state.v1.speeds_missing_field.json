@@ -7,12 +7,12 @@
   "media_class": "bd",
   "writable": true,
   "speeds": {
-    "descriptor_count": 4,
+    "speed_count": 4,
     "max_read_kbps": 35980
   },
   "vendor": "HL-DT-ST",
   "product": "BD-RE WH16NS60",
-  "firmware": "1.00",
+  "revision": "1.00",
   "registry_id": 4295032831,
   "index": 1
 }

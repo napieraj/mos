@@ -42,6 +42,10 @@ void mos_fake_set_bsd_unit(int64_t unit);
 void mos_fake_set_identity(const char *vendor, const char *product,
                            const char *revision);
 
+/* Physical interconnect / location by int code (1 atapi..5 scsi; loc
+   1 internal, 2 external, 3 unknown; 0 = key absent). */
+void mos_fake_set_interconnect(int ic_code, int loc_code);
+
 /* Override the drive / whole-disk media IORegistry entry ID (defaults
    0x100000123 / 0x100000456). Re-minting mid-scenario models xnu's
    never-reused counter on replug (drive id) and media swap (media id,
@@ -76,6 +80,11 @@ void mos_fake_set_readdiscinfo_reply(uint32_t task_status,
                                      const uint8_t *bytes, size_t len);
 void mos_fake_set_toc_reply(uint32_t task_status,
                             const uint8_t *bytes, size_t len);
+/* Script the READ TOC/PMA/ATIP format 0100b (ATIP) reply, returned only for
+   FORMAT == 0x04. Unset → format 0x04 falls through to the TOC reply, which the
+   ATIP parser rejects (atip null, the pressed-CD behavior). */
+void mos_fake_set_atip_reply(uint32_t task_status,
+                             const uint8_t *bytes, size_t len);
 void mos_fake_set_disc_structure_reply(uint32_t task_status,
                                        const uint8_t *bytes, size_t len);
 /* Script the GET PERFORMANCE (0xAC) Performance Data reply — both directions

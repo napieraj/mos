@@ -61,6 +61,7 @@ mos/
 │   ├── mos_physstruct.c         # pure READ DISC STRUCTURE — DVD/HD-DVD decode
 │   ├── mos_cdtoc.c              # pure kernel-cached full-TOC (kIOCDMediaTOCKey) decode
 │   ├── mos_cdtext.c            # pure CD-TEXT (READ TOC format 0101b) decode
+│   ├── mos_atip.c              # pure ATIP (READ TOC format 0100b, CD-R/RW) decode
 │   ├── mos_modepage.c          # pure MODE SENSE(10) optical-page decode (0x2A, 0x01)
 │   ├── mos_perf.c              # pure GET PERFORMANCE (type 00h) decode
 │   ├── mos_inqdata.c          # pure STANDARD INQUIRY (EVPD=0) identity decode
@@ -89,7 +90,7 @@ mos/
 │   ├── test_main.c              # aggregator
 │   ├── test_*.c                 # pure-unit tests (sense, config, discinfo, trackinfo,
 │   │                            #   formatcap, discstruct, physstruct, cdtoc, cdtext,
-│   │                            #   modepage, perf, inqdata, vpd80, bsd_name,
+│   │                            #   modepage, perf, inqdata, bsd_name,
 │   │                            #   scsi_status, ioreturn, state_core, watch_core,
 │   │                            #   render, result, human, io, tray, dr_doorbell, …)
 │   ├── test_adapter_*.c         # link-seam adapter tests (oneshot, watch, seam_probe)

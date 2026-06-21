@@ -615,16 +615,16 @@ TEST(capacity_accessors_and_derivation)
 TEST(drive_perf_accessors)
 {
     struct mos_drive_perf p = {
-        .have = true, .descriptor_count = 4,
+        .have = true, .speed_count = 4,
         .max_read_kbps = 35980, .max_write_kbps = 8991,
     };
     EXPECT_EQ(mos_drive_perf_have(&p), true);
-    EXPECT_EQ(mos_drive_perf_descriptor_count(&p), 4u);
+    EXPECT_EQ(mos_drive_perf_speed_count(&p), 4u);
     EXPECT_EQ(mos_drive_perf_max_read_kbps(&p), 35980u);
     EXPECT_EQ(mos_drive_perf_max_write_kbps(&p), 8991u);
 
     EXPECT_EQ(mos_drive_perf_have(NULL), false);
-    EXPECT_EQ(mos_drive_perf_descriptor_count(NULL), 0u);
+    EXPECT_EQ(mos_drive_perf_speed_count(NULL), 0u);
     EXPECT_EQ(mos_drive_perf_max_read_kbps(NULL), 0u);
     EXPECT_EQ(mos_drive_perf_max_write_kbps(NULL), 0u);
     return 0;

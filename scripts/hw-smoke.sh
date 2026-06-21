@@ -261,24 +261,35 @@ phase_empty() {
     check_doc mos.list.v1 "list --json" "$("$MOS" list --json 2>/dev/null)"
 
     run drive;    expect_text 'Vendor|Product' "drive identity (vendor/product)"
-    info "Serial is read from feature 0108h (GET CONFIGURATION, no exclusive access):"
-    info "it reads on an empty drive AND while mounted; null only if the firmware programs none."
+    info "This branch's 'mos drive' is the full identity record — eyeball these rows:"
+    info "  Serial       feature 0108h (GET CONFIGURATION); reads empty AND mounted, null if unprogrammed"
+    info "  Interconnect bus + internal/external from DiscRecording (atapi / usb / firewire; null if DR omits)"
+    info "  Protection   content schemes the drive can authenticate; Profiles = supported media classes"
+    info "  Standards / Mechanical / Error Recovery / Write Protect round out the static facts"
+    for row in Serial Interconnect Protection Profiles Standards Mechanical "Write Protect"; do
+        if printf '%s' "$OUT" | grep -q "$row:"; then info "  ✓ $row present"
+        else info "  · $row absent (null/omitted — acceptable)"; fi
+    done
     check_doc mos.drive.v1 "drive --json" "$("$MOS" drive --json 2>/dev/null)"
 
-    run features; expect_rc 0 "features"
+    run features; expect_text 'BSD' "features names the drive (BSD row — added this branch)"
+    expect_text 'Code|Cur|Persist' "features shows the MMC feature table"
     check_doc mos.features.v1 "features --json" "$("$MOS" features --json 2>/dev/null)"
 
     run capacity; info "no media → a no-media capacity report or an error envelope are both fine"
     run metadata; info "no disc → mos.error.v1 envelope expected"
     check_doc mos.error.v1 "metadata --json (no disc)" "$("$MOS" metadata --json 2>/dev/null)"
 
-    # selector equivalence that needs no media: index vs registry_id
+    # Selector equivalence (no media): this branch completes the explicit-flag set
+    # with --registry, so exercise positionals AND flags — all must pick one drive.
     rid="$(list_field registry_id)"
     if [ -n "${rid:-}" ] && [ "$rid" != 0 ]; then
-        a="$("$MOS" state 1 2>/dev/null)"; b="$("$MOS" state "$rid" 2>/dev/null)"
-        if [ -n "$a" ] && [ "$a" = "$b" ]; then ok "index and registry_id select the same drive"
-        else bad "index vs registry_id selector mismatch"; fi
-    else skp "index/registry_id equivalence" "could not read registry_id"; fi
+        p_idx="$("$MOS" state 1 2>/dev/null)";          p_reg="$("$MOS" state "$rid" 2>/dev/null)"
+        f_idx="$("$MOS" state --index 1 2>/dev/null)";   f_reg="$("$MOS" state --registry "$rid" 2>/dev/null)"
+        if [ -n "$p_idx" ] && [ "$p_idx" = "$p_reg" ] && [ "$p_idx" = "$f_idx" ] && [ "$f_idx" = "$f_reg" ]; then
+            ok "index/registry positionals and --index/--registry flags select the same drive"
+        else bad "selector forms disagree (positional index/registry vs --index/--registry)"; fi
+    else skp "selector equivalence" "could not read registry_id"; fi
 }
 
 phase_tray() {
@@ -342,25 +353,32 @@ phase_disc() {
         info "Speeds (GET PERFORMANCE) ride in 'mos state' on the ready branch:"
         run state; expect_text 'Speed' "state shows Speeds for a ready disc (or note if drive omits them)"
 
-        run metadata; expect_text 'Disc|Profile|Media|TOC' "metadata populated"
+        run metadata; expect_text 'Disc|Profile|TOC|Track' "metadata populated"
+        info "metadata rows here: Disc, Profile, Sessions (CD only), TOC, Track."
         check_doc mos.metadata.v1 "metadata --json" "$("$MOS" metadata --json 2>/dev/null)"
-        run capacity; info "capacity: total/used; blank rewritable & BD-R add a formattable view"
+        run capacity; expect_text 'Media|Recordable|Formattable' "capacity shows a size view"
+        info "capacity human uses the × glyph (blocks × B); blank rewritable & BD-R add a Formattable row."
         check_doc mos.capacity.v1 "capacity --json" "$("$MOS" capacity --json 2>/dev/null)"
         run drive;    expect_text 'Vendor|Product' "drive identity while mounted"
-        info "Serial (feature 0108h) reads even while mounted now — no exclusive-access back-off."
+        info "Serial (0108h) + Interconnect read even while mounted — no exclusive-access back-off."
 
         # lock on a MOUNTED disc → already_locked (macOS armed the removal lock)
         run tray lock; expect_text 'already_locked' "lock on a mounted disc → already_locked"
 
-        # 3) selector equivalence with media (diskN now exists)
-        bn="$(list_field bsd_node)"
+        # 3) selector equivalence with media (diskN now exists): every form agrees
+        bn="$(list_field bsd_node)"; rid="$(list_field registry_id)"
         if [ -n "${bn:-}" ] && [ "$bn" != null ]; then
             dn="${bn##*/}"
-            a="$("$MOS" state "$dn" 2>/dev/null)"; b="$("$MOS" state "$bn" 2>/dev/null)"
-            c="$("$MOS" state --bsd "$dn" 2>/dev/null)"
-            if [ "$a" = "$b" ] && [ "$b" = "$c" ]; then ok "diskN / /dev/diskN / --bsd select the same drive"
-            else bad "bsd selector forms disagree"; fi
-        else skp "bsd selector equivalence" "no bsd_node (need a mounted disc + python3)"; fi
+            s1="$("$MOS" state "$dn" 2>/dev/null)";   s2="$("$MOS" state "$bn" 2>/dev/null)"
+            s3="$("$MOS" state --bsd "$dn" 2>/dev/null)"
+            same=1; { [ "$s1" = "$s2" ] && [ "$s2" = "$s3" ]; } || same=0
+            if [ -n "${rid:-}" ] && [ "$rid" != 0 ]; then
+                s4="$("$MOS" state --registry "$rid" 2>/dev/null)"
+                [ "$s3" = "$s4" ] || same=0
+            fi
+            if [ "$same" = 1 ]; then ok "diskN / /dev/diskN / --bsd / --registry select the same drive"
+            else bad "selector forms disagree with media present"; fi
+        else skp "selector equivalence" "no bsd_node (need a mounted disc + python3)"; fi
 
         # 4) graceful eject of an idle mounted disc
         if step "Close anything using the disc — I'll test a GRACEFUL eject (unmount+eject)."; then

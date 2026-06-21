@@ -489,6 +489,19 @@ bool    mos_drive_caps_write_bus_encryption(const mos_drive_caps *c);
 bool    mos_drive_caps_securdisc(const mos_drive_caps *c);
 bool    mos_drive_caps_vcps(const mos_drive_caps *c);
 
+/* Write Protect Feature (0004h) CAPABILITY bits — whether the drive can
+   report/change write-protect status, NOT whether the loaded disc IS
+   write-protected (that is mode page 1Dh / MECHANISM STATUS, which mos does
+   not read). From the same RT=0 GET CONFIGURATION walk. _write_protect is the
+   feature's presence; the four bits are SSWPP (supports the SWPP mode-page
+   bit), SPWP (supports set/release of Persistent Write Protect), WDCB
+   (Write Inhibit DCB on DVD+RW), DWP (Disc Write Protect PAC on BD-R/-RE). */
+bool    mos_drive_caps_write_protect(const mos_drive_caps *c);
+bool    mos_drive_caps_wp_sswpp(const mos_drive_caps *c);
+bool    mos_drive_caps_wp_spwp(const mos_drive_caps *c);
+bool    mos_drive_caps_wp_wdcb(const mos_drive_caps *c);
+bool    mos_drive_caps_wp_dwp(const mos_drive_caps *c);
+
 /* Supported-profile set from the Profile List feature (0x0000) — the
    drive-static disc types this drive handles (the modern, BD-aware "what can
    this drive read/write", superseding the legacy page-0x2A media bits). The
@@ -532,6 +545,17 @@ const char *mos_handle_vendor(const mos_handle_t *h);
 const char *mos_handle_product(const mos_handle_t *h);
 const char *mos_handle_revision(const mos_handle_t *h);
 uint64_t    mos_handle_registry_id(const mos_handle_t *h);
+
+/* Physical interconnect (bus) and its location, from the same open-time
+   DiscRecording directory data (kDRDevicePhysicalInterconnect{,Location}Key).
+   Zero commands. Borrowed from the handle (valid until mos_close); NULL when
+   DR does not report the key.
+     interconnect          : "atapi" | "usb" | "firewire" | "fibre_channel"
+                             | "scsi" — the bus the drive attaches over
+                             (internal SATA/PATA optical reports "atapi").
+     interconnect_location : "internal" | "external" | "unknown". */
+const char *mos_handle_interconnect(const mos_handle_t *h);
+const char *mos_handle_interconnect_location(const mos_handle_t *h);
 
 /* The drive serial is read from the Logical Unit Serial Number feature (0108h)
    via mos_drive_caps_serial() — the non-exclusive GET CONFIGURATION path. There
@@ -790,6 +814,38 @@ uint8_t  mos_session_layout_last_track(const mos_session_layout *s, uint8_t i);
 bool     mos_session_layout_have_leadout(const mos_session_layout *s, uint8_t i);
 uint32_t mos_session_layout_leadout_lba(const mos_session_layout *s, uint8_t i);
 
+/* ---- ATIP (CD-R/RW pre-groove identity) -------------- */
+
+/* Result of an ATIP query. Opaque, handle-owned; valid until the next
+   mos_query_atip() call or mos_close(). */
+typedef struct mos_atip mos_atip;
+
+/*
+ * Read the Absolute Time In Pre-groove via READ TOC/PMA/ATIP Format=0100b (the
+ * non-exclusive convenience ReadTableOfContents mos already issues for the TOC)
+ * and decode the CD-R/RW manufacturer/media identity (MMC-6 §6.25, Table 488).
+ * CD RECORDABLE ONLY — pressed CD, DVD, and BD carry no ATIP; the command
+ * returns CHECK CONDITION there and this returns MOS_ERR_IO. mos surfaces the
+ * RAW spec fields only; the MID-to-manufacturer NAME table is the Orange Book's
+ * (curated, consumer-side). `out` REQUIRED (NULL => MOS_ERR_INVALID_ARG);
+ * MOS_ERR_IO when the disc carries no ATIP or the reply is too short.
+ */
+mos_error mos_query_atip(mos_handle_t *h, const mos_atip **out);
+
+/* Accessors. NULL-tolerant (NULL reads as 0/false). The lead-in M:S:F is the
+   manufacturer/MID identity; the last-possible lead-out M:S:F is the nominal
+   capacity. disc_type 0 = CD-R, 1 = CD-RW. Times are the raw spec bytes. */
+bool    mos_atip_uru(const mos_atip *a);
+uint8_t mos_atip_disc_type(const mos_atip *a);
+uint8_t mos_atip_disc_sub_type(const mos_atip *a);
+uint8_t mos_atip_reference_speed(const mos_atip *a);
+uint8_t mos_atip_lead_in_min(const mos_atip *a);
+uint8_t mos_atip_lead_in_sec(const mos_atip *a);
+uint8_t mos_atip_lead_in_frame(const mos_atip *a);
+uint8_t mos_atip_lead_out_min(const mos_atip *a);
+uint8_t mos_atip_lead_out_sec(const mos_atip *a);
+uint8_t mos_atip_lead_out_frame(const mos_atip *a);
+
 /* ---- Disc capacity ---------------------------------- */
 
 /* Result of a capacity query. Opaque, handle-owned; valid until the next
@@ -905,7 +961,7 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out);
 /* Accessors. NULL-tolerant (NULL reads as 0/false). The speeds are
    meaningful only when have is true (>= 1 descriptor). */
 bool     mos_drive_perf_have(const mos_drive_perf *p);
-uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p);
+uint16_t mos_drive_perf_speed_count(const mos_drive_perf *p);
 uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p);
 uint32_t mos_drive_perf_max_write_kbps(const mos_drive_perf *p);
 
@@ -1079,7 +1135,8 @@ mos_error mos_tray_unlock(mos_handle_t *h,
                           mos_tray_outcome *out, uint8_t sense[3]);
 
 /* Stable lower_snake_case token for an outcome: "done" / "refused_locked" /
-   "refused_other". Same contract as mos_state_description (never NULL). */
+   "refused_other" / "already_locked". Same contract as mos_state_description
+   (never NULL). */
 const char *mos_tray_outcome_description(mos_tray_outcome o);
 
 /* Safe to call on NULL. Do not call twice on the same handle. */
@@ -1164,10 +1221,13 @@ const char    *mos_watch_event_vendor(const mos_watch_event *e);
 const char    *mos_watch_event_product(const mos_watch_event *e);
 const char    *mos_watch_event_revision(const mos_watch_event *e);
 
-/* Drive Unit Serial Number (raw INQUIRY VPD page 0x80), the durable inventory
-   key that survives replug where registry_id does not. NULL until a free
-   (empty / not-ready) poll grabs it — the read self-gates on exclusive access,
-   so it backs off while a disc is mounted — then stable for the session.
+/* Drive serial (Logical Unit Serial Number feature 0108h), the durable inventory
+   key that survives replug where registry_id does not. Read from the non-exclusive
+   GET CONFIGURATION walk (no raw command, no exclusive access — readable even while
+   a disc is mounted), grabbed ONCE per session on a probe handle and cached: NULL
+   in early event lines until the probe reaches a terminal outcome (a read, or an
+   answered absence), then stable for the session. NULL when the drive does not
+   implement the feature / programs no serial (OPTIONAL in MMC, firmware-dependent).
    NULL-tolerant. (mos state never carries serial; it is a watch/drive datum.) */
 const char    *mos_watch_event_serial(const mos_watch_event *e);
 
@@ -1408,7 +1468,19 @@ size_t mos_safe_ascii(const char *in, char *out, size_t out_cap);
 
 /* ---- Library version ------------------------------------------------- */
 
-#define MOS_VERSION_STRING "0.4.0-dev"
+/* Numeric components, for compile-time feature gating by a consumer that
+   statically links or vendors mos:  #if MOS_VERSION_HEX >= 0x000500  (>= 0.5.0).
+   MOS_VERSION_HEX packs MAJOR.MINOR.PATCH one byte each (0x00MMmmpp) so it is
+   monotonic and >=/< comparable. Kept in lockstep with CMake project(VERSION)
+   by a configure-time assert (CMakeLists.txt). */
+#define MOS_VERSION_MAJOR 0
+#define MOS_VERSION_MINOR 4
+#define MOS_VERSION_PATCH 0
+#define MOS_VERSION_HEX   ((MOS_VERSION_MAJOR << 16) | \
+                           (MOS_VERSION_MINOR << 8)  | \
+                           (MOS_VERSION_PATCH))
+
+#define MOS_VERSION_STRING "0.4.0"
 
 const char *mos_version_string(void);
 

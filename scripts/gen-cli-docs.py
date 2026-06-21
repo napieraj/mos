@@ -152,10 +152,10 @@ def comment_block(prefix):
 
 
 def gen_bash(verbs, actions, long_opts):
-    globals_ = ["-i", "--index", "--bsd", "-j", "--json", "-h", "--help",
-                "--version"]
+    globals_ = ["-i", "--index", "--bsd", "--registry", "-j", "--json", "-h",
+                "--help", "--version"]
     # Sanity: every global long opt we list must exist in the table.
-    for name in ("index", "bsd", "json", "help", "version"):
+    for name in ("index", "bsd", "registry", "json", "help", "version"):
         if name not in long_opts:
             sys.exit(f"gen-cli-docs: expected long option --{name} missing")
     sub = " ".join(verbs)
@@ -181,7 +181,7 @@ _mos()
     local global_opts="{g}"
 
     case "$prev" in
-        -i|--index) return ;;
+        -i|--index|--registry) return ;;
         --bsd) COMPREPLY=( $(compgen -W "disk" -- "$cur") ); return ;;
     esac
 
@@ -240,6 +240,7 @@ _mos() {{
     global_opts=(
         '(-i --index)'{{-i,--index}}'[1-based drive index]:index:'
         '--bsd[BSD form selector]:bsd name:_files -g "disk*" -W /dev'
+        '--registry[registry_id selector]:registry id:'
         '(-j --json)'{{-j,--json}}'[emit JSON output]'
         '(-h --help)'{{-h,--help}}'[show help]'
         '--version[show version]'
@@ -329,6 +330,7 @@ complete -c mos -f -n '__fish_mos_using_subcommand tray' -a '{act}' -d 'tray act
 # Global options.
 complete -c mos -s i -l index   -d '1-based drive index' -x
 complete -c mos      -l bsd     -d 'BSD form selector' -x
+complete -c mos      -l registry -d 'registry_id selector' -x
 complete -c mos -s j -l json    -d 'Emit JSON output'
 complete -c mos -s h -l help    -d 'Show help'
 complete -c mos      -l version -d 'Show version'

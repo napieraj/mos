@@ -125,16 +125,18 @@ static void emit_human(const capacity_doc *d)
     bool have_bsd = mos_bsd_dev_node(d->bsd_unit, bsd_buf, sizeof bsd_buf);
     pairs[n++] = (mos_cli_human_pair){ "BSD", have_bsd ? bsd_buf : NULL };
 
-    /* Human-scaled size (e.g. "25.0 GB (12219392 blocks x 2048 B)"); the
+    /* Human-scaled size (e.g. "25.0 GB (12219392 blocks × 2048 B)"); the
        JSON keeps the raw media_bytes/block_bytes integers. Block size stays
-       in bytes — it is canonically a byte count (512/2048). */
+       in bytes — it is canonically a byte count (512/2048). The × multiplier
+       glyph matches the speeds row and the em-dash house style for human
+       output (the JSON twin is ASCII). */
     char media_buf[64];
     if (d->have_media) {
         char hb[24];
         (void)mos_cli_human_bytes(d->media_bytes, hb, sizeof hb);
         if (d->block_bytes)
             snprintf(media_buf, sizeof media_buf,
-                     "%s (%llu blocks x %u B)", hb,
+                     "%s (%llu blocks × %u B)", hb,
                      (unsigned long long)d->media_blocks, d->block_bytes);
         else
             snprintf(media_buf, sizeof media_buf, "%s", hb);
@@ -156,11 +158,11 @@ static void emit_human(const capacity_doc *d)
     pairs[n++] = (mos_cli_human_pair){ "Recordable",
                                        d->have_recordable ? rec_buf : NULL };
 
-    /* "unformatted, 11826176 blocks x 2048 B, 3 format options" -> ~58. */
+    /* "unformatted, 11826176 blocks × 2048 B, 3 format options" -> ~58. */
     char fmt_buf[80];
     if (d->have_formattable) {
         const char *tn = mos_format_capacity_type_name(d->format_type);
-        int off = snprintf(fmt_buf, sizeof fmt_buf, "%s, %u blocks x %u B",
+        int off = snprintf(fmt_buf, sizeof fmt_buf, "%s, %u blocks × %u B",
                            tn ? tn : "unknown", d->formattable_blocks,
                            d->formattable_block_bytes);
         if (off > 0 && (size_t)off < sizeof fmt_buf && d->fmt_count)
@@ -194,12 +196,8 @@ int mos_cli_run_capacity(void)
     } else {
         int total = 0;
         h = mos_cli_open_sole_drive(&err, &total);
-        if (total > 1) {
-            fprintf(stderr,
-                    "%s: %d drives present; select one, e.g. `%s capacity 2`.\n",
-                    progname, total, progname);
-            return EX_USAGE;
-        }
+        if (total > 1)
+            return mos_cli_emit_drives_present(total, "capacity 2");
     }
     if (!h) return mos_cli_emit_unknown_and_fail("could not open drive", err, NULL);
 

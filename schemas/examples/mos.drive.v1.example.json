@@ -4,8 +4,10 @@
   "registry_id": 4295021843,
   "vendor": "HL-DT-ST",
   "product": "BD-RE WH16NS40",
-  "firmware": "1.05",
+  "revision": "1.05",
   "serial": null,
+  "interconnect": "usb",
+  "interconnect_location": "external",
   "protection": {
     "aacs": {"version": 78, "bus_encryption": true, "write_bus_encryption": true},
     "css": {"version": 1},
@@ -13,6 +15,7 @@
     "securdisc": false,
     "vcps": false
   },
+  "write_protect": {"sswpp": true, "spwp": true, "wdcb": false, "dwp": true},
   "profiles": [
     {"code": "0x0008", "name": "cd_rom"},
     {"code": "0x0009", "name": "cd_r"},

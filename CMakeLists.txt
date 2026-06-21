@@ -18,6 +18,20 @@ project(mac_optical_state
     LANGUAGES   C
     DESCRIPTION "macOS optical drive state via MMC over IOKit")
 
+# Single-source the version: include/mos.h carries the public MOS_VERSION_*
+# macros (consumers compile-time gate on MOS_VERSION_HEX) and project(VERSION)
+# above drives packaging. They must agree; assert it here so the two literals
+# cannot drift (the failure the duplicated-version review flagged). The header
+# is the surface consumers see, so it is checked against project(VERSION).
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/include/mos.h" _mos_hdr)
+string(REGEX MATCH "#define MOS_VERSION_STRING \"([^\"]+)\"" _ "${_mos_hdr}")
+if(NOT CMAKE_MATCH_1 STREQUAL PROJECT_VERSION)
+    message(FATAL_ERROR
+        "version drift: include/mos.h MOS_VERSION_STRING is \"${CMAKE_MATCH_1}\" "
+        "but project(VERSION) is \"${PROJECT_VERSION}\" — update both together.")
+endif()
+unset(_mos_hdr)
+
 # Declared before first use (the if(NOT APPLE) block below) so it shows
 # up in cmake -L / GUIs instead of working only as an undeclared cache
 # write.
@@ -173,6 +187,7 @@ set(MOS_PURE_SOURCES
     src/mos_physstruct.c
     src/mos_trackinfo.c
     src/mos_cdtoc.c
+    src/mos_atip.c
     src/mos_formatcap.c
     src/mos_perf.c
     src/mos_modepage.c
@@ -345,6 +360,7 @@ if(MOS_BUILD_TESTS)
         tests/test_physstruct.c
         tests/test_trackinfo.c
         tests/test_cdtoc.c
+        tests/test_atip.c
         tests/test_formatcap.c
         tests/test_perf.c
         tests/test_modepage.c

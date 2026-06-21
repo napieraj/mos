@@ -307,6 +307,31 @@ bool mos_drive_caps_vcps(const mos_drive_caps *c)
     return c ? c->protection.vcps : false;
 }
 
+bool mos_drive_caps_write_protect(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.present : false;
+}
+
+bool mos_drive_caps_wp_sswpp(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.sswpp : false;
+}
+
+bool mos_drive_caps_wp_spwp(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.spwp : false;
+}
+
+bool mos_drive_caps_wp_wdcb(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.wdcb : false;
+}
+
+bool mos_drive_caps_wp_dwp(const mos_drive_caps *c)
+{
+    return c ? c->write_protect.dwp : false;
+}
+
 uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)
 {
     return c ? c->profile_count : 0;
@@ -649,6 +674,19 @@ uint32_t mos_session_layout_leadout_lba(const mos_session_layout *s, uint8_t i)
     return (e && e->have_leadout) ? e->leadout_lba : 0;
 }
 
+/* ---- mos_atip accessors (mos_query_atip) -------------------------- */
+
+bool    mos_atip_uru(const mos_atip *a)             { return a ? a->uru : false; }
+uint8_t mos_atip_disc_type(const mos_atip *a)       { return a ? a->disc_type : 0; }
+uint8_t mos_atip_disc_sub_type(const mos_atip *a)   { return a ? a->disc_sub_type : 0; }
+uint8_t mos_atip_reference_speed(const mos_atip *a) { return a ? a->reference_speed : 0; }
+uint8_t mos_atip_lead_in_min(const mos_atip *a)     { return a ? a->lead_in_min : 0; }
+uint8_t mos_atip_lead_in_sec(const mos_atip *a)     { return a ? a->lead_in_sec : 0; }
+uint8_t mos_atip_lead_in_frame(const mos_atip *a)   { return a ? a->lead_in_frame : 0; }
+uint8_t mos_atip_lead_out_min(const mos_atip *a)    { return a ? a->lead_out_min : 0; }
+uint8_t mos_atip_lead_out_sec(const mos_atip *a)    { return a ? a->lead_out_sec : 0; }
+uint8_t mos_atip_lead_out_frame(const mos_atip *a)  { return a ? a->lead_out_frame : 0; }
+
 /* ---- mos_capacity accessors (mos_query_capacity) ------------------- *
  * Plain values, NULL-tolerant. Two independent halves: have_media_size
  * gates the kernel IOMedia size; have_recordable gates the READ TRACK
@@ -760,9 +798,9 @@ bool mos_drive_perf_have(const mos_drive_perf *p)
     return p ? p->have : false;
 }
 
-uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p)
+uint16_t mos_drive_perf_speed_count(const mos_drive_perf *p)
 {
-    return p ? p->descriptor_count : 0;
+    return p ? p->speed_count : 0;
 }
 
 uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p)

@@ -151,6 +151,14 @@ int  mos_cli_resolve_index_of(uint64_t reg);
    non-NULL only when *total == 1 and the open succeeded. */
 mos_handle_t *mos_cli_open_sole_drive(mos_error *err, int *total);
 
+/* Multi-drive disambiguation, uniform across every verb: print
+   "N drives present; select one, e.g. `mos <example>`:" plus the drive table
+   to stderr, so a bare `mos drive` (etc.) SHOWS the choices the way `mos`
+   alone does — not just a one-liner. `example` is the suggested command after
+   progname (e.g. "2", "drive 2", "tray eject 2"). Returns EX_USAGE for the
+   caller to return directly. */
+int mos_cli_emit_drives_present(int total, const char *example);
+
 /* Count attached drives: one bare enumeration pass, no open. The watch
    no-selector path's sole-drive check. */
 int mos_cli_count_drives(void);

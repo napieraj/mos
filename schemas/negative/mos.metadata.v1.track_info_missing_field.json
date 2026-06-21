@@ -60,7 +60,8 @@
       "free_blocks": 0,
       "last_recorded": 2298495
     },
-    "cdtext": null
+    "cdtext": null,
+    "atip": null
   },
   "bsd_node": "/dev/disk4"
 }

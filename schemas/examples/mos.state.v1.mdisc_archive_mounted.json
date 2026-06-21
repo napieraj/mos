@@ -7,13 +7,13 @@
   "media_class": "bd",
   "volume_name": "FAMILY_ARCHIVE_2026",
   "speeds": {
-    "descriptor_count": 4,
+    "speed_count": 4,
     "max_read_kbps": 35980,
     "max_write_kbps": 17996
   },
   "vendor": "HL-DT-ST",
   "product": "BD-RE WH16NS60",
-  "firmware": "1.00",
+  "revision": "1.00",
   "registry_id": 4295032831,
   "index": 1
 }

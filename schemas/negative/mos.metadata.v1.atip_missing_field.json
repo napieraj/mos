@@ -1,0 +1,25 @@
+{
+  "_comment": "atip is a closed object; lead_out is required — a present ATIP descriptor always carries the lead-in and lead-out times. Omitting lead_out must be rejected.",
+  "schema": "mos.metadata.v1",
+  "bsd_node": null,
+  "captured_at": "2026-06-21T20:14:05.000Z",
+  "volume_path": null,
+  "disc": {
+    "profile": "0x0009",
+    "class": "cd",
+    "toc": null,
+    "disc_info": null,
+    "disc_structure": null,
+    "volume_name": null,
+    "track_info": null,
+    "cdtext": null,
+    "session_layout": null,
+    "atip": {
+      "disc_type": 0,
+      "disc_sub_type": 2,
+      "uru": true,
+      "reference_speed": 1,
+      "lead_in": { "min": 97, "sec": 24, "frame": 1 }
+    }
+  }
+}

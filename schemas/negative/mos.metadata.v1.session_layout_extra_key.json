@@ -20,6 +20,7 @@
         "leadout_lba": 86347,
         "extra": "session item is additionalProperties:false"
       }
-    ]
+    ],
+    "atip": null
   }
 }

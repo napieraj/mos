@@ -237,6 +237,54 @@ TEST(aacs_caps_from_real_wh16ns40_capture)
     return 0;
 }
 
+TEST(write_protect_from_0004h_decodes_capability_bits)
+{
+    /* GET CONFIGURATION RT=0 with Write Protect Feature (0004h). Payload byte 0
+       = 0x0B (SSWPP bit0 | SPWP bit1 | DWP bit3 set; WDCB bit2 clear), MMC-6
+       r02g §5.3.5 Table 101. byte2 0x08 = version 2, not current (the decoder
+       keys on presence + payload, not the current bit). */
+    static const uint8_t cfg[] = {
+        0,0,0,16,  0,0, 0x00,0x00,
+        0x00,0x04, 0x08, 0x04,  0x0B, 0x00, 0x00, 0x00,
+    };
+    mos_drive_caps c;
+    mos_internal_protection_from_config(cfg, sizeof cfg, &c);   /* zero-inits */
+    mos_internal_write_protect_from_config(cfg, sizeof cfg, &c);
+    EXPECT(c.write_protect.present);
+    EXPECT(c.write_protect.sswpp);     /* 0x0B & 0x01 */
+    EXPECT(c.write_protect.spwp);      /* 0x0B & 0x02 */
+    EXPECT(!c.write_protect.wdcb);     /* 0x0B & 0x04 == 0 */
+    EXPECT(c.write_protect.dwp);       /* 0x0B & 0x08 */
+    return 0;
+}
+
+TEST(write_protect_absent_and_truncated_fail_closed)
+{
+    mos_drive_caps c;
+
+    /* No 0004h feature → present false. */
+    static const uint8_t cfg_absent[] = { 0,0,0,8, 0,0, 0,0 };
+    mos_internal_protection_from_config(cfg_absent, sizeof cfg_absent, &c);
+    mos_internal_write_protect_from_config(cfg_absent, sizeof cfg_absent, &c);
+    EXPECT(!c.write_protect.present);
+
+    /* Present but Additional Length 0 (no capability byte) → present, bits
+       false (fail closed, like the protection decoders). */
+    static const uint8_t cfg_trunc[] = {
+        0,0,0,8, 0,0, 0,0,
+        0x00,0x04, 0x08, 0x00,
+    };
+    mos_internal_protection_from_config(cfg_trunc, sizeof cfg_trunc, &c);
+    mos_internal_write_protect_from_config(cfg_trunc, sizeof cfg_trunc, &c);
+    EXPECT(c.write_protect.present);
+    EXPECT(!c.write_protect.sswpp);
+    EXPECT(!c.write_protect.dwp);
+
+    /* NULL out is safe. */
+    mos_internal_write_protect_from_config(cfg_trunc, sizeof cfg_trunc, NULL);
+    return 0;
+}
+
 TEST(toc_parses_realistic_audio_cd)
 {
     /* 3-track audio CD + lead-out, MMC format-0. Data Length = 2 + 4*8 = 34. */
@@ -990,6 +1038,8 @@ void register_config_tests(void)
     RUN(serial_from_config_absent_empty_and_bounds);
     RUN(toc_parses_real_pony_cd_single);
     RUN(aacs_caps_from_real_wh16ns40_capture);
+    RUN(write_protect_from_0004h_decodes_capability_bits);
+    RUN(write_protect_absent_and_truncated_fail_closed);
     RUN(aacs_caps_decode_and_fail_closed);
     RUN(protection_all_schemes_decode);
     RUN(config_find_feature_returns_match_with_payload);

@@ -118,6 +118,26 @@ code; this table is the citation, not the parse.
   double-byte (DBCC / MS-JIS) text — a DBCC field reads as absent rather
   than mis-decoded as Latin-1.
 
+### `src/mos_atip.c` — READ TOC/PMA/ATIP format 0100b (ATIP)
+- **Spec:** MMC-6 r02g §6.25, Table 488 ("READ TOC/PMA/ATIP response data,
+  Format = 0100b"). Issued via the convenience `ReadTableOfContents`
+  (FORMAT=0x04), CD-R/RW only — pressed CD / DVD / BD answer CHECK CONDITION.
+- **Decoded (raw spec fields only):** URU (byte 5 bit 6), Disc Type (byte 6
+  bit 6), Disc Sub-Type (byte 6 bits 5-3), Reference Speed (byte 4 bits 2-0),
+  ATIP Start Time of Lead-in M:S:F (bytes 8-10 — the manufacturer/MID
+  identity) and Last Possible Start Time of Lead-out M:S:F (bytes 12-14 —
+  nominal capacity). Surfaced as `mos.metadata.v1.disc.atip`.
+- **Not decoded / deliberately consumer-side:** the MID-to-MANUFACTURER NAME
+  table (Orange Book [CD-Ref6-9], a curated per-device map the hardware-role
+  ADR keeps out of mos); the A1/A2/A3/S4 additional-information values; the
+  Indicative Target Writing Power. mos ships the raw M:S:F; a consumer keys
+  the Orange Book table off it.
+- **Bounds:** the device-reported ATIP Data Length (bytes 0-1, BE) may only
+  SHRINK the trusted region (dual-length rule); a reply shorter than 15 bytes
+  fails closed (no descriptor through the lead-out). No payload byte is an
+  offset. Spec-built — no in-repo capture yet; a real `mos probe --capture`
+  ATIP reply is the standing falsifier.
+
 ### `src/mos_modepage.c` — MODE SENSE(10) optical pages
 - **Spec:** page 0x2A is MMC-3 page-2A (CD/DVD Capabilities & Mechanical
   Status); page 0x01 is the SPC Read/Write Error Recovery page. Sub-page
@@ -140,6 +160,14 @@ code; this table is the citation, not the parse.
     Presence-only (Additional Length 0): **SecurDisc 0113h** (§5.3.46),
     **VCPS 0110h** (legacy, MMC-5 — designated Legacy in MMC-6 Annex E.6).
     Enforcement/region/key state behind REPORT KEY is out of scope.
+  - **Write Protect Feature (0004h):** MMC-6 r02g §5.3.5, Table 101 — payload
+    byte 0 carries the CAPABILITY bits SSWPP (bit 0), SPWP (bit 1), WDCB
+    (bit 2), DWP (bit 3). These say what the drive can REPORT/CHANGE about
+    write protection, not whether the loaded disc IS write-protected (the
+    Timeout & Protect mode page 1Dh / MECHANISM STATUS carry per-disc state,
+    which mos does not read). Decoded into `mos.drive.v1.write_protect`,
+    null when absent. NB: 0026h is the *Restricted Overwrite* feature, NOT
+    write protect — a libcdio/MS-DDK naming trap the spec corrects.
   - **Firmware Information (010Ch):** MMC-6 r02g §5.3.43, Table 197 — payload
     Century[2] Year[2] Month[2] Day[2] Hour[2] Minute[2] Second[2]
     Reserved[2], decimal ASCII, GMT; Additional Length 0x10. Emitted as an
@@ -257,15 +285,17 @@ media. The cheap-enrichment surface (disc-ingest gaps note,
   `Content Mask`, `Ejectable`, `Leaf`, `Open`, `Preferred Block Size`
   (`kIOMediaPreferredBlockSizeKey`), `Removable`, `Size` (`kIOMediaSizeKey`),
   `UUID`, `Whole`, **`Writable`** (`kIOMediaWritableKey`, OSBoolean). mos reads
-  Size + Preferred Block Size (capacity) and **`Writable`** (`mos_internal_read_writable`
+  Size + Preferred Block Size (capacity) and **`Writable`** (read off
+  `kIOMediaWritableKey` in the whole-disk walk, `src/mos_scsi.c`
   → `mos.state.v1`/`mos.event.v1` `writable`, tri-state -1/0/1, zero-command off the
   optical media node) — the mechanism bit, not a blank/appendable classification;
   `bsd_node` null ⇒ no whole-disk node ⇒ blank/unrecorded.
 - **Optical media TYPE (`kIO{CD,DVD,BD}MediaTypeKey` = `"Type"`, OSString):**
   CD → `CD-ROM` / `CD-R` / `CD-RW`; DVD → `DVD-ROM` / `-R` / `-RW` / `+R` /
   `+RW` / `-RAM` / `HD DVD-{ROM,R,RW,RAM}`; BD → `BD-ROM` / `BD-R` / `BD-RE`.
-  ROM-vs-recordable for free. mos reads these as `media_type`
-  (`mos_internal_read_media_type` → `mos_internal_media_type_token`, a stable
+  ROM-vs-recordable for free. mos reads these as `media_type` (off the `"Type"`
+  key in the whole-disk walk, `src/mos_scsi.c`, mapped by
+  `mos_internal_media_type_token` to a stable
   `cd_rom`/`dvd_minus_r`/`bd_re`/… token), zero-command off the media node, on
   both `mos.state.v1` and `mos.event.v1` — present even off the not-ready branch
   where `current_profile`/`media_class` are suppressed, and finer than
@@ -344,7 +374,12 @@ uses). Verified against `DiscRecording.framework/Headers/DRCoreDevice.h`; all
 `kDRDeviceProductNameKey` / `kDRDeviceFirmwareRevisionKey` (the pre-parsed INQUIRY
 identity mos caches at open), `kDRDeviceIORegistryEntryPathKey` (→ registry id, the
 probe authority), and `kDRDeviceMediaInfoKey` (a SUBDICTIONARY; mos reads its
-`kDRDeviceMediaBSDNameKey`). No commands, no exclusive access, no entitlement.
+`kDRDeviceMediaBSDNameKey`). `mos drive` additionally reads
+`kDRDevicePhysicalInterconnectKey` (→ `interconnect`: ATAPI/FibreChannel/FireWire/
+USB/SCSI) and `kDRDevicePhysicalInterconnectLocationKey` (→ `interconnect_location`:
+Internal/External/Unknown) off the same dict, mapped to stable tokens by CFEqual
+against the SDK value constants (`mos_dr.c` → `mos_internal_interconnect_token`).
+No commands, no exclusive access, no entitlement.
 
 ### Watch-wake surface — IOKit interest + DiscRecording doorbell (`mos_watch.c`)
 
