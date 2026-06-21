@@ -96,8 +96,77 @@ TEST(stdout_finalize_other_error_classifies_write_error)
     return 0;
 }
 
+/* ---- mos_cli_json_str: the two-pass malloc sizing path ------------------
+ * The plain escaper behaviour (NULL→null, the quote pair, \u00XX / \xNN
+ * forms, the dev-node rendering) is exercised end-to-end by the macOS
+ * emit-validate harness (tests/emit), which drives every CLI emitter
+ * through these writers — so re-asserting it here would be redundant on the
+ * authoritative combined number. The ONE branch no emit fixture reaches is
+ * the heap path: cli/io.c sizes with mos_json_escape, then escapes into a
+ * 256-byte stack buffer or malloc beyond it, and every real identity/volume
+ * string is far shorter than that. This pins the malloc branch (and that it
+ * produces a complete, untruncated result) on the platform-independent
+ * suite. open_memstream (POSIX.1-2008) captures the FILE* output. */
+TEST(cli_json_str_uses_malloc_path_beyond_stack)
+{
+    char in[201];
+    memset(in, '\\', 200);              /* 200 backslashes → 400 escaped bytes */
+    in[200] = '\0';
+
+    char *buf = NULL;
+    size_t len = 0;
+    FILE *f = open_memstream(&buf, &len);
+    if (!f) { fprintf(stderr, "\n    open_memstream failed\n"); return 1; }
+    mos_cli_json_str(f, in);
+    fclose(f);                          /* flushes; NUL-terminates buf */
+
+    char expect[1 + 400 + 1 + 1];       /* quote + 400 + quote + NUL */
+    expect[0] = '"';
+    memset(expect + 1, '\\', 400);
+    expect[401] = '"';
+    expect[402] = '\0';
+
+    int bad = (buf == NULL) || strcmp(buf, expect) != 0;
+    if (bad)
+        fprintf(stderr, "\n    malloc-path mismatch: got \"%s\"\n",
+                buf ? buf : "(null)");
+    free(buf);
+    return bad;
+}
+
+TEST(cli_safe_ascii_renders_human_escapes)
+{
+    /* mos_cli_safe_ascii is the HUMAN-output escaper (unquoted \xNN form);
+       the macOS emit-validate harness drives only the --json path, so it
+       never reaches this writer — the combined coverage shows its body red.
+       Pin it on the platform-independent suite: NULL writes nothing, plain
+       passes through, control bytes render as \xNN. */
+    static const struct { const char *in, *expect; } cases[] = {
+        { NULL,           ""             },   /* NULL → nothing written */
+        { "plain",        "plain"        },
+        { "a\x01\x1f" "b", "a\\x01\\x1fb" },  /* control bytes → \xNN */
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        char *buf = NULL;
+        size_t len = 0;
+        FILE *f = open_memstream(&buf, &len);
+        if (!f) { fprintf(stderr, "\n    open_memstream failed\n"); return 1; }
+        mos_cli_safe_ascii(f, cases[i].in);
+        fclose(f);
+        int bad = (buf == NULL) || strcmp(buf, cases[i].expect) != 0;
+        if (bad)
+            fprintf(stderr, "\n    safe_ascii[%zu]: expected \"%s\", got \"%s\"\n",
+                    i, cases[i].expect, buf ? buf : "(null)");
+        free(buf);
+        if (bad) return 1;
+    }
+    return 0;
+}
+
 void register_io_tests(void)
 {
     RUN(stdout_finalize_epipe_classifies_pipe_closed);
     RUN(stdout_finalize_other_error_classifies_write_error);
+    RUN(cli_json_str_uses_malloc_path_beyond_stack);
+    RUN(cli_safe_ascii_renders_human_escapes);
 }
