@@ -1643,3 +1643,38 @@ clear is a harmless no-op — both ALLOWs answer GOOD on an unlocked drive), or 
 that refuses the ALLOW (5/24/00) — surfaced as the drive's own answer, the
 re-eject being the real check. Each lands as a fixture + dated note with a
 generic gate, never a per-device special-case.
+
+## Finding + ADR: a locked-eject refusal is 53/02 under sense key 02 (empty) as
+## well as 05 (media present) — the tray classifier keys on ASC/ASCQ, not the
+## sense key (2026-06-21, third hardware run: WH16NS60 empty-drive lock)
+
+`mos_internal_tray_classify` (`src/mos_pure.c`) read `sk == 0x05 && asc == 0x53 &&
+ascq == 0x02 → REFUSED_LOCKED`, i.e. it required sense key 05 (ILLEGAL REQUEST).
+A hardware run (LG WH16NS60, libredrive, OWC enclosure) with NO media falsified
+the key requirement: `mos tray lock` (DONE on the empty drive — exclusive access
+is free with no mount) then `mos tray eject` answered CHECK CONDITION **02/53/02**
+(NOT READY / MEDIA REMOVAL PREVENTED), which fell through to `refused_other` —
+wrong: the tray WAS locked (the user just locked it; `unlock` then `eject`
+succeeded). The drive reports the SAME removal-prevented ASC/ASCQ (53/02) but
+under sense key **02 (NOT READY)** because the drive is empty, vs **05 (ILLEGAL
+REQUEST)** when media is present.
+
+**Rebuttal (narrow, spec-grounded).** 53/02 = MEDIUM REMOVAL PREVENTED is the
+spec's unambiguous "the Prevent lock refused removal" signal; the sense KEY is
+contextual (NOT READY when empty, ILLEGAL REQUEST with media) and must not gate
+the verdict. The classifier now keys `refused_locked` on `asc == 0x53 && ascq ==
+0x02` alone — a generic ASC/ASCQ gate, not the observed device's key. Near-miss
+codes stay `refused_other` (53/01, 53/00, 5/24/00, 02/3A/00 — pinned in
+`tests/test_tray.c`), and a GOOD status still short-circuits to DONE before any
+sense is read. This also matters for `tray eject --force` on an empty locked
+drive: the force path clears the lock only when the outcome is `refused_locked`,
+so before this fix `--force` could not clear an empty-drive lock either.
+
+**Scope unchanged.** Pure classifier only — no command surface, no new CDB, no
+privilege change. Pinned by `tray_locked_eject_is_refused_locked` (now asserts
+both 05/53/02 and 02/53/02).
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+drive that reports a locked eject under yet another ASC/ASCQ (not 53/02) — that
+would land as a fixture + dated note, and the gate would widen to the new code,
+never to a per-device sense-key special-case.

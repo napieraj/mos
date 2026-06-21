@@ -68,8 +68,9 @@ static void emit_json(const tray_doc *d)
     mos_cli_json_str(stdout, mos_tray_outcome_description(d->outcome));
 
     /* Sense only when the triple is actually known. REFUSED_LOCKED is
-       definitionally 5/53/02; REFUSED_OTHER's bytes come back via the
-       out-param → null when absent, never a fabricated 0/0/0. */
+       definitionally asc/ascq 53/02 (key 05 with media, 02 when empty);
+       REFUSED_OTHER's bytes come back via the out-param → null when absent,
+       never a fabricated 0/0/0. */
     bool have_sense = (d->sk || d->asc || d->ascq);
     fputs(",\n  \"sense\": ", stdout);
     if (have_sense)

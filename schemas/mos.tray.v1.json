@@ -44,11 +44,11 @@
     },
     "outcome": {
       "enum": ["done", "refused_locked", "refused_other"],
-      "description": "done = command completed GOOD. refused_locked = CHECK CONDITION 5/53/02 MEDIA REMOVAL PREVENTED (an eject/close hit a Prevent lock — a reported fact, not a CLI failure; on the default eject this is a COLD deliberate lock, since the OS mount-lock is auto-cleared after the graceful unmount). refused_other = any other answered CHECK CONDITION (e.g. a drive without Persistent Prevent support rejecting --persistent with 5/24/00)."
+      "description": "done = command completed GOOD. refused_locked = CHECK CONDITION 53/02 MEDIA REMOVAL PREVENTED — an eject/close hit a Prevent lock (a reported fact, not a CLI failure; on the default eject this is a COLD deliberate lock, since the OS mount-lock is auto-cleared after the graceful unmount). The sense KEY is contextual and does not gate this: 05 (ILLEGAL REQUEST) with media present, 02 (NOT READY) on an empty drive. refused_other = any other answered CHECK CONDITION (e.g. a drive without Persistent Prevent support rejecting --persistent with 5/24/00)."
     },
     "sense": {
       "type": ["object", "null"],
-      "description": "SCSI sense triple the drive returned on a refusal, or null. Populated for any answered refusal — refused_locked is always 5/53/02; refused_other carries whatever the drive reported (e.g. 5/24/00 INVALID FIELD IN CDB for a drive without Persistent Prevent support), so a consumer can diagnose a non-lock refusal. Always null on done.",
+      "description": "SCSI sense triple the drive returned on a refusal, or null. Populated for any answered refusal — refused_locked is always asc/ascq 53/02 (the sense key is 05 with media present, 02 on an empty drive); refused_other carries whatever the drive reported (e.g. 5/24/00 INVALID FIELD IN CDB for a drive without Persistent Prevent support), so a consumer can diagnose a non-lock refusal. Always null on done.",
       "required": ["key", "asc", "ascq"],
       "additionalProperties": false,
       "properties": {
