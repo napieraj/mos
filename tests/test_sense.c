@@ -204,6 +204,15 @@ TEST(sense_closed_04_08_maps_to_busy)
     return 0;
 }
 
+TEST(sense_closed_04_unknown_ascq_maps_to_unknown)
+{
+    /* 04/xx with an ASCQ the switch doesn't name (here 0xFF): a disc is
+       engaged but the reason isn't one mos classifies — the default arm
+       returns UNKNOWN rather than guessing. Pins the 04/xx fall-through. */
+    EXPECT_EQ(mos_internal_state_from_sense_closed(0x02, 0x04, 0xFF), MOS_STATE_UNKNOWN);
+    return 0;
+}
+
 TEST(sense_closed_hardware_error_maps_to_device_fault)
 {
     /* Sense key 0x04 HARDWARE ERROR outranks any medium/not-ready detail. */
@@ -411,6 +420,7 @@ void register_sense_tests(void)
     RUN(sense_closed_04_07_maps_to_loading);
     RUN(sense_closed_04_04_maps_to_formatting);
     RUN(sense_closed_04_08_maps_to_busy);
+    RUN(sense_closed_04_unknown_ascq_maps_to_unknown);
     RUN(sense_closed_hardware_error_maps_to_device_fault);
     RUN(sense_closed_medium_error_maps_to_media_unreadable);
     RUN(sense_closed_57_00_maps_to_media_unreadable);

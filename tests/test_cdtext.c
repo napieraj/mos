@@ -217,6 +217,39 @@ TEST(cdtext_double_byte_field_not_decoded)
     return 0;
 }
 
+TEST(cdtext_dbcc_midstream_keeps_prefix)
+{
+    /* A single-byte pack starts the album, then a same-type block-0 pack
+       flips to DBCC mid-stream. The walk stops at the flip and keeps the
+       prefix already decoded (distinct from a DBCC on the FIRST pack, which
+       decodes nothing). Pins the mid-stream charset-flip break. */
+    uint8_t b[4 + 2 * 18] = {0};
+    size_t off = 4;
+    off = put_pack(b, off, 0x80, 0, 0, 0x00, "Prefix");      /* single-byte */
+    off = put_pack(b, off, 0x80, 0, 1, 0x80, "??");          /* DBCC flip   */
+    finalize(b, off - 4);
+
+    struct mos_cdtext c;
+    EXPECT(mos_internal_cdtext_parse(b, off, &c));
+    EXPECT(strcmp(c.title, "Prefix") == 0);
+    return 0;
+}
+
+TEST(cdtext_trailing_unterminated_string_kept)
+{
+    /* The album string fills all 12 text bytes of its only pack with no
+       terminating NUL (data clamped mid-string). The in-loop store never
+       fires; the trailing-accumulator store after the pack walk keeps it. */
+    uint8_t b[4 + 1 * 18] = {0};
+    size_t off = put_pack(b, 4, 0x80, 0, 0, 0x00, "Unterminated");  /* exactly 12 */
+    finalize(b, off - 4);
+
+    struct mos_cdtext c;
+    EXPECT(mos_internal_cdtext_parse(b, off, &c));
+    EXPECT(strcmp(c.title, "Unterminated") == 0);
+    return 0;
+}
+
 TEST(cdtext_non_zero_block_ignored)
 {
     /* Only the first language block (block 0) is surfaced; a block-1
@@ -268,6 +301,8 @@ void register_cdtext_tests(void)
     RUN(cdtext_per_track_performer_without_title);
     RUN(cdtext_per_track_titles_without_album);
     RUN(cdtext_double_byte_field_not_decoded);
+    RUN(cdtext_dbcc_midstream_keeps_prefix);
+    RUN(cdtext_trailing_unterminated_string_kept);
     RUN(cdtext_non_zero_block_ignored);
     RUN(cdtext_fail_closed_on_hostile_buffers);
 }
