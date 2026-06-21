@@ -94,10 +94,42 @@ What remains — none a tag blocker:
 - **Permanent-negative serial re-probe** — watch probes set `serial_grabbed`
   only on a successful read, so an unsupported VPD 0x80 (or answered-empty page)
   re-attempts the optional INQUIRY/exclusive path every ~2 s stable poll, per
-  slot. Separate "serial resolved" from "serial present" (UNTRIED / RETRYABLE /
-  RESOLVED_ABSENT / RESOLVED_PRESENT): cache an answered permanent absence, retry
-  only transient BUSY/exclusive/timeout. Efficiency, not correctness — POST-TAG
-  unless repeated exclusive-access traffic becomes a release criterion.
+  slot. Separate "serial resolved" from "serial present": cache an answered
+  permanent absence, retry only transient BUSY/exclusive/timeout. Efficiency,
+  not correctness — POST-TAG unless repeated exclusive-access traffic becomes a
+  release criterion.
+
+  Build-ready design (so the post-tag session does not re-derive it). The
+  `mos_query_serial` return codes already separate the two cases via the
+  IOReturn mapper (`mos_pure.c`): TERMINAL = `MOS_OK` (present) plus the
+  answered-absence codes `MOS_ERR_IO`/`MOS_ERR_UNSUPPORTED` (CHECK CONDITION
+  5/24/00, page-code mismatch, all-spaces — the drive replied and there is no
+  serial, a STATIC fact); RETRYABLE = `MOS_ERR_BUSY`, `MOS_ERR_EXCLUSIVE_ACCESS`,
+  `MOS_ERR_TIMEOUT`, `MOS_ERR_NO_DEVICE`, `MOS_ERR_OOM` (lock contended, timeout,
+  media mid-swap, resource pressure). A `serial_probe_terminal(mos_error)` helper
+  returning false for exactly that retryable set (default → terminal) gates a flag
+  renamed `serial_grabbed` → `serial_resolved` (widened meaning: present OR
+  answered-absent) at BOTH probe sites (`watch_probe`, `watch_slot_probe`); the
+  present-string copy stays as-is, only the flag-flip widens. Slot reclaim's
+  `memset` already resets the flag to retry, so recycled slots stay correct.
+  Test hook needs no new fake plumbing: script an answered-absent reply
+  (`mos_fake_set_raw_reply`, non-GOOD status), poll repeatedly, assert
+  `mos_fake_execute_calls()` rose once; a BUSY-then-present test asserts it still
+  retries and lands the serial.
+
+  One wrinkle and the clean variant. `MOS_ERR_IO` is the mapper's `default`
+  arm, so a genuinely-transient but UNMAPPED transport IOReturn would also be
+  classified terminal-absent and suppress the serial for that session — accepted,
+  because known transients are explicitly mapped and the cost of a wrong call is
+  a benign null serial vs. the bug's forever-churn. For zero ambiguity, make
+  `mos_query_serial` return `MOS_ERR_UNSUPPORTED` for its answered-absent
+  branches (`task_status != GOOD`, parse-fail) so the watch classifies on an
+  unambiguous code — but that changes the public contract (`mos.h` documents
+  `MOS_ERR_IO` for all-spaces), so it should ride WITH the schema/header freeze,
+  not before. The 4-state `UNTRIED / RETRYABLE / RESOLVED_ABSENT /
+  RESOLVED_PRESENT` enum is only worth it if a consumer later needs to tell
+  "absent" from "not-yet-known" on the event (a separate `mos.event.v1`
+  decision); the boolean-terminal flag fixes the churn without it.
 
 - **GESN realized-count waiver — hardware-gated revisit** (HELD, not a tag
   blocker). A device that CLAIMS a full 6-byte Media descriptor but delivers only
