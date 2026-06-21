@@ -142,6 +142,11 @@ void mos_fake_set_mounted_busy(bool busy);
    the mount is NOT cleared, mos surfaces MOS_ERR_BUSY (it never forces). */
 void mos_fake_set_unmount_refused(bool refused);
 
+/* Model the F1 silent-failure case: DADiskUnmount delivers NO callback (a void
+   DASessionScheduleWithRunLoop failure / wedged daemon). mos_internal_da_unmount
+   must return false from its bounded run-loop wait rather than hang forever. */
+void mos_fake_set_unmount_never_completes(bool never);
+
 /* Make ReleaseExclusiveAccess return non-success AND keep the lock held
    (lock_balance is NOT decremented) — models a kernel that does not confirm
    the release. The adapter must then leave the handle poisoned (have_exclusive

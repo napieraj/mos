@@ -75,8 +75,8 @@ These corroborate the spec-derived fixtures; they gate nothing.
   and with them the wrong-target TOCTOU (a graceful unmount of a reused `diskN` is
   harmless), so the veto/`funmount` menu below is **mooted**. The unbounded-wait
   KNOWN ISSUE (void `DASessionSetDispatchQueue` / `DISPATCH_TIME_FOREVER`) on the
-  graceful unmount's await stays a post-tag bounded-wait fix — now an ISOLATED
-  hang (no veto coupling).
+  graceful unmount's await is **FIXED** — a bounded run-loop wait
+  (`MOS_DA_UNMOUNT_TIMEOUT_SEC`, src/mos_da.c); see the v0.4 post-tag item 2.
 - **Division of labour.** DR enumerates and hands over cheap coarse status (a
   passive, GESN-fed snapshot "not guaranteed current"); mos owns the
   synchronous, fully-checked state machine and the deep rip-relevant metadata
@@ -116,16 +116,25 @@ it). What remains:
        deletion as "dead" was NOT removed — the R3 continuation audit (2026-06-20,
        A2) showed it is live on the READ path: the volume lookup's endpoint
        identity guard uses it, see the "Shipped" bullet below.)
-    2. Heap-owned, bounded DA callback context with leak-or-reap-on-timeout (the
-       void `DASessionSetDispatchQueue` / `DISPATCH_TIME_FOREVER` hang on the
-       graceful unmount's await; a naive timeout over the stack-local context is a
-       use-after-return). **F1 — now ISOLATED** (2026-06-20): the graceful-eject
-       redesign (AGENTS addendum) removed the force-unmount, so the veto that
-       would have coupled this hang to a system-wide mount-pipeline stall is
-       mooted. F1 is therefore a plain post-tag robustness fix for the one async
-       unmount await — no longer a `--force`-hardening prerequisite. The bounded
-       wait must heap-own the late-callback dependency set (session, disk, queue,
-       semaphore) or deliberately leak it on timeout.
+    2. ~~Heap-owned, bounded DA callback context with leak-or-reap-on-timeout (the
+       void `DASessionSetDispatchQueue` / `DISPATCH_TIME_FOREVER` hang).~~ **DONE
+       (the F1 hang is fixed; it was an ISOLATED hang once the graceful-eject
+       redesign mooted the veto — item 3).** `mos_internal_da_unmount` (src/mos_da.c)
+       no longer uses a dispatch queue + `DISPATCH_TIME_FOREVER` semaphore. It now
+       schedules the DA session on THIS thread's run loop in a private mode and
+       pumps `CFRunLoopRunInMode` until the callback fires or `MOS_DA_UNMOUNT_TIMEOUT_SEC`
+       (10 s) elapses. This bounds the wait — a silent `DASessionScheduleWithRunLoop`
+       failure leaves the mode empty so `CFRunLoopRunInMode` returns
+       `kCFRunLoopRunFinished` at once (fast false), and a wedged daemon is cut off
+       at the timeout. The prescribed heap-owned context turned out **unnecessary**:
+       single-threaded run-loop delivery means the callback only runs INSIDE
+       `CFRunLoopRunInMode` on this thread, so after the loop exits +
+       `DASessionUnscheduleFromRunLoop` + session release, no source remains for a
+       late callback to arrive on — the stack-local ctx is safe without a heap copy
+       or a deliberate leak (the use-after-return that forced the heap idea only
+       exists in the concurrent dispatch-queue model). Regression:
+       `adapter_da_unmount_bounded_when_callback_never_fires` (fake
+       `unmount_never_completes`).
     3. ~~The `--force` wrong-target race (veto / `funmount`)~~ — **MOOTED** by the
        graceful-eject redesign (AGENTS addendum 2026-06-20). With a GRACEFUL
        unmount (never `Force`) a reused `diskN` is harmless (cleanly unmounts an
@@ -142,7 +151,7 @@ it). What remains:
        borrowed-field audit (stronger than the size floor; no current bug).
   Source: R3 macOS adapter audit; AGENTS.md TOCTOU addendum (2026-06-20).
 
-- **R3 continuation audit (2026-06-20) — A2/A3 SHIPPED, A1 held, A4 post-tag.**
+- **R3 continuation audit (2026-06-20) — A1/A2/A3 SHIPPED, A4 post-tag.**
     - **A2 (volume lookup not identity-exact) — SHIPPED.** `88657fc` had dropped
       the `DADiskCopyIOMedia` endpoint check on the false premise that resolving
       the IOMedia by registry id made the lookup "identity-exact by construction";
@@ -160,10 +169,11 @@ it). What remains:
       `CFRunLoopRunInMode(…, 0, …)` before returning timeout, then re-pump.
       Adapter-fake regression: empty all-watch + queued Appeared + timeout 0 emits
       `device_appeared` without advancing the fake clock.
-    - **A1 (DA-callback hang) — HELD post-tag, ISOLATED.** The graceful-eject
-      redesign (AGENTS addendum 2026-06-20) removed the force-unmount and mooted
-      the veto, so this is now a plain post-tag bounded-wait fix for the graceful
-      unmount's await (item 2 above), not a `--force`-hardening prerequisite.
+    - **A1 (DA-callback hang) — SHIPPED.** Fixed by the bounded run-loop wait in
+      `mos_internal_da_unmount` (item 2 above): the `DISPATCH_TIME_FOREVER` /
+      dispatch-queue model is gone, so the never-delivered sub-case fails fast and a
+      wedged daemon is bounded at the timeout. It was an ISOLATED hang once the
+      graceful-eject redesign mooted the veto; not a `--force`-hardening prerequisite.
     - **A4 (permanent-negative serial re-probed every poll) — POST-TAG.** Watch
       probes set `serial_grabbed` only on a successful read, so an unsupported VPD
       0x80 (or answered-empty page) re-attempts the optional INQUIRY/exclusive

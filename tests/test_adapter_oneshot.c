@@ -887,6 +887,21 @@ TEST(adapter_da_unmount_is_name_based)
     return 0;
 }
 
+TEST(adapter_da_unmount_bounded_when_callback_never_fires)
+{
+    /* F1 regression: when the unmount callback never arrives (a void
+       DASessionScheduleWithRunLoop failure / wedged daemon), the bounded
+       run-loop wait in mos_internal_da_unmount must return false rather than
+       hang forever. The fake schedules no real source, so CFRunLoopRunInMode's
+       private mode is empty and returns kCFRunLoopRunFinished at once — the
+       fast-false path. That this test RETURNS at all is the assertion the old
+       DISPATCH_TIME_FOREVER wait would have failed. */
+    mos_fake_reset();
+    mos_fake_set_unmount_never_completes(true);
+    EXPECT(!mos_internal_da_unmount("disk4"));   /* bounded false, no hang */
+    return 0;
+}
+
 TEST(adapter_tray_exclusive_denied_is_negative_error)
 {
     mos_fake_reset();
@@ -995,6 +1010,7 @@ int main(void)
     RUN(adapter_tray_eject_graceful_unmounts_and_ejects);
     RUN(adapter_tray_eject_busy_fs_surfaces_busy_never_forces);
     RUN(adapter_da_unmount_is_name_based);
+    RUN(adapter_da_unmount_bounded_when_callback_never_fires);
     RUN(adapter_tray_locked_eject_classifies_refused_locked);
     RUN(adapter_tray_refused_other_carries_its_sense);
     RUN(adapter_tray_exclusive_denied_is_negative_error);

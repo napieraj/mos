@@ -100,6 +100,10 @@ static struct {
                                    until a successful DADiskUnmount clears it */
     bool     unmount_refused;   /* a GRACEFUL DADiskUnmount dissents (busy FS,
                                    open handles): mount stays, mos surfaces BUSY */
+    bool     unmount_never_completes; /* DADiskUnmount delivers NO callback —
+                                   models the F1 silent-failure / wedged-daemon
+                                   case; mos_internal_da_unmount must return
+                                   bounded-false, not hang */
     bool     release_fail;      /* ReleaseExclusiveAccess returns non-success
                                    AND leaves the lock held (no decrement) */
     uint32_t raw_status;        uint8_t raw[64];  size_t raw_len;
@@ -306,6 +310,11 @@ void mos_fake_set_mounted_busy(bool busy) { g.mounted_busy = busy; }
 /* Model a BUSY filesystem (open handles): the graceful DADiskUnmount DISSENTS,
    the mount stays, mos surfaces MOS_ERR_BUSY (never forces). */
 void mos_fake_set_unmount_refused(bool refused) { g.unmount_refused = refused; }
+/* Model the F1 case: the unmount callback never arrives (silent
+   DASessionScheduleWithRunLoop failure / wedged daemon). mos_internal_da_unmount
+   must fall through its bounded run-loop wait and return false, never hang. */
+void mos_fake_set_unmount_never_completes(bool never)
+{ g.unmount_never_completes = never; }
 void mos_fake_set_release_fail(bool fail) { g.release_fail = fail; }
 
 void mos_fake_set_plugin_fail(bool fail) { g.plugin_fail = fail; }
@@ -1054,21 +1063,32 @@ CFDictionaryRef DADiskCopyDescription(DADiskRef disk)
 }
 
 /* Unmount path (mos_internal_da_unmount). The real DADiskUnmount is async and
-   delivers via the session's dispatch queue; the fake models an immediate
-   SUCCESS by invoking the callback synchronously with a NULL dissenter, which
-   satisfies the semaphore handshake in mos_internal_da_unmount.
-   DASessionSetDispatchQueue is a no-op. Both exist so the headless binary links
-   — it does not link -framework DiskArbitration. */
-void DASessionSetDispatchQueue(DASessionRef session, dispatch_queue_t queue)
+   delivers via the session's run-loop source; the fake models an immediate
+   result by invoking the callback synchronously, which sets ctx.done before
+   mos_internal_da_unmount enters its run-loop wait (so the loop is skipped).
+   The schedule/unschedule calls are no-ops here — there is no real DA source —
+   so when the callback never fires (unmount_never_completes) the run loop's
+   private mode is empty and CFRunLoopRunInMode returns kCFRunLoopRunFinished at
+   once: the F1 fast-false path, exercised without waiting the real timeout. All
+   exist so the headless binary links — it does not link -framework
+   DiskArbitration. */
+void DASessionScheduleWithRunLoop(DASessionRef session, CFRunLoopRef rl,
+                                  CFStringRef mode)
 {
-    (void)session;
-    (void)queue;
+    (void)session; (void)rl; (void)mode;
+}
+
+void DASessionUnscheduleFromRunLoop(DASessionRef session, CFRunLoopRef rl,
+                                    CFStringRef mode)
+{
+    (void)session; (void)rl; (void)mode;
 }
 
 void DADiskUnmount(DADiskRef disk, DADiskUnmountOptions options,
                    DADiskUnmountCallback callback, void *context)
 {
     (void)options;   /* graceful (Whole, no Force): mos never sets Force */
+    if (g.unmount_never_completes) return;  /* no callback: F1 bounded-wait case */
     if (g.unmount_refused) {
         /* Busy filesystem: the daemon DISSENTS, the mount stays. mos surfaces
            MOS_ERR_BUSY (it never forces). Non-NULL dissenter = failure. */

@@ -9,8 +9,8 @@
  *      present); with no IOMedia node nothing is mounted and DA is never consulted.
  *   2. The ASYNC GRACEFUL unmount (mos_internal_da_unmount) — the single DA ACTION
  *      mos performs, used by `tray eject` (default and --force). DADiskUnmount
- *      delivers via a callback on a dispatch queue; we block on a semaphore until
- *      it fires (see that function). NEVER forces — a busy fs surfaces BUSY.
+ *      delivers via a callback we pump on this thread's run loop with a bounded
+ *      wait (see that function). NEVER forces — a busy fs surfaces BUSY.
  *
  * Trust terms: the description dictionary is system-supplied but its values
  * are volume-controlled (a hostile disc names its volume), so extraction
@@ -37,7 +37,20 @@
 
 #if MOS_USE_DISKARBITRATION
 #include <DiskArbitration/DiskArbitration.h>
-#include <dispatch/dispatch.h>   /* semaphore wait on the async unmount callback */
+
+/* Private run-loop mode for the unmount callback. Only our DA session is
+   scheduled in it, so CFRunLoopRunInMode here services THIS unmount and nothing
+   else on the thread — the same private-mode discipline mos_watch.c uses. */
+#define MOS_DA_UNMOUNT_RUN_LOOP_MODE CFSTR("io.github.napieraj.mos.unmount")
+
+/* Backstop bound for the unmount wait (was the F1 unbounded-hang). With a run
+   loop WE own, a callback machinery that never delivers (DASessionScheduleWith-
+   RunLoop is void/fallible) is normally a FAST failure — an empty mode returns
+   kCFRunLoopRunFinished at once — so this only bounds the rarer "source
+   registered but the daemon never replies" case. 10 s matches diskarbitrationd's
+   own per-request response budget
+   (doc/research/2026-06-20-force-unmount-veto-funmount-investigation.md). */
+#define MOS_DA_UNMOUNT_TIMEOUT_SEC 10.0
 
 /* True when the IOMedia currently behind `disk` carries the expected whole-disk
    registry entry id. DADiskCopyIOMedia re-reads what the daemon resolves the
@@ -141,15 +154,15 @@ bool mos_internal_da_volume(uint64_t media_id,
     return mounted;
 }
 
-typedef struct { dispatch_semaphore_t sem; bool ok; } mos_da_unmount_ctx;
+typedef struct { bool ok; bool done; } mos_da_unmount_ctx;
 
 static void mos_internal_da_unmount_cb(DADiskRef disk,
                                        DADissenterRef dissenter, void *context)
 {
     (void)disk;
     mos_da_unmount_ctx *c = (mos_da_unmount_ctx *)context;
-    c->ok = (dissenter == NULL);     /* NULL dissenter ⇒ unmount accepted */
-    dispatch_semaphore_signal(c->sem);
+    c->ok   = (dissenter == NULL);   /* NULL dissenter ⇒ unmount accepted */
+    c->done = true;                  /* breaks the CFRunLoopRunInMode wait below */
 }
 
 /* GRACEFUL unmount of every volume on whole-disk "diskN"
@@ -170,13 +183,20 @@ static void mos_internal_da_unmount_cb(DADiskRef disk,
    DADiskUnmount is asynchronous (returns void, delivers via callback — verified
    against DADisk.h: takes the disk, not a session; option Whole=0x1; success =
    NULL dissenter, busy = non-NULL dissenter). We make it synchronous-from-our-
-   side: deliver the callback on a background queue and block on a semaphore until
-   it fires.
+   side by scheduling the session on THIS thread's run loop in a private mode and
+   pumping CFRunLoopRunInMode until the callback fires or a bound elapses.
 
-   KNOWN ISSUE (unbounded wait, post-tag): DASessionSetDispatchQueue is
-   void/fallible; a silent failure leaves no callback port and the
-   DISPATCH_TIME_FOREVER wait can hang. A bounded fix needs a heap-owned context
-   (a stack-local ctx makes a naive timeout a use-after-return). */
+   BOUNDED, and no use-after-return (was the F1 hang). The wait is bounded by
+   MOS_DA_UNMOUNT_TIMEOUT_SEC, so DASessionScheduleWithRunLoop silently failing
+   (it is void/fallible, like the old DASessionSetDispatchQueue) no longer hangs:
+   with no source registered the mode is empty and CFRunLoopRunInMode returns
+   kCFRunLoopRunFinished at once (fast false), and a wedged daemon is cut off at
+   the timeout. The ctx stays stack-local safely BECAUSE delivery is single-
+   threaded run-loop delivery: the callback only ever runs INSIDE CFRunLoopRun-
+   InMode on this thread, and after we stop pumping and DASessionUnscheduleFrom-
+   RunLoop + CFRelease the session, no source remains for a late callback to
+   arrive on — so there is no concurrent callback that could touch a freed ctx
+   (the reason a dispatch-queue version would have needed a heap-owned context). */
 bool mos_internal_da_unmount(const char *bsd_name)
 {
     if (!bsd_name || !bsd_name[0]) return false;
@@ -188,16 +208,25 @@ bool mos_internal_da_unmount(const char *bsd_name)
     DADiskRef disk = DADiskCreateFromBSDName(kCFAllocatorDefault,
                                              session, bsd_name);
     if (disk) {
-        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-        mos_da_unmount_ctx   ctx = { sem, false };
-        DASessionSetDispatchQueue(session,
-            dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
+        CFRunLoopRef       rl  = CFRunLoopGetCurrent();
+        mos_da_unmount_ctx ctx = { false, false };
+        DASessionScheduleWithRunLoop(session, rl, MOS_DA_UNMOUNT_RUN_LOOP_MODE);
         DADiskUnmount(disk, kDADiskUnmountOptionWhole,   /* graceful — no Force */
                       mos_internal_da_unmount_cb, &ctx);
-        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
-        DASessionSetDispatchQueue(session, NULL);   /* detach before release */
-        ok = ctx.ok;
-        dispatch_release(sem);
+        /* A synchronous fake fires the callback inside DADiskUnmount above, so
+           ctx.done can already be set and we never enter the loop. The real DA
+           delivers asynchronously through the run loop below. */
+        CFAbsoluteTime deadline =
+            CFAbsoluteTimeGetCurrent() + MOS_DA_UNMOUNT_TIMEOUT_SEC;
+        while (!ctx.done) {
+            CFTimeInterval remaining = deadline - CFAbsoluteTimeGetCurrent();
+            if (remaining <= 0) break;                  /* timeout backstop */
+            if (CFRunLoopRunInMode(MOS_DA_UNMOUNT_RUN_LOOP_MODE, remaining, true)
+                    == kCFRunLoopRunFinished)
+                break;                                  /* no source: nothing to await */
+        }
+        DASessionUnscheduleFromRunLoop(session, rl, MOS_DA_UNMOUNT_RUN_LOOP_MODE);
+        ok = ctx.done && ctx.ok;
     }
     if (disk) CFRelease(disk);
 
