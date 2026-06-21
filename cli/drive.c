@@ -47,7 +47,7 @@ static void emit_json(const drive_doc *d)
     fputs(",\n  \"product\": ", stdout);
     if (d->product)  mos_cli_json_str(stdout, d->product);
     else             fputs("null", stdout);
-    fputs(",\n  \"firmware\": ", stdout);
+    fputs(",\n  \"revision\": ", stdout);
     if (d->revision) mos_cli_json_str(stdout, d->revision);
     else             fputs("null", stdout);
 

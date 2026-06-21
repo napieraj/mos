@@ -10,7 +10,7 @@
     "registry_id",
     "vendor",
     "product",
-    "firmware",
+    "revision",
     "serial",
     "protection",
     "profiles",
@@ -44,7 +44,7 @@
       "type": ["string", "null"],
       "description": "Product identification, same terms/source as vendor."
     },
-    "firmware": {
+    "revision": {
       "type": ["string", "null"],
       "description": "Firmware revision (SPC-4 PRODUCT_REVISION_LEVEL) — the firmware VERSION (4 chars); the creation date is firmware_date. Same terms/source as vendor (fresh INQUIRY, DR fallback)."
     },

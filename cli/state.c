@@ -219,9 +219,9 @@ static void emit_json(const mos_state_result *r, int index1,
        the human view scales them. */
     if (mos_drive_perf_have(perf)) {
         fprintf(stdout,
-                ",\n  \"speeds\": {\"descriptor_count\": %u, "
+                ",\n  \"speeds\": {\"speed_count\": %u, "
                 "\"max_read_kbps\": %u, \"max_write_kbps\": %u}",
-                mos_drive_perf_descriptor_count(perf),
+                mos_drive_perf_speed_count(perf),
                 mos_drive_perf_max_read_kbps(perf),
                 mos_drive_perf_max_write_kbps(perf));
     }
@@ -242,7 +242,7 @@ static void emit_json(const mos_state_result *r, int index1,
         mos_cli_json_str(stdout, product);
     }
     if (revision && *revision) {
-        fputs(",\n  \"firmware\": ", stdout);
+        fputs(",\n  \"revision\": ", stdout);
         mos_cli_json_str(stdout, revision);
     }
 

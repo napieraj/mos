@@ -1,5 +1,5 @@
 mac-optical-state amalgamated distribution
-Version:  0.4.0-dev
+Version:  0.4.0
 
 Files:
   mos.h — public API

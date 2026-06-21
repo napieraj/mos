@@ -805,7 +805,7 @@ const char *mos_internal_media_type_token(const char *kernel_type);
  * per the hardware ADR. New fields append at the END. */
 struct mos_drive_perf {
     bool     have;              /* >= 1 descriptor in either direction */
-    uint16_t descriptor_count;  /* from the read-direction reply       */
+    uint16_t speed_count;       /* read-direction descriptor count      */
     uint32_t max_read_kbps;     /* max performance, WRITE=0 reply       */
     uint32_t max_write_kbps;    /* max performance, WRITE=1 reply       */
 };
@@ -4197,7 +4197,7 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
         if (we != MOS_OK && we != MOS_ERR_IO) return we;
 
         struct mos_drive_perf tmp = {0};
-        tmp.descriptor_count = rd_cnt;
+        tmp.speed_count      = rd_cnt;
         tmp.max_read_kbps    = rd_max;
         tmp.max_write_kbps   = wr_max;
         tmp.have             = (rd_cnt > 0);
@@ -5035,9 +5035,9 @@ bool mos_drive_perf_have(const mos_drive_perf *p)
     return p ? p->have : false;
 }
 
-uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p)
+uint16_t mos_drive_perf_speed_count(const mos_drive_perf *p)
 {
-    return p ? p->descriptor_count : 0;
+    return p ? p->speed_count : 0;
 }
 
 uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p)
@@ -7508,7 +7508,7 @@ static void watch_grab_speeds(mos_handle_t *h, mos_state_result *out,
             if (pe == MOS_OK && perf) {
                 *max_read  = mos_drive_perf_max_read_kbps(perf);
                 *max_write = mos_drive_perf_max_write_kbps(perf);
-                *count     = mos_drive_perf_descriptor_count(perf);
+                *count     = mos_drive_perf_speed_count(perf);
             }
             if (probe_grab_terminal(pe))
                 *media_id = out->media_id;   /* resolved for this disc */

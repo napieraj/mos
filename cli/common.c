@@ -231,7 +231,7 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
             uint16_t sc = mos_watch_event_speed_count(e);
             if (sc > 0)
                 fprintf(stdout,
-                        ",\"speeds\":{\"descriptor_count\":%u,"
+                        ",\"speeds\":{\"speed_count\":%u,"
                         "\"max_read_kbps\":%u,\"max_write_kbps\":%u}",
                         sc, mos_watch_event_max_read_kbps(e),
                         mos_watch_event_max_write_kbps(e));
@@ -243,7 +243,7 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
             fputs(",\"product\":", stdout); mos_cli_json_str(stdout, product);
         }
         if (revision && *revision) {
-            fputs(",\"firmware\":", stdout); mos_cli_json_str(stdout, revision);
+            fputs(",\"revision\":", stdout); mos_cli_json_str(stdout, revision);
         }
         /* serial: null until a free poll grabs it (mos_watch.c), then stable
            for the session — emitted only when present, like vendor/product. */
@@ -418,7 +418,7 @@ void mos_cli_emit_list_json(const mos_cli_list_row *rows, int n)
         fputs(", \"product\": ", stdout);
         if (rows[r].product[0]) mos_cli_json_str(stdout, rows[r].product);
         else                    fputs("null", stdout);
-        fputs(", \"firmware\": ", stdout);
+        fputs(", \"revision\": ", stdout);
         if (rows[r].revision[0]) mos_cli_json_str(stdout, rows[r].revision);
         else                     fputs("null", stdout);
         fputs("}", stdout);

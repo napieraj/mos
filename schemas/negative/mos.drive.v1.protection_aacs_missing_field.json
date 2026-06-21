@@ -4,7 +4,7 @@
   "registry_id": 4295021843,
   "vendor": "PIONEER",
   "product": "BD-RW BDR-XS07",
-  "firmware": "1.01",
+  "revision": "1.01",
   "serial": null,
   "protection": {
     "aacs": {"version": 68, "bus_encryption": false},

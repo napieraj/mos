@@ -35,12 +35,17 @@ because the reporter-only contract is genuinely useful by itself and
 adding control verbs introduces a different class of failure mode
 (locked drives, surprised users, cleanup-on-process-death
 obligations). The control surface, shipped in v0.4, is
-`mos tray {eject, close, lock, unlock}` (`eject --force` = open no matter what:
-force-unmount + clear locks, then eject).
-Each verb is issued as a raw CDB that needs exclusive access — and is
-therefore BUSY on a mounted disc (§3, §9.9); the convenience methods
-are structurally sense-blind (§9.7/§9.9), so the raw path is the only
-one that can honor the mechanism-facts contract. The query path is
+`mos tray {eject, close, lock, unlock}`. `tray eject` gracefully unmounts a
+mounted disc first (`DADiskUnmount` Whole, never Force — like `diskutil
+unmountDisk`; a busy filesystem reports `MOS_ERR_BUSY`, never data loss) and
+then ejects; `eject --force` additionally clears a tray Prevent LOCK in the way,
+but still never forces the filesystem (AGENTS.md force-unmount ADR chain).
+Each verb is issued as a raw CDB that needs exclusive access — so it is BUSY on
+a mounted disc (§3, §9.9), except `tray lock`, which returns `already_locked`
+because macOS already armed a tray Prevent when it mounted the disc (2026-06-21
+mount-lock ADR). The convenience methods are structurally sense-blind
+(§9.7/§9.9), so the raw path is the only one that can honor the mechanism-facts
+contract. The query path is
 unchanged: it still issues no control command and keeps its
 no-lock-on-ready guarantee. The contract states mechanism facts only —
 no application or safety editorialising; the consumer derives

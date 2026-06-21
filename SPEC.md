@@ -257,15 +257,17 @@ media. The cheap-enrichment surface (disc-ingest gaps note,
   `Content Mask`, `Ejectable`, `Leaf`, `Open`, `Preferred Block Size`
   (`kIOMediaPreferredBlockSizeKey`), `Removable`, `Size` (`kIOMediaSizeKey`),
   `UUID`, `Whole`, **`Writable`** (`kIOMediaWritableKey`, OSBoolean). mos reads
-  Size + Preferred Block Size (capacity) and **`Writable`** (`mos_internal_read_writable`
+  Size + Preferred Block Size (capacity) and **`Writable`** (read off
+  `kIOMediaWritableKey` in the whole-disk walk, `src/mos_scsi.c`
   → `mos.state.v1`/`mos.event.v1` `writable`, tri-state -1/0/1, zero-command off the
   optical media node) — the mechanism bit, not a blank/appendable classification;
   `bsd_node` null ⇒ no whole-disk node ⇒ blank/unrecorded.
 - **Optical media TYPE (`kIO{CD,DVD,BD}MediaTypeKey` = `"Type"`, OSString):**
   CD → `CD-ROM` / `CD-R` / `CD-RW`; DVD → `DVD-ROM` / `-R` / `-RW` / `+R` /
   `+RW` / `-RAM` / `HD DVD-{ROM,R,RW,RAM}`; BD → `BD-ROM` / `BD-R` / `BD-RE`.
-  ROM-vs-recordable for free. mos reads these as `media_type`
-  (`mos_internal_read_media_type` → `mos_internal_media_type_token`, a stable
+  ROM-vs-recordable for free. mos reads these as `media_type` (off the `"Type"`
+  key in the whole-disk walk, `src/mos_scsi.c`, mapped by
+  `mos_internal_media_type_token` to a stable
   `cd_rom`/`dvd_minus_r`/`bd_re`/… token), zero-command off the media node, on
   both `mos.state.v1` and `mos.event.v1` — present even off the not-ready branch
   where `current_profile`/`media_class` are suppressed, and finer than

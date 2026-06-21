@@ -905,7 +905,7 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out);
 /* Accessors. NULL-tolerant (NULL reads as 0/false). The speeds are
    meaningful only when have is true (>= 1 descriptor). */
 bool     mos_drive_perf_have(const mos_drive_perf *p);
-uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p);
+uint16_t mos_drive_perf_speed_count(const mos_drive_perf *p);
 uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p);
 uint32_t mos_drive_perf_max_write_kbps(const mos_drive_perf *p);
 
@@ -1079,7 +1079,8 @@ mos_error mos_tray_unlock(mos_handle_t *h,
                           mos_tray_outcome *out, uint8_t sense[3]);
 
 /* Stable lower_snake_case token for an outcome: "done" / "refused_locked" /
-   "refused_other". Same contract as mos_state_description (never NULL). */
+   "refused_other" / "already_locked". Same contract as mos_state_description
+   (never NULL). */
 const char *mos_tray_outcome_description(mos_tray_outcome o);
 
 /* Safe to call on NULL. Do not call twice on the same handle. */
@@ -1164,10 +1165,13 @@ const char    *mos_watch_event_vendor(const mos_watch_event *e);
 const char    *mos_watch_event_product(const mos_watch_event *e);
 const char    *mos_watch_event_revision(const mos_watch_event *e);
 
-/* Drive Unit Serial Number (raw INQUIRY VPD page 0x80), the durable inventory
-   key that survives replug where registry_id does not. NULL until a free
-   (empty / not-ready) poll grabs it — the read self-gates on exclusive access,
-   so it backs off while a disc is mounted — then stable for the session.
+/* Drive serial (Logical Unit Serial Number feature 0108h), the durable inventory
+   key that survives replug where registry_id does not. Read from the non-exclusive
+   GET CONFIGURATION walk (no raw command, no exclusive access — readable even while
+   a disc is mounted), grabbed ONCE per session on a probe handle and cached: NULL
+   in early event lines until the probe reaches a terminal outcome (a read, or an
+   answered absence), then stable for the session. NULL when the drive does not
+   implement the feature / programs no serial (OPTIONAL in MMC, firmware-dependent).
    NULL-tolerant. (mos state never carries serial; it is a watch/drive datum.) */
 const char    *mos_watch_event_serial(const mos_watch_event *e);
 
@@ -1408,7 +1412,19 @@ size_t mos_safe_ascii(const char *in, char *out, size_t out_cap);
 
 /* ---- Library version ------------------------------------------------- */
 
-#define MOS_VERSION_STRING "0.4.0-dev"
+/* Numeric components, for compile-time feature gating by a consumer that
+   statically links or vendors mos:  #if MOS_VERSION_HEX >= 0x000500  (>= 0.5.0).
+   MOS_VERSION_HEX packs MAJOR.MINOR.PATCH one byte each (0x00MMmmpp) so it is
+   monotonic and >=/< comparable. Kept in lockstep with CMake project(VERSION)
+   by a configure-time assert (CMakeLists.txt). */
+#define MOS_VERSION_MAJOR 0
+#define MOS_VERSION_MINOR 4
+#define MOS_VERSION_PATCH 0
+#define MOS_VERSION_HEX   ((MOS_VERSION_MAJOR << 16) | \
+                           (MOS_VERSION_MINOR << 8)  | \
+                           (MOS_VERSION_PATCH))
+
+#define MOS_VERSION_STRING "0.4.0"
 
 const char *mos_version_string(void);
 

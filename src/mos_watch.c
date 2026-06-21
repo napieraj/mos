@@ -277,7 +277,7 @@ static void watch_grab_speeds(mos_handle_t *h, mos_state_result *out,
             if (pe == MOS_OK && perf) {
                 *max_read  = mos_drive_perf_max_read_kbps(perf);
                 *max_write = mos_drive_perf_max_write_kbps(perf);
-                *count     = mos_drive_perf_descriptor_count(perf);
+                *count     = mos_drive_perf_speed_count(perf);
             }
             if (probe_grab_terminal(pe))
                 *media_id = out->media_id;   /* resolved for this disc */

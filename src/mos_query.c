@@ -578,7 +578,7 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
         if (we != MOS_OK && we != MOS_ERR_IO) return we;
 
         struct mos_drive_perf tmp = {0};
-        tmp.descriptor_count = rd_cnt;
+        tmp.speed_count      = rd_cnt;
         tmp.max_read_kbps    = rd_max;
         tmp.max_write_kbps   = wr_max;
         tmp.have             = (rd_cnt > 0);

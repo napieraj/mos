@@ -8,7 +8,7 @@
   "bsd_node": "/dev/disk4",
   "prev_state": "ready",
   "speeds": {
-    "descriptor_count": 1,
+    "speed_count": 1,
     "max_read_kbps": 35980,
     "max_write_kbps": 0
   }

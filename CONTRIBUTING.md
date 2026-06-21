@@ -89,7 +89,7 @@ mos/
 │   ├── test_main.c              # aggregator
 │   ├── test_*.c                 # pure-unit tests (sense, config, discinfo, trackinfo,
 │   │                            #   formatcap, discstruct, physstruct, cdtoc, cdtext,
-│   │                            #   modepage, perf, inqdata, vpd80, bsd_name,
+│   │                            #   modepage, perf, inqdata, bsd_name,
 │   │                            #   scsi_status, ioreturn, state_core, watch_core,
 │   │                            #   render, result, human, io, tray, dr_doorbell, …)
 │   ├── test_adapter_*.c         # link-seam adapter tests (oneshot, watch, seam_probe)

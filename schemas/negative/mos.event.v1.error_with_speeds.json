@@ -9,7 +9,7 @@
   "prev_state": "ready",
   "state": "unknown",
   "speeds": {
-    "descriptor_count": 1,
+    "speed_count": 1,
     "max_read_kbps": 35980,
     "max_write_kbps": 0
   },

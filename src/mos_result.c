@@ -760,9 +760,9 @@ bool mos_drive_perf_have(const mos_drive_perf *p)
     return p ? p->have : false;
 }
 
-uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p)
+uint16_t mos_drive_perf_speed_count(const mos_drive_perf *p)
 {
-    return p ? p->descriptor_count : 0;
+    return p ? p->speed_count : 0;
 }
 
 uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p)

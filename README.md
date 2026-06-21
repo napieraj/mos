@@ -59,10 +59,10 @@ $ mos state 1 --json
   "media_class": "bd",
   "media_type": "bd_rom",
   "writable": false,
-  "speeds": {"descriptor_count": 1, "max_read_kbps": 35980, "max_write_kbps": 0},
+  "speeds": {"speed_count": 1, "max_read_kbps": 35980, "max_write_kbps": 0},
   "vendor": "HL-DT-ST",
   "product": "BD-RE WH16NS60",
-  "firmware": "1.00"
+  "revision": "1.00"
 }
 ```
 
@@ -225,8 +225,10 @@ deliberately-locked idle drive (a robot's `mos tray lock`) with no mount in
 play, which a plain eject reports as `refused_locked`. It clears both Prevent
 states so the locked tray opens. It does **not** touch
 the filesystem — a busy disc still reports busy under `--force`. The one blocker
-neither path can clear is another program holding the drive exclusively
-(`outcome: exclusive_access`).
+neither path can clear is another program holding the drive exclusively, which
+surfaces as a `mos.error.v1` error with code `exclusive_access` — not a tray
+`outcome` (the outcome enum is `done` / `refused_locked` / `refused_other` /
+`already_locked`).
 
 `tray lock` sets the **basic** Prevent state — the hard removal block that
 refuses the front-panel eject button. `tray unlock` clears **both** Prevent

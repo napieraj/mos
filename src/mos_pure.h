@@ -721,7 +721,7 @@ const char *mos_internal_media_type_token(const char *kernel_type);
  * per the hardware ADR. New fields append at the END. */
 struct mos_drive_perf {
     bool     have;              /* >= 1 descriptor in either direction */
-    uint16_t descriptor_count;  /* from the read-direction reply       */
+    uint16_t speed_count;       /* read-direction descriptor count      */
     uint32_t max_read_kbps;     /* max performance, WRITE=0 reply       */
     uint32_t max_write_kbps;    /* max performance, WRITE=1 reply       */
 };
