@@ -1431,3 +1431,50 @@ leg, `cli/main.c`), and `cli/probe.c` — including its CommonCrypto/`--capture`
 code — is wholly inside the `if(MOS_CLI_PROBE)` CMake guard, so OFF pulls none
 of it in. The flip is a default change + a generator change + a doc move, not a
 code-path change to the library.
+
+## Finding + ADR: watch self-contends with control verbs; A4 serial re-probe
+## fixed (release-criterion met) — partial, the GESN residual is deferred
+## (2026-06-21, first hardware run)
+
+The first hardware run surfaced a real, confirmed contention: a concurrent
+`mos watch` makes `mos tray eject` fail with `MOS_ERR_EXCLUSIVE_ACCESS` on an
+EMPTY drive (no disc). Diagnosed self-contention, not a device quirk: on a
+not-ready/empty drive the state path takes exclusive access every poll to fire
+the raw GESN tray probe (`mos_state_core.c`; `ARCHITECTURE.md` §4), so a watch
+polling holds the SCSITaskUserClient lock briefly each cycle, and the one-shot
+eject lands in that window and loses. The eject's report is CORRECT — a sibling
+client genuinely holds the lock, there is no SCSI preempt, so it surfaces and
+stops (no retry, per the no-retry ethos). Distinct from `kIOReturnBusy` (a
+disc's mount); this is `kIOReturnExclusiveAccess` (another userland client).
+
+**What this tripped.** The A4 "permanent-negative serial re-probe" item was
+parked POST-TAG *"unless repeated exclusive-access traffic becomes a release
+criterion"* (ROADMAP). On a serial-LESS drive the watch ALSO re-issued the
+optional exclusive INQUIRY (VPD 0x80) every poll, because `serial_grabbed`
+flipped true only on a successful read — so an answered absence re-probed
+forever, doubling the per-poll exclusive traffic. That is the criterion, met by
+hardware. A4 is now implemented (maintainer decision, 2026-06-21): a
+`serial_probe_terminal()` classifier in `mos_watch.c` resolves on a successful
+read OR an answered absence (`MOS_ERR_IO`/`MOS_ERR_UNSUPPORTED` — the drive
+replied, no serial, a STATIC fact) and retries only TRANSIENT failures
+(`MOS_ERR_BUSY`/`EXCLUSIVE_ACCESS`/`TIMEOUT`/`NO_DEVICE`/`OOM`); the
+`serial_grabbed` flag is renamed `serial_resolved` to match the widened meaning.
+
+**Partial by construction — stated so it is not mistaken for the whole fix.**
+A4 removes the redundant per-poll INQUIRY on serial-less drives, but the GESN
+tray probe is INHERENTLY per-poll-exclusive on an empty drive, so a watch will
+always leave SOME window a one-shot eject can hit. Closing that residual is a
+separate, deferred decision (the forward item in ROADMAP) between (a) a bounded
+retry/backoff on the eject's `EXCLUSIVE_ACCESS` — which would cross the no-retry
+ADR chain and needs its own dated rebuttal — and (b) reducing the watch's
+exclusive footprint structurally (notification-lean + slower empty-drive
+cadence). On a drive that DOES report a serial, A4 changes nothing (the serial
+resolves once regardless) and the residual GESN contention is the whole story.
+
+**Hardware's role, honored.** Per the hardware-role ADR this finding did not
+add a device special-case: it confirmed a pre-existing architectural cost and
+met a pre-recorded release criterion. The fix is generic (an error-class
+classifier, no per-device branch). A drive whose VPD 0x80 absence is reported
+via an unmapped transport `IOReturn` is caught by the `MOS_ERR_IO` default arm
+(resolved as absent — a benign null serial, not forever-churn); any surprise
+lands as a fixture + dated note, never a per-device gate.

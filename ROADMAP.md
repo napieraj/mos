@@ -91,45 +91,20 @@ What remains — none a tag blocker:
   X-macro / generated borrowed-field audit (stronger than the size floor; no
   current bug). POST-TAG.
 
-- **Permanent-negative serial re-probe** — watch probes set `serial_grabbed`
-  only on a successful read, so an unsupported VPD 0x80 (or answered-empty page)
-  re-attempts the optional INQUIRY/exclusive path every ~2 s stable poll, per
-  slot. Separate "serial resolved" from "serial present": cache an answered
-  permanent absence, retry only transient BUSY/exclusive/timeout. Efficiency,
-  not correctness — POST-TAG unless repeated exclusive-access traffic becomes a
-  release criterion.
-
-  Build-ready design (so the post-tag session does not re-derive it). The
-  `mos_query_serial` return codes already separate the two cases via the
-  IOReturn mapper (`mos_pure.c`): TERMINAL = `MOS_OK` (present) plus the
-  answered-absence codes `MOS_ERR_IO`/`MOS_ERR_UNSUPPORTED` (CHECK CONDITION
-  5/24/00, page-code mismatch, all-spaces — the drive replied and there is no
-  serial, a STATIC fact); RETRYABLE = `MOS_ERR_BUSY`, `MOS_ERR_EXCLUSIVE_ACCESS`,
-  `MOS_ERR_TIMEOUT`, `MOS_ERR_NO_DEVICE`, `MOS_ERR_OOM` (lock contended, timeout,
-  media mid-swap, resource pressure). A `serial_probe_terminal(mos_error)` helper
-  returning false for exactly that retryable set (default → terminal) gates a flag
-  renamed `serial_grabbed` → `serial_resolved` (widened meaning: present OR
-  answered-absent) at BOTH probe sites (`watch_probe`, `watch_slot_probe`); the
-  present-string copy stays as-is, only the flag-flip widens. Slot reclaim's
-  `memset` already resets the flag to retry, so recycled slots stay correct.
-  Test hook needs no new fake plumbing: script an answered-absent reply
-  (`mos_fake_set_raw_reply`, non-GOOD status), poll repeatedly, assert
-  `mos_fake_execute_calls()` rose once; a BUSY-then-present test asserts it still
-  retries and lands the serial.
-
-  One wrinkle and the clean variant. `MOS_ERR_IO` is the mapper's `default`
-  arm, so a genuinely-transient but UNMAPPED transport IOReturn would also be
-  classified terminal-absent and suppress the serial for that session — accepted,
-  because known transients are explicitly mapped and the cost of a wrong call is
-  a benign null serial vs. the bug's forever-churn. For zero ambiguity, make
-  `mos_query_serial` return `MOS_ERR_UNSUPPORTED` for its answered-absent
-  branches (`task_status != GOOD`, parse-fail) so the watch classifies on an
-  unambiguous code — but that changes the public contract (`mos.h` documents
-  `MOS_ERR_IO` for all-spaces), so it should ride WITH the schema/header freeze,
-  not before. The 4-state `UNTRIED / RETRYABLE / RESOLVED_ABSENT /
-  RESOLVED_PRESENT` enum is only worth it if a consumer later needs to tell
-  "absent" from "not-yet-known" on the event (a separate `mos.event.v1`
-  decision); the boolean-terminal flag fixes the churn without it.
+- **Watch-vs-control-verb exclusive contention — residual GESN window**
+  (deferred; the serial half is DONE). The first hardware run confirmed a
+  concurrent `mos watch` can make `mos tray eject` fail with
+  `MOS_ERR_EXCLUSIVE_ACCESS` on an empty drive, because the not-ready state path
+  takes exclusive access every poll for the raw GESN tray probe (finding +
+  decision recorded in AGENTS.md, 2026-06-21). The serial-amplifier half (A4,
+  the per-poll INQUIRY on serial-less drives) is FIXED there; the GESN window is
+  inherent to per-poll polling and remains. Two options when this is picked up,
+  each crossing something: (a) a bounded retry/backoff on the eject's
+  `EXCLUSIVE_ACCESS` — crosses the no-retry ADR chain, needs a dated rebuttal;
+  (b) reduce the watch's exclusive footprint (notification-lean + slower
+  empty-drive cadence) — structural. On a drive that reports a serial, the GESN
+  window is the whole story; no retry/cadence change is in scope until this is
+  decided.
 
 - **GESN realized-count waiver — hardware-gated revisit** (HELD, not a tag
   blocker). A device that CLAIMS a full 6-byte Media descriptor but delivers only
