@@ -1,6 +1,14 @@
 /* cli/tray.c — the tray command: `mos tray <action> [selector] [flags]`.
  *
- * action ∈ {eject, close, lock, unlock}. eject GRACEFULLY unmounts a mount
+ * action ∈ {eject, close, lock, unlock}. `open` is an input alias of eject
+ * (the emitted action stays "eject"): Apple's own drives were mostly slot
+ * loaders, so "eject" reads as "expel the disc" — but mos targets current Mac
+ * optical media, external tray-loading drives in enclosures whose tray opens
+ * with or without media, so the open/close pair is the operator's mental
+ * model. This is a deliberate override of the no-alias house style (the
+ * status→state ADR, AGENTS.md), on that semantic ground.
+ *
+ * eject GRACEFULLY unmounts a mount
  * then ejects, clearing the OS mount-protection Prevent lock macOS arms on
  * mount; --force extends the lock-clearing to a COLD deliberate lock (no mount
  * in play). It never forces the filesystem — a busy disc surfaces BUSY; see
@@ -114,13 +122,14 @@ static bool parse_action(tray_act *act)
         return false;
     }
     if      (strcmp(opt_tray_action, "eject")  == 0) *act = ACT_EJECT;
+    else if (strcmp(opt_tray_action, "open")   == 0) *act = ACT_EJECT;  /* alias of eject */
     else if (strcmp(opt_tray_action, "close")  == 0) *act = ACT_CLOSE;
     else if (strcmp(opt_tray_action, "lock")   == 0) *act = ACT_LOCK;
     else if (strcmp(opt_tray_action, "unlock") == 0) *act = ACT_UNLOCK;
     else {
         fprintf(stderr, "%s: unknown tray action: ", progname);
         mos_cli_safe_ascii(stderr, opt_tray_action);
-        fputs("\nRecognized: eject, close, lock, unlock.\n", stderr);
+        fputs("\nRecognized: eject (alias: open), close, lock, unlock.\n", stderr);
         return false;
     }
     if (flag_force && *act != ACT_EJECT) {

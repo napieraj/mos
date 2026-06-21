@@ -43,7 +43,7 @@ _mos() {
                     _arguments \
                         "${global_opts[@]}" \
                         '--force[tray eject: also clear a tray Prevent lock (never forces the filesystem)]' \
-                        '1:action:(eject close lock unlock)'
+                        '1:action:(eject open close lock unlock)'
                     ;;
                 probe)
                     _arguments \
