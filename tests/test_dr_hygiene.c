@@ -1,8 +1,9 @@
 /* tests/test_dr_hygiene.c — macOS guard: DiscRecording identity-string and
  * IORegistry-path copies are COMPLETE-OR-EMPTY under hostile CF strings.
  *
- * Pins the mos_dr.c strict-copy contract (the mos_vpd80 interior-NUL /
- * over-width rule) at the helper boundary against real CoreFoundation:
+ * Pins the mos_dr.c strict-copy contract (the same interior-NUL / over-width
+ * complete-or-empty rule the identity decoders share) at the helper boundary
+ * against real CoreFoundation:
  *   - an over-width value collapses to "" (never a truncated false identity);
  *   - an interior NUL collapses to "" (never a severed identity);
  *   - a non-string CFType yields "";

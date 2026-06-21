@@ -110,13 +110,6 @@ struct mos_handle {
     struct mos_mode_caps      mode_caps;
     struct mos_error_recovery error_recovery;
 
-    /* Handle-owned INQUIRY VPD-0x80 serial (mos_query_serial). Filled by the
-       raw-INQUIRY shell, returned by borrowed pointer; 64 holds any real drive
-       serial. A serial that cannot be held whole — longer than this buffer or
-       carrying an interior NUL — is refused (serial stays null), never
-       truncated: a partial identity key is worse than none (mos_vpd80.c). */
-    char                      serial_str[64];
-
     /* Handle-owned standard-INQUIRY result (mos_query_drive_inquiry). */
     struct mos_drive_inquiry drive_inquiry;
 };
@@ -279,8 +272,8 @@ mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
    values return MOS_ERR_INVALID_ARG. timeout_ms must be > 0 — 0 is
    SCSITaskLib's "Wait Forever", rejected at the boundary. scsi_task_status and
    sense are required; bytes_transferred may be NULL. Callers: the GESN tray
-   probe (mos_scsi.c), the tray verbs (mos_tray.c), the INQUIRY reads
-   (mos_serial.c / mos_drive_inquiry.c), and the diagnostic capture menu
+   probe (mos_scsi.c), the tray verbs (mos_tray.c), the standard INQUIRY read
+   (mos_drive_inquiry.c), and the diagnostic capture menu
    (cli/probe.c, MOS_CLI_PROBE). */
 mos_error mos_internal_raw_cdb(mos_handle_t *h,
                                const uint8_t *cdb, size_t cdb_len,

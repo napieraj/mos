@@ -29,7 +29,7 @@ PURE = ["src/mos_pure.c", "src/mos_sense.c", "src/mos_strings.c",
         "src/mos_discinfo.c", "src/mos_discstruct.c", "src/mos_cdtext.c",
         "src/mos_physstruct.c", "src/mos_trackinfo.c", "src/mos_cdtoc.c",
         "src/mos_formatcap.c", "src/mos_perf.c", "src/mos_modepage.c",
-        "src/mos_vpd80.c", "src/mos_inqdata.c", "src/mos_result.c",
+        "src/mos_inqdata.c", "src/mos_result.c",
         "cli/human.c", "cli/io.c"]
 TESTS = ["tests/test_main.c", "tests/test_sense.c", "tests/test_bsd_name.c",
          "tests/test_scsi_status.c", "tests/test_ioreturn.c",
@@ -38,7 +38,7 @@ TESTS = ["tests/test_main.c", "tests/test_sense.c", "tests/test_bsd_name.c",
          "tests/test_discinfo.c", "tests/test_discstruct.c",
          "tests/test_cdtext.c", "tests/test_physstruct.c",
          "tests/test_trackinfo.c", "tests/test_cdtoc.c", "tests/test_formatcap.c",
-         "tests/test_perf.c", "tests/test_modepage.c", "tests/test_vpd80.c",
+         "tests/test_perf.c", "tests/test_modepage.c",
          "tests/test_inqdata.c", "tests/test_tray.c", "tests/test_result.c",
          "tests/test_io.c"]
 

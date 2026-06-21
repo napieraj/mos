@@ -872,6 +872,63 @@ TEST(firmware_date_absent_malformed_and_bounds)
     return 0;
 }
 
+TEST(serial_decodes_from_feature_0108)
+{
+    /* GET CONFIG RT=0: header + Logical Unit Serial Number feature (0108h).
+       Founding observation: an LG WH16NS60 carried a 12-byte ASCII serial here
+       while INQUIRY VPD 0x80 was empty (AGENTS.md). Synthetic value; trailing
+       spaces exercise the trim. */
+    uint8_t buf[] = {
+        0x00,0x00,0x00,0x10,  0x00,0x00, 0x00,0x10,    /* dlen 16 → total 20 */
+        0x01,0x08, 0x03, 0x08,                          /* 0108h, cur+pers, add=8 */
+        'S','N','1','2','3','4',' ',' ',                /* "SN1234" + 2 spaces */
+    };
+    char out[64];
+    mos_internal_serial_from_config(buf, sizeof buf, out, sizeof out);
+    EXPECT_STREQ(out, "SN1234");
+    return 0;
+}
+
+TEST(serial_from_config_absent_empty_and_bounds)
+{
+    char out[64];
+
+    /* Feature absent → empty. */
+    uint8_t plain[] = { 0,0,0,8, 0,0, 0x00,0x10, 0x00,0x01, 0x03, 0x00 };
+    mos_internal_serial_from_config(plain, sizeof plain, out, sizeof out);
+    EXPECT(out[0] == 0);
+
+    /* Present but all-space payload → no serial, empty (complete-or-unavailable). */
+    uint8_t blank[] = {
+        0x00,0x00,0x00,0x0C, 0x00,0x00, 0x00,0x10,
+        0x01,0x08, 0x03, 0x04, ' ',' ',' ',' ',
+    };
+    mos_internal_serial_from_config(blank, sizeof blank, out, sizeof out);
+    EXPECT(out[0] == 0);
+
+    /* Interior NUL → refused (would sever the C string). */
+    uint8_t innul[] = {
+        0x00,0x00,0x00,0x0C, 0x00,0x00, 0x00,0x10,
+        0x01,0x08, 0x03, 0x04, 'A', 0x00, 'B', ' ',
+    };
+    mos_internal_serial_from_config(innul, sizeof innul, out, sizeof out);
+    EXPECT(out[0] == 0);
+
+    /* Serial that does not fit WHOLE → refused; NULL out safe. */
+    uint8_t ok[] = {
+        0x00,0x00,0x00,0x0C, 0x00,0x00, 0x00,0x10,
+        0x01,0x08, 0x03, 0x04, 'A','B','C','D',
+    };
+    char tiny[3];                                   /* 2 chars + NUL; serial is 4 */
+    mos_internal_serial_from_config(ok, sizeof ok, tiny, sizeof tiny);
+    EXPECT(tiny[0] == 0);
+    mos_internal_serial_from_config(ok, sizeof ok, NULL, 64);   /* no crash */
+    /* Same buffer, ample out → the whole serial. */
+    mos_internal_serial_from_config(ok, sizeof ok, out, sizeof out);
+    EXPECT_STREQ(out, "ABCD");
+    return 0;
+}
+
 TEST(firmware_date_rejects_impossible_calendar)
 {
     /* All-digit but out-of-range fields must fail closed (empty out), not be
@@ -929,6 +986,8 @@ void register_config_tests(void)
     RUN(firmware_date_decodes_iso8601);
     RUN(firmware_date_absent_malformed_and_bounds);
     RUN(firmware_date_rejects_impossible_calendar);
+    RUN(serial_decodes_from_feature_0108);
+    RUN(serial_from_config_absent_empty_and_bounds);
     RUN(toc_parses_real_pony_cd_single);
     RUN(aacs_caps_from_real_wh16ns40_capture);
     RUN(aacs_caps_decode_and_fail_closed);

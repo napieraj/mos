@@ -1511,3 +1511,85 @@ the WH16NS60 insert transient; the defense cites T10, not the model. Pinned by
 `state_loading_from_0401_overrides_gesn_door_open` (pure). If a future capture
 shows a drive that legitimately reports `04/xx` with the tray genuinely open
 (a malfunction), that lands as a fixture + dated note here before any change.
+
+## ADR: serial source is feature 0108h (GET CONFIGURATION); raw VPD 0x80 is
+## RETIRED (2026-06-21, supersedes the "fourth raw CDB — INQUIRY VPD page 0x80"
+## serial-source decision)
+
+The 2026-06-16 ADR admitted a raw INQUIRY (EVPD=1, PAGE CODE 0x80) as the drive-
+serial source, on showing (a) "no convenience or zero-command path carries it."
+A hardware run (LG WH16NS60, libredrive, OWC enclosure) + a cross-family survey
+falsified that showing, and this entry records the rebuttal + the redesign.
+Append-don't-edit: the 2026-06-16 entry stands as the record; this supersedes it
+on the merits. Full decision basis (architectural + empirical falsification of
+VPD 0x80, cross-family OEM-firmware survey, the 0108h/0109h distinction):
+`doc/research/2026-06-21-optical-serial-vpd80-vs-0108h.md`.
+
+**What hardware showed.** `mos probe --capture` on the WH16NS60: INQUIRY VPD 0x80
+returned `GOOD` with **page length 0** — the page is supported but EMPTY (no
+serial programmed). The drive's real serial instead lives in **GET CONFIGURATION
+feature 0108h (Logical Unit Serial Number)** — a 12-byte ASCII serial, decoded
+cleanly from the same RT=0 walk mos already issues for protection / profiles /
+firmware_date. (The serial also appears in the standard INQUIRY's vendor-specific
+region, bytes 36+ — corroboration that 0108h's value is the true serial, but that
+region's layout is vendor-defined per SPC, so it is NOT decoded: that would be the
+per-device special-casing the hardware-role ADR forbids.)
+
+**Why 0108h is the better source (the rebuttal to showing (a)).** Feature 0108h
+is reached through the **non-exclusive `GetConfiguration` convenience method** —
+no raw CDB, no `ObtainExclusiveAccess`. So it (1) reads the serial **even while a
+disc is mounted**, where the raw VPD-0x80 INQUIRY returns `MOS_ERR_BUSY`; (2) is
+**hardware-validated populated** on the one drive we have, where VPD 0x80 is
+empty; and (3) takes **no exclusive lock**, so a `mos watch` serial grab no longer
+contends with a one-shot `mos tray eject` — the root cause the A4 work could only
+shrink is removed for the serial entirely. Decoding it is spec-grounded (an MMC
+feature, same class as the 010Ch firmware-date decode), generic, no per-device
+branch.
+
+**The decision (maintainer, 2026-06-21) — RETIRE, not demote.** `mos_drive_caps_serial`
+(feature 0108h, `src/mos_config.c` `mos_internal_serial_from_config`) is the **SOLE**
+serial source for `mos drive` and `mos watch`. The raw VPD-0x80 subsystem is
+**deleted** — `src/mos_serial.c`, `src/mos_vpd80.c`, `tests/test_vpd80.c`, the
+public `mos_query_serial`, the handle's `serial_str`, and the (briefly-added)
+`MOS_SERIAL_VPD80` flag are gone. **Why retire rather than keep an opt-in fallback:**
+the 2026-06-16 raw-CDB admission rested entirely on showing (a) "no convenience
+method carries the serial"; 0108h IS a convenience-method path that carries it, so
+that showing has **collapsed** — and layer-1 admits a raw CDB *only* with that
+showing. Keeping VPD 0x80 even behind a flag keeps an exclusive raw CDB whose
+justification no longer exists, against a *hypothetical* VPD-only drive for which
+there is zero positive evidence (it read empty on the one drive tested; smartmontools:
+"CD or DVD-ROM devices often do not support VPD pages 0x80, 0x83 or 0x85"; the
+2026-06-16 admission was a spec bet never hardware-validated). That is exactly the
+speculative-code-for-unobserved-hardware the hardware-role ADR forbids.
+
+**0108h is OPTIONAL and firmware-dependent.** The survey found the *same* OEM ships
+firmware that fills 0108h and firmware that leaves it blank (e.g. Pioneer BDR-209 /
+212U populate it, BDR-213M blank). So the decoder fails closed on an absent or
+all-space feature (`serial` null) — never assume presence. This is the same
+optionality VPD had; the difference is 0108h is the in-spec MMC carrier (sg3_utils
+`sg_get_config` `case 0x108: "Drive serial number"`, libcdio `CDIO_MMC_FEATURE_LU_SN`),
+read non-exclusively from a walk mos already issues, where VPD 0x80 is the wrong
+SPC/block-storage abstraction for an MMC drive.
+
+**Scope / count.** The INQUIRY opcode 0x12 raw CDB is **unchanged** — the standard
+INQUIRY (EVPD=0) still issues for drive identity (vendor/product/revision/version
+descriptors), so the one-raw-CDB count stays one-of-four (GESN + two tray opcodes +
+INQUIRY). What changed: INQUIRY's **EVPD=1 / page-0x80 mode and its decoder are
+removed**; the serial read is now lock-free GET CONFIGURATION. Privilege footprint
+(layer 3) unchanged. Pre-first-tag, so the `mos.drive.v1.serial` description + the
+public header were updated in place (mutable-in-place clause). Pinned by
+`serial_decodes_from_feature_0108` + `serial_from_config_absent_empty_and_bounds`
+(pure).
+
+**The vendor INQUIRY-tail is deliberately NOT decoded.** The serial also appears in
+the standard INQUIRY's vendor-specific region (bytes 36+) — corroboration that
+0108h's value is the true serial, but that region's layout is vendor-defined per
+SPC, so decoding it is the per-device special-casing the hardware-role ADR forbids.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a drive
+that populates VPD 0x80 but NOT 0108h. There is no evidence such a drive exists; if a
+future first-party capture (a Pioneer or MediaTek `mos probe --capture`) shows one,
+THAT capture drives re-adding a serial path through the normal fixture→generic-gate
+flow — mos does not pre-emptively carry an unjustified raw command against the
+possibility. The open evidence gap the survey flagged (first-party 0108h captures on
+a non-LG unit) is a capture target, not a blocker.

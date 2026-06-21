@@ -338,6 +338,11 @@ typedef struct mos_drive_caps {
        (010Ch), "YYYY-MM-DDTHH:MM:SSZ" (GMT) or "" when absent. 24 holds the
        20-char ISO form + NUL. */
     char     firmware_date[24];
+    /* Logical Unit Serial Number from the Logical Unit Serial Number feature
+       (0108h), same RT=0 reply. ASCII, trimmed; "" when the feature is absent
+       or carries no serial. PRIMARY drive-serial source — non-exclusive, reads
+       even on mounted media. 64 matches the serial width used elsewhere. */
+    char     serial[64];
     /* Current Profile from the RT=0 reply header (the loaded medium's profile;
        0x0000 = no current profile / tray empty). MEDIA-DEPENDENT, unlike the
        rest of this struct — surfaced only so a caller can name the loaded
@@ -372,6 +377,14 @@ void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
    rejected (out empty). Pure, no-OOB — fuzz/ASan-gated. */
 void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
                                             char *out, size_t out_cap);
+
+/* Decode the Logical Unit Serial Number feature (0108h) into out as an ASCII
+   serial (out_cap >= 1), or out[0]=0 when the feature is absent / empty. The
+   descriptor payload is the serial; trailing space/NUL padding trimmed, an
+   interior NUL or over-length refused (complete-or-unavailable, like the
+   VPD-0x80 parser). PRIMARY serial source. Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_serial_from_config(const uint8_t *buf, size_t len,
+                                     char *out, size_t out_cap);
 
 /* ---- Standard INQUIRY decode (mos_inqdata.c) ----------------------- *
  *
@@ -733,16 +746,6 @@ bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
                                   struct mos_mode_caps *out);
 bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
                                        struct mos_error_recovery *out);
-
-/* ---- INQUIRY VPD page 0x80 decode (mos_vpd80.c) ------------------- *
- *
- * Decode the Unit Serial Number page into a NUL-terminated ASCII string in
- * out[0..out_cap). True only when the reply echoes page code 0x80 and a
- * non-empty serial survives the trailing space/NUL trim. Pure, bounded,
- * no-OOB — fuzz/ASan-gated. The shell (mos_serial.c) bounds len to the
- * realized transfer count before calling (O-4). */
-bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
-                                     char *out, size_t out_cap);
 
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *

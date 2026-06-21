@@ -194,9 +194,9 @@ partial read whose downstream effect is bounded (the GESN waiver above —
 worst case a fabricated closed tray bit, see the exception note for the
 exact OPEN→EMPTY shape; the config walk — a short feature reads as
 absent). But two reads feed values the system
-treats as AUTHORITATIVE and STICKY: the drive serial (VPD 0x80,
-`mos_vpd80.c` — a durable inventory key cached once per watch session)
-and the standard-INQUIRY identity (`mos_inqdata.c` — the canonical
+treats as AUTHORITATIVE and STICKY: the drive serial (GET CONFIGURATION
+feature 0108h, `mos_config.c` — a durable inventory key cached once per
+watch session) and the standard-INQUIRY identity (`mos_inqdata.c` — the canonical
 vendor/product/revision `mos drive` prefers OVER the DiscRecording
 cache). For those, "decode what arrived" silently manufactures a
 partial-but-trusted value: a serial prefix that collides with another

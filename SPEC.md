@@ -145,6 +145,13 @@ code; this table is the citation, not the parse.
     Reserved[2], decimal ASCII, GMT; Additional Length 0x10. Emitted as an
     RFC 3339 UTC string (the format `mos.event.v1`'s `ts` uses). NB: 0x1FF
     (libcdio's `FIRMWARE_DATE`) is *Reserved* in MMC-6 — the feature is 010Ch.
+  - **Logical Unit Serial Number (0108h):** MMC — feature payload is the
+    drive serial as ASCII (trailing space/NUL padding trimmed; interior NUL or
+    over-length refused, complete-or-unavailable — a durable identity key is
+    whole or nothing). The serial source (`mos_drive_caps_serial`): non-exclusive, read
+    from this same RT=0 walk, populated where VPD 0x80 is empty (the WH16NS60
+    finding — AGENTS.md serial-source ADR). Neighbours in the walk: 0109h Media
+    Serial Number, 010Ah Disc Control Blocks.
 
 ### `src/mos_inqdata.c` — standard INQUIRY data (identity + version + descriptors)
 - **Spec:** SPC-4 §6.4.2, opcode 0x12 EVPD=0. VENDOR bytes 8-15, PRODUCT
@@ -165,29 +172,17 @@ code; this table is the citation, not the parse.
   (the descriptor code→name table; mos maps the "no version claimed" family
   codes, unknown → hex).
 
-### `src/mos_vpd80.c` — INQUIRY VPD page 0x80 (Unit Serial Number)
-- **Spec:** SPC-4 §7.7.13, opcode 0x12 with EVPD=1, PAGE CODE 0x80. Byte 3
-  is the (single-byte) PAGE LENGTH; the serial is the ASCII bytes 4..n.
-  Byte 2 stays reserved for this page — it is NOT the high byte of a 2-byte
-  length (that generalization is page 0x83's, not 0x80's).
-- **Under-delivery refused / overflow marked:** the serial is a durable cache
-  key, so completeness is enforced two ways. If PAGE LENGTH exceeds the bytes
-  delivered (the transport under-filled the reply), the parser refuses rather
-  than cache a silent prefix — complete or nothing. If the serial is complete
-  on the wire but longer than the output buffer, it is truncated with a visible
-  trailing `...` marker (never a silent prefix); real serials sit far below the
-  64-byte sink, so this is a pathological/hostile-input guard.
-- **Cross-check:** sg3_utils `sg_inq.c` (`fetch_unit_serial_num` →
-  `vpd_fetch_page` with maxlen −1) takes the single-byte `b[3]` length and
-  the serial at `b + 4`. Linux `drivers/scsi/scsi.c` reads
-  `get_unaligned_be16(&buf[2])`, which equals `buf[3]` here because byte 2 is
-  reserved (zero) on page 0x80 — same value, confirming the single-byte read.
-- **Not decoded:** every other VPD page (0x00 supported-pages list, 0x83
-  Device Identification, …) and the standard-INQUIRY data itself — this parser
-  decodes only the serial page. (vendor/product/revision come zero-command
-  from DiscRecording's directory on every path EXCEPT `mos drive`, which
-  prefers a fresh raw standard INQUIRY via mos_inqdata.c and falls back to the
-  DR cache only on BUSY.)
+### Drive serial — NOT a VPD page
+The drive serial is read from GET CONFIGURATION feature 0108h (`mos_config.c`,
+above), not INQUIRY VPD page 0x80. VPD 0x80 is the SPC/block-storage serial
+carrier and is the wrong abstraction for an MMC optical drive — architecturally
+(the serial feature lives in MMC, not SPC) and empirically (it read empty on the
+drives surveyed while 0108h carried the serial). Decision + cross-family survey:
+`doc/research/2026-06-21-optical-serial-vpd80-vs-0108h.md`; AGENTS.md
+serial-source ADR. (vendor/product/revision come zero-command from
+DiscRecording's directory on every path EXCEPT `mos drive`, which prefers a
+fresh raw standard INQUIRY via mos_inqdata.c and falls back to the DR cache only
+on BUSY.)
 
 ## macOS IOKit platform surface (the command/wrapper/registry inventory)
 
@@ -213,7 +208,7 @@ then `(taskStatus, senseDataBuffer)`.
 
 | Method | Issues (spec) | mos use |
 |--------|---------------|---------|
-| `Inquiry` | INQUIRY (SPC-2) | standard INQUIRY (`mos_inqdata.c`, `mos drive`). **StandardData-only — no EVPD/PAGE_CODE**, so the VPD-0x80 serial is raw (`mos_serial.c`). |
+| `Inquiry` | INQUIRY (SPC-2) | standard INQUIRY (`mos_inqdata.c`, `mos drive`), StandardData-only — no EVPD/PAGE_CODE. The drive serial is NOT read via INQUIRY; it is GET CONFIGURATION feature 0108h (`mos_config.c`). |
 | `TestUnitReady` | TEST_UNIT_READY (SPC-2) | the state core's readiness probe (`mos_state_core.c`). |
 | `GetConfiguration` | GET_CONFIGURATION (MMC-2) | current profile + feature walk (`mos_config.c`, `mos_scsi.c`). RT / STARTING_FEATURE_NUMBER. |
 | `ModeSense10` | MODE_SENSE_10 (SPC-2) | pages 0x2A + 0x01 (`mos_modepage.c`, `mos drive`). LLBAA / DBD / PC / PAGE_CODE. |
@@ -241,8 +236,8 @@ synchronous).
 ### SCSITaskDeviceInterface — the raw-CDB path (`mos_internal_raw_cdb`, the ONLY exclusive site)
 
 mos authors a raw CDB only with a layer-1 showing; the **four** raw verbs (GESN
-0x4A, START STOP UNIT 0x1B, PREVENT ALLOW MEDIUM REMOVAL 0x1E, INQUIRY EVPD
-0x80) all go through `mos_scsi.c`'s `mos_internal_raw_cdb` — the SINGLE
+0x4A, START STOP UNIT 0x1B, PREVENT ALLOW MEDIUM REMOVAL 0x1E, INQUIRY standard
+EVPD=0) all go through `mos_scsi.c`'s `mos_internal_raw_cdb` — the SINGLE
 `ObtainExclusiveAccess` call site (internal mechanism only; the public
 passthrough was retired — AGENTS.md. The diagnostic `mos probe --capture`
 fixed menu issues its read-only command set through the same path). Lifecycle: `ObtainExclusiveAccess` →
@@ -281,9 +276,9 @@ media. The cheap-enrichment surface (disc-ingest gaps note,
   `…DVDFeaturesKey` / `…BDFeaturesKey` (`"CD/DVD/BD Features"` capability
   bitfields — bit meanings in `IOSCSIMultimediaCommandsDevice.h`),
   `kIOPropertyProductSerialNumberKey` (`"Serial Number"` — the optical SCSI
-  stack leaves it empty, so mos reads serial via raw VPD 0x80; see the
-  2026-06-16 serial doc). Plus `kIOBSDNameKey` / `kIOBSDUnitKey` (the BSD
-  vocabulary).
+  stack leaves it empty, so mos reads the serial from GET CONFIGURATION feature
+  0108h instead; see `doc/research/2026-06-21-optical-serial-vpd80-vs-0108h.md`).
+  Plus `kIOBSDNameKey` / `kIOBSDUnitKey` (the BSD vocabulary).
 
 ### Disc-state structs — via the `*MediaBSDClient` ioctls (command-gated, not free)
 
@@ -397,7 +392,9 @@ instead (discovery rides the doorbell).
 1. In the registry table → a zero-command read. Done.
 2. Else a command-issuing convenience method above → non-exclusive, no lock.
    Prefer it.
-3. Only if **neither** carries it — a documented absence (INQUIRY's missing
-   EVPD) or a masking convenience (GetTrayState) — author a raw CDB through
+3. Only if **neither** carries it — a documented absence (the convenience
+   `Inquiry` returns only the 36-byte StandardData, so the version descriptors
+   at bytes 58-73 are unreachable) or a masking convenience (GetTrayState) —
+   author a raw CDB through
    `mos_internal_raw_cdb` with the AGENTS layer-1 showing. Never infer "no convenience
    method" from §9.7; that is a subset, this table is the inventory.

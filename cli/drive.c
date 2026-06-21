@@ -7,11 +7,12 @@
  * version descriptors come FRESH from a raw standard INQUIRY
  * (mos_query_drive_inquiry), falling back to the DiscRecording directory cache
  * (the zero-command source the rest of mos uses) only when that raw read can't
- * run. The serial is a separate raw INQUIRY VPD page 0x80 (mos_query_serial).
- * All raw reads self-gate on exclusive access: null/DR-fallback on BUSY
- * (mounted media) — the natural inventory moment is an empty drive. Design:
+ * run. The serial is the Logical Unit Serial Number feature (0108h) from the
+ * same non-exclusive GET CONFIGURATION walk (mos_drive_caps_serial) — readable
+ * even on mounted media. The other raw reads self-gate on exclusive access:
+ * null/DR-fallback on BUSY (mounted media). Design:
  * doc/research/2026-06-16-drive-identity-enrichment-survey.md,
- * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md.
+ * doc/research/2026-06-21-optical-serial-vpd80-vs-0108h.md.
  */
 #include "common.h"
 
@@ -420,11 +421,11 @@ int mos_cli_run_drive(void)
     d.revision = mos_drive_inquiry_revision(inq);
     if (!d.revision) d.revision = mos_handle_revision(h);
 
-    /* Serial is best-effort: raw INQUIRY VPD 0x80 returns BUSY on mounted
-       media and IO on a drive without the page / no programmed serial — each
-       leaves serial null (see file header). */
-    const char *serial = NULL;
-    if (mos_query_serial(h, &serial) == MOS_OK) d.serial = serial;
+    /* Serial: the Logical Unit Serial Number feature (0108h), already decoded
+       into `c` by the GET CONFIGURATION walk above — non-exclusive (no raw
+       command, no lock), so it reads even on mounted media. null when the drive
+       does not implement the feature or programs no serial (firmware-dependent). */
+    d.serial = mos_drive_caps_serial(c);
 
     /* Speeds are best-effort and media-dependent: a failed command or
        empty descriptor list leaves them null (have_speeds false). */
