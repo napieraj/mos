@@ -177,8 +177,11 @@ check_doc() {
         2) skp "$desc schema ($got)" "schema file absent"; return 0 ;;
         1) bad "$desc: does not validate $got"; printf '%s\n' "$errs" | sed 's/^/         /' | head -6; return 1 ;;
     esac
-    if [ "$got" = "$expected" ]; then ok "$desc → valid $got"; return 0
-    else bad "$desc: expected $expected, got $got (a valid but unexpected document type)"; return 1; fi
+    # expected may be a space-separated set of acceptable schema names.
+    case " $expected " in
+        *" $got "*) ok "$desc → valid $got"; return 0 ;;
+        *) bad "$desc: expected $expected, got $got (a valid but unexpected document type)"; return 1 ;;
+    esac
 }
 
 # pull a field from the first drive of `mos list --json`. Uses python3 -c so the
@@ -194,6 +197,30 @@ if not ds: sys.exit(1)
 v = ds[0].get(sys.argv[1])
 print("" if v is None else v)
 ' "$1" 2>/dev/null
+}
+
+# the drive's current state string, with or without the JSON validator present.
+current_state() {
+    if [ -n "$FIELD" ]; then "$MOS" state --json 2>/dev/null | python3 "$FIELD" state 2>/dev/null
+    else "$MOS" state 2>/dev/null | grep -i '^ *State' | head -1 | sed 's/.*[Ss]tate[: ]*//' | tr -dc 'a-z_'; fi
+}
+
+# registry_id a given selector resolves to (from `mos state <sel> --json`). The
+# stable identity to compare selectors by — the human/JSON identity ROWS differ
+# by how you selected (Index populated when picked by index, etc.), so comparing
+# full output gives false mismatches; registry_id is invariant.
+state_regid() { [ -n "$FIELD" ] || return 1; "$MOS" state "$@" --json 2>/dev/null | python3 "$FIELD" registry_id 2>/dev/null; }
+
+# stop a backgrounded `mos watch` WITHOUT hanging: it stops on SIGINT (not the
+# default SIGTERM `kill` sends), so send INT, wait briefly, then SIGKILL if it is
+# still alive, and only then reap. An unbounded `wait` on a watcher that ignores
+# the signal is the classic hang.
+stop_watch() {
+    p="$1"
+    kill -INT "$p" 2>/dev/null
+    n=0; while [ "$n" -lt 10 ]; do kill -0 "$p" 2>/dev/null || break; sleep 0.5; n=$((n+1)); done
+    kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null
+    wait "$p" 2>/dev/null
 }
 
 # ---- cleanup: never leave the tray locked or open ----------------------------
@@ -277,19 +304,22 @@ phase_empty() {
     check_doc mos.features.v1 "features --json" "$("$MOS" features --json 2>/dev/null)"
 
     run capacity; info "no media → a no-media capacity report or an error envelope are both fine"
-    run metadata; info "no disc → mos.error.v1 envelope expected"
-    check_doc mos.error.v1 "metadata --json (no disc)" "$("$MOS" metadata --json 2>/dev/null)"
+    run metadata; info "no disc → a mos.metadata.v1 doc with null rows (the disc facts are unreadable),"
+    info "or a mos.error.v1 envelope on a hard failure — both acceptable."
+    check_doc "mos.metadata.v1 mos.error.v1" "metadata --json (no disc)" "$("$MOS" metadata --json 2>/dev/null)"
 
     # Selector equivalence (no media): this branch completes the explicit-flag set
-    # with --registry, so exercise positionals AND flags — all must pick one drive.
+    # with --registry. Compare the registry_id each form resolves to (NOT the raw
+    # output — the identity rows differ by selector), so this is a true "same
+    # drive" check across positional index/registry + --index/--registry.
     rid="$(list_field registry_id)"
-    if [ -n "${rid:-}" ] && [ "$rid" != 0 ]; then
-        p_idx="$("$MOS" state 1 2>/dev/null)";          p_reg="$("$MOS" state "$rid" 2>/dev/null)"
-        f_idx="$("$MOS" state --index 1 2>/dev/null)";   f_reg="$("$MOS" state --registry "$rid" 2>/dev/null)"
-        if [ -n "$p_idx" ] && [ "$p_idx" = "$p_reg" ] && [ "$p_idx" = "$f_idx" ] && [ "$f_idx" = "$f_reg" ]; then
-            ok "index/registry positionals and --index/--registry flags select the same drive"
-        else bad "selector forms disagree (positional index/registry vs --index/--registry)"; fi
-    else skp "selector equivalence" "could not read registry_id"; fi
+    if [ "$HAVE_SCHEMA" = 1 ] && [ -n "${rid:-}" ] && [ "$rid" != 0 ]; then
+        r1="$(state_regid 1)"; r2="$(state_regid "$rid")"
+        r3="$(state_regid --index 1)"; r4="$(state_regid --registry "$rid")"
+        if [ "$r1" = "$rid" ] && [ "$r2" = "$rid" ] && [ "$r3" = "$rid" ] && [ "$r4" = "$rid" ]; then
+            ok "index/registry positionals + --index/--registry all resolve to registry_id $rid"
+        else bad "selector forms resolve differently (idx=$r1 reg=$r2 --index=$r3 --registry=$r4, want $rid)"; fi
+    else skp "selector equivalence" "need python3 + registry_id"; fi
 }
 
 phase_tray() {
@@ -365,20 +395,17 @@ phase_disc() {
         # lock on a MOUNTED disc → already_locked (macOS armed the removal lock)
         run tray lock; expect_text 'already_locked' "lock on a mounted disc → already_locked"
 
-        # 3) selector equivalence with media (diskN now exists): every form agrees
+        # 3) selector equivalence with media (diskN exists): every form must resolve
+        # to the same registry_id (compare identity, not selector-dependent output).
         bn="$(list_field bsd_node)"; rid="$(list_field registry_id)"
-        if [ -n "${bn:-}" ] && [ "$bn" != null ]; then
+        if [ "$HAVE_SCHEMA" = 1 ] && [ -n "${bn:-}" ] && [ "$bn" != null ] && [ -n "${rid:-}" ] && [ "$rid" != 0 ]; then
             dn="${bn##*/}"
-            s1="$("$MOS" state "$dn" 2>/dev/null)";   s2="$("$MOS" state "$bn" 2>/dev/null)"
-            s3="$("$MOS" state --bsd "$dn" 2>/dev/null)"
-            same=1; { [ "$s1" = "$s2" ] && [ "$s2" = "$s3" ]; } || same=0
-            if [ -n "${rid:-}" ] && [ "$rid" != 0 ]; then
-                s4="$("$MOS" state --registry "$rid" 2>/dev/null)"
-                [ "$s3" = "$s4" ] || same=0
-            fi
-            if [ "$same" = 1 ]; then ok "diskN / /dev/diskN / --bsd / --registry select the same drive"
-            else bad "selector forms disagree with media present"; fi
-        else skp "selector equivalence" "no bsd_node (need a mounted disc + python3)"; fi
+            r1="$(state_regid "$dn")"; r2="$(state_regid "$bn")"
+            r3="$(state_regid --bsd "$dn")"; r4="$(state_regid --registry "$rid")"
+            if [ "$r1" = "$rid" ] && [ "$r2" = "$rid" ] && [ "$r3" = "$rid" ] && [ "$r4" = "$rid" ]; then
+                ok "diskN / /dev/diskN / --bsd / --registry all resolve to registry_id $rid"
+            else bad "selector forms resolve differently (got $r1/$r2/$r3/$r4, want $rid)"; fi
+        else skp "selector equivalence" "need python3 + a mounted disc"; fi
 
         # 4) graceful eject of an idle mounted disc
         if step "Close anything using the disc — I'll test a GRACEFUL eject (unmount+eject)."; then
@@ -404,11 +431,23 @@ phase_disc() {
 
 phase_watch() {
     hdr "WATCH — event stream + contention"
-    if step "I'll stream watch events for ~20s while you EJECT, then INSERT a disc."; then
+    if step "WATCH stream (~20s): set an empty baseline, then you generate events."; then
+        # Baseline: if a disc is already loaded, eject it FIRST so the stream
+        # starts from a known empty drive — then the operator inserts (and may
+        # eject again) during the window to produce a clean lifecycle. Without
+        # this, a disc that's already in defeats the insert transition.
+        st="$(current_state)"
+        case "$st" in
+            *ready*|*loading*|*busy*|*formatting*|*media_unreadable*)
+                info "a disc is already loaded (state: $st) — ejecting it to set an empty baseline"
+                run tray eject
+                ;;
+            *) info "no disc loaded (state: ${st:-unknown}) — baseline already empty" ;;
+        esac
         evf="$(mktemp -t mos_watch.XXXXXX)"
         "$MOS" watch --json >"$evf" 2>/dev/null & wpid=$!
-        info "watching (pid $wpid) — eject the tray, then insert a disc…"
-        sleep 20; kill "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null
+        info "watching (pid $wpid) for ~20s — INSERT a disc now (then you may eject it)…"
+        sleep 20; stop_watch "$wpid"
         sed 's/^/       /' "$evf" | head -12
         if [ -s "$evf" ]; then
             n=0; failed=0
@@ -438,7 +477,7 @@ phase_watch() {
         elif printf '%s' "$OUT" | grep -qi 'exclusive'; then
             bad "eject lost to watch (EXCLUSIVE_ACCESS) — residual empty-drive GESN window"
         else info "eject non-zero ($RC) for a non-contention reason — inspect above"; fi
-        kill "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null
+        stop_watch "$wpid"
         "$MOS" tray close >/dev/null 2>&1
     fi
 }
