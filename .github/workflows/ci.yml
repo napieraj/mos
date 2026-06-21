@@ -786,11 +786,18 @@ jobs:
           ./build-cov/bin/mos_tests
           ./build-cov/bin/mos_adapter_oneshot_tests
           ./build-cov/bin/mos_adapter_watch_tests
-          # Drive every emit verb/scenario through the validator so the CLI
-          # emitter + mos_result.c paths are exercised (and stay correct).
+          # Drive every emit verb/scenario through BOTH validators so the CLI
+          # emitter + mos_result.c paths are exercised (and stay correct). The
+          # JSON validator covers the emit_json paths; the human validator runs
+          # the same scenarios in `human` mode so the cli/*.c emit_human
+          # renderers are measured here too (the adapter-fake job already pins
+          # them to goldens — this run is purely so they count toward coverage,
+          # not bare lines that are tested-but-unmeasured).
           pip install --require-hashes -r schemas/requirements-ci.txt
           python3 tests/emit/validate_emitted.py \
             ./build-cov/bin/mos_emit_fixtures schemas
+          python3 tests/emit/validate_emitted_human.py \
+            ./build-cov/bin/mos_emit_fixtures
 
       - name: Report coverage
         run: |
