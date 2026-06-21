@@ -96,113 +96,47 @@ TEST(stdout_finalize_other_error_classifies_write_error)
     return 0;
 }
 
-/* ---- CLI string writers (mos_cli_json_str / _safe_ascii / _bsd_dev_node) --
- * These wrap the pure mos_json_escape / mos_safe_ascii (covered in
- * test_render.c) with the CLI's FILE* framing: NULL handling, the quote
- * pair, the malloc-beyond-stack sizing path, and the dev-node rendering.
- * open_memstream (POSIX.1-2008) captures the writer's output for exact
- * comparison; runs on Linux CI and macOS alike. */
-
-/* Run `writer` into an open_memstream and compare the captured bytes to
-   `expect`. Returns 0 on match, 1 otherwise (with a harness diagnostic). */
-typedef void (*str_writer)(FILE *, const char *);
-static int expect_str_capture(str_writer writer, const char *in,
-                              const char *expect, int line)
-{
-    char  *buf = NULL;
-    size_t len = 0;
-    FILE  *f   = open_memstream(&buf, &len);
-    if (!f) { fprintf(stderr, "\n    open_memstream failed\n"); return 1; }
-    writer(f, in);
-    fclose(f);                          /* flushes; NUL-terminates buf */
-    int bad = (buf == NULL) || strcmp(buf, expect) != 0;
-    if (bad)
-        fprintf(stderr,
-            "\n    capture mismatch at %s:%d:\n"
-            "      expected: \"%s\"\n      actual  : \"%s\"\n",
-            __FILE__, line, expect, buf ? buf : "(null)");
-    free(buf);
-    return bad;
-}
-#define EXPECT_CAPTURE(writer, in, expect) do {                       \
-    if (expect_str_capture((writer), (in), (expect), __LINE__))      \
-        return 1;                                                     \
-} while (0)
-
-TEST(cli_json_str_null_plain_and_escapes)
-{
-    EXPECT_CAPTURE(mos_cli_json_str, NULL, "null");      /* NULL → bare null */
-    EXPECT_CAPTURE(mos_cli_json_str, "", "\"\"");        /* empty → "" */
-    EXPECT_CAPTURE(mos_cli_json_str, "plain", "\"plain\"");
-    /* quote + backslash named-escaped, the whole wrapped in quotes */
-    EXPECT_CAPTURE(mos_cli_json_str, "a\"b\\c", "\"a\\\"b\\\\c\"");
-    /* unnamed control byte → \u00XX (lowercase), matching mos_json_escape */
-    EXPECT_CAPTURE(mos_cli_json_str, "x\x01y", "\"x\\u0001y\"");
-    return 0;
-}
-
+/* ---- mos_cli_json_str: the two-pass malloc sizing path ------------------
+ * The plain escaper behaviour (NULL→null, the quote pair, \u00XX / \xNN
+ * forms, the dev-node rendering) is exercised end-to-end by the macOS
+ * emit-validate harness (tests/emit), which drives every CLI emitter
+ * through these writers — so re-asserting it here would be redundant on the
+ * authoritative combined number. The ONE branch no emit fixture reaches is
+ * the heap path: cli/io.c sizes with mos_json_escape, then escapes into a
+ * 256-byte stack buffer or malloc beyond it, and every real identity/volume
+ * string is far shorter than that. This pins the malloc branch (and that it
+ * produces a complete, untruncated result) on the platform-independent
+ * suite. open_memstream (POSIX.1-2008) captures the FILE* output. */
 TEST(cli_json_str_uses_malloc_path_beyond_stack)
 {
-    /* cli/io.c sizes with mos_json_escape then escapes into an exactly-sized
-       buffer, switching from a 256-byte stack buffer to malloc past it. Drive
-       a string whose escaped form exceeds 256 so the malloc branch runs and
-       still produces a complete, correctly quoted result (no mid-escape
-       truncation). 200 backslashes escape to 400 bytes. */
     char in[201];
-    memset(in, '\\', 200);
+    memset(in, '\\', 200);              /* 200 backslashes → 400 escaped bytes */
     in[200] = '\0';
+
+    char *buf = NULL;
+    size_t len = 0;
+    FILE *f = open_memstream(&buf, &len);
+    if (!f) { fprintf(stderr, "\n    open_memstream failed\n"); return 1; }
+    mos_cli_json_str(f, in);
+    fclose(f);                          /* flushes; NUL-terminates buf */
+
     char expect[1 + 400 + 1 + 1];       /* quote + 400 + quote + NUL */
     expect[0] = '"';
     memset(expect + 1, '\\', 400);
     expect[401] = '"';
     expect[402] = '\0';
-    EXPECT_CAPTURE(mos_cli_json_str, in, expect);
-    return 0;
-}
 
-TEST(cli_safe_ascii_null_plain_and_escapes)
-{
-    EXPECT_CAPTURE(mos_cli_safe_ascii, NULL, "");        /* NULL → nothing */
-    EXPECT_CAPTURE(mos_cli_safe_ascii, "plain", "plain");
-    /* control bytes → \xNN (no surrounding quotes — unquoted human form) */
-    EXPECT_CAPTURE(mos_cli_safe_ascii, "a\x01\x1f" "b", "a\\x01\\x1fb");
-    return 0;
-}
-
-/* mos_cli_bsd_dev_node takes an int64_t unit, not a string, so it needs its
-   own capture (it renders "/dev/diskN" as a JSON string, or bare null). */
-static int expect_node_capture(int64_t unit, const char *expect, int line)
-{
-    char  *buf = NULL;
-    size_t len = 0;
-    FILE  *f   = open_memstream(&buf, &len);
-    if (!f) { fprintf(stderr, "\n    open_memstream failed\n"); return 1; }
-    mos_cli_bsd_dev_node(f, unit);
-    fclose(f);
     int bad = (buf == NULL) || strcmp(buf, expect) != 0;
     if (bad)
-        fprintf(stderr,
-            "\n    node mismatch at %s:%d: expected \"%s\", got \"%s\"\n",
-            __FILE__, line, expect, buf ? buf : "(null)");
+        fprintf(stderr, "\n    malloc-path mismatch: got \"%s\"\n",
+                buf ? buf : "(null)");
     free(buf);
     return bad;
-}
-
-TEST(cli_bsd_dev_node_renders_node_or_null)
-{
-    /* Valid unit → quoted dev node. */
-    if (expect_node_capture(4, "\"/dev/disk4\"", __LINE__)) return 1;
-    /* unit < 0 is the "no media" sentinel → bare null (not a node). */
-    if (expect_node_capture(-1, "null", __LINE__)) return 1;
-    return 0;
 }
 
 void register_io_tests(void)
 {
     RUN(stdout_finalize_epipe_classifies_pipe_closed);
     RUN(stdout_finalize_other_error_classifies_write_error);
-    RUN(cli_json_str_null_plain_and_escapes);
     RUN(cli_json_str_uses_malloc_path_beyond_stack);
-    RUN(cli_safe_ascii_null_plain_and_escapes);
-    RUN(cli_bsd_dev_node_renders_node_or_null);
 }
