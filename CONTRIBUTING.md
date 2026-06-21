@@ -130,7 +130,8 @@ mos/
     ├── doc-staleness.sh         # documentation-drift grep gate
     ├── gen-cli-docs.py          # regenerate man page + shell completions from source
     ├── mutation-pass.py         # pre-tag mutation-testing ritual
-    └── release-preflight.sh     # archive hygiene gate
+    ├── release-preflight.sh     # archive hygiene gate
+    └── hw-smoke.sh              # interactive real-hardware smoke test
 ```
 
 ## Symbol-naming conventions
