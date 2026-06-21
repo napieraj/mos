@@ -65,17 +65,18 @@ These corroborate the spec-derived fixtures; they gate nothing.
   the AGENTS.md probe-default ADR. Pre-tag the default stays ON (HEAD installers
   are developers, and the fixture-capture workflow wants `mos probe --capture`
   present with zero friction).
-- **Force-unmount: name semantics, selector-gated, ships ON** (supersedes the
-  earlier "disabled at tag"). `tray eject --force` unmounts by NAME, exactly like
-  `diskutil unmountDisk` — the public DA API has no identity-bound unmount target
-  (first-hand in DADisk.c; AGENTS.md ADR "name semantics, gated by selector").
-  The compile flag is gone; the consent is `--force` + a CLI **selector gate**:
-  default for a bsd-node selector or the sole drive; an index or registry-id is
-  refused with a redirect unless `MOS_FORCE_BY_IDENTITY=1`. More conservative than
-  diskutil, honest that the residual is diskutil-class. The unbounded-wait
-  KNOWN ISSUE (void `DASessionSetDispatchQueue` / `DISPATCH_TIME_FOREVER`) stays a
-  post-tag refinement; the gate may later be relaxed (regid → default) per the
-  ADR's retire path.
+- **`tray eject` is GRACEFUL; `--force` clears LOCKS, never the filesystem**
+  (supersedes "name semantics, selector-gated"; AGENTS.md addendum 2026-06-20).
+  Every eject gracefully unmounts a mounted disc (`DADiskUnmount` Whole, **not**
+  Force) then ejects — like `diskutil unmountDisk` / `drutil eject`; a busy
+  filesystem surfaces `MOS_ERR_BUSY`, **mos never forces / never destroys open
+  files**. `--force` only clears a tray Prevent LOCK in the way. The data-loss
+  force-unmount, the selector gate, and `MOS_FORCE_BY_IDENTITY` are all REMOVED —
+  and with them the wrong-target TOCTOU (a graceful unmount of a reused `diskN` is
+  harmless), so the veto/`funmount` menu below is **mooted**. The unbounded-wait
+  KNOWN ISSUE (void `DASessionSetDispatchQueue` / `DISPATCH_TIME_FOREVER`) on the
+  graceful unmount's await stays a post-tag bounded-wait fix — now an ISOLATED
+  hang (no veto coupling).
 - **Division of labour.** DR enumerates and hands over cheap coarse status (a
   passive, GESN-fed snapshot "not guaranteed current"); mos owns the
   synchronous, fully-checked state machine and the deep rip-relevant metadata
@@ -116,33 +117,23 @@ it). What remains:
        A2) showed it is live on the READ path: the volume lookup's endpoint
        identity guard uses it, see the "Shipped" bullet below.)
     2. Heap-owned, bounded DA callback context with leak-or-reap-on-timeout (the
-       void `DASessionSetDispatchQueue` / `DISPATCH_TIME_FOREVER` hang; a naive
-       timeout over the stack-local context is a use-after-return). The R3
-       continuation audit (2026-06-20, A1) re-raised this as a pre-tag blocker now
-       that `--force` ships ON, distinguishing the **never-delivered** sub-case
-       (silent queue-setup failure ⇒ no callback port ⇒ hang) from the wedged-I/O
-       case the AGENTS ADD blessed "by design". Maintainer decision (2026-06-20):
-       held post-tag for the tag itself, but **now a PREREQUISITE for any `--force`
-       hardening** (was "accept the risk"): the veto investigation
+       void `DASessionSetDispatchQueue` / `DISPATCH_TIME_FOREVER` hang on the
+       graceful unmount's await; a naive timeout over the stack-local context is a
+       use-after-return). **F1 — now ISOLATED** (2026-06-20): the graceful-eject
+       redesign (AGENTS addendum) removed the force-unmount, so the veto that
+       would have coupled this hang to a system-wide mount-pipeline stall is
+       mooted. F1 is therefore a plain post-tag robustness fix for the one async
+       unmount await — no longer a `--force`-hardening prerequisite. The bounded
+       wait must heap-own the late-callback dependency set (session, disk, queue,
+       semaphore) or deliberately leak it on timeout.
+    3. ~~The `--force` wrong-target race (veto / `funmount`)~~ — **MOOTED** by the
+       graceful-eject redesign (AGENTS addendum 2026-06-20). With a GRACEFUL
+       unmount (never `Force`) a reused `diskN` is harmless (cleanly unmounts an
+       idle disc or fails on a busy one — no data loss), so there is no
+       wrong-target data-loss to reduce. The veto / `funmount(2)` investigation
        (`doc/research/2026-06-20-force-unmount-veto-funmount-investigation.md`)
-       showed that the wrong-target fix that actually works — a DA mount-approval
-       veto — makes mos an approval gatekeeper, so a wedged mos stalls
-       `diskarbitrationd`'s mount pipeline. The veto SHARPENS this hang into a
-       system-wide stall, so F1 must land before the veto. When built, the bounded
-       wait must heap-own the ENTIRE late-callback dependency set (session, disk,
-       queue, semaphore), not just the result Boolean, or deliberately leak all of
-       it on timeout.
-    3. The `--force` wrong-target race is REDUCIBLE (overturns the prior
-       "irreducible" — same investigation doc; AGENTS addendum 2026-06-20). The
-       reframe: don't bind the unmount to identity (impossible on the DA path);
-       remove competing mounts from the window so a `diskN` reuse resolves only to
-       an *unmounted* disc (no-op force-unmount). Post-tag, F1-gated, two options:
-       (a) the DA **mount-approval veto** — in console-user budget, eliminates the
-       data-loss for DA-mediated mounts, costs the gatekeeper stall above; (b)
-       **`funmount(2)`** / `fsctl(VFS_CTL_UMOUNT)` — a true identity bind (a
-       reassigned `diskN` can't redirect an fd-pinned vnode) but needs **root** (DA
-       auto-mounts optical as root, `f_owner==0`). The name-semantics + selector
-       gate stays for the tag (defensible integrity residual).
+       correctly overturned "irreducible", but the cleaner fix was to remove the
+       data-loss operation entirely. Kept here as the record; not a build item.
     4. Write-speed presence/error observability (a `has_write_kbps` tri-state) if
        the public `mos_drive_perf` struct can change — so a write command-level
        failure is distinguishable from a legitimately-absent write speed, the gap
@@ -169,9 +160,10 @@ it). What remains:
       `CFRunLoopRunInMode(…, 0, …)` before returning timeout, then re-pump.
       Adapter-fake regression: empty all-watch + queued Appeared + timeout 0 emits
       `device_appeared` without advancing the fake clock.
-    - **A1 (force-unmount hang) — HELD post-tag, now a `--force`-hardening
-      PREREQUISITE** (the veto fix sharpens it into a mount-pipeline stall — item 2
-      above + the 2026-06-20 veto investigation doc).
+    - **A1 (DA-callback hang) — HELD post-tag, ISOLATED.** The graceful-eject
+      redesign (AGENTS addendum 2026-06-20) removed the force-unmount and mooted
+      the veto, so this is now a plain post-tag bounded-wait fix for the graceful
+      unmount's await (item 2 above), not a `--force`-hardening prerequisite.
     - **A4 (permanent-negative serial re-probed every poll) — POST-TAG.** Watch
       probes set `serial_grabbed` only on a successful read, so an unsupported VPD
       0x80 (or answered-empty page) re-attempts the optional INQUIRY/exclusive

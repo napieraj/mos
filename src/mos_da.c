@@ -1,5 +1,5 @@
 /*
- * mos_da.c — DiskArbitration: a one-shot volume lookup and the force-unmount.
+ * mos_da.c — DiskArbitration: a one-shot volume lookup and a graceful unmount.
  *
  * Two modalities, both confined here:
  *   1. SYNCHRONOUS volume lookup (mos_internal_da_volume) — a DADiskCopyDescription
@@ -7,10 +7,10 @@
  *      scheduling, no run loop, no callbacks, no commands to the drive
  *      (AGENTS.md scope doctrine). Callers gate on the media nub (bsd_unit
  *      present); with no IOMedia node nothing is mounted and DA is never consulted.
- *   2. The ASYNC force-unmount (mos_internal_da_unmount) — the single DA ACTION
- *      mos performs, used ONLY by `tray eject --force`. DADiskUnmount delivers
- *      via a callback on a dispatch queue; we block on a semaphore until it
- *      fires (see that function). Data-loss capable, strictly opt-in.
+ *   2. The ASYNC GRACEFUL unmount (mos_internal_da_unmount) — the single DA ACTION
+ *      mos performs, used by `tray eject` (default and --force). DADiskUnmount
+ *      delivers via a callback on a dispatch queue; we block on a semaphore until
+ *      it fires (see that function). NEVER forces — a busy fs surfaces BUSY.
  *
  * Trust terms: the description dictionary is system-supplied but its values
  * are volume-controlled (a hostile disc names its volume), so extraction
@@ -64,7 +64,7 @@ static bool mos_internal_da_disk_is_media(DADiskRef disk,
    "diskN"). We resolve that EXACT IOMedia by id, but the description still comes
    back through a NAME: DADiskCreateFromIOMedia reads the object's kIOBSDNameKey
    and delegates to DADiskCreateFromBSDName (first-hand in DADisk.c — the same
-   fact the force-unmount path documents), so the DADiskRef is name-backed and
+   fact the unmount path documents), so the DADiskRef is name-backed and
    DADiskCopyDescription resolves that diskN at the daemon. A diskN reuse in the
    create→describe window could therefore hand back a DIFFERENT disc's volume.
    So this is NOT identity-exact by construction: we read into LOCAL buffers,

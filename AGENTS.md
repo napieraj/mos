@@ -741,6 +741,55 @@ re-walked): `DADiskClaim` (per-object, can't pin a future disc's mount),
 unmount-approval (wrong direction), in-callback reads (read-only), `DKIOCEJECT`
 (eject needs the mount gone first), volume-UUID (no by-UUID unmount entry point).
 
+### Addendum: `tray eject` is GRACEFUL; `--force` clears LOCKS, never the
+### filesystem — the data-loss force-unmount is REMOVED, and with it the whole
+### TOCTOU edifice (2026-06-20, supersedes the data-loss `--force` model)
+
+The entire chain above engineered around a premise the maintainer reframed: that
+`--force` had to *force the filesystem* ("open no matter what"). It never did —
+the "no matter what" was always about tray **PREVENT LOCKS**, not a busy mount.
+This entry records the redesign that follows, which **dissolves** the wrong-target
+TOCTOU rather than hardening against it. Append-don't-edit; the data-loss model
+above stands as the record, this supersedes it on the merits.
+
+**New contract** (`mos_tray_eject`, `mos_internal_da_unmount`, `cli/tray.c`):
+- **Every** `tray eject` GRACEFULLY unmounts a mounted disc first
+  (`DADiskUnmount` `kDADiskUnmountOptionWhole`, **never** `Force`) and then
+  ejects — exactly `diskutil unmountDisk diskN` / `drutil eject`. A **busy**
+  filesystem (open handles) makes the graceful unmount dissent, which mos
+  surfaces as `MOS_ERR_BUSY`. **mos never forces the filesystem; there is no
+  data-loss path.** (This narrows the older "mos does not unmount for you" ADR:
+  the default now *does* gracefully unmount — a safe, fail-closed policy, the
+  drutil contract — because the data-loss fear that motivated the hands-off
+  stance is gone.)
+- **`--force`** adds exactly one thing: on a basic Prevent lock
+  (`REFUSED_LOCKED`) it clears both Prevent states so the eject gets past the
+  **lock**. It does not touch the filesystem.
+
+**What this dissolves.** The wrong-target data-loss race existed *only* because a
+forced unmount could kill the open files of a disc a reused `diskN` mis-resolved
+to. With a GRACEFUL unmount a reused `diskN` can only (a) cleanly unmount an idle
+disc or (b) fail on a busy one — neither destroys data. So the whole apparatus
+built to fight it is **removed/mooted**: the name-vs-identity bind, the CLI
+**selector gate**, the runtime **`MOS_FORCE_BY_IDENTITY`** opt-in, and the entire
+**veto / `funmount` post-tag menu** (the REDUCIBLE addendum above — kept as the
+record, but there is now no force-unmount to harden). The investigation that
+overturned "irreducible" was correct *and* is now unneeded: the cleaner fix was to
+not do the dangerous operation at all.
+
+**F1 (the unbounded DA-callback wait) survives but is ISOLATED.** The graceful
+`DADiskUnmount` is still async-awaited on a semaphore, so the
+`DASessionSetDispatchQueue`-silent-failure hang is still real and still a post-tag
+bounded-wait/heap-context fix. But it is now an ordinary isolated hang — the veto
+coupling that would have sharpened it into a system-wide mount-pipeline stall is
+gone with the veto. F1 is no longer a "`--force` hardening prerequisite"; it is
+just a robustness fix for the one graceful-unmount await.
+
+**Scope / footprint unchanged.** Still the SINGLE DA action (`DADiskUnmount`,
+now `Whole`-only), the same console-user budget, no new command surface. The
+`MOS_USE_DISKARBITRATION=0` build still reports `MOS_ERR_BUSY` on a mounted disc
+(no unmount capability), exactly as a busy filesystem does.
+
 ## ADR: verb `state` replaces `status`; bare selector is the default subject (2026-06-14)
 
 The default verb was renamed `status` → `state` (clean break, no alias),

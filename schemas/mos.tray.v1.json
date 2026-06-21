@@ -36,7 +36,7 @@
     },
     "force": {
       "type": ["boolean", "null"],
-      "description": "eject only (null on every other action): true when --force was requested — \"open no matter what\". The eject is attempted and, on a clearable blocker, the blocker is cleared and the eject re-issued: a Finder/system mount is FORCE-UNMOUNTED (DADiskUnmount, data-loss capable — kills open file handles), and a basic Prevent lock is cleared (along with the persistent state, so a lock in the way leaves nothing locked). The one blocker --force cannot clear is another userland client holding exclusive access (no SCSI preempt): that surfaces as mos.error.v1 with code exclusive_access. Without --force a mounted disc is mos.error.v1 busy and a basic lock is outcome refused_locked — both reported facts, nothing cleared."
+      "description": "eject only (null on every other action): true when --force was requested. Every eject GRACEFULLY unmounts a mounted disc first (DADiskUnmount, Whole, NOT Force) and then ejects; mos NEVER forces the filesystem, so a busy volume (open file handles) surfaces as mos.error.v1 busy on both the default and --force. --force adds exactly one thing: on a basic Prevent lock (outcome refused_locked without --force) it clears both Prevent states so the eject gets past the lock. The one blocker --force cannot clear is another userland client holding exclusive access (no SCSI preempt): mos.error.v1 code exclusive_access."
     },
     "persistent": {
       "type": ["boolean", "null"],

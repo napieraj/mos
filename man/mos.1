@@ -111,34 +111,27 @@ BSD form; the explicit form of the positional BSD selector.
 .TP
 .B \-\-force
 With
-.BR "tray eject" :
-open no matter what \(em force-unmount a mounted volume
-.RB ( DADiskUnmount ,
-data-loss capable: it kills open file handles) and clear a Prevent lock that is
-in the way, then eject. The unmount acts by
-.BR name ,
+.BR "tray eject" ,
+additionally clear a tray Prevent
+.B LOCK
+in the way (both the basic and persistent Prevent states), then eject. It does
+.B not
+force the filesystem. A plain
+.B "tray eject"
+already unmounts a mounted disc
+.BR gracefully ,
 exactly like
-.BR "diskutil unmountDisk diskN" :
-it unmounts whatever disc currently carries the selected
-.BR diskN .
-Because that is data-loss capable, force is allowed by default only when the
-disc was named unambiguously \(em a
-.B BSD-form
-selector
-.RB ( disk4 ", " /dev/disk4 )
-or the sole attached drive. With an
-.B Index
-or
-.B registry_id
-selector \(em where an ephemeral position or an identity can resolve to a
-different
-.B diskN
-than intended \(em force is refused with a redirect to the BSD form, unless
-.B MOS_FORCE_BY_IDENTITY
-is set (see
-.BR ENVIRONMENT ).
-The one blocker it cannot clear is another program holding the drive
-exclusively, which is reported as
+.BR "diskutil unmountDisk diskN" ,
+and
+.B never
+kills open file handles \(em a busy volume is reported as
+.B busy
+(close the open files, or unmount with
+.B diskutil
+first). The only thing
+.B \-\-force
+adds is clearing a Prevent lock; the one blocker it cannot clear is another
+program holding the drive exclusively, reported as
 .BR exclusive_access .
 .TP
 .B \-\-persistent
@@ -171,21 +164,7 @@ Show usage and exit.
 .B \-\-version
 Show version and exit.
 .SH ENVIRONMENT
-.TP
-.B MOS_FORCE_BY_IDENTITY
-When set (to any value), permit
-.B "tray eject \-\-force"
-through an
-.B Index
-or
-.B registry_id
-selector instead of refusing it. Off by default: the force-unmount is
-data-loss capable and acts by name, so a non-BSD selector that could resolve
-to a different disc than intended is refused unless this opt-in is present. It
-has no effect on a BSD-form selector or the sole drive, where force is already
-the default.
-.PP
-The remaining variables apply to
+The following variables apply to
 .B watch
 only. Each is an integer number of milliseconds in the range
 0..3600000, where 0 selects the library default; an out-of-range or
@@ -251,11 +230,8 @@ List every drive:
 Act on each disc that becomes readable, hot-plug included:
 .B mos watch | jq ...
 .TP
-Eject a named drive no matter what (force-unmount + clear any lock, then eject):
+Eject a drive, clearing a tray lock in the way (graceful unmount, never forces the filesystem):
 .B mos tray eject disk4 \-\-force
-.TP
-Same, forcing through an index selector (opt-in, since the index is ephemeral):
-.B MOS_FORCE_BY_IDENTITY=1 mos tray eject 1 \-\-force
 .SH SEE ALSO
 .BR drutil (1),
 .BR diskutil (8),

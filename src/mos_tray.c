@@ -55,23 +55,18 @@ static const uint8_t cdb_lock_persist  [6] = { 0x1E, 0x00, 0x00, 0x00, 0x03, 0x0
 #define MOS_TRAY_PREVENT_TIMEOUT_MS 2000u
 #define MOS_TRAY_MOTION_TIMEOUT_MS  5000u
 
-/* `tray eject --force` is DATA-LOSS CAPABLE: on a mounted disc it force-unmounts
-   the volume, then ejects ("open no matter what"). It operates by NAME, exactly
-   like `diskutil unmountDisk` — the daemon resolves the unmount target by the BSD
-   name at request time (verified first-hand in DiskArbitration's DADisk.c:
-   DADiskCreateFromIOMedia reads kIOBSDNameKey and delegates to
-   DADiskCreateFromBSDName, and the DADiskRef stores only the name), so mos cannot
-   bind the daemon's action to an exact IOMedia identity and does not pretend to.
-   These are honest name semantics: a `diskN` whose name was reassigned in the
-   request window is unmounted as-named, the same residual diskutil ships.
+/* `tray eject` GRACEFULLY unmounts a mounted disc before ejecting, and mos NEVER
+   forces the filesystem (no kDADiskUnmountOptionForce, no killing of open file
+   handles): a busy volume surfaces MOS_ERR_BUSY, exactly like `diskutil
+   unmountDisk diskN`. `--force` adds ONE thing — it clears a tray PREVENT LOCK in
+   the way (basic + persistent Prevent); it does not touch the filesystem.
 
-   The SELECTOR-level safety lives in the CLI (cli/tray.c): force is the default
-   only for an explicit bsd-node selector (or the sole-drive case), where the user
-   named the disc; an ephemeral positional index or an identity registry-id
-   requires the MOS_FORCE_BY_IDENTITY opt-in and otherwise gets a redirect to the
-   bsd-node form. The library exposes the capability; the consumer owns the
-   policy. See the AGENTS.md ADR "tray eject --force = name semantics, gated by
-   selector". */
+   The unmount is by NAME (DiskArbitration resolves the target by BSD name at
+   request time — DADisk.c). With a GRACEFUL unmount that name reuse is HARMLESS:
+   a reassigned `diskN` either cleanly unmounts an idle disc or fails on a busy
+   one — no data loss either way. That is why there is no identity bind and no CLI
+   selector gate (both retired with the data-loss force-unmount). See the AGENTS.md
+   force-unmount ADR chain (the "graceful eject; --force clears locks" addendum). */
 
 mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
                                 mos_tray_outcome *outcome, uint8_t sense_out[3])

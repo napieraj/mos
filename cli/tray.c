@@ -207,15 +207,15 @@ int mos_cli_run_tray(void)
     }
 
     if (op != MOS_OK) {
-        /* A force eject that still reports BUSY means the volume could not be
-           force-unmounted — DiskArbitration is opted out of this build, or the
-           unmount was refused. Give the actionable diskutil hint rather than a
-           bare "busy". (EXCLUSIVE_ACCESS — a peer client — falls to generic.) */
-        const char *msg = (act == ACT_EJECT && flag_force &&
-                           op == MOS_ERR_BUSY)
-            ? "could not force-unmount the volume (DiskArbitration unavailable "
-              "in this build, or the unmount was refused); unmount it with "
-              "`diskutil unmountDisk` first, then `tray eject`"
+        /* An eject that still reports BUSY means the GRACEFUL unmount could not
+           clear the mount — a busy filesystem (open handles; mos never forces),
+           or DiskArbitration is opted out of this build. Give the actionable
+           diskutil hint rather than a bare "busy". (EXCLUSIVE_ACCESS — a peer
+           client — falls to generic.) */
+        const char *msg = (act == ACT_EJECT && op == MOS_ERR_BUSY)
+            ? "could not unmount the volume (it is busy, or DiskArbitration is "
+              "unavailable in this build); close the open files or unmount it "
+              "with `diskutil unmountDisk` first, then `tray eject`"
             : "tray command failed";
         char bsd_buf[24];
         if (!mos_bsd_dev_node(mos_handle_bsd_unit(h), bsd_buf, sizeof bsd_buf))
