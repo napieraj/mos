@@ -52,6 +52,5 @@ complete -c mos      -l version -d 'Show version'
 
 # Subcommand-scoped options.
 complete -c mos -l force      -n '__fish_mos_using_subcommand tray'  -d 'eject: also clear a tray Prevent lock (never forces the filesystem)'
-complete -c mos -l persistent -n '__fish_mos_using_subcommand tray'  -d 'lock/unlock: Persistent Prevent'
 complete -c mos -l dump       -n '__fish_mos_using_subcommand probe' -d 'One-shot DiscRecording capture'
 complete -c mos -l capture    -n '__fish_mos_using_subcommand probe' -d 'Fixed-menu raw MMC capture'

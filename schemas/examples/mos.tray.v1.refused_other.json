@@ -4,7 +4,10 @@
   "registry_id": 4295021843,
   "action": "lock",
   "force": null,
-  "persistent": true,
   "outcome": "refused_other",
-  "sense": { "key": "0x05", "asc": "0x24", "ascq": "0x00" }
+  "sense": {
+    "key": "0x05",
+    "asc": "0x24",
+    "ascq": "0x00"
+  }
 }

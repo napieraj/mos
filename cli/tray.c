@@ -4,15 +4,16 @@
  * then ejects, clearing the OS mount-protection Prevent lock macOS arms on
  * mount; --force extends the lock-clearing to a COLD deliberate lock (no mount
  * in play). It never forces the filesystem — a busy disc surfaces BUSY; see
- * mos_tray_eject. lock/unlock take --persistent (the Persistent Prevent state).
- * Emits one mos.tray.v1 document or a human line.
+ * mos_tray_eject. lock sets the durable PERSISTENT Prevent; unlock clears both
+ * Prevent states. Emits one mos.tray.v1 document or a human line.
  *
  * A control verb (START STOP UNIT / PREVENT ALLOW MEDIUM REMOVAL), not a
- * query. A command the drive ANSWERED — including a 5/53/02 locked-eject
- * refusal — is EX_OK: the refusal rides the `outcome` field as a reported
- * fact. Only a transport/lock failure (BUSY, NO_DEVICE, IO) is non-zero,
- * via the shared mos.error.v1 path. A `lock` persists past this process
- * (T10 04-349r1 §6.18); release with `mos tray unlock` (match --persistent).
+ * query. A command the drive ANSWERED — including a 53/02 locked-eject refusal,
+ * and `lock` on a mounted disc reporting `already_locked` — is EX_OK: the
+ * outcome rides the `outcome` field as a reported fact. Only a transport/lock
+ * failure (BUSY, NO_DEVICE, IO) is non-zero, via the shared mos.error.v1 path.
+ * A `lock` persists past this process (T10 04-349r1 §6.18); release with
+ * `mos tray unlock`.
  */
 #include "common.h"
 
@@ -26,7 +27,6 @@ typedef struct {
     uint64_t         registry_id;
     tray_act         act;
     bool             force;       /* eject only */
-    bool             persistent;  /* lock/unlock only */
     mos_tray_outcome outcome;
     uint8_t          sk, asc, ascq;  /* sense triple; all-zero = none */
 } tray_doc;
@@ -52,17 +52,11 @@ static void emit_json(const tray_doc *d)
     fputs(",\n  \"action\": ", stdout);
     mos_cli_json_str(stdout, action_word(d->act));
 
-    /* force / persistent carry a value only on the verb they modify, null
-       elsewhere — keeps the field set closed while staying honest about
-       which modifier applied. */
+    /* force carries a value only on eject, null elsewhere — keeps the field set
+       closed while staying honest about which modifier applied. */
     fputs(",\n  \"force\": ", stdout);
     if (d->act == ACT_EJECT) fputs(d->force ? "true" : "false", stdout);
     else                     fputs("null", stdout);
-    fputs(",\n  \"persistent\": ", stdout);
-    if (d->act == ACT_LOCK || d->act == ACT_UNLOCK)
-        fputs(d->persistent ? "true" : "false", stdout);
-    else
-        fputs("null", stdout);
 
     fputs(",\n  \"outcome\": ", stdout);
     mos_cli_json_str(stdout, mos_tray_outcome_description(d->outcome));
@@ -93,10 +87,7 @@ static void emit_human(const tray_doc *d)
 
     pairs[n++] = (mos_cli_human_pair){ "Action", action_word(d->act) };
 
-    const char *mod = NULL;
-    if (d->act == ACT_EJECT && d->force)            mod = "force";
-    else if ((d->act == ACT_LOCK || d->act == ACT_UNLOCK) && d->persistent)
-        mod = "persistent";
+    const char *mod = (d->act == ACT_EJECT && d->force) ? "force" : NULL;
     pairs[n++] = (mos_cli_human_pair){ "Modifier", mod };
 
     pairs[n++] = (mos_cli_human_pair){ "Outcome",
@@ -134,12 +125,6 @@ static bool parse_action(tray_act *act)
     }
     if (flag_force && *act != ACT_EJECT) {
         fprintf(stderr, "%s: --force applies only to `tray eject`\n", progname);
-        return false;
-    }
-    if (flag_persistent && *act != ACT_LOCK && *act != ACT_UNLOCK) {
-        fprintf(stderr,
-                "%s: --persistent applies only to `tray lock`/`tray unlock`\n",
-                progname);
         return false;
     }
     return true;
@@ -186,7 +171,6 @@ int mos_cli_run_tray(void)
     d.registry_id = mos_handle_registry_id(h);
     d.act         = act;
     d.force       = flag_force;
-    d.persistent  = flag_persistent;
     d.outcome     = MOS_TRAY_DONE;
 
     /* No selector gate is needed: `tray eject --force` clears Prevent LOCKS and
@@ -196,29 +180,35 @@ int mos_cli_run_tray(void)
        to gate. Rationale: AGENTS.md force-unmount ADR chain. */
 
     /* The verbs return the drive's sense triple via the out-param: all-zero
-       on DONE, the real {key,asc,ascq} on any refusal (5/53/02 for
-       refused_locked, e.g. 5/24/00 for an unsupported Persistent Prevent). */
+       on DONE / ALREADY_LOCKED, the real {key,asc,ascq} on any refusal (53/02
+       for refused_locked, e.g. 5/24/00 for an unsupported Persistent Prevent). */
     uint8_t sense[3] = {0};
     mos_error op;
     switch (act) {
         case ACT_EJECT:  op = mos_tray_eject(h, flag_force, &d.outcome, sense); break;
         case ACT_CLOSE:  op = mos_tray_close(h, &d.outcome, sense); break;
-        case ACT_LOCK:   op = mos_tray_lock(h, flag_persistent, &d.outcome, sense); break;
+        case ACT_LOCK:   op = mos_tray_lock(h, &d.outcome, sense); break;
         case ACT_UNLOCK: default:
-                         op = mos_tray_unlock(h, flag_persistent, &d.outcome, sense); break;
+                         op = mos_tray_unlock(h, &d.outcome, sense); break;
     }
 
     if (op != MOS_OK) {
-        /* An eject that still reports BUSY means the GRACEFUL unmount could not
-           clear the mount — a busy filesystem (open handles; mos never forces),
-           or DiskArbitration is opted out of this build. Give the actionable
-           diskutil hint rather than a bare "busy". (EXCLUSIVE_ACCESS — a peer
-           client — falls to generic.) */
-        const char *msg = (act == ACT_EJECT && op == MOS_ERR_BUSY)
-            ? "could not unmount the volume (it is busy, or DiskArbitration is "
-              "unavailable in this build); close the open files or unmount it "
-              "with `diskutil unmountDisk` first, then `tray eject`"
-            : "tray command failed";
+        /* BUSY = the disc is mounted ("media is still mounted"). Two actionable
+           hints; EXCLUSIVE_ACCESS (a peer client) and other errors fall to
+           generic. eject's BUSY means the GRACEFUL unmount could not clear the
+           mount (busy filesystem, or DiskArbitration opted out); unlock's BUSY
+           means a mounted disc is held by macOS — eject releases it. (lock never
+           reaches here on a mount: it reports `already_locked` success.) */
+        const char *msg =
+            (op == MOS_ERR_BUSY && act == ACT_EJECT)
+              ? "could not unmount the volume (it is busy, or DiskArbitration is "
+                "unavailable in this build); close the open files or unmount it "
+                "with `diskutil unmountDisk` first, then `tray eject`"
+          : (op == MOS_ERR_BUSY && act == ACT_UNLOCK)
+              ? "the disc is mounted and its tray is held locked by macOS; "
+                "`mos tray eject` releases it, or unmount with `diskutil "
+                "unmountDisk` first"
+          : "tray command failed";
         char bsd_buf[24];
         if (!mos_bsd_dev_node(mos_handle_bsd_unit(h), bsd_buf, sizeof bsd_buf))
             bsd_buf[0] = 0;

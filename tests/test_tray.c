@@ -76,6 +76,7 @@ TEST(tray_outcome_tokens_are_stable)
     EXPECT_STREQ(mos_tray_outcome_description(MOS_TRAY_DONE),           "done");
     EXPECT_STREQ(mos_tray_outcome_description(MOS_TRAY_REFUSED_LOCKED), "refused_locked");
     EXPECT_STREQ(mos_tray_outcome_description(MOS_TRAY_REFUSED_OTHER),  "refused_other");
+    EXPECT_STREQ(mos_tray_outcome_description(MOS_TRAY_ALREADY_LOCKED), "already_locked");
     return 0;
 }
 

@@ -157,8 +157,8 @@ print("" if v is None else v)
 
 # ---- cleanup: never leave the tray locked ------------------------------------
 cleanup() {
-    "$MOS" tray unlock            >/dev/null 2>&1
-    "$MOS" tray unlock --persistent >/dev/null 2>&1
+    # unlock clears BOTH Prevent states, so one call suffices.
+    "$MOS" tray unlock >/dev/null 2>&1
 }
 trap cleanup EXIT INT TERM
 
@@ -237,24 +237,24 @@ phase_empty() {
 
 phase_tray() {
     hdr "TRAY CONTROL (no disc)"
-    pause "Empty drive, tray closed. Exercising eject/close/lock/unlock/persistent/force." || { skp "tray phase" "skipped"; return; }
+    pause "Empty drive, tray closed. Exercising eject/close/lock/unlock/force." || { skp "tray phase" "skipped"; return; }
     run tray eject;  want_text 'done\|outcome' "tray eject → done"
     run state;       want_one_of "after eject: open" '"open"' 'open' 'empty_or_open'
     run tray close;  want_text 'done\|outcome' "tray close → done"
     want_schema mos.tray.v1 "tray close --json" tray close --json
 
-    run tray lock;   want_text 'done\|outcome' "tray lock (basic) → done"
-    run tray eject;  want_one_of "eject while locked → refused_locked" 'refused_locked' '53/02' '5/53/02'
-    run tray unlock; want_text 'done\|outcome' "tray unlock (basic) → done"
+    # lock is the durable PERSISTENT Prevent; unlock clears BOTH states. On an
+    # empty drive the lock takes hold (exclusive access is free), the default
+    # eject is refused (a COLD lock — needs --force), and unlock releases it.
+    run tray lock;   want_text 'done\|outcome' "tray lock (persistent) → done"
+    run tray eject;  want_one_of "eject while locked → refused_locked" 'refused_locked' '53/02'
+    run tray unlock; want_text 'done\|outcome' "tray unlock (clears both) → done"
     run tray eject;  want_text 'done\|outcome' "eject after unlock → done"
     run tray close
 
-    run tray lock --persistent;   want_text 'done\|outcome' "tray lock --persistent → done"
-    run tray unlock --persistent; want_text 'done\|outcome' "tray unlock --persistent → done"
-
-    run tray lock;            want_text 'done\|outcome' "re-lock (basic) for --force test"
-    run tray eject --force;   want_one_of "eject --force clears the lock" 'done' 'outcome'
-    note "--force cleared the Prevent lock then ejected; it never forces the filesystem"
+    run tray lock;            want_text 'done\|outcome' "re-lock for --force test"
+    run tray eject --force;   want_one_of "eject --force clears the cold lock" 'done' 'outcome'
+    note "--force cleared the cold Prevent lock then ejected; it never forces the filesystem"
     run tray close
 }
 
@@ -288,6 +288,9 @@ phase_disc() {
         want_schema mos.capacity.v1 "capacity --json" capacity --json
         run drive;     note "serial reads null while mounted (raw INQUIRY backs off on exclusive access) — expected"
         run list;      want_one_of "list shows ready + volume" 'ready' '/Volumes'
+        # lock on a MOUNTED disc: already removal-locked by macOS → already_locked
+        # (a no-op success), NOT a busy error.
+        run tray lock; want_text 'already_locked' "lock on mounted disc → already_locked"
 
         # 3) selector equivalence with media present (diskN now exists)
         bn="$(list_field bsd_node)"   # e.g. /dev/disk8

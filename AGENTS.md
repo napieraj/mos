@@ -1678,3 +1678,60 @@ both 05/53/02 and 02/53/02).
 drive that reports a locked eject under yet another ASC/ASCQ (not 53/02) — that
 would land as a fixture + dated note, and the gate would widen to the new code,
 never to a per-device sense-key special-case.
+
+## ADR: `--persistent` retired — `lock` is the persistent Prevent, `unlock`
+## clears both; `lock` on a mounted disc is `already_locked` (2026-06-21)
+
+Hardware exploration of the tray verbs surfaced that the basic/persistent
+`--persistent` flag carried no real CLI use, and that `lock`/`unlock` on a
+MOUNTED disc were unhelpful (BUSY). This entry records the resulting
+simplification (maintainer decision, 2026-06-21). It narrows the tray-control
+feasibility design (`doc/research/2026-06-13-tray-control-feasibility.md`, which
+specified a `--persistent` flag and a basic-default lock) on the merits.
+
+**What changed.**
+- **`mos tray lock` sets the PERSISTENT Prevent (0x03) only**; the basic Prevent
+  (0x01) is no longer issued, and the `--persistent` flag is removed. Rationale:
+  a single-shot, fire-and-forget CLI lock wants the durable state that survives
+  an I_T-nexus loss (e.g. a USB bus reset on an external enclosure) — basic
+  Prevent does not, and has no CLI use case that persistent doesn't cover. A
+  drive without the Persistent Prevent state answers `refused_other` (5/24/00),
+  reported honestly (no silent downgrade to basic — that would be the
+  device-special-casing the hardware-role ADR forbids; basic-as-fallback is a
+  fresh argument if a PDTE-less drive ever shows up).
+- **`mos tray unlock` clears BOTH Prevent states** (basic ALLOW 0x00 then
+  persistent ALLOW 0x02) so the tray ends unlocked whichever state held it. A
+  transport failure on either is surfaced; an ANSWERED refusal on the persistent
+  ALLOW (a PDTE-less drive's 5/24/00) is tolerated — the basic ALLOW already
+  cleared what such a drive can hold. The `--persistent` flag is removed here
+  too (it is now unconditional).
+- **`mos tray lock` on a MOUNTED disc returns `already_locked` (a SUCCESS), not
+  `MOS_ERR_BUSY`.** The lock CDB can't take exclusive access while mounted
+  (`ObtainExclusiveAccess` → BUSY = "media is still mounted", SCSITaskLib.h), but
+  macOS arms a tray Prevent when it mounts a disc (the 2026-06-21 mount-lock
+  finding), so the requested state already holds. A new `MOS_TRAY_ALREADY_LOCKED`
+  outcome / `already_locked` token carries this. A peer client holding exclusive
+  access (`MOS_ERR_EXCLUSIVE_ACCESS`) is NOT translated — only a mount (BUSY)
+  implies the OS lock. `mos tray unlock` on a mounted disc stays `MOS_ERR_BUSY`
+  (it genuinely can't unlock) with a CLI hint to `tray eject` (which releases it).
+
+**Why lock/unlock retain a point (the question this answers).** They are for
+IDLE and UNMOUNTED drives — lock an empty tray or a blank/unmounted disc so a
+stray operator eject can't fire the tray (the ripping-robot case, ROADMAP). For
+MOUNTED discs the OS owns the lock and `tray eject` releases it, so the verbs
+correctly defer there (`already_locked` for lock, the eject hint for unlock).
+
+**Surface / API.** Public: `mos_tray_lock(h,out,sense)` and
+`mos_tray_unlock(h,out,sense)` drop the `bool persistent` parameter (pre-tag,
+mutable). Schema: `mos.tray.v1` drops the `persistent` field (and its `allOf`
+clause) and adds `already_locked` to the `outcome` enum — pre-tag mutable-in-
+place, the C↔schema drift guard keeps the enum in lockstep with
+`mos_tray_outcome_description()`. No new command surface, no new CDB: the
+opcodes are unchanged (0x1E ALLOW 0x00/0x02, LOCK 0x03), `mos_internal_raw_cdb`
+stays the sole exclusive-access site, one-of-four count untouched.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+drive whose mounted-disc Prevent does NOT hold (then `already_locked` would
+over-claim) — but a mounted optical disc cannot be operator-ejected under macOS,
+so the tray is held regardless; if a capture ever shows a mounted disc with an
+ejectable tray, that lands as a fixture + dated note here before any change.

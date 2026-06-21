@@ -4,7 +4,10 @@
   "registry_id": 4295021843,
   "action": "close",
   "force": null,
-  "persistent": null,
   "outcome": "done",
-  "sense": { "key": "0x05", "asc": "0x53", "ascq": "0x02" }
+  "sense": {
+    "key": "0x05",
+    "asc": "0x53",
+    "ascq": "0x02"
+  }
 }

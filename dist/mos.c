@@ -6421,6 +6421,7 @@ const char *mos_tray_outcome_description(mos_tray_outcome o)
     switch (o) {
         case MOS_TRAY_DONE:           return "done";
         case MOS_TRAY_REFUSED_LOCKED: return "refused_locked";
+        case MOS_TRAY_ALREADY_LOCKED: return "already_locked";
         /* REFUSED_OTHER also the default; -Wswitch still fires on a new one. */
         case MOS_TRAY_REFUSED_OTHER: default: return "refused_other";
     }
@@ -6989,9 +6990,10 @@ bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
 static const uint8_t cdb_eject [6] = { 0x1B, 0x00, 0x00, 0x00, 0x02, 0x00 };
 static const uint8_t cdb_close [6] = { 0x1B, 0x00, 0x00, 0x00, 0x03, 0x00 };
 static const uint8_t cdb_unlock        [6] = { 0x1E, 0x00, 0x00, 0x00, 0x00, 0x00 };
-static const uint8_t cdb_lock          [6] = { 0x1E, 0x00, 0x00, 0x00, 0x01, 0x00 };
 static const uint8_t cdb_unlock_persist[6] = { 0x1E, 0x00, 0x00, 0x00, 0x02, 0x00 };
 static const uint8_t cdb_lock_persist  [6] = { 0x1E, 0x00, 0x00, 0x00, 0x03, 0x00 };
+/* basic LOCK (byte4 0x01) is intentionally not issued — mos locks with the
+   durable PERSISTENT Prevent (0x03); see mos_tray_lock. */
 
 /* Prevent/allow is electronic (instant); eject/close drives the tray motor
    and needs time for mechanical travel. GESN uses 2000 ms; eject/close start
@@ -7129,21 +7131,50 @@ mos_error mos_tray_close(mos_handle_t *h, mos_tray_outcome *out, uint8_t sense[3
     return mos_internal_tray_cmd(h, cdb_close, out, sense);
 }
 
-mos_error mos_tray_lock(mos_handle_t *h, bool persistent,
-                        mos_tray_outcome *out, uint8_t sense[3])
+mos_error mos_tray_lock(mos_handle_t *h, mos_tray_outcome *out, uint8_t sense[3])
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
-    return mos_internal_tray_cmd(h, persistent ? cdb_lock_persist : cdb_lock,
-                                 out, sense);
+    /* Persistent Prevent (0x03) — the durable lock that survives an I_T-nexus
+       loss (e.g. a USB bus reset), which a fire-and-forget single-initiator
+       lock wants. On a MOUNTED disc the CDB can't issue (ObtainExclusiveAccess
+       returns BUSY = "media is still mounted", SCSITaskLib.h), but a mounted
+       disc is ALREADY removal-locked by macOS — the requested state already
+       holds, so report ALREADY_LOCKED, a success, not a BUSY error. A peer
+       client holding exclusive access (MOS_ERR_EXCLUSIVE_ACCESS) is NOT
+       translated — we cannot know that means locked. */
+    mos_error e = mos_internal_tray_cmd(h, cdb_lock_persist, out, sense);
+    if (e == MOS_ERR_BUSY) {
+        *out = MOS_TRAY_ALREADY_LOCKED;
+        if (sense) { sense[0] = sense[1] = sense[2] = 0; }
+        return MOS_OK;
+    }
+    return e;
 }
 
-mos_error mos_tray_unlock(mos_handle_t *h, bool persistent,
-                          mos_tray_outcome *out, uint8_t sense[3])
+mos_error mos_tray_unlock(mos_handle_t *h, mos_tray_outcome *out, uint8_t sense[3])
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
-    return mos_internal_tray_cmd(h,
-                                 persistent ? cdb_unlock_persist : cdb_unlock,
-                                 out, sense);
+    /* Clear BOTH Prevent states so the tray ends UNLOCKED whichever was set:
+       basic ALLOW 0x00 then persistent ALLOW 0x02 (the two states are
+       independent — 04-349r1 §6.18.2 — and mos doesn't know which a lock used).
+       The basic ALLOW is mandatory and idempotent (GOOD even if nothing was
+       locked); BUSY here means the disc is mounted (eject to release). */
+    mos_error e = mos_internal_tray_cmd(h, cdb_unlock, out, sense);
+    if (e != MOS_OK) return e;            /* BUSY (mounted) / transport — surface */
+
+    /* The persistent ALLOW: a TRANSPORT failure means it did NOT happen (a
+       persistent lock may survive) — surface it, zeroing sense per the negative
+       contract. An ANSWERED refusal (a drive without Persistent Prevent
+       rejecting 0x02 with 5/24/00) is tolerated and ignored: there is no
+       persistent state to clear, the basic ALLOW already unlocked the tray, so
+       the outcome stays the basic ALLOW's DONE. */
+    mos_tray_outcome persist_ignored = MOS_TRAY_DONE;
+    e = mos_internal_tray_cmd(h, cdb_unlock_persist, &persist_ignored, NULL);
+    if (e != MOS_OK) {
+        if (sense) { sense[0] = sense[1] = sense[2] = 0; }
+        return e;
+    }
+    return MOS_OK;
 }
 
 /* ==== src/mos_watch.c ==== */

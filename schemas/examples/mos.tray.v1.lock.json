@@ -1,9 +1,9 @@
 {
   "schema": "mos.tray.v1",
-  "bsd_node": "/dev/disk4",
+  "bsd_node": null,
   "registry_id": 4295021843,
-  "action": "eject",
-  "force": true,
+  "action": "lock",
+  "force": null,
   "outcome": "done",
   "sense": null
 }

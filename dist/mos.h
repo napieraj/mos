@@ -128,11 +128,17 @@ MOS_ABI_PIN_I32(mos_disc_status);
    negative mos_error instead and leaves the outcome unmodified. */
 typedef enum {
     MOS_TRAY_DONE           = 0, /* command completed GOOD                  */
-    MOS_TRAY_REFUSED_LOCKED = 1, /* CHECK CONDITION 5/53/02 MEDIA REMOVAL
+    MOS_TRAY_REFUSED_LOCKED = 1, /* CHECK CONDITION 53/02 MEDIA REMOVAL
                                     PREVENTED — an eject/close hit a lock    */
     MOS_TRAY_REFUSED_OTHER  = 2, /* CHECK CONDITION, other sense (e.g. a
                                     drive without Persistent Prevent support
-                                    rejecting --persistent with 5/24/00)     */
+                                    rejecting the persistent state with
+                                    5/24/00)                                 */
+    MOS_TRAY_ALREADY_LOCKED = 3, /* tray lock on a MOUNTED disc: the lock CDB
+                                    can't issue (media still mounted), but a
+                                    mounted disc is already removal-locked by
+                                    macOS — the requested state already holds,
+                                    so this is a success, not an error       */
 } mos_tray_outcome;
 MOS_ABI_PIN_I32(mos_tray_outcome);
 
@@ -994,14 +1000,17 @@ mos_error mos_enumerate_features(mos_handle_t *h,
  * acquires and RELEASES exclusive access within the call:
  *
  *   - MOS_ERR_BUSY / MOS_ERR_EXCLUSIVE_ACCESS when the drive is mounted as a
- *     volume or held by another client. For lock/close/unlock the consumer
- *     quiesces first. mos_tray_eject is the exception: it GRACEFULLY unmounts a
+ *     volume or held by another client. close/unlock need the consumer to
+ *     quiesce first. Two exceptions: mos_tray_eject GRACEFULLY unmounts a
  *     mounted disc before ejecting (both default and --force — matching `drutil
  *     tray eject`), but NEVER forces, so a BUSY filesystem (open file handles)
- *     surfaces MOS_ERR_BUSY rather than being destroyed. Neither path preempts
- *     another userland client (MOS_ERR_EXCLUSIVE_ACCESS).
+ *     surfaces MOS_ERR_BUSY rather than being destroyed; and mos_tray_lock on a
+ *     mounted disc returns MOS_OK / ALREADY_LOCKED (a mounted disc is already
+ *     removal-locked by macOS — the requested state already holds). Neither path
+ *     preempts another userland client (MOS_ERR_EXCLUSIVE_ACCESS).
  *   - On a command the drive ANSWERED, MOS_OK and *out carries the outcome
- *     (DONE / REFUSED_LOCKED / REFUSED_OTHER) — mechanism facts only.
+ *     (DONE / REFUSED_LOCKED / REFUSED_OTHER / ALREADY_LOCKED) — mechanism facts
+ *     only.
  *
  * Lock lifetime (T10 04-349r1 §6.18): the PREVENT state is per-I_T-nexus and
  * survives a handle close / process exit — it clears only on bus/LU/hard
@@ -1014,10 +1023,12 @@ mos_error mos_enumerate_features(mos_handle_t *h,
  * ONLY on MOS_OK; on a negative return *out is unspecified (a caller must read it
  * only when the call returned MOS_OK). `sense` is
  * OPTIONAL (NULL to ignore): on MOS_OK it receives the {key, asc, ascq} the
- * drive returned — meaningful on a refusal (REFUSED_LOCKED is always 5/53/02;
+ * drive returned — meaningful on a refusal (REFUSED_LOCKED is always asc/ascq
+ * 53/02, the sense key 05 with media present or 02 on an empty drive;
  * REFUSED_OTHER is whatever the drive reported, e.g. 5/24/00 for an
- * unsupported Persistent Prevent), all-zero on DONE. Zeroed on a transport
- * failure (negative return). Same shape as the internal raw-CDB sense out-param.
+ * unsupported Persistent Prevent), all-zero on DONE / ALREADY_LOCKED. Zeroed on
+ * a transport failure (negative return). Same shape as the internal raw-CDB
+ * sense out-param.
  */
 
 /* Eject the tray / unload the medium (START STOP UNIT 0x1B, LoEj=1 START=0).
@@ -1043,21 +1054,26 @@ mos_error mos_tray_eject (mos_handle_t *h, bool force,
 mos_error mos_tray_close (mos_handle_t *h,
                           mos_tray_outcome *out, uint8_t sense[3]);
 
-/* Prevent medium removal (PREVENT ALLOW MEDIUM REMOVAL 0x1E). persistent
-   selects the PERSISTENT bit: false sets the basic Prevent state (byte4
-   0x01) — blocks operator-button AND initiator eject until an ALLOW; true
-   sets the Persistent Prevent state (byte4 0x03) — the robot-grade lock:
-   the operator button is converted to a GESN EjectRequest event instead of
-   ejecting, while an initiator eject still succeeds. A drive that does not
-   implement Persistent Prevent answers REFUSED_OTHER (5/24/00). */
-mos_error mos_tray_lock  (mos_handle_t *h, bool persistent,
+/* Prevent medium removal (PREVENT ALLOW MEDIUM REMOVAL 0x1E, byte4 0x03 — the
+   PERSISTENT Prevent state). The persistent state is the durable, robot-grade
+   lock: it survives an I_T-nexus loss (e.g. a USB bus reset) that would clear a
+   basic Prevent, which is what a fire-and-forget single-initiator lock wants.
+   A drive that does not implement Persistent Prevent answers REFUSED_OTHER
+   (5/24/00). On a MOUNTED disc the lock CDB cannot issue (media still mounted),
+   but a mounted disc is already removal-locked by macOS, so this returns MOS_OK
+   / ALREADY_LOCKED rather than MOS_ERR_BUSY. (mos issues only the persistent
+   state; the basic-only Prevent is not exposed.) */
+mos_error mos_tray_lock  (mos_handle_t *h,
                           mos_tray_outcome *out, uint8_t sense[3]);
 
-/* Allow medium removal (PREVENT ALLOW MEDIUM REMOVAL 0x1E). persistent must
-   MATCH the lock being released — the two prevent states are independent
-   (04-349r1 §6.18.2): false issues 0x00 (clears basic Prevent), true issues
-   0x02 (clears Persistent Prevent). A 0x00 does NOT clear a persistent lock. */
-mos_error mos_tray_unlock(mos_handle_t *h, bool persistent,
+/* Allow medium removal (PREVENT ALLOW MEDIUM REMOVAL 0x1E). Clears BOTH Prevent
+   states — basic ALLOW 0x00 then persistent ALLOW 0x02 — so the tray ends
+   UNLOCKED whichever state was set (the two are independent, 04-349r1 §6.18.2).
+   A drive without Persistent Prevent answers the 0x02 with 5/24/00; that is
+   tolerated (the basic ALLOW already cleared what such a drive can hold), so the
+   outcome is DONE. Cannot run on a MOUNTED disc (media still mounted) —
+   MOS_ERR_BUSY; eject to release a mounted disc's lock. */
+mos_error mos_tray_unlock(mos_handle_t *h,
                           mos_tray_outcome *out, uint8_t sense[3]);
 
 /* Stable lower_snake_case token for an outcome: "done" / "refused_locked" /

@@ -23,7 +23,7 @@ What is generated:
     rest of the man page — global reference: OPTIONS, EXAMPLES, … — is
     hand-written and untouched).
 
-The verb-scoped flag partition (--force/--persistent belong to tray,
+The verb-scoped flag partition (--force belongs to tray,
 --dump to probe) mirrors main.c's own validation guards and is the one
 structural rule kept in this script; short-option pairings (-i/-j/-h) are
 likewise structural. Everything that GROWS when a command is added — the
@@ -60,8 +60,8 @@ GENERATED_NOTE = (
 )
 
 # Flags scoped to a single verb (mirrors main.c's validation guards:
-# `(flag_force||flag_persistent) && !flag_tray` and `flag_dump && !flag_probe`).
-TRAY_FLAGS = ["--force", "--persistent"]
+# `flag_force && !flag_tray` and `flag_dump && !flag_probe`).
+TRAY_FLAGS = ["--force"]
 PROBE_FLAGS = ["--dump", "--capture"]
 
 
@@ -264,7 +264,6 @@ _mos() {{
                     _arguments \\
                         "${{global_opts[@]}}" \\
                         '--force[tray eject: also clear a tray Prevent lock (never forces the filesystem)]' \\
-                        '--persistent[tray lock/unlock: Persistent Prevent state]' \\
                         '1:action:({act})'
                     ;;
                 probe)
@@ -336,7 +335,6 @@ complete -c mos      -l version -d 'Show version'
 
 # Subcommand-scoped options.
 complete -c mos -l force      -n '__fish_mos_using_subcommand tray'  -d 'eject: also clear a tray Prevent lock (never forces the filesystem)'
-complete -c mos -l persistent -n '__fish_mos_using_subcommand tray'  -d 'lock/unlock: Persistent Prevent'
 complete -c mos -l dump       -n '__fish_mos_using_subcommand probe' -d 'One-shot DiscRecording capture'
 complete -c mos -l capture    -n '__fish_mos_using_subcommand probe' -d 'Fixed-menu raw MMC capture'
 """

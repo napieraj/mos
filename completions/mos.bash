@@ -46,7 +46,7 @@ _mos()
 
     local opts="$global_opts"
     case "$sub" in
-        tray)  opts="-i --index --bsd -j --json -h --help --version --force --persistent" ;;
+        tray)  opts="-i --index --bsd -j --json -h --help --version --force" ;;
         probe) opts="-i --index --bsd -j --json -h --help --version --dump --capture" ;;
     esac
 

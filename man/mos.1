@@ -112,9 +112,12 @@ BSD form; the explicit form of the positional BSD selector.
 .B \-\-force
 With
 .BR "tray eject" ,
-additionally clear a tray Prevent
+additionally clear a
+.B COLD
+tray Prevent
 .B LOCK
-in the way (both the basic and persistent Prevent states), then eject. It does
+in the way \(em a deliberately\-locked idle drive, no mount in play (both the
+basic and persistent Prevent states) \(em then eject. It does
 .B not
 force the filesystem. A plain
 .B "tray eject"
@@ -122,7 +125,7 @@ already unmounts a mounted disc
 .BR gracefully ,
 exactly like
 .BR "diskutil unmountDisk diskN" ,
-and
+clears the removal lock macOS arms on mount, and
 .B never
 kills open file handles \(em a busy volume is reported as
 .B busy
@@ -130,14 +133,9 @@ kills open file handles \(em a busy volume is reported as
 .B diskutil
 first). The only thing
 .B \-\-force
-adds is clearing a Prevent lock; the one blocker it cannot clear is another
+adds is clearing a cold Prevent lock; the one blocker it cannot clear is another
 program holding the drive exclusively, reported as
 .BR exclusive_access .
-.TP
-.B \-\-persistent
-With
-.BR "tray lock" " / " "tray unlock" :
-select the Persistent Prevent state.
 .TP
 .B \-\-dump
 With

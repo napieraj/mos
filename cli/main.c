@@ -77,12 +77,10 @@ void mos_cli_print_usage(FILE *f)
         "  -i, --index N     1-based drive index (the Index column in\n"
         "                    'mos list'); explicit form of the positional\n"
         "      --bsd NAME    BSD form; explicit form of the positional\n"
-        "      --force       tray eject: also clear a tray Prevent LOCK in the\n"
-        "                    way (basic + persistent), then eject. NEVER forces\n"
-        "                    the filesystem — a busy disc reports busy. (A plain\n"
-        "                    eject already unmounts gracefully, like drutil.)\n"
-        "      --persistent  tray lock/unlock: the Persistent Prevent state\n"
-        "                    (survives the operator eject button as an event)\n"
+        "      --force       tray eject: also clear a COLD tray Prevent LOCK in\n"
+        "                    the way (basic + persistent), then eject. NEVER\n"
+        "                    forces the filesystem — a busy disc reports busy. (A\n"
+        "                    plain eject already unmounts gracefully, like drutil.)\n"
 #ifdef MOS_CLI_PROBE
         "      --dump        With probe: one-shot DR dictionary capture\n"
         "                    (text + XML plists; takes no drive argument)\n"
@@ -118,7 +116,6 @@ enum {
     OPT_BSD = 1000,
     OPT_VERSION,
     OPT_FORCE,
-    OPT_PERSISTENT,
 #ifdef MOS_CLI_PROBE
     OPT_DUMP,
     OPT_CAPTURE,
@@ -130,7 +127,6 @@ static const struct option long_options[] = {
     { "bsd",     required_argument, 0, OPT_BSD },
     /* tray-only; the verb match is enforced below. */
     { "force",      no_argument,    0, OPT_FORCE },
-    { "persistent", no_argument,    0, OPT_PERSISTENT },
 #ifdef MOS_CLI_PROBE
     /* Compiled out so an OFF build rejects --dump/--capture as unknown rather
        than half-recognizing them. */
@@ -304,7 +300,6 @@ int main(int argc, char **argv)
                 opt_bsd = optarg;
                 break;
             case OPT_FORCE:      flag_force = true; break;
-            case OPT_PERSISTENT: flag_persistent = true; break;
 #ifdef MOS_CLI_PROBE
             case OPT_DUMP:    flag_dump = true; break;
             case OPT_CAPTURE: flag_capture = true; break;
@@ -389,13 +384,12 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 
-    /* --force / --persistent belong to tray; reject them on any other verb
-       the way --dump is rejected outside probe. The finer eject-vs-lock
-       match happens in mos_cli_run_tray, where the action word is known. */
-    if ((flag_force || flag_persistent) &&
-        !(selected->flags & MOS_CLI_CMD_TRAY_ACTION)) {
+    /* --force belongs to tray; reject it on any other verb the way --dump is
+       rejected outside probe. The finer eject-only match happens in
+       mos_cli_run_tray, where the action word is known. */
+    if (flag_force && !(selected->flags & MOS_CLI_CMD_TRAY_ACTION)) {
         fprintf(stderr,
-                "%s: --force/--persistent apply only to the tray subcommand\n",
+                "%s: --force applies only to the tray subcommand\n",
                 progname);
         return EX_USAGE;
     }
