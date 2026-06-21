@@ -1,10 +1,11 @@
 /* cli/tray.c — the tray command: `mos tray <action> [selector] [flags]`.
  *
  * action ∈ {eject, close, lock, unlock}. eject GRACEFULLY unmounts a mount
- * then ejects; --force additionally clears a Prevent LOCK in the way (it never
- * forces the filesystem — a busy disc surfaces BUSY; see mos_tray_eject).
- * lock/unlock take --persistent (the Persistent Prevent state). Emits one
- * mos.tray.v1 document or a human line.
+ * then ejects, clearing the OS mount-protection Prevent lock macOS arms on
+ * mount; --force extends the lock-clearing to a COLD deliberate lock (no mount
+ * in play). It never forces the filesystem — a busy disc surfaces BUSY; see
+ * mos_tray_eject. lock/unlock take --persistent (the Persistent Prevent state).
+ * Emits one mos.tray.v1 document or a human line.
  *
  * A control verb (START STOP UNIT / PREVENT ALLOW MEDIUM REMOVAL), not a
  * query. A command the drive ANSWERED — including a 5/53/02 locked-eject

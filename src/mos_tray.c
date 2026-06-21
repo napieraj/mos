@@ -58,8 +58,12 @@ static const uint8_t cdb_lock_persist  [6] = { 0x1E, 0x00, 0x00, 0x00, 0x03, 0x0
 /* `tray eject` GRACEFULLY unmounts a mounted disc before ejecting, and mos NEVER
    forces the filesystem (no kDADiskUnmountOptionForce, no killing of open file
    handles): a busy volume surfaces MOS_ERR_BUSY, exactly like `diskutil
-   unmountDisk diskN`. `--force` adds ONE thing — it clears a tray PREVENT LOCK in
-   the way (basic + persistent Prevent); it does not touch the filesystem.
+   unmountDisk diskN`. macOS arms a tray PREVENT lock when it mounts a disc, and
+   that lock survives mos's graceful unmount (the unmount issues no ALLOW), so a
+   default eject of a mounted disc clears that OS mount-protection lock (basic +
+   persistent Prevent) after its own unmount and ejects — Finder/`drutil`
+   semantics. `--force` extends the lock-clearing to a COLD lock (a deliberately-
+   locked idle drive, no mount in play); it does not touch the filesystem.
 
    The unmount is by NAME (DiskArbitration resolves the target by BSD name at
    request time — DADisk.c). With a GRACEFUL unmount that name reuse is HARMLESS:
@@ -107,22 +111,26 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
            busy filesystem (open handles) leaves the mount and surfaces
            MOS_ERR_BUSY, exactly like `diskutil unmountDisk diskN`. mos never
            fights the filesystem — it only surfaces the error.
-         - REFUSED_LOCKED = a basic Prevent lock refused the eject CDB. --force
-           ONLY: clear BOTH Prevent states (basic then persistent, so nothing is
-           left locked), re-eject. The DEFAULT returns REFUSED_LOCKED untouched —
-           `--force` means "open past the LOCK", never past the filesystem.
+         - REFUSED_LOCKED = a Prevent lock refused the eject CDB. Cleared (BOTH
+           Prevent states, basic then persistent, so nothing is left locked) when
+           EITHER --force was given OR this eject just did the graceful unmount
+           (did_unmount): macOS arms a tray Prevent when it MOUNTS a disc, and that
+           lock survives the unmount (no ALLOW is issued), so a REFUSED_LOCKED that
+           follows mos's own unmount is the OS mount-protection lock, not a
+           deliberate one — clear it and re-eject, Finder/`drutil` semantics, no
+           --force needed. A COLD REFUSED_LOCKED (no preceding unmount — a
+           deliberately-locked idle drive, e.g. a robot's `mos tray lock`) is
+           returned untouched on the default path and needs --force.
 
        The one failure nothing here clears is MOS_ERR_EXCLUSIVE_ACCESS = another
        userland client (no SCSI preempt exists): it falls through and surfaces,
        tray shut. At most two blockers (mount, lock) stack, so the loop is
        bounded at two passes. Each CDB grabs/releases exclusive access per call
        — mos_internal_raw_cdb stays the sole §3 lock site; no second one is introduced.
-       (A drive with ONLY a Persistent Prevent and no mount/basic-lock ejects on
-       the first CDB — an initiator eject succeeds under Persistent Prevent by
-       spec — so it opens without a speculative clear; --force clears persistent
-       only when a lock actually blocked, never issuing a command it can't know
-       it needs.) */
+       (The clear issues both ALLOWs only when a lock actually blocked, never a
+       speculative command it can't know it needs.) */
     mos_error e = mos_internal_tray_cmd(h, cdb_eject, out, sense);
+    bool did_unmount = false;
 
     for (int pass = 0; pass < 2; pass++) {
         if (e == MOS_ERR_BUSY) {                          /* Finder/system mount */
@@ -142,15 +150,18 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
                 !mos_bsd_name_format(h->bsd_unit, name, sizeof name) ||
                 !mos_internal_da_unmount(name))
                 break;                                    /* busy/uncleared → surface BUSY */
-        } else if (force && e == MOS_OK && *out == MOS_TRAY_REFUSED_LOCKED) {  /* --force: basic Prevent */
-            /* Clear both Prevent states so nothing is left locked. A TRANSPORT
-               failure (negative) clearing either state means the clear did NOT
-               happen, so the "nothing left locked" contract cannot be met —
-               abort with that error instead of reconverging into a false DONE
-               (R3 F2). An ANSWERED refusal (MOS_OK + REFUSED_*, e.g. a drive
-               without Persistent Prevent answering the persistent clear) is the
-               drive's own answer and is tolerated — the re-eject below is the
-               real check of whether the lock cleared. */
+            did_unmount = true;                           /* the lock we may now hit is the OS mount-lock */
+        } else if ((force || did_unmount) && e == MOS_OK && *out == MOS_TRAY_REFUSED_LOCKED) {
+            /* Clear both Prevent states so nothing is left locked — reached by
+               --force (a cold deliberate lock) or by a post-unmount OS
+               mount-lock (did_unmount). A TRANSPORT failure (negative) clearing
+               either state means the clear did NOT happen, so the "nothing left
+               locked" contract cannot be met — abort with that error instead of
+               reconverging into a false DONE (R3 F2). An ANSWERED refusal
+               (MOS_OK + REFUSED_*, e.g. a drive without Persistent Prevent
+               answering the persistent clear) is the drive's own answer and is
+               tolerated — the re-eject below is the real check of whether the
+               lock cleared. */
             mos_tray_outcome cleared = MOS_TRAY_DONE;
             mos_error ce = mos_internal_tray_cmd(h, cdb_unlock, &cleared, NULL);
             if (ce == MOS_OK)

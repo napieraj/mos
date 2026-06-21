@@ -154,6 +154,16 @@ void mos_fake_set_unmount_never_completes(bool never);
    mos_close retries the release. Cleared by mos_fake_reset(). */
 void mos_fake_set_release_fail(bool fail);
 
+/* Model the macOS mount-protection tray PREVENT lock: macOS arms a Prevent when
+   it mounts a disc, and that lock survives mos's graceful unmount, so an eject
+   answers CHECK CONDITION 5/53/02 until a PREVENT ALLOW clears it. Enables the
+   stateful model and sets the initial lock state. With the model on, a 0x1E
+   PREVENT ALLOW toggles the lock (byte4 bit0) and a 0x1B eject/close while
+   locked answers refused_locked; other CDBs fall through to the generic reply.
+   Opt-in (off by default) so the static raw-reply tests are unaffected.
+   Cleared by mos_fake_reset(). */
+void mos_fake_set_prevent_locked(bool locked);
+
 /* Make IOCreatePlugInInterfaceForService fail (kext declines to attach
    SCSITaskUserClient): every open maps to MOS_ERR_DRIVER_REJECTED,
    yielding a deterministic identical-error streak for the backoff

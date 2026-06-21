@@ -12,8 +12,8 @@ cross-checked against what mos already plumbs. No `src/` or schema changes —
 this file is the deliverable.
 
 Confidence per claim: HIGH = header/spec/in-repo source quoted; MEDIUM =
-inferred macOS behavior not separately confirmed (mos has never run on real
-hardware — falsifiable per the hardware-role ADR).
+inferred macOS behavior not separately confirmed on hardware — falsifiable
+per the hardware-role ADR.
 
 ## Verdict
 

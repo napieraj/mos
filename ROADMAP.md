@@ -6,9 +6,13 @@ dated `doc/research/` notes, `doc/history/` (frozen), and git history;
 design rationale is in `ARCHITECTURE.md`. This file states what is *not yet
 built* and does not relitigate what is.
 
-**Reality check.** mos has never run on a real drive. The pure decision
-layer is exercised in CI, but every IOKit / MMC / DiskArbitration assumption
-below is off-Mac supposition until the reference rig confirms it. Treat
+**Reality check.** mos has run on a real drive — an LG WH16NS60 (libredrive)
+in an OWC enclosure — and the first hardware runs already landed findings (the
+stray-open-on-insert GESN/sense fix, the serial-source pivot to feature 0108h,
+the watch/eject self-contention, the mount-lock eject path). But that is ONE
+rig: the pure decision layer is exercised in CI, and every IOKit / MMC /
+DiskArbitration assumption below that those runs did not exercise is still
+confirmed only on that one drive — or remains off-Mac supposition. Treat
 unbuilt items as hypotheses, not commitments — including the ones written as
 if settled.
 
