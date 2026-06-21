@@ -6,5 +6,5 @@
   "force": false,
   "persistent": null,
   "outcome": "refused_locked",
-  "sense": { "key": 5, "asc": 83, "ascq": 2 }
+  "sense": { "key": "0x05", "asc": "0x53", "ascq": "0x02" }
 }

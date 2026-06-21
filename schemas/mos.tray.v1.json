@@ -52,9 +52,9 @@
       "required": ["key", "asc", "ascq"],
       "additionalProperties": false,
       "properties": {
-        "key":  { "type": "integer", "minimum": 0, "maximum": 15,  "description": "Sense key (e.g. 5 = ILLEGAL REQUEST)." },
-        "asc":  { "type": "integer", "minimum": 0, "maximum": 255, "description": "Additional Sense Code (e.g. 0x53 = 83)." },
-        "ascq": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Additional Sense Code Qualifier (e.g. 0x02 = 2)." }
+        "key":  { "type": "string", "pattern": "^0x[0-9a-f]{2}$", "description": "Sense key, 0x-prefixed hex (e.g. 0x05 = ILLEGAL REQUEST). Same representation as mos.state.v1 / mos.event.v1." },
+        "asc":  { "type": "string", "pattern": "^0x[0-9a-f]{2}$", "description": "Additional Sense Code, 0x-prefixed hex (e.g. 0x53 = MEDIA REMOVAL PREVENTED)." },
+        "ascq": { "type": "string", "pattern": "^0x[0-9a-f]{2}$", "description": "Additional Sense Code Qualifier, 0x-prefixed hex (e.g. 0x02)." }
       }
     }
   },

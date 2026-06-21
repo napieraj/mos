@@ -72,7 +72,8 @@ static void emit_json(const tray_doc *d)
     bool have_sense = (d->sk || d->asc || d->ascq);
     fputs(",\n  \"sense\": ", stdout);
     if (have_sense)
-        fprintf(stdout, "{\"key\": %u, \"asc\": %u, \"ascq\": %u}",
+        fprintf(stdout,
+                "{\"key\": \"0x%02x\", \"asc\": \"0x%02x\", \"ascq\": \"0x%02x\"}",
                 d->sk, d->asc, d->ascq);
     else
         fputs("null", stdout);

@@ -6,5 +6,5 @@
   "force": null,
   "persistent": true,
   "outcome": "refused_other",
-  "sense": { "key": 5, "asc": 36, "ascq": 0 }
+  "sense": { "key": "0x05", "asc": "0x24", "ascq": "0x00" }
 }
