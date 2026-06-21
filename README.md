@@ -59,6 +59,7 @@ $ mos state 1 --json
   "media_class": "bd",
   "media_type": "bd_rom",
   "writable": false,
+  "speeds": {"descriptor_count": 1, "max_read_kbps": 35980, "max_write_kbps": 0},
   "vendor": "HL-DT-ST",
   "product": "BD-RE WH16NS60",
   "firmware": "1.00"
@@ -96,6 +97,10 @@ distinguish from a closed empty slot. A loaded disc adds the `Media:` and
 `Writable:` rows shown in the [Quickstart](#quickstart); an empty tray has
 neither. In `--json`, `media_type` and `writable` are read with zero SCSI
 commands and match the [`watch`](#watch) stream, so a poll and the stream agree.
+On a READY disc the document also carries a `speeds` object — the loaded disc's
+max read/write (kB/s). Reading it never locks the drive or interrupts another
+program using it, so it is safe to poll. `watch` reads it once per disc (the
+value is fixed for a given disc), so a polling loop doesn't re-query it.
 
 ### `list` — every attached drive
 
@@ -157,15 +162,16 @@ $ mos drive 1
     Protection:  AACS (v68, bus encryption), CSS (v1)
       Profiles:  cd_rom, cd_r, cd_rw, dvd_rom, dvd_minus_r, ..., bd_rom, bd_r, bd_re
      Standards:  spc_4 — mmc_6, sbc_3, sam_5, spc_4
-        Speeds:  read ~16.0× BD (72.0 MB/s), write ~12.0× BD (54.0 MB/s) (max)
     Mechanical:  tray, buffer 4.1 MB
 Error Recovery:  retry 20, PER
 ```
 
 Disc-independent facts: identity, `serial` (the durable inventory key that
 survives replug where `registry_id` does not), content-protection *capability*,
-the supported-profile set, max read/write speeds, and the mechanical and
-error-recovery configuration. Read-only — `mos` reports these, never changes them.
+the supported-profile set, and the mechanical and error-recovery configuration.
+Read-only — `mos` reports these, never changes them. (Read/write **speeds** are
+media-dependent, so they live on [`state`](#state-default--what-the-drive-is-doing-now)
+and [`watch`](#watch), not here.)
 
 ### `features` — medium writability
 

@@ -39,7 +39,6 @@
     {"code": "0x1ea0", "name": "sat"}
   ],
   "firmware_date": "2019-01-07T13:20:43Z",
-  "speeds": null,
   "mechanical": null,
   "error_recovery": null
 }

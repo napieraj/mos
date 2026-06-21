@@ -7,6 +7,5 @@
     Protection:  none
       Profiles:  -
      Standards:  -
-        Speeds:  -
     Mechanical:  -
 Error Recovery:  -

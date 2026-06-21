@@ -17,7 +17,6 @@
   "version": {"code": 6, "name": "spc_4"},
   "version_descriptors": [{"code": "0x04e0", "name": "mmc_6"}],
   "firmware_date": "2013-99-99T99:99:99Z",
-  "speeds": null,
   "mechanical": null,
   "error_recovery": null
 }

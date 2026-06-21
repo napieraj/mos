@@ -1735,3 +1735,65 @@ drive whose mounted-disc Prevent does NOT hold (then `already_locked` would
 over-claim) — but a mounted optical disc cannot be operator-ejected under macOS,
 so the tray is held regardless; if a capture ever shows a mounted disc with an
 ejectable tray, that lands as a fixture + dated note here before any change.
+
+## ADR: drive speeds (GET PERFORMANCE) move from `mos drive` to `mos state` +
+## `mos watch` — they are disc-bound, not drive-static (2026-06-21)
+
+The read/write `speeds` object was emitted by `mos drive` (`mos.drive.v1`). It is
+removed from there and added to `mos.state.v1` and `mos.event.v1`. This entry
+records why the move is correct and why folding a per-poll read into the state
+path does not violate the no-lock-on-READY shape the state core protects.
+
+**Why they don't belong on `mos drive`.** The numbers come from GET PERFORMANCE
+(0xAC, Type 00h), which reports the *loaded medium's* nominal performance — drive
+clamped, media-dependent (`src/mos_perf.c`; the set-speed survey, 2026-06-18,
+already called it "media-dependent and drive-clamped"). mos decodes no
+drive-static speed (page 0x2A's deprecated speed fields are not read). So a
+disc-bound value sat in the static-drive view, where it was null whenever the
+tray was empty — the tell that it was misplaced. `mos drive` is "what IS this
+drive"; speeds are "what can this drive do with THIS disc."
+
+**Why `state`/`watch` and not `metadata`.** The split between `state` (cheap,
+polled) and `metadata` (heavy, on-demand) is by **poll cost**, not by disc-vs-
+drive. The earlier objection was that GET PERFORMANCE is 2 commands (read+write
+directions) per poll. Two facts answer it: (a) `GetPerformance` is a NON-exclusive
+**convenience method** — no raw CDB, no `ObtainExclusiveAccess` — so it adds **zero
+raw CDBs** and takes **no lock**, and therefore never contends with a one-shot
+control verb (the A4 contention class, 2026-06-21, does not apply); the state
+core's at-most-one-raw-CDB budget (the GESN on the not-ready branch) is unchanged,
+because speeds are read only on the READY branch where TUR GOOD already
+short-circuits without GESN. (b) A disc's performance is **constant for that
+disc**, so `mos watch` grabs it **once per media identity and caches** it
+(`watch_grab_speeds`, keyed on `media_id` — the per-disc analogue of the serial's
+per-session `serial_resolved`, sharing the `probe_grab_terminal` retry classifier),
+paying the read once per disc, not every poll. One-shot `mos state` reads it per
+invocation (a deliberate one-shot, like the serial in `mos drive`).
+
+**The library query stays pure.** `mos_query_state` does NOT issue GET
+PERFORMANCE — exactly as it does not grab the serial. The speeds are filled at the
+adapter/CLI layer: `mos state` calls `mos_query_drive_perf` directly on the READY
+branch; the watch adapter (`watch_probe`/`watch_slot_probe`) grabs once per disc
+and re-homes into the `mos_state_result`/`mos_watch_event` (plain scalars —
+`max_read_kbps`/`max_write_kbps`/`speed_count` — so no pointer re-home, unlike the
+identity strings). This keeps the no-lock-on-READY core query untouched.
+
+**Schema shape and gating.** `speeds` is an OPTIONAL key (the state idiom: present
+only when applicable, absent otherwise — like `volume_name`/`media_class`), not
+required-and-nullable as it was on drive. It is present only on a READY disc that
+reported ≥1 read-direction descriptor; a `state.v1` conditional forbids it on any
+non-ready document, and the `event.v1` oneOf forbids it on error/device_removed
+(symmetric with the other media fields). Pre-first-tag, so the move landed
+in-place across `mos.drive.v1`/`mos.state.v1`/`mos.event.v1` (schemas + examples +
+negatives + emitters + README + this entry in one commit; the JSON-schema ADR's
+mutable-in-place clause).
+
+**Scope / footprint unchanged.** No new command surface, no raw CDB added or
+removed (the one-of-four count is untouched), no new privilege. The only library-
+visible additions are three scalar fields + three `mos_watch_event_*` accessors.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+drive whose GET PERFORMANCE reply truncates or whose two directions disagree under
+a real capture — that lands as a fixture + dated note and at most refines the
+parser's bounds, never a per-device special-case. The descriptor layout is still
+spec-built (no in-repo capture yet), the standing falsifier the perf parser
+already carries.

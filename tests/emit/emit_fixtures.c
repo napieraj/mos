@@ -198,6 +198,16 @@ int main(int argc, char **argv)
         mos_fake_set_getconfig_reply(0x00, cfg,
             build_getconfig(cfg, sizeof cfg, 0x0008, false));
         mos_fake_set_da_volume("Audio CD", "/Volumes/Audio CD");
+        /* GET PERFORMANCE Performance Data, TYPE 00h: one Nominal Performance
+           Descriptor with start = end = 7680 kB/s (= 50.0× CD). The fake hands
+           the same buffer to both directions, so read and write both read 7680.
+           Exercises the READY-branch speeds grab folded into mos.state.v1. */
+        static const uint8_t perf[24] = {
+            0x00,0x00,0x00,0x14,  0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,  0x00,0x00,0x1E,0x00,
+            0x00,0x00,0x00,0x00,  0x00,0x00,0x1E,0x00
+        };
+        mos_fake_set_perf_reply(0x00, perf, sizeof perf);
         return mos_cli_run_state();
     }
     if (strcmp(verb, "list") == 0 && strcmp(scn, "one_drive") == 0) {

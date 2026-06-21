@@ -1,4 +1,1 @@
-        BSD:  -
-      Media:  -
- Recordable:  -
-Formattable:  -
+No disc loaded, or media not ready — run `mos state` to check the drive.

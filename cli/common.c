@@ -223,6 +223,19 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
             if (writable >= 0)
                 fprintf(stdout, ",\"writable\":%s", writable ? "true" : "false");
         }
+        /* Drive speeds (GET PERFORMANCE) — MEDIA-DEPENDENT, grabbed once per
+           disc and cached (mos_watch.c). Key absent until the first ready poll
+           for a disc lands the read (speed_count 0), then present and stable
+           until the next media change. Raw kbps integers. */
+        {
+            uint16_t sc = mos_watch_event_speed_count(e);
+            if (sc > 0)
+                fprintf(stdout,
+                        ",\"speeds\":{\"descriptor_count\":%u,"
+                        "\"max_read_kbps\":%u,\"max_write_kbps\":%u}",
+                        sc, mos_watch_event_max_read_kbps(e),
+                        mos_watch_event_max_write_kbps(e));
+        }
         if (vendor && *vendor) {
             fputs(",\"vendor\":", stdout);  mos_cli_json_str(stdout, vendor);
         }

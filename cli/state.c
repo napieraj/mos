@@ -7,12 +7,12 @@
 
 static void emit_human(const mos_state_result *r, int index1,
                        bool invoked_by_index, bool invoked_by_registry,
-                       const char *volume_name)
+                       const char *volume_name, const mos_drive_perf *perf)
 {
     /* Order: addressing, answer, evidence, media, identity. Suppression
        mirrors the JSON contract (omitted pairs absent); structural rows
        show "-" via NULL. */
-    mos_cli_human_pair pairs[13];
+    mos_cli_human_pair pairs[14];
     size_t n = 0;
 
     /* Index, Registry ID, BSD. The selector the caller typed is dropped;
@@ -99,6 +99,24 @@ static void emit_human(const mos_state_result *r, int index1,
     if (writable >= 0)
         pairs[n++] = (mos_cli_human_pair){ "Writable", writable ? "yes" : "no" };
 
+    /* Speeds: the loaded disc's GET PERFORMANCE max read/write, scaled to the
+       medium's native 1x multiple ("read ~16.0× BD (72.0 MB/s)"). Row present
+       only when a perf read landed (READY disc with descriptors); absent
+       otherwise, mirroring the JSON key suppression. The class comes from the
+       current profile; with no/unknown class the helper shows the absolute rate
+       alone. JSON keeps the raw kbps integers. */
+    char spd_buf[96];
+    if (mos_drive_perf_have(perf)) {
+        const char *mcls = mos_profile_class(mos_state_result_current_profile(r));
+        char rd[40], wr[40];
+        snprintf(spd_buf, sizeof spd_buf, "read %s, write %s (max)",
+                 mos_cli_human_rate_x(mos_drive_perf_max_read_kbps(perf),
+                                      mcls, rd, sizeof rd),
+                 mos_cli_human_rate_x(mos_drive_perf_max_write_kbps(perf),
+                                      mcls, wr, sizeof wr));
+        pairs[n++] = (mos_cli_human_pair){ "Speeds", spd_buf };
+    }
+
     /* Volume name: the second identical-drives disambiguator (media class
        is the first). Disc-controlled bytes, escaped like the identity rows
        below; no row when unmounted, mirroring the JSON suppression. */
@@ -130,7 +148,7 @@ static void emit_human(const mos_state_result *r, int index1,
 }
 
 static void emit_json(const mos_state_result *r, int index1,
-                      const char *volume_name)
+                      const char *volume_name, const mos_drive_perf *perf)
 {
     uint16_t    profile      = mos_state_result_current_profile(r);
     const char *state        = mos_state_description(mos_state_result_state(r));
@@ -193,6 +211,19 @@ static void emit_json(const mos_state_result *r, int index1,
         if (writable >= 0)
             fprintf(stdout, ",\n  \"writable\": %s",
                     writable ? "true" : "false");
+    }
+
+    /* Drive speeds (GET PERFORMANCE, non-exclusive convenience method) for the
+       loaded disc — MEDIA-DEPENDENT. Key present only when a perf read landed
+       (READY disc with descriptors); absent otherwise. The raw kbps integers;
+       the human view scales them. */
+    if (mos_drive_perf_have(perf)) {
+        fprintf(stdout,
+                ",\n  \"speeds\": {\"descriptor_count\": %u, "
+                "\"max_read_kbps\": %u, \"max_write_kbps\": %u}",
+                mos_drive_perf_descriptor_count(perf),
+                mos_drive_perf_max_read_kbps(perf),
+                mos_drive_perf_max_write_kbps(perf));
     }
 
     /* Mounted-volume name (DA one-shot). Present only when non-empty —
@@ -301,9 +332,20 @@ int mos_cli_run_state(void)
     bool mounted = false;
     (void)mos_query_volume(h, &mounted, volume, sizeof volume, NULL, 0);
 
-    if (flag_json) emit_json(r, index1, mounted ? volume : NULL);
+    /* Drive speeds: the loaded disc's GET PERFORMANCE read/write performance,
+       MEDIA-DEPENDENT. Only worth a read on a READY disc (no readable disc ⇒ no
+       speeds, and the state core already issued its at-most-one raw GESN on the
+       not-ready branch). GetPerformance is a non-exclusive convenience method —
+       no raw CDB, no exclusive lock — so this adds no lock and no contention with
+       a concurrent control verb. perf stays NULL on failure; the emitters gate
+       on mos_drive_perf_have(). */
+    const mos_drive_perf *perf = NULL;
+    if (mos_state_result_state(r) == MOS_STATE_READY)
+        (void)mos_query_drive_perf(h, &perf);
+
+    if (flag_json) emit_json(r, index1, mounted ? volume : NULL, perf);
     else           emit_human(r, index1, opt_index > 0, opt_registry != 0,
-                              mounted ? volume : NULL);
+                              mounted ? volume : NULL, perf);
 
     /* Exit 0 on any state, unknown included — state is stdout data, not
        exit status, and unknown is still an observation. Non-zero is

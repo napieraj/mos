@@ -17,7 +17,6 @@
     "version",
     "version_descriptors",
     "firmware_date",
-    "speeds",
     "mechanical",
     "error_recovery"
   ],
@@ -183,29 +182,6 @@
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
       "description": "Firmware creation timestamp from the GET CONFIGURATION Firmware Information feature (010Ch; MMC-6 §5.3.43 Table 197 — Century/Year/Month/Day/Hour/Minute/Second decimal ASCII, GMT), on the same RT=0 walk that yields protection/profiles. SAME RFC 3339 UTC format as mos.event.v1's `ts` (integer seconds, trailing Z). null when the drive does not implement the feature (common). NOTE: this is the firmware's CREATION date, not a version string — the `firmware` field (4-char PRODUCT_REVISION_LEVEL) is the version identifier.",
       "examples": ["2019-01-07T13:20:43Z"]
-    },
-    "speeds": {
-      "type": ["object", "null"],
-      "description": "Read/write performance from GET PERFORMANCE (0xAC, Type 00h Performance Data) via the GetPerformance convenience method — the MMC-sanctioned modern speed source (the convenience signature exposes the WRITE bit but not the TYPE field, so write-speed descriptors are unreachable; read and write are two calls, WRITE=0/1). MEDIA-DEPENDENT: performance reflects the loaded medium, so this is null when no media is loaded or the drive reported no descriptors in either direction (zero is data, not error). Spec-derived descriptor layout (no in-repo capture yet); a real GET PERFORMANCE capture is a falsifier per the hardware ADR.",
-      "required": ["descriptor_count", "max_read_kbps", "max_write_kbps"],
-      "additionalProperties": false,
-      "properties": {
-        "descriptor_count": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Number of performance descriptors in the read-direction reply."
-        },
-        "max_read_kbps": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Maximum read performance (kB/s) across the WRITE=0 descriptors."
-        },
-        "max_write_kbps": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Maximum write performance (kB/s) across the WRITE=1 descriptors (0 on a read-only drive / non-writable medium)."
-        }
-      }
     },
     "mechanical": {
       "type": ["object", "null"],

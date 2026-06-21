@@ -32,11 +32,6 @@
     {"code": "0x04e0", "name": "mmc_6"}
   ],
   "firmware_date": null,
-  "speeds": {
-    "descriptor_count": 4,
-    "max_read_kbps": 10560,
-    "max_write_kbps": 8310
-  },
   "mechanical": {
     "loading_mechanism": "tray",
     "can_eject": true,
