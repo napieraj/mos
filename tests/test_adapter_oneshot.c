@@ -767,30 +767,56 @@ TEST(adapter_tray_cdbs_pinned_byte_for_byte)
     return rc;
 }
 
-TEST(adapter_tray_eject_force_unmounts_and_ejects)
+TEST(adapter_tray_eject_graceful_unmounts_and_ejects)
 {
-    /* `tray eject --force` is name-semantics (diskutil-class), enabled at the
-       library: a mounted disc makes the first eject's ObtainExclusiveAccess
-       return BUSY; --force force-unmounts the volume (DADiskUnmount clears the
-       mount) and reconverges on the eject CDB, which now succeeds → DONE. The
-       SELECTOR gate (index/regid opt-in) lives in cli/tray.c, not here. */
+    /* `tray eject` GRACEFULLY unmounts a mounted (idle) disc, then ejects — BOTH
+       the default and --force (force only adds LOCK clearing, never fs forcing).
+       The mount makes the first eject's ObtainExclusiveAccess BUSY; the graceful
+       DADiskUnmount clears the idle mount; the re-eject succeeds → DONE. */
     mos_fake_reset();
-    mos_fake_set_mounted_busy(true);     /* first eject sees the mount as BUSY */
     mos_error err = MOS_ERR_IO;
     mos_handle_t *h = mos_open_by_index(1, &err);
     EXPECT(h != NULL);
 
+    /* Default (no force) now unmounts gracefully (matching `drutil eject`). */
+    mos_fake_set_mounted_busy(true);
     mos_tray_outcome out = (mos_tray_outcome)-1;
-    EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/true, &out, NULL));
+    EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/false, &out, NULL));
     EXPECT_EQ(MOS_TRAY_DONE, out);
-    /* The re-eject took the exclusive lock once and released it (the BUSY first
-       attempt never acquired); balance is clean. */
     EXPECT_EQ(0, mos_fake_lock_balance());
 
-    /* Without --force, the same mount surfaces as MOS_ERR_BUSY (unchanged). */
+    /* --force takes the SAME graceful path on a mount (force is for LOCKS). */
     mos_fake_set_mounted_busy(true);
     out = (mos_tray_outcome)-1;
+    EXPECT_EQ(MOS_OK, mos_tray_eject(h, /*force=*/true, &out, NULL));
+    EXPECT_EQ(MOS_TRAY_DONE, out);
+    EXPECT_EQ(0, mos_fake_lock_balance());
+
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_tray_eject_busy_fs_surfaces_busy_never_forces)
+{
+    /* A BUSY filesystem (open handles): the graceful DADiskUnmount DISSENTS, the
+       mount stays, and mos surfaces MOS_ERR_BUSY — it NEVER forces. True for BOTH
+       the default and --force (--force clears LOCKS, never fights the fs). This is
+       the whole point: mos has no data-loss path. */
+    mos_fake_reset();
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    mos_fake_set_mounted_busy(true);
+    mos_fake_set_unmount_refused(true);   /* graceful unmount dissents (busy fs) */
+
+    mos_tray_outcome out = (mos_tray_outcome)-1;
     EXPECT_EQ(MOS_ERR_BUSY, mos_tray_eject(h, /*force=*/false, &out, NULL));
+    EXPECT_EQ(0, mos_fake_lock_balance());
+
+    /* --force does not change it: still BUSY, the mount untouched (no force). */
+    out = (mos_tray_outcome)-1;
+    EXPECT_EQ(MOS_ERR_BUSY, mos_tray_eject(h, /*force=*/true, &out, NULL));
     EXPECT_EQ(0, mos_fake_lock_balance());
 
     mos_close(h);
@@ -849,16 +875,30 @@ TEST(adapter_tray_refused_other_carries_its_sense)
 
 TEST(adapter_da_unmount_is_name_based)
 {
-    /* Force-unmount is NAME semantics (diskutil-class): mos_internal_da_unmount
-       unmounts the disc currently named "diskN", with no identity bind — the
-       public DA API can't provide one (the daemon re-resolves by name; verified
-       in DADisk.c). The consent against a reused name is the CLI selector gate,
-       not a library bind. Here we pin the library contract: a non-empty name
-       unmounts (fake DADiskUnmount succeeds), degenerate names fail closed. */
+    /* The GRACEFUL unmount is BY NAME (diskutil semantics): mos_internal_da_unmount
+       unmounts the disc currently named "diskN". With a graceful unmount the
+       wrong-target name-reuse is harmless (no force, no data loss), so no identity
+       bind is needed. Here we pin the library contract: a non-empty name attempts
+       the unmount (fake succeeds on an idle disc), degenerate names fail closed. */
     mos_fake_reset();
     EXPECT(mos_internal_da_unmount("disk4"));   /* succeeds by name */
     EXPECT(!mos_internal_da_unmount(NULL));      /* no name: false */
     EXPECT(!mos_internal_da_unmount(""));        /* empty name: false */
+    return 0;
+}
+
+TEST(adapter_da_unmount_bounded_when_callback_never_fires)
+{
+    /* F1 regression: when the unmount callback never arrives (a void
+       DASessionScheduleWithRunLoop failure / wedged daemon), the bounded
+       run-loop wait in mos_internal_da_unmount must return false rather than
+       hang forever. The fake schedules no real source, so CFRunLoopRunInMode's
+       private mode is empty and returns kCFRunLoopRunFinished at once — the
+       fast-false path. That this test RETURNS at all is the assertion the old
+       DISPATCH_TIME_FOREVER wait would have failed. */
+    mos_fake_reset();
+    mos_fake_set_unmount_never_completes(true);
+    EXPECT(!mos_internal_da_unmount("disk4"));   /* bounded false, no hang */
     return 0;
 }
 
@@ -967,8 +1007,10 @@ int main(void)
     RUN(adapter_disc_id_decodes_and_fails_closed);
     RUN(adapter_feature_enumeration_order_and_stop);
     RUN(adapter_tray_cdbs_pinned_byte_for_byte);
-    RUN(adapter_tray_eject_force_unmounts_and_ejects);
+    RUN(adapter_tray_eject_graceful_unmounts_and_ejects);
+    RUN(adapter_tray_eject_busy_fs_surfaces_busy_never_forces);
     RUN(adapter_da_unmount_is_name_based);
+    RUN(adapter_da_unmount_bounded_when_callback_never_fires);
     RUN(adapter_tray_locked_eject_classifies_refused_locked);
     RUN(adapter_tray_refused_other_carries_its_sense);
     RUN(adapter_tray_exclusive_denied_is_negative_error);

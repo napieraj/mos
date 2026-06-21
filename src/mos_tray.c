@@ -55,23 +55,17 @@ static const uint8_t cdb_lock_persist  [6] = { 0x1E, 0x00, 0x00, 0x00, 0x03, 0x0
 #define MOS_TRAY_PREVENT_TIMEOUT_MS 2000u
 #define MOS_TRAY_MOTION_TIMEOUT_MS  5000u
 
-/* `tray eject --force` is DATA-LOSS CAPABLE: on a mounted disc it force-unmounts
-   the volume, then ejects ("open no matter what"). It operates by NAME, exactly
-   like `diskutil unmountDisk` — the daemon resolves the unmount target by the BSD
-   name at request time (verified first-hand in DiskArbitration's DADisk.c:
-   DADiskCreateFromIOMedia reads kIOBSDNameKey and delegates to
-   DADiskCreateFromBSDName, and the DADiskRef stores only the name), so mos cannot
-   bind the daemon's action to an exact IOMedia identity and does not pretend to.
-   These are honest name semantics: a `diskN` whose name was reassigned in the
-   request window is unmounted as-named, the same residual diskutil ships.
+/* `tray eject` GRACEFULLY unmounts a mounted disc before ejecting, and mos NEVER
+   forces the filesystem (no kDADiskUnmountOptionForce, no killing of open file
+   handles): a busy volume surfaces MOS_ERR_BUSY, exactly like `diskutil
+   unmountDisk diskN`. `--force` adds ONE thing — it clears a tray PREVENT LOCK in
+   the way (basic + persistent Prevent); it does not touch the filesystem.
 
-   The SELECTOR-level safety lives in the CLI (cli/tray.c): force is the default
-   only for an explicit bsd-node selector (or the sole-drive case), where the user
-   named the disc; an ephemeral positional index or an identity registry-id
-   requires the MOS_FORCE_BY_IDENTITY opt-in and otherwise gets a redirect to the
-   bsd-node form. The library exposes the capability; the consumer owns the
-   policy. See the AGENTS.md ADR "tray eject --force = name semantics, gated by
-   selector". */
+   The unmount is by NAME (DiskArbitration resolves the target by BSD name at
+   request time — DADisk.c). With a GRACEFUL unmount that name reuse is HARMLESS:
+   a reassigned `diskN` either cleanly unmounts an idle disc or fails on a busy
+   one — no data loss either way, so no identity bind and no CLI selector gate are
+   needed. Rationale: the AGENTS.md force-unmount ADR chain. */
 
 mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
                                 mos_tray_outcome *outcome, uint8_t sense_out[3])
@@ -102,18 +96,23 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
 {
     if (!h || !out) return MOS_ERR_INVALID_ARG;
 
-    /* ONE flow. Every eject grabs exclusive access (in mos_internal_raw_cdb) and issues
-       the CDB; a plain eject reports the result verbatim. --force diverges only
-       on a CLEARABLE failure and then RECONVERGES on the same eject CDB:
+    /* ONE flow, GRACEFUL by design. Every eject grabs exclusive access (in
+       mos_internal_raw_cdb) and issues the CDB. On a CLEARABLE failure the flow
+       clears the blocker and RECONVERGES on the same eject CDB:
 
          - MOS_ERR_BUSY = a Finder/system mount holds exclusive access
            (SCSITaskLib: "media is still mounted"; mos_pure.c maps it,
-           mos_scsi.c static-asserts the constant) -> force-unmount, re-eject.
-         - REFUSED_LOCKED = a basic Prevent lock refused the eject CDB -> clear
-           BOTH Prevent states (basic then persistent, so nothing is left
-           locked when a lock was in the way), re-eject.
+           mos_scsi.c static-asserts the constant) -> GRACEFUL unmount, re-eject.
+           BOTH the default and --force do this; the unmount is NEVER forced, so a
+           busy filesystem (open handles) leaves the mount and surfaces
+           MOS_ERR_BUSY, exactly like `diskutil unmountDisk diskN`. mos never
+           fights the filesystem — it only surfaces the error.
+         - REFUSED_LOCKED = a basic Prevent lock refused the eject CDB. --force
+           ONLY: clear BOTH Prevent states (basic then persistent, so nothing is
+           left locked), re-eject. The DEFAULT returns REFUSED_LOCKED untouched —
+           `--force` means "open past the LOCK", never past the filesystem.
 
-       The one failure --force cannot clear is MOS_ERR_EXCLUSIVE_ACCESS = another
+       The one failure nothing here clears is MOS_ERR_EXCLUSIVE_ACCESS = another
        userland client (no SCSI preempt exists): it falls through and surfaces,
        tray shut. At most two blockers (mount, lock) stack, so the loop is
        bounded at two passes. Each CDB grabs/releases exclusive access per call
@@ -124,24 +123,26 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
        only when a lock actually blocked, never issuing a command it can't know
        it needs.) */
     mos_error e = mos_internal_tray_cmd(h, cdb_eject, out, sense);
-    if (!force) return e;
 
     for (int pass = 0; pass < 2; pass++) {
         if (e == MOS_ERR_BUSY) {                          /* Finder/system mount */
-            /* Re-resolve the CURRENT media under h->svc so we unmount the disc
-               actually in THIS drive now — the cached bsd_unit can be stale
-               (opened empty, or a swap since the last query). media gone
-               (bsd_unit < 0) → fail closed (nothing to clear). The unmount is by
-               NAME (diskutil semantics; see the header) — no identity bind,
-               because the daemon re-resolves by name regardless, and the
-               selector gate in cli/tray.c is where the policy lives. */
+            /* GRACEFUL unmount (both default and --force). Re-resolve the CURRENT
+               media under h->svc so we unmount the disc actually in THIS drive
+               now — the cached bsd_unit can be stale (opened empty, or a swap
+               since the last query). media gone (bsd_unit < 0) → fail closed.
+               The unmount is by NAME (diskutil semantics; see mos_da.c) and is
+               NEVER forced, so a busy filesystem or an uncleared mount breaks out
+               and surfaces the original MOS_ERR_BUSY. With a graceful unmount the
+               wrong-target diskN-reuse race is harmless (fails on a busy disc,
+               cleanly unmounts an idle one — no data loss), so no identity bind
+               or selector gate is needed. */
             mos_internal_refresh_media_identity(h);
             char name[24];
             if (h->bsd_unit < 0 ||
                 !mos_bsd_name_format(h->bsd_unit, name, sizeof name) ||
                 !mos_internal_da_unmount(name))
-                break;                                    /* mount uncleared */
-        } else if (e == MOS_OK && *out == MOS_TRAY_REFUSED_LOCKED) {  /* basic Prevent */
+                break;                                    /* busy/uncleared → surface BUSY */
+        } else if (force && e == MOS_OK && *out == MOS_TRAY_REFUSED_LOCKED) {  /* --force: basic Prevent */
             /* Clear both Prevent states so nothing is left locked. A TRANSPORT
                failure (negative) clearing either state means the clear did NOT
                happen, so the "nothing left locked" contract cannot be met —
@@ -160,7 +161,7 @@ mos_error mos_tray_eject(mos_handle_t *h, bool force,
                 break;
             }
         } else {
-            break;   /* DONE, EXCLUSIVE_ACCESS (peer client), or transport — stop */
+            break;   /* DONE; REFUSED_LOCKED on the default path; EXCLUSIVE_ACCESS; transport */
         }
         e = mos_internal_tray_cmd(h, cdb_eject, out, sense);   /* reconverge */
     }

@@ -175,19 +175,16 @@ bool mos_internal_da_volume(uint64_t media_id,
                             char *name_buf, size_t name_cap,
                             char *path_buf, size_t path_cap);
 
-/* Force-unmount every volume on whole-disk "diskN" via DiskArbitration
-   (kDADiskUnmountOptionForce | kDADiskUnmountOptionWhole). True on success.
-   The SOLE DA action mos performs (async DADiskUnmount, awaited on a semaphore),
-   used only by `tray eject --force`. Returns false when DA is opted out at build
-   time (capability absent) — the force eject then reports the mount as BUSY.
+/* GRACEFULLY unmount every volume on whole-disk "diskN" via DiskArbitration
+   (kDADiskUnmountOptionWhole — NOT Force). True on success; FALSE on a busy
+   filesystem (the caller surfaces MOS_ERR_BUSY) — mos NEVER forces. The SOLE DA
+   action mos performs (async DADiskUnmount, awaited on a semaphore), used by
+   `tray eject` (both default and --force). Returns false when DA is opted out at
+   build time (capability absent) — the eject then reports the mount as BUSY.
 
-   NAME SEMANTICS: unmounts the disc currently named `bsd_name`, exactly like
-   `diskutil unmountDisk` — there is no identity bind because the public DA API
-   cannot provide one (diskarbitrationd re-resolves the name at request time; see
-   the call-site comment in mos_da.c). The consent / safety against a reused
-   "diskN" is the SELECTOR GATE in cli/tray.c (explicit bsd-node / sole-drive by
-   default; an ephemeral index or identity registry-id needs MOS_FORCE_BY_IDENTITY),
-   not a library-level bind. */
+   By NAME, like `diskutil unmountDisk` (diskarbitrationd re-resolves at request
+   time; mos_da.c). With a graceful unmount the reused-`diskN` race is harmless
+   (no force, no data loss), so there is no identity bind and no selector gate. */
 bool mos_internal_da_unmount(const char *bsd_name);
 
 /* Extract one device's snapshot (registry id, bsd unit, identity) from a

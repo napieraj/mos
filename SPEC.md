@@ -317,7 +317,7 @@ deployment floor.
 | `DADiskCreateFromBSDName` | DADisk.h | `(allocator, session, const char *)` → `DADiskRef` (CFRelease) | the force-unmount target. |
 | `DADiskCopyDescription` | DADisk.h | `(DADiskRef)` → `CFDictionaryRef` (CFRelease) | volume name/path read (keys below). Header note: contacts the daemon for the LATEST description (resolved by the ref's name), unless called inside a registered DA callback. |
 | `DADiskCopyIOMedia` | DADisk.h | `(DADiskRef)` → `io_service_t` (**IOObjectRelease**) | volume lookup's **endpoint identity guard** (A2): the IOMedia the ref currently resolves to; mos compares its `IORegistryEntryGetRegistryEntryID` to `media_id` and commits the name/path only on a match. Valid for a READ (no later daemon re-resolution); the unmount ACTION cannot use it (the daemon re-resolves the name AFTER any check — AGENTS TOCTOU addendum). |
-| `DADiskUnmount` | DiskArbitration.h | `(disk, options, callback, context)` → `void` (async; callback `(disk, dissenter, context)`, NULL dissenter = success) | the **SINGLE DA action**: `tray eject --force` with `kDADiskUnmountOptionForce` (`0x00080000`) `\| kDADiskUnmountOptionWhole` (`0x1`). Data-loss-capable, opt-in. Made synchronous via the queue + semaphore (the unbounded-wait KNOWN ISSUE if `DASessionSetDispatchQueue` silently fails — post-tag, ROADMAP). |
+| `DADiskUnmount` | DiskArbitration.h | `(disk, options, callback, context)` → `void` (async; callback `(disk, dissenter, context)`, NULL dissenter = success, non-NULL = busy) | the **SINGLE DA action**: `tray eject`'s GRACEFUL unmount with `kDADiskUnmountOptionWhole` (`0x1`) — **never** `Force`, so a busy filesystem dissents and mos surfaces `MOS_ERR_BUSY` (no data loss; both default and --force). Made synchronous via the queue + semaphore (the unbounded-wait KNOWN ISSUE if `DASessionSetDispatchQueue` silently fails — post-tag, ROADMAP). |
 
 Description keys (DADisk.h, both `macos(10.4)`): `kDADiskDescriptionVolumeNameKey`
 (CFString → `volume_name`), `kDADiskDescriptionVolumePathKey` (CFURL →
@@ -327,7 +327,7 @@ zero-command off the IOKit registry instead, not via DA. Unused DADisk.h surface
 `DADiskCreateFromVolumePath` (`macos(10.7)`), `DADiskGetBSDName`,
 `DADiskCopyWholeDisk`, `DADiskGetTypeID`. Privilege: every DA read takes no
 entitlement / TCC / exclusive access (scope-doctrine layer 3); `DADiskUnmount` is
-the only action and the only data-loss path.
+the only DA action, and it is GRACEFUL (no `Force`) — mos has no data-loss path.
 
 ### DiscRecording device directory — enumeration + identity (`mos_dr.c`)
 

@@ -190,9 +190,9 @@ rewritables. The three are independently nullable for the disc you have.
 The one verb that **changes** drive state; every query path stays reporter-only.
 
 ```sh
-mos tray eject 1                 # eject (START STOP UNIT)
-mos tray eject disk4 --force     # open no matter what: force-unmount a mount +
-                                 #   clear any lock, then eject (data-loss-capable)
+mos tray eject 1                 # graceful unmount (if mounted) + eject
+mos tray eject disk4 --force     # also clear a tray Prevent LOCK in the way,
+                                 #   then eject (never forces the filesystem)
 mos tray close 1
 mos tray lock 1                  # prevent removal until an unlock
 mos tray lock 1 --persistent     # survives process exit — an operator eject
@@ -202,20 +202,17 @@ mos tray unlock 1                # add --persistent to release a persistent lock
 
 `--json` emits `mos.tray.v1` with an `outcome`: `done`, `refused_locked` (an
 eject hit a lock — a reported fact, still exit 0), or `refused_other` (carries
-the SCSI `sense` triple). A plain eject on a mounted disc returns busy (exit 75);
-`mos` does not unmount for you.
+the SCSI `sense` triple). A plain eject **gracefully unmounts** a mounted disc
+first (exactly like `diskutil unmountDisk diskN` / `drutil eject`) and then
+ejects; if the filesystem is **busy** (open file handles) the unmount fails and
+the eject returns busy (exit 75) — `mos` **never** forces the filesystem, so it
+never kills your open files. (Close the files, or `diskutil unmountDisk` first.)
 
-`--force` (eject only) opens **no matter what**: it force-unmounts a mounted
-volume (data-loss-capable — it kills open file handles) and clears a Prevent
-lock in the way, then ejects. The unmount acts **by name**, exactly like
-`diskutil unmountDisk diskN` — it unmounts whatever disc currently carries the
-selected `diskN`. Because that is destructive, force is allowed by default only
-when you named the disc unambiguously: a **BSD-form** selector (`disk4`,
-`/dev/disk4`) or the sole attached drive. Through an **index** or **registry_id**
-selector — where an ephemeral position or identity can resolve to a different
-`diskN` than you mean — force is refused with a redirect to the BSD form, unless
-you set `MOS_FORCE_BY_IDENTITY=1`. The one blocker force can't clear is another
-program holding the drive exclusively (`outcome: exclusive_access`).
+`--force` (eject only) adds exactly **one** thing: it clears a tray **Prevent
+LOCK** in the way (both the basic and persistent Prevent states) so a locked
+tray opens. It does **not** touch the filesystem — a busy disc still reports
+busy under `--force`. The one blocker it can't clear is another program holding
+the drive exclusively (`outcome: exclusive_access`).
 
 A lock **persists past the process** — any later
 `mos tray unlock` recovers it. Lock several drives with a loop over `mos list`
