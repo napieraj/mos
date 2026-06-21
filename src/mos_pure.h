@@ -276,6 +276,34 @@ typedef struct mos_session_layout {  /* tagged: mos.h forward-declares opaquely 
 bool mos_internal_cdtoc_parse(const uint8_t *buf, size_t len,
                               mos_session_layout *out);
 
+/* ---- ATIP decode (mos_atip.c) ------------------------------------- *
+ *
+ * Absolute Time In Pre-groove — the CD-R/RW manufacturer/media identity in
+ * the disc's pre-groove, read via READ TOC/PMA/ATIP Format=0100b (the
+ * convenience ReadTableOfContents mos already issues for the TOC). CD
+ * recordable only; ROM/DVD/BD carry no ATIP. mos surfaces the RAW spec fields
+ * only — the MID-to-manufacturer NAME table is the Orange Book's, curated and
+ * consumer-side (the per-device table the hardware-role ADR forbids).
+ * MMC-6 r02g §6.25, Table 488. */
+typedef struct mos_atip {        /* tagged: mos.h forward-declares opaquely */
+    bool    uru;            /* Unrestricted Use Disc bit (byte5 bit6)          */
+    uint8_t disc_type;      /* byte6 bit6 (0 = CD-R, 1 = CD-RW)                */
+    uint8_t disc_sub_type;  /* byte6 bits5-3 (speed/class subdivision)         */
+    uint8_t reference_speed;/* byte4 bits2-0                                   */
+    /* ATIP Start Time of Lead-in (M:S:F) — the manufacturer/MID identity. */
+    uint8_t lead_in_min, lead_in_sec, lead_in_frame;
+    /* Last Possible Start Time of Lead-out (M:S:F) — nominal capacity. */
+    uint8_t lead_out_min, lead_out_sec, lead_out_frame;
+} mos_atip;
+
+/* Parse a READ TOC/PMA/ATIP Format=0100b reply (MMC-6 §6.25 Table 488) into
+   *out. Returns true iff the reply is long enough to carry the ATIP descriptor
+   through the lead-out time (response byte 14). The device-reported ATIP Data
+   Length (bytes 0-1, BE) may only SHRINK the trusted region (dual-length rule);
+   no payload byte is used as an offset. Fail-closed: a short/hostile reply
+   returns false and leaves *out zeroed. Pure, no-OOB — fuzz/ASan-gated. */
+bool mos_internal_atip_parse(const uint8_t *buf, size_t len, mos_atip *out);
+
 /* Decode the SAME CDTOC blob into the per-track mos_toc (format-0000b's shape):
    first/last track, lead-out (the highest session's A2), and {track, adr,
    control, start_lba} per track. This is what lets the cached full-TOC be the

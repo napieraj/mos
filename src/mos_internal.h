@@ -99,6 +99,9 @@ struct mos_handle {
        terms; plain values, no borrowed pointers. */
     struct mos_session_layout session_layout;
 
+    /* Handle-owned ATIP result (mos_query_atip), CD-R/RW only. */
+    struct mos_atip           atip;
+
     /* Handle-owned capacity result (mos_query_capacity). Assembled from
        the per-call-refreshed IOMedia size above + a fresh track_info read +
        (for formattable profiles) a READ FORMAT CAPACITIES convenience read. */

@@ -1943,3 +1943,44 @@ fail-closed → bits false) or a bridge that mis-sets the bits — each lands as
 fixture + dated note, never a per-device special-case. The layout is spec-built
 (no in-repo capture yet); a real GET CONFIGURATION capture carrying 0004h is the
 standing falsifier.
+
+## ADR: CD-R/RW ATIP surfaced on `mos metadata` — raw pre-groove identity, the
+## CD analog of `disc_structure`; the manufacturer NAME stays consumer-side
+## (2026-06-21)
+
+`mos.metadata.v1.disc` gains a nullable `atip` object — the Absolute Time In
+Pre-groove of a CD-R/RW, read via READ TOC/PMA/ATIP **Format=0100b** (the
+convenience `ReadTableOfContents` mos already issues; built to MMC-6 r02g §6.25
+Table 488, `mos_atip.c`). This records why it is in-doctrine and where the line
+is drawn.
+
+**Why it earns a block.** mos surfaces a disc-maker identity for DVD/BD
+(`disc_structure.manufacturer_id` / `media_type_id`) but had **no CD-R/RW
+equivalent** — an asymmetric coverage hole every CD tool fills (`cdrecord
+-atip`, cdrdao). ATIP carries the CD-R/RW manufacturer/media identity in the
+lead-in start time, the disc type/sub-type, the unrestricted-use bit, and the
+last-possible lead-out (nominal capacity). It completes the per-media-class
+identity story symmetrically. Per-disc → `mos metadata` (the disc fingerprint),
+CD-only, null on pressed CD / DVD / BD.
+
+**The hard line: raw fields only, no manufacturer NAME.** The spec is explicit
+(§6.25.3.6.2 "For specific field values and meanings, see [CD-Ref6-9]") that the
+MID→manufacturer mapping lives in the Orange Book, not MMC — it is a curated
+per-device table, exactly the kind the hardware-role ADR keeps out of mos and
+ROADMAP marks permanently consumer-side (like MusicBrainz/dvdid). mos emits the
+raw lead-in M:S:F; a consumer keys the Orange Book table off it. Same posture as
+the DVD/BD `disc_structure` (raw maker code, no name table).
+
+**Scope-doctrine compliance.** Layer 1 untouched — Format=0100b rides the
+**convenience** `ReadTableOfContents` (the same method the CD TOC and CD-TEXT
+reads use), so NO new raw CDB; the one-of-four count is unchanged, no exclusive
+access. CD-only, gated on the cd profile class so other media never eat a
+guaranteed-failing read (a pressed CD answers CHECK CONDITION → `atip` null).
+Layer 2/3 unchanged.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): the
+exact field encodings on a real CD-R (the layout is spec-built to Table 488 with
+no in-repo capture yet) — a `mos probe --capture` ATIP reply is the standing
+falsifier, landing as a fixture + dated note, never a per-device special-case.
+The pure parser fails closed on a short/hostile reply (atip null), so a
+non-conformant bridge degrades cleanly.

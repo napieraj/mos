@@ -135,6 +135,37 @@ mos_error mos_query_cdtext(mos_handle_t *h, const mos_cdtext **out)
     return MOS_OK;
 }
 
+mos_error mos_query_atip(mos_handle_t *h, const mos_atip **out)
+{
+    if (out) *out = NULL;
+    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
+
+    /* READ TOC/PMA/ATIP format 0100b (ATIP). The descriptor is small and
+       fixed; 64 bytes holds it with the A1/A2/A3/S4 tail, and the reply's own
+       ATIP Data Length only shrinks the parse (O-4). CD-R/RW only — a pressed
+       CD / DVD / BD answers CHECK CONDITION, surfaced as MOS_ERR_IO. The
+       track/session parameter is reserved here — passed 0. */
+    uint8_t         buf[64] = {0};
+    SCSITaskStatus  st      = 0;
+    SCSI_Sense_Data sd      = {0};
+
+    IOReturn rc = (*h->mmc)->ReadTableOfContents(
+        h->mmc, 0 /*LBA*/, 0x04 /*ATIP*/, 0 /*reserved*/,
+        buf, (UInt16)sizeof(buf), &st, &sd);
+
+    if (rc != kIOReturnSuccess || st != kSCSITaskStatus_GOOD) {
+        return (rc != kIOReturnSuccess)
+                   ? mos_internal_ioreturn_to_mos_error(rc)
+                   : MOS_ERR_IO;
+    }
+
+    if (!mos_internal_atip_parse(buf, sizeof(buf), &h->atip)) {
+        return MOS_ERR_IO;   /* no ATIP / reply too short */
+    }
+    *out = &h->atip;
+    return MOS_OK;
+}
+
 mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
 {
     if (out) *out = NULL;

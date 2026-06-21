@@ -95,6 +95,7 @@ static struct {
     uint32_t cfg_status;        uint8_t cfg[64];  size_t cfg_len;
     uint32_t rdi_status;        uint8_t rdi[64];  size_t rdi_len;
     uint32_t toc_status;        uint8_t toc[804]; size_t toc_len;
+    uint32_t atip_status;       uint8_t atip[64]; size_t atip_len;
     uint32_t ds_status;         uint8_t ds[4096]; size_t ds_len;
     uint32_t rti_status;        uint8_t rti[64];  size_t rti_len;
     uint32_t perf_status;       uint8_t perf[64]; size_t perf_len;
@@ -275,6 +276,14 @@ void mos_fake_set_toc_reply(uint32_t task_status,
     g.toc_status = task_status;
     g.toc_len = (len > sizeof g.toc) ? sizeof g.toc : len;
     if (bytes && g.toc_len) memcpy(g.toc, bytes, g.toc_len);
+}
+
+void mos_fake_set_atip_reply(uint32_t task_status,
+                             const uint8_t *bytes, size_t len)
+{
+    g.atip_status = task_status;
+    g.atip_len = (len > sizeof g.atip) ? sizeof g.atip : len;
+    if (bytes && g.atip_len) memcpy(g.atip, bytes, g.atip_len);
 }
 
 void mos_fake_set_disc_structure_reply(uint32_t task_status,
@@ -728,10 +737,23 @@ static IOReturn mmc_ReadTableOfContents(void *self, SCSICmdField1Bit MSF,
                                         SCSITaskStatus *taskStatus,
                                         SCSI_Sense_Data *senseDataBuffer)
 {
-    (void)self; (void)MSF; (void)FORMAT; (void)TRACK_SESSION_NUMBER;
+    (void)self; (void)MSF; (void)TRACK_SESSION_NUMBER;
     (void)senseDataBuffer;
     if (g.method_rc[MOS_FAKE_METHOD_READTOC]) {
         return (IOReturn)g.method_rc[MOS_FAKE_METHOD_READTOC];
+    }
+    /* Format 0100b (ATIP) returns its own canned reply when a scenario set one;
+       otherwise it falls through to the default (the TOC bytes), which the ATIP
+       parser rejects → atip null, the pressed-CD behavior. Other formats
+       (TOC 0000b, CD-TEXT 0101b) keep the historical single-reply behavior. */
+    if (FORMAT == 0x04 && g.atip_len) {
+        if (buffer && bufferSize) {
+            size_t n = (g.atip_len < (size_t)bufferSize) ? g.atip_len : (size_t)bufferSize;
+            memset(buffer, 0, bufferSize);
+            if (n) memcpy(buffer, g.atip, n);
+        }
+        if (taskStatus) *taskStatus = (SCSITaskStatus)g.atip_status;
+        return kIOReturnSuccess;
     }
     if (buffer && bufferSize) {
         size_t n = (g.toc_len < (size_t)bufferSize) ? g.toc_len : (size_t)bufferSize;

@@ -50,7 +50,8 @@
         "disc_structure",
         "track_info",
         "cdtext",
-        "session_layout"
+        "session_layout",
+        "atip"
       ],
       "additionalProperties": false,
       "properties": {
@@ -610,6 +611,58 @@
                 ],
                 "minimum": 0,
                 "description": "Session lead-out start LBA (POINT 0xA2 MSF, converted minus the 150-frame pregap), or null when the session carried no 0xA2 descriptor."
+              }
+            }
+          }
+        },
+        "atip": {
+          "type": ["object", "null"],
+          "description": "Absolute Time In Pre-groove — the CD-R/RW manufacturer/media identity in the disc's pre-groove, read via READ TOC/PMA/ATIP Format=0100b (the convenience READ TOC mos already issues; MMC-6 §6.25, Table 488). CD RECORDABLE ONLY: null on pressed CD / DVD / BD (no ATIP) and on any disc whose drive answers the format with CHECK CONDITION. mos surfaces the RAW spec fields only; the MID-to-manufacturer NAME table is the Orange Book's (curated, consumer-side — mos ships no per-device identity table). Closed field set.",
+          "required": ["disc_type", "disc_sub_type", "uru", "reference_speed", "lead_in", "lead_out"],
+          "additionalProperties": false,
+          "properties": {
+            "disc_type": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "ATIP byte 6 bit 6: 0 = CD-R, 1 = CD-RW."
+            },
+            "disc_sub_type": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7,
+              "description": "ATIP byte 6 bits 5-3: the speed/class subdivision (raw; meaning per the Orange Book)."
+            },
+            "uru": {
+              "type": "boolean",
+              "description": "Unrestricted Use Disc bit (ATIP byte 5 bit 6) — derived from the Application Code; false marks a restricted-use (e.g. for-audio / authoring) disc."
+            },
+            "reference_speed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7,
+              "description": "ATIP byte 4 bits 2-0: the media's encoded recommended write speed (raw)."
+            },
+            "lead_in": {
+              "type": "object",
+              "required": ["min", "sec", "frame"],
+              "additionalProperties": false,
+              "description": "ATIP Start Time of Lead-in (M:S:F) — the manufacturer/MID identity. Raw spec bytes; the M:S:F triple keys the Orange Book manufacturer table consumer-side.",
+              "properties": {
+                "min": {"type": "integer", "minimum": 0, "maximum": 255},
+                "sec": {"type": "integer", "minimum": 0, "maximum": 255},
+                "frame": {"type": "integer", "minimum": 0, "maximum": 255}
+              }
+            },
+            "lead_out": {
+              "type": "object",
+              "required": ["min", "sec", "frame"],
+              "additionalProperties": false,
+              "description": "ATIP Last Possible Start Time of Lead-out (M:S:F) — the nominal disc capacity. Raw spec bytes.",
+              "properties": {
+                "min": {"type": "integer", "minimum": 0, "maximum": 255},
+                "sec": {"type": "integer", "minimum": 0, "maximum": 255},
+                "frame": {"type": "integer", "minimum": 0, "maximum": 255}
               }
             }
           }

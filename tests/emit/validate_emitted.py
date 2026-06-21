@@ -39,6 +39,7 @@ if "date-time" not in _FORMAT_CHECKER.checkers:
 SCENARIOS = [
     ("metadata", "bd_mdisc",      "mos.metadata.v1"),
     ("metadata", "cd_mounted",    "mos.metadata.v1"),
+    ("metadata", "blank_cdr",     "mos.metadata.v1"),
     ("metadata", "not_ready",     "mos.metadata.v1"),
     ("drive",    "aacs_bd",       "mos.drive.v1"),
     ("drive",    "plain_dvd",     "mos.drive.v1"),

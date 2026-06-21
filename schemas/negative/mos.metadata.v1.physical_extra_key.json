@@ -50,7 +50,8 @@
     },
     "volume_name": null,
     "track_info": null,
-    "cdtext": null
+    "cdtext": null,
+    "atip": null
   },
   "bsd_node": "/dev/disk4"
 }

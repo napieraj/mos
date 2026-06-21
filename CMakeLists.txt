@@ -187,6 +187,7 @@ set(MOS_PURE_SOURCES
     src/mos_physstruct.c
     src/mos_trackinfo.c
     src/mos_cdtoc.c
+    src/mos_atip.c
     src/mos_formatcap.c
     src/mos_perf.c
     src/mos_modepage.c
@@ -359,6 +360,7 @@ if(MOS_BUILD_TESTS)
         tests/test_physstruct.c
         tests/test_trackinfo.c
         tests/test_cdtoc.c
+        tests/test_atip.c
         tests/test_formatcap.c
         tests/test_perf.c
         tests/test_modepage.c

@@ -814,6 +814,38 @@ uint8_t  mos_session_layout_last_track(const mos_session_layout *s, uint8_t i);
 bool     mos_session_layout_have_leadout(const mos_session_layout *s, uint8_t i);
 uint32_t mos_session_layout_leadout_lba(const mos_session_layout *s, uint8_t i);
 
+/* ---- ATIP (CD-R/RW pre-groove identity) -------------- */
+
+/* Result of an ATIP query. Opaque, handle-owned; valid until the next
+   mos_query_atip() call or mos_close(). */
+typedef struct mos_atip mos_atip;
+
+/*
+ * Read the Absolute Time In Pre-groove via READ TOC/PMA/ATIP Format=0100b (the
+ * non-exclusive convenience ReadTableOfContents mos already issues for the TOC)
+ * and decode the CD-R/RW manufacturer/media identity (MMC-6 §6.25, Table 488).
+ * CD RECORDABLE ONLY — pressed CD, DVD, and BD carry no ATIP; the command
+ * returns CHECK CONDITION there and this returns MOS_ERR_IO. mos surfaces the
+ * RAW spec fields only; the MID-to-manufacturer NAME table is the Orange Book's
+ * (curated, consumer-side). `out` REQUIRED (NULL => MOS_ERR_INVALID_ARG);
+ * MOS_ERR_IO when the disc carries no ATIP or the reply is too short.
+ */
+mos_error mos_query_atip(mos_handle_t *h, const mos_atip **out);
+
+/* Accessors. NULL-tolerant (NULL reads as 0/false). The lead-in M:S:F is the
+   manufacturer/MID identity; the last-possible lead-out M:S:F is the nominal
+   capacity. disc_type 0 = CD-R, 1 = CD-RW. Times are the raw spec bytes. */
+bool    mos_atip_uru(const mos_atip *a);
+uint8_t mos_atip_disc_type(const mos_atip *a);
+uint8_t mos_atip_disc_sub_type(const mos_atip *a);
+uint8_t mos_atip_reference_speed(const mos_atip *a);
+uint8_t mos_atip_lead_in_min(const mos_atip *a);
+uint8_t mos_atip_lead_in_sec(const mos_atip *a);
+uint8_t mos_atip_lead_in_frame(const mos_atip *a);
+uint8_t mos_atip_lead_out_min(const mos_atip *a);
+uint8_t mos_atip_lead_out_sec(const mos_atip *a);
+uint8_t mos_atip_lead_out_frame(const mos_atip *a);
+
 /* ---- Disc capacity ---------------------------------- */
 
 /* Result of a capacity query. Opaque, handle-owned; valid until the next

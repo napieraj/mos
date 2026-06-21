@@ -145,9 +145,11 @@ $ mos metadata 1
 
 Profile and media class, completion state (`blank` / `appendable` / `complete`),
 TOC, the registered disc-maker identity (e.g. `MILLEN`/`MR1` for Millenniata
-M-DISC), CD-TEXT, and a CD `session_layout`. In `--json`, the `disc` object is a
-closed, hashable fingerprint subtree — third-party IDs (MusicBrainz, AccurateRip,
-dvdid) derive from it client-side (see [Shell integration](#shell-integration)).
+M-DISC; for CD-R/RW the raw `atip` pre-groove identity — lead-in M:S:F, disc
+type, capacity), CD-TEXT, and a CD `session_layout`. In `--json`, the `disc`
+object is a closed, hashable fingerprint subtree — third-party IDs (MusicBrainz,
+AccurateRip, dvdid) derive from it client-side (see
+[Shell integration](#shell-integration)).
 
 ### `drive` — static drive facts
 

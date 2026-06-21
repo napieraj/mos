@@ -118,6 +118,26 @@ code; this table is the citation, not the parse.
   double-byte (DBCC / MS-JIS) text — a DBCC field reads as absent rather
   than mis-decoded as Latin-1.
 
+### `src/mos_atip.c` — READ TOC/PMA/ATIP format 0100b (ATIP)
+- **Spec:** MMC-6 r02g §6.25, Table 488 ("READ TOC/PMA/ATIP response data,
+  Format = 0100b"). Issued via the convenience `ReadTableOfContents`
+  (FORMAT=0x04), CD-R/RW only — pressed CD / DVD / BD answer CHECK CONDITION.
+- **Decoded (raw spec fields only):** URU (byte 5 bit 6), Disc Type (byte 6
+  bit 6), Disc Sub-Type (byte 6 bits 5-3), Reference Speed (byte 4 bits 2-0),
+  ATIP Start Time of Lead-in M:S:F (bytes 8-10 — the manufacturer/MID
+  identity) and Last Possible Start Time of Lead-out M:S:F (bytes 12-14 —
+  nominal capacity). Surfaced as `mos.metadata.v1.disc.atip`.
+- **Not decoded / deliberately consumer-side:** the MID-to-MANUFACTURER NAME
+  table (Orange Book [CD-Ref6-9], a curated per-device map the hardware-role
+  ADR keeps out of mos); the A1/A2/A3/S4 additional-information values; the
+  Indicative Target Writing Power. mos ships the raw M:S:F; a consumer keys
+  the Orange Book table off it.
+- **Bounds:** the device-reported ATIP Data Length (bytes 0-1, BE) may only
+  SHRINK the trusted region (dual-length rule); a reply shorter than 15 bytes
+  fails closed (no descriptor through the lead-out). No payload byte is an
+  offset. Spec-built — no in-repo capture yet; a real `mos probe --capture`
+  ATIP reply is the standing falsifier.
+
 ### `src/mos_modepage.c` — MODE SENSE(10) optical pages
 - **Spec:** page 0x2A is MMC-3 page-2A (CD/DVD Capabilities & Mechanical
   Status); page 0x01 is the SPC Read/Write Error Recovery page. Sub-page

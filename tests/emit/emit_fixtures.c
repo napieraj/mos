@@ -168,6 +168,21 @@ int main(int argc, char **argv)
         mos_fake_set_da_volume("Audio CD", "/Volumes/Audio CD");
         return mos_cli_run_metadata();
     }
+    if (strcmp(verb, "metadata") == 0 && strcmp(scn, "blank_cdr") == 0) {
+        common_drive_setup();
+        mos_fake_set_getconfig_reply(0x00, cfg,
+            build_getconfig(cfg, sizeof cfg, 0x0009 /*cd_r*/, false));
+        uint8_t rdi[34]; build_rdi(rdi, 0x00 /*blank*/, false, 1);
+        mos_fake_set_readdiscinfo_reply(0x00, rdi, sizeof rdi);
+        /* ATIP format 0100b reply (mirrors fixtures/readtoc_atip_cdr.bin):
+           CD-R, sub-type 2, URU, lead-in 97:24:01, lead-out 79:59:74. */
+        static const uint8_t atip[] = {
+            0x00,0x1A, 0x00,0x00, 0x51, 0x40, 0x90, 0x00, 97,24,1, 0x00,
+            79,59,74, 0x00, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+        };
+        mos_fake_set_atip_reply(0x00, atip, sizeof atip);
+        return mos_cli_run_metadata();
+    }
     if (strcmp(verb, "metadata") == 0 && strcmp(scn, "not_ready") == 0) {
         mos_fake_reset();
         mos_fake_set_bsd_unit(-1);

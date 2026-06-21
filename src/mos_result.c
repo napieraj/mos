@@ -674,6 +674,19 @@ uint32_t mos_session_layout_leadout_lba(const mos_session_layout *s, uint8_t i)
     return (e && e->have_leadout) ? e->leadout_lba : 0;
 }
 
+/* ---- mos_atip accessors (mos_query_atip) -------------------------- */
+
+bool    mos_atip_uru(const mos_atip *a)             { return a ? a->uru : false; }
+uint8_t mos_atip_disc_type(const mos_atip *a)       { return a ? a->disc_type : 0; }
+uint8_t mos_atip_disc_sub_type(const mos_atip *a)   { return a ? a->disc_sub_type : 0; }
+uint8_t mos_atip_reference_speed(const mos_atip *a) { return a ? a->reference_speed : 0; }
+uint8_t mos_atip_lead_in_min(const mos_atip *a)     { return a ? a->lead_in_min : 0; }
+uint8_t mos_atip_lead_in_sec(const mos_atip *a)     { return a ? a->lead_in_sec : 0; }
+uint8_t mos_atip_lead_in_frame(const mos_atip *a)   { return a ? a->lead_in_frame : 0; }
+uint8_t mos_atip_lead_out_min(const mos_atip *a)    { return a ? a->lead_out_min : 0; }
+uint8_t mos_atip_lead_out_sec(const mos_atip *a)    { return a ? a->lead_out_sec : 0; }
+uint8_t mos_atip_lead_out_frame(const mos_atip *a)  { return a ? a->lead_out_frame : 0; }
+
 /* ---- mos_capacity accessors (mos_query_capacity) ------------------- *
  * Plain values, NULL-tolerant. Two independent halves: have_media_size
  * gates the kernel IOMedia size; have_recordable gates the READ TRACK

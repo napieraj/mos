@@ -43,6 +43,7 @@
     "cdtext": null,
     "session_layout": [
       { "session": 1, "first_track": 1, "last_track": 2, "leadout_lba": 50000 }
-    ]
+    ],
+    "atip": null
   }
 }

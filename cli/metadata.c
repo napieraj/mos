@@ -43,6 +43,7 @@ typedef struct {
     const mos_track_info *ti;            /* NULL = unavailable          */
     const mos_cdtext     *ct;            /* NULL = non-CD or no CD-TEXT   */
     const mos_session_layout *sl;        /* NULL = non-CD or no cached TOC */
+    const mos_atip       *atip;          /* NULL = non-CD-R/RW or no ATIP   */
     bool                 mounted;
     char                 volume_name[256];
     char                 volume_path[1024];
@@ -293,6 +294,27 @@ static void emit_json(const metadata_doc *d)
     else
         fputs("null", stdout);
 
+    /* atip: the CD-R/RW pre-groove identity (READ TOC/PMA/ATIP format 0100b).
+       Object when present, null on pressed CD / DVD / BD (no ATIP). Raw spec
+       fields only. */
+    fputs(",\n    \"atip\": ", stdout);
+    if (d->atip) {
+        fprintf(stdout,
+                "{\"disc_type\": %u, \"disc_sub_type\": %u, \"uru\": %s, "
+                "\"reference_speed\": %u, "
+                "\"lead_in\": {\"min\": %u, \"sec\": %u, \"frame\": %u}, "
+                "\"lead_out\": {\"min\": %u, \"sec\": %u, \"frame\": %u}}",
+                mos_atip_disc_type(d->atip), mos_atip_disc_sub_type(d->atip),
+                mos_atip_uru(d->atip) ? "true" : "false",
+                mos_atip_reference_speed(d->atip),
+                mos_atip_lead_in_min(d->atip), mos_atip_lead_in_sec(d->atip),
+                mos_atip_lead_in_frame(d->atip),
+                mos_atip_lead_out_min(d->atip), mos_atip_lead_out_sec(d->atip),
+                mos_atip_lead_out_frame(d->atip));
+    } else {
+        fputs("null", stdout);
+    }
+
     fputs("\n  }\n}\n", stdout);
 }
 
@@ -386,9 +408,19 @@ static void emit_human(const metadata_doc *d)
                  (d->ps && mos_physical_structure_have_copyright(d->ps) &&
                   mos_physical_structure_protection(d->ps)) ? ", protected" : "");
         (void)mos_safe_ascii(media_buf, media_esc, sizeof media_esc);
+    } else if (d->atip) {
+        /* CD-R/RW: the ATIP lead-in M:S:F is the manufacturer/MID identity (the
+           CD analog of the BD/DVD disc-maker code; the MID→name table is the
+           Orange Book's, consumer-side). Fixed digits, no hostile bytes. */
+        snprintf(media_buf, sizeof media_buf, "%s, MID %u:%02u:%02u",
+                 mos_atip_disc_type(d->atip) ? "CD-RW" : "CD-R",
+                 mos_atip_lead_in_min(d->atip), mos_atip_lead_in_sec(d->atip),
+                 mos_atip_lead_in_frame(d->atip));
+        (void)mos_safe_ascii(media_buf, media_esc, sizeof media_esc);
     }
     pairs[n++] = (mos_cli_human_pair){
-        "Media", (d->did || (d->ps && mos_physical_structure_have_physical(d->ps)))
+        "Media", (d->did || (d->ps && mos_physical_structure_have_physical(d->ps))
+                  || d->atip)
                      ? media_esc : NULL };
 
     char toc_buf[64];
@@ -571,6 +603,11 @@ int mos_cli_run_metadata(void)
            no cached TOC (just-inserted/unrecognized media). */
         const mos_session_layout *sl = NULL;
         if (mos_query_session_layout(h, &sl) == MOS_OK) d.sl = sl;
+        /* ATIP — CD-R/RW manufacturer/media identity (READ TOC format 0100b).
+           Null on a pressed CD (no ATIP): the read answers CHECK CONDITION and
+           mos_query_atip returns an error, leaving d.atip NULL. */
+        const mos_atip *atip = NULL;
+        if (mos_query_atip(h, &atip) == MOS_OK) d.atip = atip;
     }
     (void)mos_query_volume(h, &d.mounted,
                            d.volume_name, sizeof d.volume_name,
