@@ -1478,3 +1478,36 @@ classifier, no per-device branch). A drive whose VPD 0x80 absence is reported
 via an unmapped transport `IOReturn` is caught by the `MOS_ERR_IO` default arm
 (resolved as absent — a benign null serial, not forever-churn); any surprise
 lands as a fixture + dated note, never a per-device gate.
+
+## Finding + ADR: GESN door bit vs a 04/xx disc-engaged sense — the sense wins
+## (2026-06-21, second hardware run: WH16NS60 stray-open on insert)
+
+`mos_state_core.c`'s tray rule read "MOS_OK ⇒ door_open is authoritative; the
+sense never overturns a GESN open/closed verdict." A second hardware run (LG
+WH16NS60, libredrive, OWC enclosure) falsified the unconditional form: inserting
+a UHD BD produced a **stray `open`** between `busy` and `ready`. Captured cause —
+mid-load the drive answered TUR with sense **02/04/01** (NOT READY / LOGICAL UNIT
+NOT READY / **IN PROCESS OF BECOMING READY**) while the raw GESN transiently
+returned **door_open=true**. The old rule trusted GESN, forked to OPEN, and never
+consulted the 04/01 sense (which the closed-branch classifier already maps to
+LOADING, `mos_sense.c`).
+
+**Rebuttal (narrow, spec-grounded, not a reversal).** A `04/xx` LOGICAL UNIT NOT
+READY sense (becoming-ready / init-required / format / long-write / op-in-
+progress) is positive proof a disc is **ENGAGED**, which an OPEN tray physically
+cannot be — you cannot spin up, format, or write a disc with the tray out. So
+when the TUR sense ASC == 0x04, a GESN `door_open=true` is the transient lie and
+is suppressed: the tray reads CLOSED and the sense classifier names the reason
+(loading / formatting / busy). The GESN bit remains authoritative for every
+other case, including the `3A/xx` tray hints (those still never overturn GESN —
+`state_gesn_*_is_not_invalidated_by_*_sense` are unchanged); only the disc-
+engaged `04/xx` family wins. `mos_state_core.c` now reads
+`tray_open = door_open && asc != 0x04`.
+
+**Hardware's role, honored.** This is a generic gate keyed on the SPEC semantics
+of `04/xx` (disc engaged), not a per-device branch — any drive whose GESN
+transiently disagrees with a becoming-ready sense is covered. The observation is
+the WH16NS60 insert transient; the defense cites T10, not the model. Pinned by
+`state_loading_from_0401_overrides_gesn_door_open` (pure). If a future capture
+shows a drive that legitimately reports `04/xx` with the tray genuinely open
+(a malfunction), that lands as a fixture + dated note here before any change.

@@ -232,6 +232,30 @@ TEST(state_gesn_open_is_not_invalidated_by_closed_sense)
     return 0;
 }
 
+TEST(state_loading_from_0401_overrides_gesn_door_open)
+{
+    /* The 04/xx EXCEPTION to GESN authority (AGENTS.md, observed on a WH16NS60
+       mid-load): TUR sense 02/04/01 (LOGICAL UNIT BECOMING READY) is positive
+       proof a disc is ENGAGED, which an open tray cannot be — so a transient
+       GESN door_open=true is suppressed and the result is LOADING, not the
+       stray OPEN. Distinct from state_gesn_open_is_not_invalidated_by_closed_
+       sense above: a 3A tray HINT never overturns GESN, but a 04/xx disc-
+       engaged sense does. */
+    fake_mmc f = {0};
+    f.tur_err    = MOS_OK;
+    f.tur_status = MOS_SCSI_STATUS_CHECK_CONDITION;
+    fake_set_fixed_sense(&f, 0x02, 0x04, 0x01);   /* becoming ready */
+    f.tray_err  = MOS_OK;
+    f.tray_open = true;                               /* GESN: transient door open */
+
+    mos_state_env_t env = make_env(&f);
+    mos_state_result r;
+    EXPECT_EQ(mos_internal_query_state_core(&env, &r), MOS_OK);
+    EXPECT_EQ(r.state, MOS_STATE_LOADING);   /* disc-engaged sense beats door bit */
+    EXPECT_EQ(f.tray_calls, 1);
+    return 0;
+}
+
 TEST(state_empty_from_3A01_sense_fork_when_gesn_silent)
 {
     /* GESN silent; fork on sense: 3A/01 → tray closed → EMPTY. */
@@ -698,6 +722,7 @@ void register_state_core_tests(void)
     RUN(state_empty_from_gesn_closed_no_medium);
     RUN(state_gesn_closed_is_not_invalidated_by_open_sense);
     RUN(state_gesn_open_is_not_invalidated_by_closed_sense);
+    RUN(state_loading_from_0401_overrides_gesn_door_open);
     RUN(state_empty_from_3A01_sense_fork_when_gesn_silent);
     RUN(state_open_from_3A02_sense_fork_when_gesn_silent);
     RUN(state_empty_or_open_when_gesn_silent_and_sense_3A00);
