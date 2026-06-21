@@ -92,15 +92,15 @@ struct mos_watch {
     char product[17];
     char revision[5];
 
-    /* Drive Unit Serial Number (INQUIRY VPD 0x80), grabbed ONCE per session
-       on a probe handle and cached for the watch's life. serial_resolved flips
-       true once the probe reaches a TERMINAL outcome — a successful read OR an
-       answered absence (the drive replied and has no serial page; a STATIC
-       fact). A TRANSIENT failure (lock contended, timeout, media mid-swap)
-       leaves it false to retry, so the first free/not-ready poll still lands a
-       real serial. Resolving an answered absence is what stops the optional
-       exclusive INQUIRY from re-firing every poll (serial_probe_terminal).
-       serial[64] matches mos_handle's serial_str width (SPC max is 255; 64
+    /* Drive serial (Logical Unit Serial Number feature 0108h, via the non-
+       exclusive config walk), grabbed ONCE per session on a probe handle and
+       cached for the watch's life. serial_resolved flips true once the probe
+       reaches a TERMINAL outcome — a successful read OR an answered absence (the
+       config walk succeeded, the feature is absent/empty; a STATIC fact). A
+       TRANSIENT transport failure (another client holds exclusive access,
+       timeout) leaves it false to retry. The 0108h read takes no exclusive
+       access, so it neither contends with a one-shot eject nor waits for an
+       empty tray. serial[64] matches the mos_drive_caps.serial width (64
        truncates safely — the chosen buffer everywhere). Empty (serial[0]==0)
        until a read lands; events carry NULL until then, the cached string
        after. */
@@ -211,17 +211,15 @@ static uint64_t stream_epoch_wall_ms(void)
    pointer, so "forgot one" is the default. A new borrowed pointer on
    mos_watch_event / mos_state_result needs watch-lifetime backing and a
    replacement below. (bsd_unit is a value, never replaced.) */
-/* Should the serial probe stop retrying after this mos_query_serial outcome?
-   A serial is a STATIC drive fact, so an ANSWERED absence (the drive replied,
-   no VPD 0x80 / no serial -> MOS_ERR_IO or MOS_ERR_UNSUPPORTED) is permanent
-   and resolves; only a TRANSIENT failure (lock contended by a mount or another
-   client, transport timeout, media mid-swap, resource pressure) is worth
-   retrying. Resolving an answered absence is what stops the optional exclusive
-   INQUIRY from re-firing every stable poll — exclusive-access traffic a
-   concurrent control verb (mos tray eject) contends with. MOS_OK falls to the
-   default (terminal). The MOS_ERR_IO default arm of the IOReturn mapper means a
-   rare unmapped transient is also taken as terminal-absent (a benign null
-   serial for the session) — accepted over the alternative of forever-churn. */
+/* Should the serial probe stop retrying after this mos_query_drive_caps outcome?
+   A serial is a STATIC drive fact, so a config walk that SUCCEEDED (MOS_OK)
+   resolves whether or not feature 0108h carried a serial — an answered absence
+   is permanent. Only a TRANSIENT transport failure (another client holds
+   exclusive access, timeout, media mid-swap, resource pressure) is worth
+   retrying, so the serial isn't re-queried every stable poll for nothing. MOS_OK
+   falls to the default (terminal). The MOS_ERR_IO default arm of the IOReturn
+   mapper means a rare unmapped transient is also taken as terminal (a benign
+   null serial for the session) — accepted over the alternative of forever-churn. */
 static bool serial_probe_terminal(mos_error e)
 {
     switch (e) {
@@ -272,18 +270,18 @@ static mos_error watch_probe(void *ctx, mos_state_result *out)
     out->product  = w->product[0]  ? w->product  : NULL;
     out->revision = w->revision[0] ? w->revision : NULL;
 
-    /* Resolve the serial ONCE per session, piggybacked on this same handle (no
-       extra open). mos_query_serial self-gates on exclusive access, so a
-       mounted/ready disc makes it BUSY and the CDB never issues — that stays
-       unresolved and retries next poll; the first empty/not-ready poll lands it
-       (the walk's lock is already free then and the serial needs no disc). An
-       ANSWERED absence resolves so the optional INQUIRY stops re-firing every
-       poll (serial_probe_terminal). Re-home into watch-static storage like the
-       identity strings (the returned pointer borrows the handle we close). */
+    /* Resolve the serial ONCE per session via the Logical Unit Serial Number
+       feature (0108h), from the non-exclusive GET CONFIGURATION walk — no raw
+       command and no exclusive access, so it reads regardless of mount state and
+       never contends with a one-shot control verb (eject). An answered absence
+       (feature absent / empty) resolves so it stops re-querying; only a transient
+       transport failure retries (serial_probe_terminal). Re-home into watch-
+       static storage (the pointer borrows the handle we close). */
     if (!w->serial_resolved) {
-        const char *sn = NULL;
-        mos_error se = mos_query_serial(h, &sn);
-        if (se == MOS_OK && sn && sn[0])
+        const mos_drive_caps *caps = NULL;
+        mos_error se = mos_query_drive_caps(h, &caps);
+        const char *sn = (se == MOS_OK && caps) ? mos_drive_caps_serial(caps) : NULL;
+        if (sn && sn[0])
             strlcpy(w->serial, sn, sizeof w->serial);
         if (serial_probe_terminal(se))
             w->serial_resolved = true;
@@ -340,12 +338,14 @@ static mos_error watch_slot_probe(void *ctx, mos_state_result *out)
     out->revision = s->revision[0] ? s->revision : NULL;
 
     /* Resolve the serial once per slot (per session), same contract as
-       watch_probe above — piggyback the open handle, transient-back-off,
-       answered-absence resolves, re-home into slot storage before close. */
+       watch_probe above — the Logical Unit Serial Number feature (0108h) from
+       the non-exclusive config walk, transient-back-off, answered-absence
+       resolves, re-home into slot storage before close. */
     if (!s->serial_resolved) {
-        const char *sn = NULL;
-        mos_error se = mos_query_serial(h, &sn);
-        if (se == MOS_OK && sn && sn[0])
+        const mos_drive_caps *caps = NULL;
+        mos_error se = mos_query_drive_caps(h, &caps);
+        const char *sn = (se == MOS_OK && caps) ? mos_drive_caps_serial(caps) : NULL;
+        if (sn && sn[0])
             strlcpy(s->serial, sn, sizeof s->serial);
         if (serial_probe_terminal(se))
             s->serial_resolved = true;

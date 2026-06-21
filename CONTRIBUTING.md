@@ -64,7 +64,6 @@ mos/
 │   ├── mos_modepage.c          # pure MODE SENSE(10) optical-page decode (0x2A, 0x01)
 │   ├── mos_perf.c              # pure GET PERFORMANCE (type 00h) decode
 │   ├── mos_inqdata.c          # pure STANDARD INQUIRY (EVPD=0) identity decode
-│   ├── mos_vpd80.c            # pure INQUIRY VPD 0x80 (serial) decode
 │   ├── mos_result.c           # pure opaque-struct accessors
 │   ├── mos_strings.c          # pure error-string and version tables
 │   ├── mos_state_core.c       # pure decision tree (testable without IOKit)
@@ -73,7 +72,6 @@ mos/
 │   ├── mos_watch.c            # IOKit watch adapter (poll pump + DR doorbell)
 │   ├── mos_scsi.c             # IOKit lifecycle, MMC convenience primitives, raw CDB
 │   ├── mos_query.c            # typed mos_query_* verbs (decode MMC replies)
-│   ├── mos_serial.c           # raw INQUIRY VPD 0x80 query (drive serial)
 │   ├── mos_drive_inquiry.c    # raw STANDARD INQUIRY query (drive identity)
 │   ├── mos_tray.c             # tray verbs (START STOP UNIT, PREVENT ALLOW MEDIUM REMOVAL)
 │   ├── mos_dr.c               # DiscRecording directory adapter (enumeration/identity)

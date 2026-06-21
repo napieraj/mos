@@ -243,3 +243,42 @@ void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
     out[16]=':'; out[17]=(char)d[12]; out[18]=(char)d[13];
     out[19]='Z'; out[20]='\0';
 }
+
+/* Logical Unit Serial Number — GET CONFIGURATION feature 0108h, from the same
+   RT=0 reply. The descriptor payload is the drive's serial as ASCII (MMC: the
+   Logical Unit Serial Number feature carries an ASCII serial in its feature
+   data). PRIMARY serial source: this rides the non-exclusive GetConfiguration
+   convenience walk (no exclusive access, reads even on mounted media), and is
+   the hardware-validated path. Decode discipline: trailing space/NUL padding
+   trimmed, interior NUL or over-length refused, complete-or-unavailable — a
+   durable identity key is whole or nothing (a prefix is a wrong key two drives
+   can share). out NUL-terminated;
+   empty out (out[0]==0) when the feature is absent or carries no serial. */
+void mos_internal_serial_from_config(const uint8_t *buf, size_t len,
+                                     char *out, size_t out_cap)
+{
+    if (out && out_cap) out[0] = 0;
+    if (!out || out_cap == 0) return;
+
+    mos_config_feature f;
+    if (!mos_internal_config_find_feature(buf, len, 0x0108, &f)) return;
+    if (!f.data || f.data_len == 0) return;          /* feature present, no data */
+
+    /* Trim trailing wire padding (spaces + NULs); leading/interior bytes stay. */
+    size_t n = f.data_len;
+    while (n > 0) {
+        uint8_t c = f.data[n - 1];
+        if (c != ' ' && c != 0x00) break;
+        n--;
+    }
+    if (n == 0) return;                               /* present, no serial */
+
+    /* Complete-or-unavailable: refuse an interior NUL (would sever the C string)
+       or a serial that does not fit WHOLE — same as the VPD-0x80 rule. */
+    for (size_t i = 0; i < n; i++)
+        if (f.data[i] == 0x00) return;                /* interior NUL */
+    if (n > out_cap - 1u) return;                     /* would not fit whole */
+
+    for (size_t i = 0; i < n; i++) out[i] = (char)f.data[i];
+    out[n] = 0;
+}

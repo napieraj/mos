@@ -501,6 +501,15 @@ uint16_t mos_drive_caps_profile_code(const mos_drive_caps *c, uint8_t i);
    GET CONFIGURATION walk the caps query already performs. */
 const char *mos_drive_caps_firmware_date(const mos_drive_caps *c);
 
+/* Drive serial from the Logical Unit Serial Number feature (0108h), as an ASCII
+   string, or NULL when the drive does not implement the feature / programs no
+   serial (it is OPTIONAL in MMC and population is firmware-dependent — some
+   firmware leaves it blank). The drive-serial source: it rides the non-exclusive
+   GET CONFIGURATION walk the caps query already performs (no raw command, no
+   exclusive access — readable even while a disc is mounted). Borrowed from the
+   handle (valid until the next mos_query_drive_caps() / mos_close()). */
+const char *mos_drive_caps_serial(const mos_drive_caps *c);
+
 /* Current Profile (loaded medium) from the same RT=0 GET CONFIGURATION reply,
    or 0 when the tray is empty / the field was absent. MEDIA-DEPENDENT (unlike
    the rest of mos_drive_caps): surfaced so a caller can name the loaded disc's
@@ -518,28 +527,12 @@ const char *mos_handle_product(const mos_handle_t *h);
 const char *mos_handle_revision(const mos_handle_t *h);
 uint64_t    mos_handle_registry_id(const mos_handle_t *h);
 
-/*
- * Query the drive's Unit Serial Number: one raw INQUIRY (EVPD=1, PAGE
- * CODE=0x80) on the internal exclusive-access raw-CDB path, decoded by the
- * bounds-checked pure parser. This is the durable inventory key that
- * survives replug and machine moves — registry_id is attachment identity
- * (replug mints a new one) and must not be used as a durable key.
- *
- * It is the one identity field DiscRecording's directory does not cache and
- * no convenience method can carry: MMCDeviceInterface's Inquiry issues only
- * a standard INQUIRY (no EVPD / PAGE CODE), so VPD page 0x80 is structurally
- * unreachable through it (AGENTS.md scope-doctrine layer-1 raw-verb showing;
- * design: doc/research/2026-06-16-serial-vpd-0x80-feasibility.md).
- *
- * Because it is raw it takes ObtainExclusiveAccess, which returns
- * MOS_ERR_BUSY on MOUNTED media — benign: the serial is a static drive fact,
- * equally readable with the tray empty (the natural time to inventory a
- * drive). A drive that does not implement page 0x80 (it is optional) or has
- * no serial programmed (all-spaces) returns MOS_ERR_IO. `out` REQUIRED
- * (NULL => MOS_ERR_INVALID_ARG); on success *out is a borrowed string valid
- * until the next mos_query_serial() call or mos_close().
- */
-mos_error mos_query_serial(mos_handle_t *h, const char **out);
+/* The drive serial is read from the Logical Unit Serial Number feature (0108h)
+   via mos_drive_caps_serial() — the non-exclusive GET CONFIGURATION path. There
+   is no raw VPD-0x80 serial entry point: VPD page 0x80 is the SPC/block-storage
+   carrier and is the wrong abstraction for an MMC optical drive (architecturally
+   and empirically — it read empty on the drives surveyed). See the AGENTS.md
+   serial-source ADR. */
 
 /* ---- Drive standards (standard INQUIRY) ------------- */
 

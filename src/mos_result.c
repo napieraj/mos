@@ -307,6 +307,11 @@ const char *mos_drive_caps_firmware_date(const mos_drive_caps *c)
     return (c && c->firmware_date[0]) ? c->firmware_date : NULL;
 }
 
+const char *mos_drive_caps_serial(const mos_drive_caps *c)
+{
+    return (c && c->serial[0]) ? c->serial : NULL;
+}
+
 uint16_t mos_drive_caps_current_profile(const mos_drive_caps *c)
 {
     return c ? c->current_profile : 0;

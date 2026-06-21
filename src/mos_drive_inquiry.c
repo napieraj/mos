@@ -10,10 +10,10 @@
  * Authored raw, not via the convenience Inquiry, because that method returns
  * only the 36-byte standard header (SCSICmd_INQUIRY_StandardData), so the
  * version descriptors at bytes 58-73 are structurally unreachable through it
- * — the same layer-1 raw-verb showing as the serial, the same INQUIRY opcode
- * (0x12) in a different mode: EVPD=0 here vs EVPD=1/page-0x80 in mos_serial.c
- * (AGENTS.md scope-doctrine ADR; design:
- * doc/research/2026-06-16-drive-identity-enrichment-survey.md).
+ * — the layer-1 raw-verb showing for this standard INQUIRY (EVPD=0). The drive
+ * serial is NOT read here: it comes from GET CONFIGURATION feature 0108h
+ * (mos_config.c), not a raw INQUIRY VPD page (AGENTS.md serial-source ADR;
+ * design: doc/research/2026-06-16-drive-identity-enrichment-survey.md).
  *
  * mos_internal_raw_cdb is the SINGLE ObtainExclusiveAccess call site; this file adds
  * none. Exclusive access is the gate: a mounted volume / other holder makes

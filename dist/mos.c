@@ -422,6 +422,11 @@ typedef struct mos_drive_caps {
        (010Ch), "YYYY-MM-DDTHH:MM:SSZ" (GMT) or "" when absent. 24 holds the
        20-char ISO form + NUL. */
     char     firmware_date[24];
+    /* Logical Unit Serial Number from the Logical Unit Serial Number feature
+       (0108h), same RT=0 reply. ASCII, trimmed; "" when the feature is absent
+       or carries no serial. PRIMARY drive-serial source — non-exclusive, reads
+       even on mounted media. 64 matches the serial width used elsewhere. */
+    char     serial[64];
     /* Current Profile from the RT=0 reply header (the loaded medium's profile;
        0x0000 = no current profile / tray empty). MEDIA-DEPENDENT, unlike the
        rest of this struct — surfaced only so a caller can name the loaded
@@ -456,6 +461,14 @@ void mos_internal_profile_list_from_config(const uint8_t *buf, size_t len,
    rejected (out empty). Pure, no-OOB — fuzz/ASan-gated. */
 void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
                                             char *out, size_t out_cap);
+
+/* Decode the Logical Unit Serial Number feature (0108h) into out as an ASCII
+   serial (out_cap >= 1), or out[0]=0 when the feature is absent / empty. The
+   descriptor payload is the serial; trailing space/NUL padding trimmed, an
+   interior NUL or over-length refused (complete-or-unavailable, like the
+   VPD-0x80 parser). PRIMARY serial source. Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_serial_from_config(const uint8_t *buf, size_t len,
+                                     char *out, size_t out_cap);
 
 /* ---- Standard INQUIRY decode (mos_inqdata.c) ----------------------- *
  *
@@ -817,16 +830,6 @@ bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
                                   struct mos_mode_caps *out);
 bool mos_internal_error_recovery_parse(const uint8_t *buf, size_t len,
                                        struct mos_error_recovery *out);
-
-/* ---- INQUIRY VPD page 0x80 decode (mos_vpd80.c) ------------------- *
- *
- * Decode the Unit Serial Number page into a NUL-terminated ASCII string in
- * out[0..out_cap). True only when the reply echoes page code 0x80 and a
- * non-empty serial survives the trailing space/NUL trim. Pure, bounded,
- * no-OOB — fuzz/ASan-gated. The shell (mos_serial.c) bounds len to the
- * realized transfer count before calling (O-4). */
-bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
-                                     char *out, size_t out_cap);
 
 /* ---- SCSI task status classification (mos_pure.c) ----------------- *
  *
@@ -1198,13 +1201,6 @@ struct mos_handle {
     struct mos_mode_caps      mode_caps;
     struct mos_error_recovery error_recovery;
 
-    /* Handle-owned INQUIRY VPD-0x80 serial (mos_query_serial). Filled by the
-       raw-INQUIRY shell, returned by borrowed pointer; 64 holds any real drive
-       serial. A serial that cannot be held whole — longer than this buffer or
-       carrying an interior NUL — is refused (serial stays null), never
-       truncated: a partial identity key is worse than none (mos_vpd80.c). */
-    char                      serial_str[64];
-
     /* Handle-owned standard-INQUIRY result (mos_query_drive_inquiry). */
     struct mos_drive_inquiry drive_inquiry;
 };
@@ -1367,8 +1363,8 @@ mos_error mos_internal_tray_cmd(mos_handle_t *h, const uint8_t cdb[6],
    values return MOS_ERR_INVALID_ARG. timeout_ms must be > 0 — 0 is
    SCSITaskLib's "Wait Forever", rejected at the boundary. scsi_task_status and
    sense are required; bytes_transferred may be NULL. Callers: the GESN tray
-   probe (mos_scsi.c), the tray verbs (mos_tray.c), the INQUIRY reads
-   (mos_serial.c / mos_drive_inquiry.c), and the diagnostic capture menu
+   probe (mos_scsi.c), the tray verbs (mos_tray.c), the standard INQUIRY read
+   (mos_drive_inquiry.c), and the diagnostic capture menu
    (cli/probe.c, MOS_CLI_PROBE). */
 mos_error mos_internal_raw_cdb(mos_handle_t *h,
                                const uint8_t *cdb, size_t cdb_len,
@@ -1991,6 +1987,45 @@ void mos_internal_firmware_date_from_config(const uint8_t *buf, size_t len,
     out[13]=':'; out[14]=(char)d[10]; out[15]=(char)d[11];
     out[16]=':'; out[17]=(char)d[12]; out[18]=(char)d[13];
     out[19]='Z'; out[20]='\0';
+}
+
+/* Logical Unit Serial Number — GET CONFIGURATION feature 0108h, from the same
+   RT=0 reply. The descriptor payload is the drive's serial as ASCII (MMC: the
+   Logical Unit Serial Number feature carries an ASCII serial in its feature
+   data). PRIMARY serial source: this rides the non-exclusive GetConfiguration
+   convenience walk (no exclusive access, reads even on mounted media), and is
+   the hardware-validated path. Decode discipline: trailing space/NUL padding
+   trimmed, interior NUL or over-length refused, complete-or-unavailable — a
+   durable identity key is whole or nothing (a prefix is a wrong key two drives
+   can share). out NUL-terminated;
+   empty out (out[0]==0) when the feature is absent or carries no serial. */
+void mos_internal_serial_from_config(const uint8_t *buf, size_t len,
+                                     char *out, size_t out_cap)
+{
+    if (out && out_cap) out[0] = 0;
+    if (!out || out_cap == 0) return;
+
+    mos_config_feature f;
+    if (!mos_internal_config_find_feature(buf, len, 0x0108, &f)) return;
+    if (!f.data || f.data_len == 0) return;          /* feature present, no data */
+
+    /* Trim trailing wire padding (spaces + NULs); leading/interior bytes stay. */
+    size_t n = f.data_len;
+    while (n > 0) {
+        uint8_t c = f.data[n - 1];
+        if (c != ' ' && c != 0x00) break;
+        n--;
+    }
+    if (n == 0) return;                               /* present, no serial */
+
+    /* Complete-or-unavailable: refuse an interior NUL (would sever the C string)
+       or a serial that does not fit WHOLE — same as the VPD-0x80 rule. */
+    for (size_t i = 0; i < n; i++)
+        if (f.data[i] == 0x00) return;                /* interior NUL */
+    if (n > out_cap - 1u) return;                     /* would not fit whole */
+
+    for (size_t i = 0; i < n; i++) out[i] = (char)f.data[i];
+    out[n] = 0;
 }
 
 /* ==== src/mos_da.c ==== */
@@ -2743,10 +2778,10 @@ bool mos_internal_dr_copy_identity_for_service(io_service_t svc,
  * Authored raw, not via the convenience Inquiry, because that method returns
  * only the 36-byte standard header (SCSICmd_INQUIRY_StandardData), so the
  * version descriptors at bytes 58-73 are structurally unreachable through it
- * — the same layer-1 raw-verb showing as the serial, the same INQUIRY opcode
- * (0x12) in a different mode: EVPD=0 here vs EVPD=1/page-0x80 in mos_serial.c
- * (AGENTS.md scope-doctrine ADR; design:
- * doc/research/2026-06-16-drive-identity-enrichment-survey.md).
+ * — the layer-1 raw-verb showing for this standard INQUIRY (EVPD=0). The drive
+ * serial is NOT read here: it comes from GET CONFIGURATION feature 0108h
+ * (mos_config.c), not a raw INQUIRY VPD page (AGENTS.md serial-source ADR;
+ * design: doc/research/2026-06-16-drive-identity-enrichment-survey.md).
  *
  * mos_internal_raw_cdb is the SINGLE ObtainExclusiveAccess call site; this file adds
  * none. Exclusive access is the gate: a mounted volume / other holder makes
@@ -3729,6 +3764,10 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
     mos_internal_firmware_date_from_config(buf, sizeof(buf),
                                            h->caps.firmware_date,
                                            sizeof h->caps.firmware_date);
+    /* Logical Unit Serial Number (feature 0108h) from the same RT=0 reply — the
+       PRIMARY serial source, non-exclusive (no raw INQUIRY, no exclusive lock). */
+    mos_internal_serial_from_config(buf, sizeof(buf),
+                                    h->caps.serial, sizeof h->caps.serial);
     /* Current Profile (loaded medium) from the same RT=0 header — 0 when the
        field is absent/truncated or the tray is empty. Media-dependent; used
        only to name the loaded disc's class (e.g. speed 1x scaling). */
@@ -4513,6 +4552,11 @@ uint16_t mos_drive_caps_profile_code(const mos_drive_caps *c, uint8_t i)
 const char *mos_drive_caps_firmware_date(const mos_drive_caps *c)
 {
     return (c && c->firmware_date[0]) ? c->firmware_date : NULL;
+}
+
+const char *mos_drive_caps_serial(const mos_drive_caps *c)
+{
+    return (c && c->serial[0]) ? c->serial : NULL;
 }
 
 uint16_t mos_drive_caps_current_profile(const mos_drive_caps *c)
@@ -6052,93 +6096,6 @@ mos_state mos_internal_state_from_sense_closed(uint8_t sk, uint8_t asc, uint8_t 
     return MOS_STATE_UNKNOWN;
 }
 
-/* ==== src/mos_serial.c ==== */
-/*
- * mos_serial.c — the drive-serial query (mos_query_serial): one raw INQUIRY
- * (EVPD=1, PAGE CODE=0x80, Unit Serial Number) on the mos_internal_raw_cdb path,
- * decoded by the pure parser in mos_vpd80.c. The serial is the durable
- * drive-inventory key that survives replug and machine moves (registry_id is
- * attachment-scoped). Named for the datum it produces, not the generic
- * INQUIRY command set: this file owns the serial verb only — any future VPD
- * page is its own argument, not a fold into "the inquiry file".
- *
- * Authored raw, not via the convenience Inquiry, because MMCDeviceInterface's
- * Inquiry takes only SCSICmd_INQUIRY_StandardData* — no EVPD / PAGE CODE
- * parameter — so VPD page 0x80 is structurally unreachable through it
- * (contrast ModeSense10's PC/PAGE_CODE, GetConfiguration's RT). That is the
- * layer-1 "no convenience method carries the information" showing (AGENTS.md
- * scope doctrine; design + full derivation:
- * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md).
- *
- * Never disturbs another consumer. mos_internal_raw_cdb is the SINGLE
- * ObtainExclusiveAccess call site (ARCHITECTURE.md §3); this file adds none.
- * Exclusive access is the gate: if anyone else holds the drive — a mounted
- * IOMedia nub, Finder, MakeMKV, another initiator — ObtainExclusiveAccess
- * fails (kIOReturnBusy / kIOReturnExclusiveAccess) and mos_internal_raw_cdb returns
- * the mapped error WITHOUT issuing the CDB, so the serial read backs off
- * cleanly rather than contending. On success the lock is held only for the
- * single INQUIRY and released immediately (mos_internal_raw_cdb releases per call —
- * never held across the handle's life). This is the same BUSY-on-mounted
- * guard the §5.5 nub invariant relies on. The degradation is benign: the
- * serial is a static drive fact, equally readable with the tray empty (the
- * natural time to inventory a drive), and any non-OK leaves serial null —
- * the field's existing default. INQUIRY changes no drive state, so there is
- * no lock-lifetime question (unlike the tray PREVENT verbs).
- */
-
-
-/* 252-byte reply buffer: the serial fits in serial_str (64) many times over;
-   the SPC PAGE LENGTH is a single byte (max 255), so this receives any
-   conforming page and the parser truncates into serial_str. */
-#define MOS_SERIAL_REPLY_BUF 252u
-
-mos_error mos_query_serial(mos_handle_t *h, const char **out)
-{
-    if (out) *out = NULL;
-    if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
-
-    /* INQUIRY (SPC-4 0x12), 6-byte CDB:
-         byte0   opcode 0x12
-         byte1   bit0 EVPD = 1            — request a vital-product-data page
-         byte2   PAGE CODE = 0x80         — Unit Serial Number
-         byte3-4 ALLOCATION LENGTH (BE)   — MOS_SERIAL_REPLY_BUF
-         byte5   CONTROL = 0
-       IMMED has no meaning for INQUIRY; the call waits for final status. */
-    const uint8_t cdb[6] = {
-        0x12, 0x01, 0x80,
-        (uint8_t)(MOS_SERIAL_REPLY_BUF >> 8),
-        (uint8_t)(MOS_SERIAL_REPLY_BUF & 0xFF),
-        0x00,
-    };
-
-    uint8_t  buf[MOS_SERIAL_REPLY_BUF] = {0};
-    uint32_t task_status               = 0;
-    uint8_t  sense[18]                 = {0};
-    uint64_t xferred                   = 0;
-
-    /* Exclusive access unavailable (mounted media, another holder) →
-       kIOReturnBusy/ExclusiveAccess → MOS_ERR_BUSY, the CDB never issues;
-       any transport error surfaces honestly. The caller treats every non-OK
-       as "serial stays null". */
-    mos_error e = mos_internal_raw_cdb(h, cdb, sizeof cdb, buf, sizeof buf,
-                              MOS_XFER_FROM_TARGET, 2000,
-                              &task_status, sense, &xferred);
-    if (e != MOS_OK) return e;
-    if (task_status != MOS_SCSI_STATUS_GOOD)   /* CHECK CONDITION etc. */
-        return MOS_ERR_IO;
-
-    /* Dual-length rule (O-4): bound the parse to the bytes the transport
-       actually delivered, not the full buffer — some USB bridges under-fill.
-       The page's own PAGE LENGTH only shrinks the serial within that span. */
-    size_t trusted = (xferred < sizeof buf) ? (size_t)xferred : sizeof buf;
-    if (!mos_internal_vpd80_serial_parse(buf, trusted,
-                                         h->serial_str, sizeof h->serial_str))
-        return MOS_ERR_IO;   /* page absent / wrong page / no serial → null */
-
-    *out = h->serial_str;
-    return MOS_OK;
-}
-
 /* ==== src/mos_state.c ==== */
 /*
  * mos_state.c — Apple-side adapter for the pure decision-tree core.
@@ -7171,109 +7128,6 @@ mos_error mos_tray_unlock(mos_handle_t *h, bool persistent,
                                  out, sense);
 }
 
-/* ==== src/mos_vpd80.c ==== */
-/*
- * mos_vpd80.c — pure, bounds-safe decode of INQUIRY VPD page 0x80 (Unit
- * Serial Number). The one identity field DiscRecording's directory does not
- * cache and no convenience method can carry: MMCDeviceInterface's Inquiry
- * issues only a standard INQUIRY (no EVPD / PAGE CODE), so page 0x80 needs a
- * raw INQUIRY (mos_serial.c). Design + layer-1 raw-verb showing:
- * doc/research/2026-06-16-serial-vpd-0x80-feasibility.md.
- *
- * No IOKit: the shell hands us a fixed zero-init buffer (filled via
- * mos_internal_raw_cdb) bounded to the bytes the transport actually returned
- * (dual-length rule O-4 — the realized count, not the device-claimed
- * length, is the trusted span). The page's own PAGE LENGTH never extends
- * past that span; if it exceeds it (the transport under-delivered) the
- * reply is refused rather than emitted as a prefix — a durable identity key
- * is complete or nothing (the canonical-data corollary of O-4).
- *
- * Page 0x80 layout (SPC-4 §7.7.13, Unit Serial Number VPD page):
- *   [0]      PERIPHERAL QUALIFIER (7:5) | PERIPHERAL DEVICE TYPE (4:0)
- *   [1]      PAGE CODE = 80h        — the drive echoes the page we asked for
- *   [2]      reserved
- *   [3]      PAGE LENGTH (n-3)      — serial byte count
- *   [4..n]   PRODUCT SERIAL NUMBER  — ASCII, left-justified, space-padded
- * Byte 2 stays reserved for this page (it is NOT the high byte of a 2-byte
- * length — that generalization is page 0x83's, not 0x80's). A real page-0x80
- * capture is a falsifier per the hardware ADR, not a design input.
- */
-
-
-#define VPD_HDR 4u   /* bytes 0..3 before the serial */
-
-/* Decode page 0x80 into out[0..out_cap). True only when the reply echoes
-   page code 0x80 and carries a complete, non-empty serial (trailing spaces /
-   NULs trimmed) that can be represented WHOLE as a C string. out is always
-   NUL-terminated. Returns false → the caller leaves serial null (never an
-   empty, truncated, or NUL-severed string) when the drive does not implement
-   the page (it is optional), has none programmed (all-spaces), under-delivers
-   the reply (PAGE LENGTH > bytes received), or the serial cannot be held whole
-   — longer than out_cap, or containing an interior NUL (which would sever the
-   C string invisibly at the NUL). This is the complete-or-unavailable rule for
-   a durable identity key: a prefix is an indistinguishable, wrong key (two
-   drives can share it), so it is refused, not marked. Non-ASCII bytes are
-   copied verbatim and escaped at the output sink (mos_cli_json_str /
-   mos_safe_ascii), as with vendor/product/revision. */
-bool mos_internal_vpd80_serial_parse(const uint8_t *buf, size_t len,
-                                     char *out, size_t out_cap)
-{
-    if (out && out_cap) out[0] = 0;
-    if (!buf || !out || out_cap == 0) return false;
-    if (len < VPD_HDR) return false;          /* no room for the VPD header */
-    if (buf[1] != 0x80) return false;         /* wrong page echoed — refuse */
-
-    /* PAGE LENGTH (byte 3) is the serial byte count the drive CLAIMS. The
-       reply must actually carry all of it. If PAGE LENGTH exceeds the bytes
-       delivered (avail — the realized-transfer span, O-4), the transport
-       under-filled (a non-conformant USB-SATA bridge, a short transfer) and we
-       hold only a PREFIX of the serial. REFUSE rather than emit it: this value
-       is a DURABLE IDENTITY KEY the caller caches sticky (mos watch grabs it
-       once per session), and a silent prefix can collide with another drive or
-       misidentify this one — an incomplete key is worse than none. Complete or
-       nothing. (A conforming drive, given mos_serial.c's ample 252-byte
-       allocation, returns the whole serial, so page_len <= avail holds.) This
-       still bounds the read: refusing happens before any serial byte is read,
-       so a hostile over-long PAGE LENGTH cannot read past the trusted span. */
-    size_t page_len = buf[3];
-    size_t avail    = len - VPD_HDR;
-    if (page_len > avail) return false;
-    size_t serial_len = page_len;
-
-    /* Trim trailing wire padding — spaces (SPC pad) and NULs. Leading and
-       interior bytes are data and stay (mirrors mos_dr.c identity trim). */
-    while (serial_len > 0) {
-        uint8_t c = buf[VPD_HDR + serial_len - 1];
-        if (c != ' ' && c != 0x00) break;
-        serial_len--;
-    }
-    if (serial_len == 0) return false;        /* page present, no serial */
-
-    /* Complete-or-unavailable. The serial is a durable identity key the caller
-       caches sticky, so it must be representable WHOLE as a C string or refused
-       — a prefix is a different-but-equally-wrong key two drives can share.
-       Two ways the whole serial cannot be held, both REFUSE (return false), the
-       same disposition as the transport-under-delivery case above:
-
-         - an interior NUL: trailing NULs were trimmed, but a NUL among the
-           remaining bytes would sever the C string invisibly at the NUL,
-           hiding everything after it — so two serials differing only past
-           the NUL would collide. It is non-ASCII for a SPC serial; treat it
-           as an unrepresentable key, not data to copy.
-         - serial_len > out_cap - 1: the whole serial does not fit. (Real
-           serials sit far below mos_serial.c's 64-byte sink, so this fires only
-           on a pathological/hostile over-long serial.)
-
-       Refusing precedes any copy, so nothing partial is ever emitted. */
-    for (size_t i = 0; i < serial_len; i++)
-        if (buf[VPD_HDR + i] == 0x00) return false;   /* interior NUL */
-    if (serial_len > out_cap - 1u) return false;       /* would not fit whole */
-
-    for (size_t i = 0; i < serial_len; i++) out[i] = (char)buf[VPD_HDR + i];
-    out[serial_len] = 0;
-    return true;
-}
-
 /* ==== src/mos_watch.c ==== */
 /*
  * mos_watch.c — Apple-side adapter for the pure watch state machine
@@ -7368,15 +7222,15 @@ struct mos_watch {
     char product[17];
     char revision[5];
 
-    /* Drive Unit Serial Number (INQUIRY VPD 0x80), grabbed ONCE per session
-       on a probe handle and cached for the watch's life. serial_resolved flips
-       true once the probe reaches a TERMINAL outcome — a successful read OR an
-       answered absence (the drive replied and has no serial page; a STATIC
-       fact). A TRANSIENT failure (lock contended, timeout, media mid-swap)
-       leaves it false to retry, so the first free/not-ready poll still lands a
-       real serial. Resolving an answered absence is what stops the optional
-       exclusive INQUIRY from re-firing every poll (serial_probe_terminal).
-       serial[64] matches mos_handle's serial_str width (SPC max is 255; 64
+    /* Drive serial (Logical Unit Serial Number feature 0108h, via the non-
+       exclusive config walk), grabbed ONCE per session on a probe handle and
+       cached for the watch's life. serial_resolved flips true once the probe
+       reaches a TERMINAL outcome — a successful read OR an answered absence (the
+       config walk succeeded, the feature is absent/empty; a STATIC fact). A
+       TRANSIENT transport failure (another client holds exclusive access,
+       timeout) leaves it false to retry. The 0108h read takes no exclusive
+       access, so it neither contends with a one-shot eject nor waits for an
+       empty tray. serial[64] matches the mos_drive_caps.serial width (64
        truncates safely — the chosen buffer everywhere). Empty (serial[0]==0)
        until a read lands; events carry NULL until then, the cached string
        after. */
@@ -7487,17 +7341,15 @@ static uint64_t stream_epoch_wall_ms(void)
    pointer, so "forgot one" is the default. A new borrowed pointer on
    mos_watch_event / mos_state_result needs watch-lifetime backing and a
    replacement below. (bsd_unit is a value, never replaced.) */
-/* Should the serial probe stop retrying after this mos_query_serial outcome?
-   A serial is a STATIC drive fact, so an ANSWERED absence (the drive replied,
-   no VPD 0x80 / no serial -> MOS_ERR_IO or MOS_ERR_UNSUPPORTED) is permanent
-   and resolves; only a TRANSIENT failure (lock contended by a mount or another
-   client, transport timeout, media mid-swap, resource pressure) is worth
-   retrying. Resolving an answered absence is what stops the optional exclusive
-   INQUIRY from re-firing every stable poll — exclusive-access traffic a
-   concurrent control verb (mos tray eject) contends with. MOS_OK falls to the
-   default (terminal). The MOS_ERR_IO default arm of the IOReturn mapper means a
-   rare unmapped transient is also taken as terminal-absent (a benign null
-   serial for the session) — accepted over the alternative of forever-churn. */
+/* Should the serial probe stop retrying after this mos_query_drive_caps outcome?
+   A serial is a STATIC drive fact, so a config walk that SUCCEEDED (MOS_OK)
+   resolves whether or not feature 0108h carried a serial — an answered absence
+   is permanent. Only a TRANSIENT transport failure (another client holds
+   exclusive access, timeout, media mid-swap, resource pressure) is worth
+   retrying, so the serial isn't re-queried every stable poll for nothing. MOS_OK
+   falls to the default (terminal). The MOS_ERR_IO default arm of the IOReturn
+   mapper means a rare unmapped transient is also taken as terminal (a benign
+   null serial for the session) — accepted over the alternative of forever-churn. */
 static bool serial_probe_terminal(mos_error e)
 {
     switch (e) {
@@ -7548,18 +7400,18 @@ static mos_error watch_probe(void *ctx, mos_state_result *out)
     out->product  = w->product[0]  ? w->product  : NULL;
     out->revision = w->revision[0] ? w->revision : NULL;
 
-    /* Resolve the serial ONCE per session, piggybacked on this same handle (no
-       extra open). mos_query_serial self-gates on exclusive access, so a
-       mounted/ready disc makes it BUSY and the CDB never issues — that stays
-       unresolved and retries next poll; the first empty/not-ready poll lands it
-       (the walk's lock is already free then and the serial needs no disc). An
-       ANSWERED absence resolves so the optional INQUIRY stops re-firing every
-       poll (serial_probe_terminal). Re-home into watch-static storage like the
-       identity strings (the returned pointer borrows the handle we close). */
+    /* Resolve the serial ONCE per session via the Logical Unit Serial Number
+       feature (0108h), from the non-exclusive GET CONFIGURATION walk — no raw
+       command and no exclusive access, so it reads regardless of mount state and
+       never contends with a one-shot control verb (eject). An answered absence
+       (feature absent / empty) resolves so it stops re-querying; only a transient
+       transport failure retries (serial_probe_terminal). Re-home into watch-
+       static storage (the pointer borrows the handle we close). */
     if (!w->serial_resolved) {
-        const char *sn = NULL;
-        mos_error se = mos_query_serial(h, &sn);
-        if (se == MOS_OK && sn && sn[0])
+        const mos_drive_caps *caps = NULL;
+        mos_error se = mos_query_drive_caps(h, &caps);
+        const char *sn = (se == MOS_OK && caps) ? mos_drive_caps_serial(caps) : NULL;
+        if (sn && sn[0])
             strlcpy(w->serial, sn, sizeof w->serial);
         if (serial_probe_terminal(se))
             w->serial_resolved = true;
@@ -7616,12 +7468,14 @@ static mos_error watch_slot_probe(void *ctx, mos_state_result *out)
     out->revision = s->revision[0] ? s->revision : NULL;
 
     /* Resolve the serial once per slot (per session), same contract as
-       watch_probe above — piggyback the open handle, transient-back-off,
-       answered-absence resolves, re-home into slot storage before close. */
+       watch_probe above — the Logical Unit Serial Number feature (0108h) from
+       the non-exclusive config walk, transient-back-off, answered-absence
+       resolves, re-home into slot storage before close. */
     if (!s->serial_resolved) {
-        const char *sn = NULL;
-        mos_error se = mos_query_serial(h, &sn);
-        if (se == MOS_OK && sn && sn[0])
+        const mos_drive_caps *caps = NULL;
+        mos_error se = mos_query_drive_caps(h, &caps);
+        const char *sn = (se == MOS_OK && caps) ? mos_drive_caps_serial(caps) : NULL;
+        if (sn && sn[0])
             strlcpy(s->serial, sn, sizeof s->serial);
         if (serial_probe_terminal(se))
             s->serial_resolved = true;

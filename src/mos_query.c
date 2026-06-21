@@ -173,6 +173,10 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
     mos_internal_firmware_date_from_config(buf, sizeof(buf),
                                            h->caps.firmware_date,
                                            sizeof h->caps.firmware_date);
+    /* Logical Unit Serial Number (feature 0108h) from the same RT=0 reply — the
+       PRIMARY serial source, non-exclusive (no raw INQUIRY, no exclusive lock). */
+    mos_internal_serial_from_config(buf, sizeof(buf),
+                                    h->caps.serial, sizeof h->caps.serial);
     /* Current Profile (loaded medium) from the same RT=0 header — 0 when the
        field is absent/truncated or the tray is empty. Media-dependent; used
        only to name the loaded disc's class (e.g. speed 1x scaling). */

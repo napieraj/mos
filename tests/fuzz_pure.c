@@ -274,6 +274,8 @@ static void fuzz_config(uint64_t iters)
                                               MOS_DRIVE_PROFILE_CAP, &pcount);
         char fw[24];
         mos_internal_firmware_date_from_config(buf, len, fw, sizeof fw);
+        char sn[64];
+        mos_internal_serial_from_config(buf, len, sn, sizeof sn);
         free(buf);
     }
 }
@@ -294,33 +296,6 @@ static void fuzz_inqdata(uint64_t iters)
         if ((i & 0x3ffu) == 0) {
             (void)mos_internal_inqdata_parse(NULL, len, &s);
             (void)mos_internal_inqdata_parse(buf, len, NULL);
-        }
-        free(buf);
-    }
-}
-
-/* ---- phase: INQUIRY VPD page 0x80 (serial) ------------------------------ */
-static void fuzz_vpd80(uint64_t iters)
-{
-    for (uint64_t i = 0; i < iters; i++) {
-        size_t   len = rng_below(80);
-        uint8_t *buf = (uint8_t *)malloc(len ? len : 1);
-        for (size_t b = 0; b < len; b++) buf[b] = (uint8_t)rng();
-        /* Half the time plant the page-code echo + a self-reported page length
-           so the serial copy runs (and the dual-length bound is exercised). */
-        if (len >= 4 && rng_below(2)) { buf[1] = 0x80; buf[3] = (uint8_t)rng(); }
-
-        /* Exact-size out buffer (1..40): any write past out_cap trips ASan,
-           so this checks the truncate-not-overflow bound. */
-        size_t cap = 1u + rng_below(40);
-        char *out = (char *)malloc(cap);
-        (void)mos_internal_vpd80_serial_parse(buf, len, out, cap);
-        free(out);
-        if ((i & 0x3ffu) == 0) {
-            char o2[8];
-            (void)mos_internal_vpd80_serial_parse(NULL, len, o2, sizeof o2);
-            (void)mos_internal_vpd80_serial_parse(buf, len, NULL, 8);
-            (void)mos_internal_vpd80_serial_parse(buf, len, o2, 0);
         }
         free(buf);
     }
@@ -724,12 +699,11 @@ int main(int argc, char **argv)
     uint64_t n_perf  = env_u64("MOS_FUZZ_PERF", 500000);
     uint64_t n_mp    = env_u64("MOS_FUZZ_MODEPAGE", 500000);
     uint64_t n_inq   = env_u64("MOS_FUZZ_INQDATA", 500000);
-    uint64_t n_vpd   = env_u64("MOS_FUZZ_VPD80", 500000);
 
     fprintf(stderr,
             "mos fuzz_pure seed=0x%016llx sense=%llu esc=%llu bsd=%llu "
             "cfg=%llu di=%llu tl=%llu toc=%llu ds=%llu ct=%llu ps=%llu "
-            "ti=%llu perf=%llu mp=%llu inq=%llu vpd=%llu\n",
+            "ti=%llu perf=%llu mp=%llu inq=%llu\n",
             (unsigned long long)seed, (unsigned long long)n_sense,
             (unsigned long long)n_esc, (unsigned long long)n_bsd,
             (unsigned long long)n_cfg, (unsigned long long)n_di,
@@ -737,8 +711,7 @@ int main(int argc, char **argv)
             (unsigned long long)n_toc, (unsigned long long)n_ds,
             (unsigned long long)n_ct, (unsigned long long)n_ps,
             (unsigned long long)n_ti, (unsigned long long)n_perf,
-            (unsigned long long)n_mp, (unsigned long long)n_inq,
-            (unsigned long long)n_vpd);
+            (unsigned long long)n_mp, (unsigned long long)n_inq);
 
     fuzz_sense(n_sense);
     fuzz_escapers(n_esc);
@@ -754,9 +727,8 @@ int main(int argc, char **argv)
     fuzz_perf(n_perf);
     fuzz_modepage(n_mp);
     fuzz_inqdata(n_inq);
-    fuzz_vpd80(n_vpd);
 
     fprintf(stderr, "OK: fuzz_pure clean (%llu iterations total)\n",
-            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc + n_ds + n_ct + n_ps + n_ti + n_perf + n_mp + n_inq + n_vpd));
+            (unsigned long long)(n_sense + n_esc + n_bsd + n_cfg + n_di + n_tl + n_toc + n_ds + n_ct + n_ps + n_ti + n_perf + n_mp + n_inq));
     return 0;
 }
