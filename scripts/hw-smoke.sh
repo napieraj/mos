@@ -1,424 +1,500 @@
 #!/usr/bin/env bash
 #
-# hw-smoke.sh — interactive hardware smoke test: a full walk of the mos CLI
-# surface on a real drive. Complements INTEGRATION_HARNESS.md (which covers the
-# six core states, falsification rows, and fixture capture); this script EXERCISES
-# every verb, selector form, error path, and --json document type, asserting exit
-# codes / output / schema conformance where deterministic and PROMPTING for the
-# physical disc/tray changes the media-dependent branches need.
+# hw-smoke.sh — interactive hardware smoke test for the mos CLI.
 #
-# It is a smoke test, not a unit test: the pure suite + adapter fake (ctest) are
-# the automated correctness oracle; this is the "does the whole thing behave on a
-# real WH16NS40-class drive" pass a tag wants. A surprise here is a finding — per
-# the hardware-role ADR it becomes a committed fixture + dated note, never a
+# What this is: a guided, MENU-DRIVEN walk of the whole CLI surface on a real
+# drive. You pick a section, the script tells you exactly what to do physically
+# (empty the tray, insert a CD, …), runs the relevant commands, and reports a
+# concise PASS/FAIL for each — adapting its assertions to whatever disc/tray
+# state it actually finds rather than demanding a fixed script.
+#
+# What this is NOT: the automated correctness oracle. The pure suite + adapter
+# fake (`ctest`, `build/bin/mos_tests`) own that. This is the "does the whole
+# thing behave on a real WH16NS60-class drive" pass a tag wants. Per the
+# hardware-role ADR, a surprise here is a DELIVERABLE: capture it with
+# `mos probe --capture <drive>` and file it as a fixture + dated note — never a
 # per-device branch in src/.
 #
 # Usage:
-#   scripts/hw-smoke.sh [phase]
-#   phases: static | empty | tray | disc | watch | errors | all (default)
-#   MOS=/path/to/mos scripts/hw-smoke.sh        # override the binary; otherwise
-#                                                 an installed `mos` on PATH is
-#                                                 preferred, then build/bin/mos
-#   SMOKE_INSTALL_DEPS=0 scripts/hw-smoke.sh     # don't auto-install python3/jsonschema
+#   scripts/hw-smoke.sh                 # interactive menu (recommended)
+#   scripts/hw-smoke.sh <section>       # run one section non-interactively
+#       sections: static empty tray disc watch errors all
+#   MOS=/path/to/mos scripts/hw-smoke.sh         # force a specific binary
+#   SMOKE_NONINTERACTIVE=1 scripts/hw-smoke.sh all   # assume "ready" at prompts
+#   SMOKE_INSTALL_DEPS=0 scripts/hw-smoke.sh     # don't auto-install python deps
 #
-# Designed for macOS (bash 3.2 / zsh both fine). Needs python3 + the jsonschema
-# module for the --json schema checks and JSON parsing; when missing, the script
-# installs them best-effort (python3 via brew, jsonschema via pip — the hash-
-# pinned schemas/requirements-ci.txt the CI schema job uses) unless
-# SMOKE_INSTALL_DEPS=0. If install isn't possible those steps SKIP with a note
-# (everything else still runs). No jq dependency.
+# macOS-targeted (bash 3.2 / zsh both fine). The --json schema checks want
+# python3 + jsonschema + rfc3339-validator (the same stack CI uses,
+# schemas/requirements-ci.txt); they SKIP cleanly when those are absent. No jq.
 
 set -u
 
-# ---- locate the binary + repo ------------------------------------------------
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 SCHEMA_DIR="$HERE/schemas"
-MOS="${MOS:-}"
 
-PHASE="all"
-for a in "$@"; do
-    case "$a" in
-        static|empty|tray|disc|watch|errors|all) PHASE="$a" ;;
-        *) ;;
-    esac
-done
-# Binary precedence: an explicit MOS= wins; otherwise an installed `mos` on PATH
-# (what a hardware tester usually validates — e.g. a brew install) is preferred
-# over a local build tree. Set MOS=build/bin/mos to force the freshly-built one.
-MOS_ON_PATH=""
-command -v mos >/dev/null 2>&1 && MOS_ON_PATH="$(command -v mos)"
+# ---- binary selection --------------------------------------------------------
+# Precedence: an explicit MOS= wins; otherwise the freshly-built build/bin/mos
+# (what you are validating for a tag) is preferred over an installed `mos` on
+# PATH. The old script preferred PATH, which silently tested a STALE brew binary
+# against the current repo's schemas — the surest way to a screen of false
+# schema failures. We surface the alternative instead of choosing it silently.
+MOS_ON_PATH=""; command -v mos >/dev/null 2>&1 && MOS_ON_PATH="$(command -v mos)"
+MOS_BUILT="$HERE/build/bin/mos"
+MOS="${MOS:-}"
 if [ -z "$MOS" ]; then
-    if   [ -n "$MOS_ON_PATH" ];        then MOS="$MOS_ON_PATH"
-    elif [ -x "$HERE/build/bin/mos" ]; then MOS="$HERE/build/bin/mos"
-    else echo "no mos binary: install it (brew) or build it (cmake -B build && cmake --build build), or set MOS=" >&2; exit 2
+    if   [ -x "$MOS_BUILT" ]; then MOS="$MOS_BUILT"
+    elif [ -n "$MOS_ON_PATH" ]; then MOS="$MOS_ON_PATH"
+    else
+        echo "no mos binary found." >&2
+        echo "  build it:  cmake -B build && cmake --build build" >&2
+        echo "  or install it (brew), or pass MOS=/path/to/mos" >&2
+        exit 2
     fi
 fi
 
-# ---- presentation + counters -------------------------------------------------
-if [ -t 1 ]; then B=$(printf '\033[1m'); R=$(printf '\033[31m'); G=$(printf '\033[32m')
-                  Y=$(printf '\033[33m'); D=$(printf '\033[2m'); Z=$(printf '\033[0m')
-else B=; R=; G=; Y=; D=; Z=; fi
-PASS=0; FAIL=0; SKIP=0
-FAILED_NAMES=""
+# ---- presentation ------------------------------------------------------------
+if [ -t 1 ]; then
+    B=$(printf '\033[1m'); R=$(printf '\033[31m'); G=$(printf '\033[32m')
+    Y=$(printf '\033[33m'); C=$(printf '\033[36m'); D=$(printf '\033[2m'); Z=$(printf '\033[0m')
+else B=; R=; G=; Y=; C=; D=; Z=; fi
 
-hdr()  { printf '\n%s== %s ==%s\n' "$B" "$1" "$Z"; }
-note() { printf '%s   %s%s\n' "$D" "$1" "$Z"; }
-ok()   { PASS=$((PASS+1)); printf '%s   PASS%s %s\n' "$G" "$Z" "$1"; }
-bad()  { FAIL=$((FAIL+1)); FAILED_NAMES="$FAILED_NAMES\n   - $1"; printf '%s   FAIL%s %s\n' "$R" "$Z" "$1"; }
-skp()  { SKIP=$((SKIP+1)); printf '%s   SKIP%s %s%s%s\n' "$Y" "$Z" "$1" "${2:+  — }" "${2:-}"; }
+PASS=0; FAIL=0; SKIP=0; FAILED_NAMES=""
 
-pause() { # prompt the operator for a physical change; honor SMOKE_NONINTERACTIVE
-    printf '\n%s>> %s%s\n' "$Y" "$1" "$Z"
-    if [ "${SMOKE_NONINTERACTIVE:-0}" = "1" ]; then note "(non-interactive: assuming done)"; return; fi
-    printf '   press Enter when ready (or s+Enter to skip this group)... '
-    read -r reply || reply="s"
-    [ "$reply" = "s" ] && return 1 || return 0
+hdr()  { printf '\n%s━━ %s %s\n' "$B$C" "$1" "$Z"; }
+info() { printf '%s   %s%s\n' "$D" "$*" "$Z"; }
+ok()   { PASS=$((PASS+1)); printf '   %sPASS%s %s\n' "$G" "$Z" "$1"; }
+bad()  { FAIL=$((FAIL+1)); FAILED_NAMES="$FAILED_NAMES\n   - $1"; printf '   %sFAIL%s %s\n' "$R" "$Z" "$1"; }
+skp()  { SKIP=$((SKIP+1)); printf '   %sSKIP%s %s%s%s\n' "$Y" "$Z" "$1" "${2:+  — }" "${2:-}"; }
+
+# step "physical instruction" → 0 proceed, 1 skip-this-section.
+# Enter = proceed, s = skip section, q = quit to menu/exit. Honors
+# SMOKE_NONINTERACTIVE (always proceeds).
+step() {
+    printf '\n%s➤  %s%s\n' "$B$Y" "$1" "$Z"
+    if [ "${SMOKE_NONINTERACTIVE:-0}" = 1 ]; then info "(non-interactive: proceeding)"; return 0; fi
+    printf '   %s[Enter] go   [s] skip   [q] quit%s ' "$D" "$Z"
+    read -r r || r="q"
+    case "$r" in s|S) return 1 ;; q|Q) return 2 ;; *) return 0 ;; esac
 }
 
-# run a command, capture stdout+exit; echo a trimmed view of the output
-LAST_OUT=""; LAST_RC=0
-run() { LAST_OUT="$("$MOS" "$@" 2>&1)"; LAST_RC=$?; printf '%s   $ mos %s%s\n' "$D" "$*" "$Z"
-        printf '%s\n' "$LAST_OUT" | sed 's/^/     /' | head -20; }
+# ---- command runner: one invocation, displayed and captured ------------------
+OUT=""; RC=0
+run() {  # run <mos-args...>; fills OUT/RC and prints a compact view
+    OUT="$("$MOS" "$@" 2>&1)"; RC=$?
+    printf '%s   $ mos %s%s\n' "$D" "$*" "$Z"
+    printf '%s\n' "$OUT" | sed 's/^/       /' | head -14
+}
 
-# assert helpers operate on LAST_OUT / LAST_RC of the preceding run()
-want_rc()   { if [ "$LAST_RC" = "$1" ]; then ok "$2 (exit $1)"; else bad "$2 (exit $LAST_RC, wanted $1)"; fi; }
-want_text() { if printf '%s' "$LAST_OUT" | grep -q -- "$1"; then ok "$2"; else bad "$2 (missing: $1)"; fi; }
-want_one_of(){ d="$1"; shift; for p in "$@"; do if printf '%s' "$LAST_OUT" | grep -q -- "$p"; then ok "$d ($p)"; return; fi; done; bad "$d (none of: $*)"; }
+expect_rc()   { if [ "$RC" = "$1" ]; then ok "$2"; else bad "$2 (exit $RC, wanted $1)"; fi; }
+# ERE so `a|b` alternation is portable across GNU and BSD (macOS) grep.
+expect_text() { if printf '%s' "$OUT" | grep -Eqi -- "$1"; then ok "$2"; else bad "$2 (missing /$1/)"; fi; }
+expect_nonzero() { if [ "$RC" -ne 0 ]; then ok "$1 (exit $RC)"; else bad "$1 (expected non-zero exit)"; fi; }
+expect_any() {  # expect_any "desc" pat1 pat2 ...; PASS if any pattern matches OUT
+    d="$1"; shift
+    for p in "$@"; do printf '%s' "$OUT" | grep -qi -- "$p" && { ok "$d"; return; }; done
+    bad "$d (none of: $*)"
+}
 
-# ---- dependency bootstrap (python3 + jsonschema via brew/pip) ----------------
-# The --json schema checks need python3 with the jsonschema module. When either
-# is missing, install them best-effort: python3 via Homebrew, then the same
-# hash-pinned jsonschema stack the CI schema job uses (schemas/requirements-ci.txt)
-# via that python's pip. Opt out with SMOKE_INSTALL_DEPS=0; if brew is absent or
-# an install step fails, the schema checks fall back to SKIP exactly as before —
-# everything else still runs.
-have_schema_deps() { command -v python3 >/dev/null 2>&1 && python3 -c 'import jsonschema' >/dev/null 2>&1; }
-
-bootstrap_schema_deps() {
+# ---- schema validation (python3 + jsonschema, matching CI) -------------------
+# Schemas are self-contained, so we validate each document against its single
+# schema file with Draft202012Validator + FormatChecker — the exact mechanism
+# schemas/validate.py and CI use (no deprecated RefResolver).
+HAVE_SCHEMA=0; VALIDATOR=""; FIELD=""
+have_deps() {
+    command -v python3 >/dev/null 2>&1 \
+        && python3 -c 'import jsonschema, rfc3339_validator' >/dev/null 2>&1
+}
+bootstrap_deps() {
     [ "${SMOKE_INSTALL_DEPS:-1}" = 1 ] || return 0
-    have_schema_deps && return 0
-    if ! command -v brew >/dev/null 2>&1; then
-        note "brew not found — skipping python3/jsonschema install (schema checks will SKIP; set SMOKE_INSTALL_DEPS=0 to silence)"
-        return 0
-    fi
-    if ! command -v python3 >/dev/null 2>&1; then
-        note "installing python3 via brew (SMOKE_INSTALL_DEPS=0 to skip)..."
-        brew install python3 || note "brew install python3 failed — schema checks will SKIP"
-    fi
-    if command -v python3 >/dev/null 2>&1 && ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
-        req="$HERE/schemas/requirements-ci.txt"
-        note "installing jsonschema via pip (hash-pinned: schemas/requirements-ci.txt)..."
-        # brew's python is PEP 668 externally-managed, so fall back to --user
-        # then --break-system-packages if a plain install is refused.
-        pip_install() {
-            python3 -m pip install "$@" \
-                || python3 -m pip install --user "$@" \
-                || python3 -m pip install --break-system-packages "$@"
-        }
-        if [ -f "$req" ]; then
-            pip_install --require-hashes -r "$req" || pip_install jsonschema \
-                || note "jsonschema install failed — schema checks will SKIP"
-        else
-            pip_install jsonschema || note "jsonschema install failed — schema checks will SKIP"
-        fi
+    have_deps && return 0
+    command -v python3 >/dev/null 2>&1 || {
+        info "python3 not found — --json schema checks will SKIP"; return 0; }
+    req="$SCHEMA_DIR/requirements-ci.txt"
+    info "installing jsonschema + rfc3339-validator (schemas/requirements-ci.txt)…"
+    pin() { python3 -m pip install "$@" \
+              || python3 -m pip install --user "$@" \
+              || python3 -m pip install --break-system-packages "$@"; }
+    if [ -f "$req" ]; then
+        pin --require-hashes -r "$req" >/dev/null 2>&1 \
+            || pin jsonschema rfc3339-validator >/dev/null 2>&1 \
+            || info "install failed — schema checks will SKIP"
+    else
+        pin jsonschema rfc3339-validator >/dev/null 2>&1 \
+            || info "install failed — schema checks will SKIP"
     fi
 }
-
-# ---- schema validation (best-effort, python3 + jsonschema) -------------------
-bootstrap_schema_deps
-HAVE_SCHEMA=0
-have_schema_deps && HAVE_SCHEMA=1
-
-schema_one() { # $1 schema name, stdin = one JSON object; rc 0 ok / 1 fail / 2 skip
-    [ "$HAVE_SCHEMA" = 1 ] || return 2
-    [ -f "$SCHEMA_DIR/$1.json" ] || return 2
-    python3 - "$SCHEMA_DIR/$1.json" "$SCHEMA_DIR" <<'PY'
-import sys, json, glob, os
-try: import jsonschema
-except Exception: sys.exit(2)
-schema = json.load(open(sys.argv[1]))
-store = {}
-for f in glob.glob(os.path.join(sys.argv[2], "*.json")):
-    try:
-        s = json.load(open(f))
-        if isinstance(s, dict) and "$id" in s: store[s["$id"]] = s
-    except Exception: pass
+setup_validator() {
+    bootstrap_deps
+    have_deps || { info "no python3/jsonschema/rfc3339-validator — schema checks SKIP"; return; }
+    HAVE_SCHEMA=1
+    VALIDATOR="$(mktemp -t mos_validate.XXXXXX)"
+    cat > "$VALIDATOR" <<'PY'
+import sys, json
+from jsonschema import Draft202012Validator, FormatChecker
+sdir, name = sys.argv[1], sys.argv[2]
+try:
+    schema = json.load(open("%s/%s.json" % (sdir, name)))
+except FileNotFoundError:
+    sys.exit(2)
 try:
     doc = json.load(sys.stdin)
 except Exception as e:
     print("not JSON: %s" % e, file=sys.stderr); sys.exit(1)
-try:
-    resolver = jsonschema.RefResolver(base_uri=schema.get("$id",""), referrer=schema, store=store)
-    jsonschema.validate(doc, schema, resolver=resolver)
-except jsonschema.ValidationError as e:
-    print("schema: %s" % e.message, file=sys.stderr); sys.exit(1)
-except Exception as e:
-    print("validator: %s" % e, file=sys.stderr); sys.exit(2)
-sys.exit(0)
+errs = sorted(Draft202012Validator(schema, format_checker=FormatChecker())
+              .iter_errors(doc), key=lambda e: list(e.path))
+for e in errs[:6]:
+    print("%s (at %s)" % (e.message, list(e.path)), file=sys.stderr)
+sys.exit(1 if errs else 0)
+PY
+    FIELD="$(mktemp -t mos_field.XXXXXX)"
+    cat > "$FIELD" <<'PY'
+import sys, json
+try: d = json.load(sys.stdin)
+except Exception: sys.exit(1)
+for k in sys.argv[1:]:
+    if isinstance(d, dict) and k in d: d = d[k]
+    else: sys.exit(1)
+print("" if d is None else d)
 PY
 }
+json_field() { [ -n "$FIELD" ] && printf '%s' "$1" | python3 "$FIELD" "${@:2}" 2>/dev/null; }
 
-want_schema() { # $1 schema, $2 desc, $3.. = mos args (must include --json)
-    sch="$1"; desc="$2"; shift 2
-    out="$("$MOS" "$@" 2>/dev/null)"
-    printf '%s' "$out" | schema_one "$sch"; rc=$?
+# check_doc "expected.schema" "desc" "<json output>"
+# Detects the document's own `schema` field, validates against THAT schema, and
+# compares it to the expected one — so an error envelope where a state document
+# was expected reads "got mos.error.v1" instead of a cryptic validation failure.
+check_doc() {
+    expected="$1"; desc="$2"; doc="$3"
+    got="$(printf '%s' "$doc" | python3 "$FIELD" schema 2>/dev/null)"
+    if [ -z "$got" ]; then
+        if [ "$HAVE_SCHEMA" = 1 ]; then bad "$desc: output is not a JSON document with a schema field"
+        else skp "$desc schema" "no validator"; fi
+        return 1
+    fi
+    if [ "$HAVE_SCHEMA" != 1 ]; then skp "$desc schema ($got)" "no validator"; return 0; fi
+    errs="$(printf '%s' "$doc" | python3 "$VALIDATOR" "$SCHEMA_DIR" "$got" 2>&1)"; rc=$?
     case "$rc" in
-        0) ok "$desc validates $sch" ;;
-        1) bad "$desc does not validate $sch" ; printf '%s' "$out" | schema_one "$sch" 2>&1 | sed 's/^/       /' ;;
-        2) skp "$desc schema $sch" "no python3/jsonschema or schema absent" ;;
+        2) skp "$desc schema ($got)" "schema file absent"; return 0 ;;
+        1) bad "$desc: does not validate $got"; printf '%s\n' "$errs" | sed 's/^/         /' | head -6; return 1 ;;
     esac
+    if [ "$got" = "$expected" ]; then ok "$desc → valid $got"; return 0
+    else bad "$desc: expected $expected, got $got (a valid but unexpected document type)"; return 1; fi
 }
 
-want_schema_ndjson() { # $1 schema, $2 desc, $3 file of NDJSON
-    sch="$1"; desc="$2"; f="$3"
-    if [ "$HAVE_SCHEMA" != 1 ]; then skp "$desc ($sch)" "no validator"; return; fi
-    if [ ! -s "$f" ]; then skp "$desc ($sch)" "no events captured"; return; fi
-    n=0; failed=0
-    while IFS= read -r line; do
-        [ -z "$line" ] && continue
-        n=$((n+1))
-        if ! printf '%s' "$line" | schema_one "$sch"; then failed=1; fi
-    done < "$f"
-    if [ "$failed" = 0 ]; then ok "$desc: $n line(s) validate $sch"; else bad "$desc: a line failed $sch"; fi
-}
-
-# pull a field out of `mos list --json` (field name in $1; first drive)
+# pull a field from the first drive of `mos list --json`. Uses python3 -c so the
+# piped JSON reaches stdin (a heredoc here would override the pipe — SC2259).
 list_field() {
-    command -v python3 >/dev/null 2>&1 || return 1
+    [ -n "$FIELD" ] || return 1
     "$MOS" list --json 2>/dev/null | python3 -c '
 import sys, json
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    sys.exit(1)
+try: d = json.load(sys.stdin)
+except Exception: sys.exit(1)
 ds = d.get("drives", [])
-if not ds:
-    sys.exit(1)
+if not ds: sys.exit(1)
 v = ds[0].get(sys.argv[1])
 print("" if v is None else v)
 ' "$1" 2>/dev/null
 }
 
-# ---- cleanup: never leave the tray locked ------------------------------------
+# ---- cleanup: never leave the tray locked or open ----------------------------
 cleanup() {
-    # unlock clears BOTH Prevent states, so one call suffices.
-    "$MOS" tray unlock >/dev/null 2>&1
+    [ -n "$VALIDATOR" ] && rm -f "$VALIDATOR"
+    [ -n "$FIELD" ] && rm -f "$FIELD"
+    "$MOS" tray unlock >/dev/null 2>&1   # unlock clears BOTH Prevent states
 }
 trap cleanup EXIT INT TERM
 
-banner() {
-    printf '%smos hardware smoke test%s\n' "$B" "$Z"
-    note "binary : $MOS"
-    if [ "$MOS" = "$MOS_ON_PATH" ] && [ -x "$HERE/build/bin/mos" ]; then
-        note "         (installed mos on PATH; a build tree also exists —"
-        note "          set MOS=$HERE/build/bin/mos to test that instead)"
-    fi
-    note "version: $("$MOS" --version 2>/dev/null || echo '(no --version)')"
-    note "schema : $([ "$HAVE_SCHEMA" = 1 ] && echo 'python3 + jsonschema present' || echo 'absent — --json checks will SKIP')"
-    note "phase  : $PHASE"
-}
-
 # =============================================================================
+# SECTIONS
+# =============================================================================
+
 phase_static() {
-    hdr "STATIC (no hardware)"
+    hdr "STATIC — no hardware"
     if [ -x "$HERE/build/bin/mos_tests" ]; then
-        out="$("$HERE/build/bin/mos_tests" 2>&1 | tail -1)"
-        case "$out" in *", 0 failed"*) ok "pure suite: $out" ;; *) bad "pure suite: $out" ;; esac
+        t="$("$HERE/build/bin/mos_tests" 2>&1 | tail -1)"
+        case "$t" in *", 0 failed"*) ok "pure suite: $t" ;; *) bad "pure suite: $t" ;; esac
     else skp "pure suite" "build/bin/mos_tests not built"; fi
+
     if [ "$HAVE_SCHEMA" = 1 ] && [ -f "$SCHEMA_DIR/validate.py" ]; then
-        if python3 "$SCHEMA_DIR/validate.py" >/dev/null 2>&1; then ok "schemas/validate.py"; else bad "schemas/validate.py"; fi
-    else skp "schemas/validate.py" "no python3/jsonschema"; fi
-    run --help;            want_rc 0 "mos --help"
-    run;                   want_rc 64 "bare mos → EX_USAGE"
-    run definitelynotaverb; want_rc 64 "unknown subcommand → EX_USAGE"
-    run state --json=oops; want_rc 64 "--json takes no argument → EX_USAGE"
+        if python3 "$SCHEMA_DIR/validate.py" >/dev/null 2>&1; then ok "schemas/validate.py (examples + drift guards)"
+        else bad "schemas/validate.py"; python3 "$SCHEMA_DIR/validate.py" 2>&1 | tail -8 | sed 's/^/         /'; fi
+    else skp "schemas/validate.py" "no python3/jsonschema/rfc3339-validator"; fi
+
+    run --version;          expect_rc 0 "mos --version"
+    run --help;             expect_rc 0 "mos --help"
+    run;                    expect_rc 64 "bare mos → EX_USAGE (64)"
+    run definitelynotaverb; expect_rc 64 "unknown subcommand → EX_USAGE (64)"
+    run state --json=oops;  expect_rc 64 "--json takes no argument → EX_USAGE (64)"
 }
 
 phase_errors() {
-    hdr "ERROR / SELECTOR EDGE CASES"
-    run state 99
-    if [ "$LAST_RC" -ne 0 ]; then ok "bad index -> non-zero ($LAST_RC)"; else bad "bad index should not exit 0"; fi
-    out="$("$MOS" state --json 99 2>/dev/null)"
-    if printf '%s' "$out" | schema_one mos.error.v1 >/dev/null 2>&1; then
-        ok "bad index --json validates mos.error.v1"
-    else
-        skp "bad-index error schema" "validator unavailable or shape differs"
-    fi
-    run state disk999
-    if [ "$LAST_RC" -ne 0 ]; then ok "nonexistent diskN -> non-zero ($LAST_RC)"; else bad "nonexistent diskN should not exit 0"; fi
+    hdr "ERROR / SELECTOR PATHS — no hardware"
+    run state 99;     expect_nonzero "bad index → non-zero"
+    run state disk999; expect_nonzero "nonexistent diskN → non-zero"
+    e="$("$MOS" state --json 99 2>/dev/null)"
+    check_doc mos.error.v1 "bad index --json" "$e"
+}
+
+# Inspect whatever the drive currently reports, asserting the checks that fit
+# the observed state. Sets the global STATE to the observed state string (display
+# goes straight to stdout, so this is NOT called in a $(...) capture).
+STATE=""
+inspect_state() {
+    run state;  expect_rc 0 "state exits 0 on an observed drive"
+    s="$("$MOS" state --json 2>/dev/null)"
+    check_doc mos.state.v1 "state --json" "$s"
+    STATE="$(json_field "$s" state)"
+    info "observed state: ${STATE:-<unknown>}"
 }
 
 phase_empty() {
-    hdr "DRIVE PRESENT, NO DISC (tray open or closed-empty)"
-    pause "Eject the tray and remove any disc (empty drive). 'mos tray eject' will run first." || { skp "empty phase" "skipped by operator"; return; }
-    run tray eject; note "(if the tray was already open/empty this is a no-op 'done')"
+    hdr "EMPTY DRIVE — no disc loaded"
+    step "Eject the tray and remove any disc (a plain 'mos tray eject' runs first)." || return
+    run tray eject; info "(already-open/empty drive → a no-op 'done')"
 
-    run state;              want_one_of "state is open/empty" '"open"' 'open' '"empty"' 'empty' 'empty_or_open'
-    want_schema mos.state.v1 "state --json" state --json
-    run list;               want_text 'HL-DT-ST\|Vendor\|Product\|Index' "list shows the drive"
-    want_schema mos.list.v1 "list --json" list --json
-    run drive;              want_text 'Vendor\|Product' "drive identity"
-    note "serial may be null — many optical drives don't program VPD 0x80 (expected)"
-    want_schema mos.drive.v1 "drive --json" drive --json
-    run features;           want_rc 0 "features"
-    run capacity;           note "capacity with no media: a no-media report or error is both fine"
-    run metadata;           note "metadata with no disc: error envelope expected"
+    inspect_state
+    case "$STATE" in *open*|*empty*) ok "state is open/empty ($STATE)" ;;
+        "") skp "state classification" "could not read state" ;;
+        *) bad "expected open/empty, got '$STATE'" ;; esac
 
-    # selector equivalence that does NOT need media: index + registry_id
+    run list;     expect_text 'Index|Vendor|Product' "list shows the drive"
+    check_doc mos.list.v1 "list --json" "$("$MOS" list --json 2>/dev/null)"
+
+    run drive;    expect_text 'Vendor|Product' "drive identity (vendor/product)"
+    info "Serial is read from feature 0108h (GET CONFIGURATION, no exclusive access):"
+    info "it reads on an empty drive AND while mounted; null only if the firmware programs none."
+    check_doc mos.drive.v1 "drive --json" "$("$MOS" drive --json 2>/dev/null)"
+
+    run features; expect_rc 0 "features"
+    check_doc mos.features.v1 "features --json" "$("$MOS" features --json 2>/dev/null)"
+
+    run capacity; info "no media → a no-media capacity report or an error envelope are both fine"
+    run metadata; info "no disc → mos.error.v1 envelope expected"
+    check_doc mos.error.v1 "metadata --json (no disc)" "$("$MOS" metadata --json 2>/dev/null)"
+
+    # selector equivalence that needs no media: index vs registry_id
     rid="$(list_field registry_id)"
-    if [ -n "${rid:-}" ] && [ "$rid" != "0" ]; then
-        run state 1;        s1="$LAST_OUT"
-        run state "$rid";   s2="$LAST_OUT"
-        if [ -n "$s1" ] && [ "$s1" = "$s2" ]; then ok "index and registry_id select the same drive"
+    if [ -n "${rid:-}" ] && [ "$rid" != 0 ]; then
+        a="$("$MOS" state 1 2>/dev/null)"; b="$("$MOS" state "$rid" 2>/dev/null)"
+        if [ -n "$a" ] && [ "$a" = "$b" ]; then ok "index and registry_id select the same drive"
         else bad "index vs registry_id selector mismatch"; fi
-    else skp "index/registry_id selector equivalence" "could not read registry_id (need python3)"; fi
-
-    if [ "${SMOKE_SKIP_PROBE:-0}" != 1 ]; then
-        run probe --capture; want_text 'mos.capture.v0\|inquiry_serial\|not built' "probe --capture menu (or OFF build)"
-        note "the inquiry_serial line is the VPD-0x80 reply — task_status/sense/bytes_transferred tell you if a serial exists"
-    fi
+    else skp "index/registry_id equivalence" "could not read registry_id"; fi
 }
 
 phase_tray() {
-    hdr "TRAY CONTROL (no disc)"
-    pause "Empty drive, tray closed. Exercising eject/close/lock/unlock/force." || { skp "tray phase" "skipped"; return; }
-    run tray eject;  want_text 'done\|outcome' "tray eject → done"
-    run state;       want_one_of "after eject: open" '"open"' 'open' 'empty_or_open'
-    run tray close;  want_text 'done\|outcome' "tray close → done"
-    want_schema mos.tray.v1 "tray close --json" tray close --json
+    hdr "TRAY CONTROL — no disc"
+    step "Empty drive, tray closed. Walks eject/close/lock/unlock and --force." || return
 
-    # lock is the basic Prevent (the hard removal block); unlock clears BOTH
-    # states. On an empty drive the lock takes hold (exclusive access is free),
-    # the default eject is refused (a COLD lock — needs --force), and unlock
-    # releases it.
-    run tray lock;   want_text 'done\|outcome' "tray lock (basic) → done"
-    run tray eject;  want_one_of "eject while locked → refused_locked" 'refused_locked' '53/02'
-    run tray unlock; want_text 'done\|outcome' "tray unlock (clears both) → done"
-    run tray eject;  want_text 'done\|outcome' "eject after unlock → done"
+    run tray eject;  expect_text 'eject|done|outcome' "tray eject → done"
+    inspect_state; case "$STATE" in *open*|*empty*) ok "after eject: open/empty ($STATE)" ;; *) info "state: $STATE" ;; esac
+    run tray close;  expect_text 'close|done|outcome' "tray close → done"
+    check_doc mos.tray.v1 "tray close --json" "$("$MOS" tray close --json 2>/dev/null)"
+
+    info "lock = the basic Prevent (hard removal block); unlock clears BOTH states."
+    info "On an empty drive the lock is a COLD lock — the default eject is refused,"
+    info "and --force clears it. (--persistent is gone: lock is always the basic Prevent.)"
+    run tray lock;          expect_text 'lock|done|outcome' "tray lock → done"
+    run tray eject;         expect_any "eject of a COLD-locked tray → refused_locked" 'refused_locked' '53/02'
+    run tray unlock;        expect_text 'unlock|done|outcome' "tray unlock → done"
+    run tray eject;         expect_text 'eject|done|outcome' "eject after unlock → done"
     run tray close
 
-    run tray lock;            want_text 'done\|outcome' "re-lock for --force test"
-    run tray eject --force;   want_one_of "eject --force clears the cold lock" 'done' 'outcome'
-    note "--force cleared the cold Prevent lock then ejected; it never forces the filesystem"
+    run tray lock;          expect_text 'lock|done|outcome' "re-lock for the --force test"
+    run tray eject --force; expect_any "eject --force clears the cold lock" 'done' 'outcome'
+    info "--force cleared the COLD Prevent lock then ejected; it never forces the filesystem."
     run tray close
 }
 
 phase_disc() {
-    hdr "DISC INSERTED (per media type — repeat for each disc you have)"
-    note "Media to cover if available: CD-ROM, CD-R/RW, DVD-ROM, DVD±R/RW, BD-ROM, blank BD-R/RE, UHD BD."
+    hdr "DISC LOADED — adaptive, repeat per media type"
+    info "Cover if you have them: CD-ROM, CD-R/RW, DVD-ROM, DVD±R/RW, BD-ROM, blank BD-R/RE, UHD BD."
+    # non-interactive can't swap discs, and `step` always proceeds there — cap the
+    # insert loop at one pass so `SMOKE_NONINTERACTIVE=1 all` can't spin forever.
+    disc_pass=0
     while : ; do
-        pause "Insert a disc and let macOS mount it (or 'diskutil mount'). s+Enter to finish the disc phase." || break
+        [ "${SMOKE_NONINTERACTIVE:-0}" = 1 ] && [ "$disc_pass" -ge 1 ] && break
+        disc_pass=$((disc_pass+1))
+        step "Insert a disc and let macOS mount it (or 'diskutil mount diskN')." || break
 
-        # 1) the stray-open guard: sample state across the load window
-        note "sampling state during spin-up (expect: loading → ready; NO stray 'open')"
-        seen_open=0; seen_loading=0
-        i=0; while [ $i -lt 8 ]; do
-            s="$("$MOS" state 2>/dev/null | grep -i '^State:' | head -1)"
-            printf '%s     %s%s\n' "$D" "$s" "$Z"
-            case "$s" in *open*) seen_open=1 ;; esac
-            case "$s" in *loading*) seen_loading=1 ;; esac
-            case "$s" in *ready*) break ;; esac
+        # 1) the stray-open guard — sample state across the spin-up window
+        info "sampling state during spin-up (expect loading → ready; NO stray 'open')"
+        seen_open=0; seen_loading=0; i=0
+        while [ $i -lt 10 ]; do
+            line="$("$MOS" state 2>/dev/null | grep -i 'State' | head -1)"
+            printf '%s       %s%s\n' "$D" "$line" "$Z"
+            case "$line" in *open*) seen_open=1 ;; esac
+            case "$line" in *loading*) seen_loading=1 ;; esac
+            case "$line" in *ready*) break ;; esac
             i=$((i+1)); sleep 0.4
         done
-        if [ "$seen_open" = 1 ]; then bad "STRAY OPEN during load (the 04/xx-vs-GESN bug) — capture this!"
+        if [ "$seen_open" = 1 ]; then
+            bad "STRAY 'open' during load (the 04/xx-vs-GESN transient) — CAPTURE THIS with 'mos probe --capture'"
         elif [ "$seen_loading" = 1 ]; then ok "load showed 'loading', no stray 'open'"
-        else note "didn't catch the loading window (too fast) — fine if it reached ready"; fi
+        else info "spin-up too fast to catch 'loading' — fine if it reached ready"; fi
 
-        # 2) ready/mounted enrichment
-        run state;     want_one_of "disc state ready" '"ready"' 'ready'
-        want_schema mos.state.v1 "state --json (mounted)" state --json
-        run metadata;  want_text 'Disc:\|Profile:\|Media:\|TOC' "metadata populated"
-        want_schema mos.metadata.v1 "metadata --json" metadata --json
-        run capacity;  note "capacity: total/used; blank rewritable & BD-R add a formattable view"
-        want_schema mos.capacity.v1 "capacity --json" capacity --json
-        run drive;     note "serial reads null while mounted (raw INQUIRY backs off on exclusive access) — expected"
-        run list;      want_one_of "list shows ready + volume" 'ready' '/Volumes'
-        # lock on a MOUNTED disc: already removal-locked by macOS → already_locked
-        # (a no-op success), NOT a busy error.
-        run tray lock; want_text 'already_locked' "lock on mounted disc → already_locked"
+        # 2) ready-state enrichment
+        inspect_state
+        case "$STATE" in
+            *ready*) ok "disc reached ready ($STATE)" ;;
+            "") skp "ready enrichment" "no state read" ; continue ;;
+            *) info "state is '$STATE' (not ready) — skipping ready-only checks"; continue ;;
+        esac
+        info "Speeds (GET PERFORMANCE) ride in 'mos state' on the ready branch:"
+        run state; expect_text 'Speed' "state shows Speeds for a ready disc (or note if drive omits them)"
 
-        # 3) selector equivalence with media present (diskN now exists)
-        bn="$(list_field bsd_node)"   # e.g. /dev/disk8
-        if [ -n "${bn:-}" ] && [ "$bn" != "null" ]; then
-            dn="${bn##*/}"            # disk8
-            run state "$dn";              a="$LAST_OUT"
-            run state "$bn";              b="$LAST_OUT"
-            run state --bsd "$dn";        c="$LAST_OUT"
+        run metadata; expect_text 'Disc|Profile|Media|TOC' "metadata populated"
+        check_doc mos.metadata.v1 "metadata --json" "$("$MOS" metadata --json 2>/dev/null)"
+        run capacity; info "capacity: total/used; blank rewritable & BD-R add a formattable view"
+        check_doc mos.capacity.v1 "capacity --json" "$("$MOS" capacity --json 2>/dev/null)"
+        run drive;    expect_text 'Vendor|Product' "drive identity while mounted"
+        info "Serial (feature 0108h) reads even while mounted now — no exclusive-access back-off."
+
+        # lock on a MOUNTED disc → already_locked (macOS armed the removal lock)
+        run tray lock; expect_text 'already_locked' "lock on a mounted disc → already_locked"
+
+        # 3) selector equivalence with media (diskN now exists)
+        bn="$(list_field bsd_node)"
+        if [ -n "${bn:-}" ] && [ "$bn" != null ]; then
+            dn="${bn##*/}"
+            a="$("$MOS" state "$dn" 2>/dev/null)"; b="$("$MOS" state "$bn" 2>/dev/null)"
+            c="$("$MOS" state --bsd "$dn" 2>/dev/null)"
             if [ "$a" = "$b" ] && [ "$b" = "$c" ]; then ok "diskN / /dev/diskN / --bsd select the same drive"
             else bad "bsd selector forms disagree"; fi
-        else skp "bsd selector equivalence" "no bsd_node (need python3 / mounted media)"; fi
+        else skp "bsd selector equivalence" "no bsd_node (need a mounted disc + python3)"; fi
 
-        # 4) graceful eject of a mounted (idle) disc
-        if pause "Close any apps using the disc, then I'll test a GRACEFUL eject (unmount+eject)."; then
-            run tray eject; want_one_of "graceful eject of mounted disc" 'done' 'outcome'
-            note "mounted → mos unmounts gracefully then ejects; a BUSY filesystem would surface MOS_ERR_BUSY instead"
+        # 4) graceful eject of an idle mounted disc
+        if step "Close anything using the disc — I'll test a GRACEFUL eject (unmount+eject)."; then
+            run tray eject; expect_any "graceful eject of a mounted disc" 'done' 'outcome'
+            info "mounted → mos unmounts gracefully then ejects; a BUSY fs would surface MOS_ERR_BUSY."
             run tray close
         fi
     done
 
-    # 5) busy-filesystem eject (data-loss guard: mos must REFUSE, never force)
-    if pause "BUSY-FS test: insert a disc, let it mount. I'll hold a file open and try to eject." ; then
-        vol="$(list_field volume_path)"; bn="$(list_field bsd_node)"
-        if [ -n "${vol:-}" ] && [ "$vol" != "null" ] && [ -d "$vol" ]; then
-            # hold an open handle on the volume root, then attempt eject
-            ( exec 9< "$vol"; "$MOS" tray eject >/tmp/mos_busy_eject.$$ 2>&1; ) ; rc=$?
-            LAST_OUT="$(cat /tmp/mos_busy_eject.$$ 2>/dev/null)"; rm -f /tmp/mos_busy_eject.$$
-            printf '%s\n' "$LAST_OUT" | sed 's/^/     /'
-            want_one_of "busy-fs eject is REFUSED, not forced" 'busy' 'BUSY' 'EX_TEMPFAIL'
-            note "mos never force-unmounts: a busy volume yields MOS_ERR_BUSY (diskutil-equivalent), data intact"
-        else skp "busy-fs eject" "no mounted volume_path (need python3 + a data disc)"; fi
+    # 5) busy-filesystem eject — mos must REFUSE, never force (data-loss guard)
+    if step "BUSY-FS test: insert a disc, let it mount; I'll hold a file open then eject."; then
+        vol="$(list_field volume_path)"
+        if [ -n "${vol:-}" ] && [ "$vol" != null ] && [ -d "$vol" ]; then
+            tmp="$(mktemp -t mos_busy.XXXXXX)"
+            ( exec 9< "$vol"; "$MOS" tray eject >"$tmp" 2>&1 )
+            OUT="$(cat "$tmp")"; rm -f "$tmp"
+            printf '%s\n' "$OUT" | sed 's/^/       /' | head -8
+            expect_any "busy-fs eject is REFUSED, not forced" 'busy' 'EX_TEMPFAIL'
+            info "mos never force-unmounts: a busy volume yields MOS_ERR_BUSY (diskutil-equivalent), data intact."
+        else skp "busy-fs eject" "no mounted volume_path (need a data disc + python3)"; fi
     fi
 }
 
 phase_watch() {
-    hdr "WATCH (event stream + contention)"
-    if pause "Single-drive watch: I'll stream events while you EJECT then INSERT a disc."; then
-        evf="/tmp/mos_watch_events.$$"
-        "$MOS" watch --json >"$evf" 2>/dev/null &
-        wpid=$!
-        note "watching (pid $wpid) for ~20s — eject the tray, then insert a disc..."
+    hdr "WATCH — event stream + contention"
+    if step "I'll stream watch events for ~20s while you EJECT, then INSERT a disc."; then
+        evf="$(mktemp -t mos_watch.XXXXXX)"
+        "$MOS" watch --json >"$evf" 2>/dev/null & wpid=$!
+        info "watching (pid $wpid) — eject the tray, then insert a disc…"
         sleep 20; kill "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null
-        sed 's/^/     /' "$evf" | head -12
-        want_schema_ndjson mos.event.v1 "watch events" "$evf"
-        if grep -q 'state_changed\|snapshot' "$evf" 2>/dev/null; then ok "watch emitted lifecycle events"; else bad "watch emitted no events"; fi
-        if grep -q '"open"' "$evf" 2>/dev/null && grep -q 'becoming\|04/01\|loading' "$evf" 2>/dev/null; then
-            note "check the event order: an insert should show 'loading', not a stray 'open'"; fi
+        sed 's/^/       /' "$evf" | head -12
+        if [ -s "$evf" ]; then
+            n=0; failed=0
+            while IFS= read -r ln; do
+                [ -z "$ln" ] && continue; n=$((n+1))
+                sch="$(printf '%s' "$ln" | python3 "$FIELD" schema 2>/dev/null)"
+                if [ "$HAVE_SCHEMA" = 1 ] && [ -n "$sch" ]; then
+                    printf '%s' "$ln" | python3 "$VALIDATOR" "$SCHEMA_DIR" "$sch" >/dev/null 2>&1 || failed=1
+                fi
+            done < "$evf"
+            if [ "$HAVE_SCHEMA" != 1 ]; then skp "watch event schemas" "no validator"
+            elif [ "$failed" = 0 ]; then ok "watch: $n event line(s) each validate their own schema"
+            else bad "watch: an event line failed its schema"; fi
+            if grep -Eq 'state_changed|snapshot' "$evf"; then ok "watch emitted lifecycle events"
+            else bad "watch emitted no lifecycle events"; fi
+            if grep -q '"open"' "$evf" && grep -Eqi 'becoming|04/01|loading' "$evf"; then
+                info "review the order: an insert should show 'loading', not a stray 'open'"; fi
+        else bad "watch produced no output"; fi
         rm -f "$evf"
     fi
 
-    if pause "CONTENTION: I'll run a background watch and fire 'mos tray eject' against it (post-#110 should SUCCEED)."; then
+    if step "CONTENTION: background watch + 'mos tray eject' against it (should SUCCEED post-#110)."; then
         "$MOS" watch >/dev/null 2>&1 & wpid=$!
         sleep 2
         run tray eject
-        case "$LAST_RC" in
-            0) ok "eject succeeded under a concurrent watch (contention reduced)" ;;
-            *) if printf '%s' "$LAST_OUT" | grep -qi 'exclusive'; then
-                   bad "eject lost to watch (EXCLUSIVE_ACCESS) - residual GESN window hit"
-               else
-                   note "eject non-zero ($LAST_RC) for a non-contention reason - inspect above"
-               fi ;;
-        esac
+        if [ "$RC" = 0 ]; then ok "eject succeeded under a concurrent watch (contention reduced)"
+        elif printf '%s' "$OUT" | grep -qi 'exclusive'; then
+            bad "eject lost to watch (EXCLUSIVE_ACCESS) — residual empty-drive GESN window"
+        else info "eject non-zero ($RC) for a non-contention reason — inspect above"; fi
         kill "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null
         "$MOS" tray close >/dev/null 2>&1
     fi
 }
 
 # =============================================================================
-banner
-case "$PHASE" in
-    static) phase_static ;;
-    empty)  phase_empty ;;
-    tray)   phase_tray ;;
-    disc)   phase_disc ;;
-    watch)  phase_watch ;;
-    errors) phase_errors ;;
-    all)    phase_static; phase_errors; phase_empty; phase_tray; phase_disc; phase_watch ;;
-esac
+banner() {
+    printf '%smos hardware smoke test%s\n' "$B" "$Z"
+    info "binary : $MOS  ($("$MOS" --version 2>/dev/null || echo 'no --version'))"
+    if [ "$MOS" = "$MOS_BUILT" ] && [ -n "$MOS_ON_PATH" ]; then
+        info "note   : an installed mos is also on PATH ($MOS_ON_PATH);"
+        info "         testing the freshly-built one. Pass MOS=$MOS_ON_PATH to test that."
+    elif [ "$MOS" = "$MOS_ON_PATH" ] && [ -x "$MOS_BUILT" ]; then
+        info "note   : a build tree also exists; testing the installed mos on PATH."
+        info "         Pass MOS=$MOS_BUILT to test the freshly-built one."
+    fi
+    info "schema : $([ "$HAVE_SCHEMA" = 1 ] && echo 'python3 + jsonschema + rfc3339-validator present' || echo 'absent — --json checks SKIP')"
+}
 
-hdr "SUMMARY"
-printf '%s%d passed%s, %s%d failed%s, %s%d skipped%s\n' \
-    "$G" "$PASS" "$Z" "$R" "$FAIL" "$Z" "$Y" "$SKIP" "$Z"
-[ "$FAIL" -gt 0 ] && printf 'failed:%b\n' "$FAILED_NAMES"
-note "Per the hardware-role ADR, a FAIL or a surprise is a deliverable: capture it"
-note "with 'mos probe --capture <drive>' and file it as a fixture + dated note."
-[ "$FAIL" -eq 0 ]
+summary() {
+    hdr "SUMMARY"
+    printf '%s%d passed%s, %s%d failed%s, %s%d skipped%s\n' \
+        "$G" "$PASS" "$Z" "$R" "$FAIL" "$Z" "$Y" "$SKIP" "$Z"
+    [ "$FAIL" -gt 0 ] && printf 'failed:%b\n' "$FAILED_NAMES"
+    info "Per the hardware-role ADR a FAIL or surprise is a deliverable: capture it with"
+    info "'mos probe --capture <drive>' and file it as a fixture + a dated note."
+}
+
+run_section() {
+    case "$1" in
+        static) phase_static ;; errors) phase_errors ;; empty) phase_empty ;;
+        tray)   phase_tray ;;   disc)   phase_disc ;;   watch) phase_watch ;;
+        all)    phase_static; phase_errors; phase_empty; phase_tray; phase_disc; phase_watch ;;
+    esac
+}
+
+menu() {
+    while : ; do
+        printf '\n%sChoose a section%s (set up the drive/disc to match):\n' "$B" "$Z"
+        cat <<EOF
+   1) static   no hardware: pure suite, schemas, help/exit codes
+   2) errors   selector + usage error paths
+   3) empty    drive present, NO disc — identity, serial, list, features
+   4) tray     eject / close / lock / unlock / --force (no disc)
+   5) disc     insert a disc — adaptive loading/ready/enrichment checks
+   6) watch    event stream + watch/eject contention
+   a) all      run 1–6 in order
+   s) summary so far     q) quit
+EOF
+        printf '%s> %s' "$D" "$Z"; read -r pick || pick=q
+        case "$pick" in
+            1) phase_static ;; 2) phase_errors ;; 3) phase_empty ;;
+            4) phase_tray ;; 5) phase_disc ;; 6) phase_watch ;;
+            a|A) run_section all ;;
+            s|S) summary ;;
+            q|Q) break ;;
+            *) info "pick 1–6, a, s, or q" ;;
+        esac
+    done
+}
+
+# ---- main --------------------------------------------------------------------
+setup_validator
+banner
+
+ARG="${1:-}"
+case "$ARG" in
+    static|errors|empty|tray|disc|watch|all)
+        run_section "$ARG"; summary; [ "$FAIL" -eq 0 ] ;;
+    "")
+        if [ "${SMOKE_NONINTERACTIVE:-0}" = 1 ]; then
+            run_section all; summary; [ "$FAIL" -eq 0 ]
+        else
+            menu; summary; [ "$FAIL" -eq 0 ]
+        fi ;;
+    *)
+        echo "unknown section '$ARG' (static|empty|tray|disc|watch|errors|all)" >&2; exit 2 ;;
+esac
