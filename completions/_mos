@@ -54,9 +54,14 @@ _mos() {
         args)
             case $line[1] in
                 tray)
+                    local -a tray_opts
+                    tray_opts=("${global_opts[@]}")
+                    local _tray_act
+                    for w in "${(@)line[2,-1]}"; do [[ $w != -* ]] && { _tray_act=$w; break; }; done
+                    [[ -z $_tray_act || $_tray_act == eject ]] && \
+                        tray_opts+=('--force[tray eject: also clear a tray Prevent lock (never forces the filesystem)]')
                     _arguments \
-                        "${global_opts[@]}" \
-                        '--force[tray eject: also clear a tray Prevent lock (never forces the filesystem)]' \
+                        "${tray_opts[@]}" \
                         '1:action:(eject open close lock unlock)'
                     ;;
                 probe)
