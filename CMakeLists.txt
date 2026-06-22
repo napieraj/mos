@@ -324,6 +324,42 @@ if(MOS_CLI_PROBE)
     target_compile_definitions(mos PRIVATE MOS_CLI_PROBE=1)
 endif()
 
+# ---- Shared library (dylib) for Python ctypes / FFI use ----------------
+#
+# opt-in: -DMOS_BUILD_DYLIB=ON. Produces libmos.dylib that ctypes, cffi,
+# or any dlopen consumer can load. Sources are compiled directly into the
+# SHARED target (not re-linked from the static archives) because those are
+# PRIVATE/ARCHIVE targets and cannot be re-exported without -force_load.
+# Visibility is left at the compiler default so all mos_* symbols
+# (including mos_internal_*) are exported; ctypes callers name specific
+# symbols, so internal exposure is harmless.
+option(MOS_BUILD_DYLIB
+       "Build libmos.dylib for ctypes/FFI use (macOS only, opt-in)" OFF)
+if(MOS_BUILD_DYLIB)
+    add_library(mos_dylib SHARED ${MOS_PURE_SOURCES} ${MOS_CORE_SOURCES})
+    target_include_directories(mos_dylib
+        PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                $<INSTALL_INTERFACE:include>
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(mos_dylib
+        PRIVATE mos_warnings
+                ${IOKIT_FRAMEWORK}
+                ${COREFOUNDATION_FRAMEWORK}
+                ${DISCRECORDING_FRAMEWORK}
+    )
+    if(MOS_USE_DISKARBITRATION)
+        target_link_libraries(mos_dylib PRIVATE ${DISKARBITRATION_FRAMEWORK})
+    else()
+        target_compile_definitions(mos_dylib PRIVATE MOS_USE_DISKARBITRATION=0)
+    endif()
+    set_target_properties(mos_dylib PROPERTIES
+        OUTPUT_NAME mos
+    )
+    install(TARGETS mos_dylib
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()
+
 endif() # APPLE
 
 # ---- Opt-in: unit tests + CLI contract test ---------------------------

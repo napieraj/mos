@@ -341,6 +341,37 @@ jobs:
         run: brew style homebrew/mos.rb || true
         # `|| true` until the first tag is pushed and url/sha256 are filled.
 
+  dylib:
+    name: Build dylib (macOS, Python ctypes)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0 (Node 24)
+        with:
+          persist-credentials: false
+
+      - name: Configure
+        run: cmake -B build-dylib -DCMAKE_BUILD_TYPE=Release -DMOS_BUILD_DYLIB=ON
+
+      - name: Build libmos.dylib
+        run: cmake --build build-dylib --target mos_dylib --parallel
+
+      - name: Verify dylib loads with Python ctypes
+        run: |
+          set -e
+          LIB=$(find build-dylib -name "libmos.dylib" | head -1)
+          echo "Built: $LIB"
+          EXPORTED=$(nm -g --defined-only "$LIB" | awk '$2=="T"{print $3}' | grep -c '^_mos_' || true)
+          echo "Exported mos_ symbols: $EXPORTED"
+          MOS_DYLIB="$LIB" python3 -c "import ctypes, os; ctypes.CDLL(os.environ['MOS_DYLIB']); print('ctypes.CDLL loaded OK')"
+          echo "OK: libmos.dylib loadable with Python ctypes"
+
+      - name: Upload libmos.dylib
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: libmos-dylib-macos
+          path: build-dylib/libmos.dylib
+          retention-days: 7
+
   schemas:
     name: JSON Schema validation
     # Schema validation is pure Python — no IOKit needed. Runs on
