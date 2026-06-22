@@ -59,7 +59,9 @@
 #   RIPS_DIR / ARCHIVE_DIR   output roots          (default ~/Rips, ~/Archive)
 #   INVENTORY                append-only JSONL log (default ~/disc-inventory.jsonl;
 #                            set empty to disable)
-#   SIDECAR=1                write <image>.mos.json + .sha256 beside archives
+#   SIDECAR=1                write a checksummed provenance record per rip:
+#                            manifest.json inside an audio/movie rip dir, and
+#                            <image>.mos.json beside an archived .iso
 #   EJECT_WHEN_DONE=0        `mos tray eject` after a successful job (swap-me)
 #   LOCK_DURING_RIP=0        `mos tray lock` an idle drive across the job
 #   MOVIE_MODE=all           rip "all" titles, or "main" (longest only)
@@ -384,6 +386,7 @@ ingest_audio_cd() {                         # <sel> <meta> <drive> <node_n> <lab
         "$(jq -nc --arg a "$artist" --arg b "$album" --arg y "$year" \
                   --arg s "$source" --arg lc "$length_check" \
             '{artist:$a, album:$b, year:(($y|select(.!="")) // null), id_source:$s, length_check:$lc}')"
+    write_manifest "$meta" "$drive_json" "$out" audio_cd
     tray_eject "$sel"
 }
 
@@ -464,6 +467,7 @@ ingest_video() {                            # <sel> <meta> <drive> <raw> <label>
     inventory_append "$meta" "$drive_json" video \
         "$(jq -nc --arg n "$name" --argjson tc "${titles:-0}" --arg mt "${main_title:-}" \
             '{disc_name:$n, title_count:$tc, main_title:(($mt|select(.!="")) // null)}')"
+    write_manifest "$meta" "$drive_json" "$out" video
     tray_eject "$sel"
     return 0
 }
@@ -853,6 +857,38 @@ inventory_append() {
         } + $extra')
     if [ "${DRY_RUN:-0}" = 1 ]; then log "inventory += $row"
     else printf '%s\n' "$row" >>"$INVENTORY"; fi
+}
+
+# write_manifest <metadata-json> <drive-json> <dir> <action> — the per-rip
+# provenance record written INSIDE a rip directory (audio/movie): mos's full
+# metadata + drive identity + fingerprint + a sha256 of EVERY output file in
+# the dir (the redumper .bin/.cue/.log, the .mkv titles, the tracklist). This
+# is the directory twin of write_sidecar's beside-the-.iso record, so all three
+# rip branches leave the same checksummed provenance. Honors SIDECAR + DRY_RUN.
+write_manifest() {
+    [ "$SIDECAR" = 1 ] || return 0
+    local meta="$1" drive="$2" dir="$3" action="$4"
+    if [ "${DRY_RUN:-0}" = 1 ]; then log "manifest -> $dir/manifest.json (sha256 of each output)"; return 0; fi
+    [ -d "$dir" ] || return 0
+    # hash every regular file in the dir except the manifest we're writing. This
+    # is post-rip provenance: best-effort, and must never abort a finished rip —
+    # so stat/sha failures degrade to 0/"" and the whole thing is guarded.
+    local files
+    files=$( cd "$dir" && find . -type f ! -name manifest.json -print0 \
+        | while IFS= read -r -d '' f; do
+              f=${f#./}
+              jq -nc --arg name "$f" \
+                     --argjson bytes "$(stat -f%z "$f" 2>/dev/null || echo 0)" \
+                     --arg sha "$(sha256 <"$f" 2>/dev/null || true)" \
+                     '{name: $name, bytes: $bytes, sha256: $sha}'
+          done | jq -sc '.' ) || files='[]'
+    jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg action "$action" \
+        --arg fp "$(fingerprint "$meta")" --argjson files "${files:-[]}" \
+        --argjson meta "$meta" --argjson drive "$drive" \
+        '{captured_at: $ts, action: $action, fingerprint: $fp,
+          files: $files, metadata: $meta, drive: $drive}' >"$dir/manifest.json" \
+        || warn "manifest write failed for $dir (rip is intact)"
+    return 0
 }
 
 # write_sidecar <metadata-json> <drive-json> <image-path> — the archivist's
