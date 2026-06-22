@@ -224,11 +224,20 @@ complete -F _mos mos
 ZSH_DRIVES_HELPER = r"""
 # Query attached optical drives from `mos list --json`. Produces completions of
 # the form "/dev/disk4:ready LG BD-RE WH16NS60" — bsd_node as the completion
-# value, drive state + identity as the description. Requires jq; silently
-# produces no candidates when jq is absent or no drives are attached.
+# value, drive state + identity as the description.
+# Uses jq when available, falls back to python3, silently yields no candidates
+# when neither is present or no drives are attached.
 _mos_drives() {
   local -a drives
-  drives=(${(f)"$(mos list --json 2>/dev/null | jq -r '.drives[]|"\(.bsd_node):\(.state) \(.vendor) \(.product)"' 2>/dev/null)"})
+  local json
+  json="$(mos list --json 2>/dev/null)" || return
+  if (( $+commands[jq] )); then
+    drives=(${(f)"$(printf '%s' "$json" | jq -r '.drives[]|"\(.bsd_node):\(.state) \(.vendor) \(.product)"' 2>/dev/null)"})
+  elif (( $+commands[python3] )); then
+    drives=(${(f)"$(printf '%s' "$json" | python3 -c \
+      'import sys,json;[print("%s:%s %s %s"%(d.get("bsd_node",""),d.get("state",""),d.get("vendor",""),d.get("product",""))) for d in json.load(sys.stdin).get("drives",[]) if d.get("bsd_node")]' \
+      2>/dev/null)"})
+  fi
   _describe 'drives' drives
 }
 """
