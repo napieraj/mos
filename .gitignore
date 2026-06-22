@@ -40,3 +40,6 @@ __pycache__/
 ## copies, not redistributable under 0BSD (release-preflight enforces
 ## the same rule on archives). See doc/dr-field-mapping.md.
 docs/apple/
+
+# hw-smoke capture staging (fixtures get filed into tests/fixtures/ by hand)
+hw-captures/

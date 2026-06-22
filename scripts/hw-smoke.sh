@@ -19,11 +19,11 @@
 #   scripts/hw-smoke.sh                 # interactive menu (recommended)
 #   scripts/hw-smoke.sh <section>       # run one section non-interactively
 #       sections: static empty tray disc watch errors capture all
-#   scripts/hw-smoke.sh capture            # capture hex fixtures (per disc type),
-#                                          # serial-scrubbed (keyed BLAKE2b) by default
-#   scripts/hw-smoke.sh capture --raw      # BYTE-PERFECT: do NOT scrub the serial (private)
-#   scripts/hw-smoke.sh capture --salt=KEY # BLAKE2b key for the scrub (or MOS_SCRUB_SALT)
+#   scripts/hw-smoke.sh capture            # capture hex fixtures per disc type;
+#                                          # interactive setup asks scrub/raw + save-log
+#   scripts/hw-smoke.sh capture --raw      # scripted opt-out of the serial scrub (private)
 #   SMOKE_CAPTURE_DIR=/path scripts/hw-smoke.sh capture   # output root (grouped vendor/model)
+#   (advanced) --salt=KEY / MOS_SCRUB_SALT: BLAKE2b key for the scrub.
 #   MOS=/path/to/mos scripts/hw-smoke.sh         # force a specific binary
 #   SMOKE_NONINTERACTIVE=1 scripts/hw-smoke.sh all   # assume "ready" at prompts
 #   SMOKE_INSTALL_DEPS=0 scripts/hw-smoke.sh     # don't auto-install python deps
@@ -72,10 +72,14 @@ PASS=0; FAIL=0; SKIP=0; FAILED_NAMES=""
 # at main) drives the T+mm:ss markers. When LOGFILE is set (capture phase) every
 # emitted line is appended to it, T+-prefixed, so the log reads as a timeline.
 START_ISO=""; LOGFILE=""
-# --raw (or SMOKE_RAW=1): skip serial hashing — byte-perfect fixtures/logs that DO
-# contain the real serial (opt-in). --salt=VALUE (or MOS_SCRUB_SALT): the BLAKE2b
-# key for the scrub. Both are parsed from argv in main.
-RAW="${SMOKE_RAW:-0}"; SCRUB_SALT="${MOS_SCRUB_SALT:-}"
+# Serial scrub (capture only). Interactive: the capture-setup prompt asks whether
+# to scrub. Non-interactive / scripted: --raw (or SMOKE_RAW=1) forces byte-perfect
+# (no scrub). RAW_FORCED records that --raw came from the CLI so setup won't
+# re-ask. The salt is a quiet runtime knob only (--salt= / MOS_SCRUB_SALT), not a
+# prompt — a BD-writer serial barely warrants it, but it's there for the paranoid.
+RAW="${SMOKE_RAW:-0}"; RAW_FORCED=0; SCRUB_SALT="${MOS_SCRUB_SALT:-}"
+SAVE_LOG=1           # capture: write the run log + manifest (asked in setup)
+CAP_PARTIAL=0        # capture: set when a step is skipped / the run ends early
 tplus() { printf 'T+%02d:%02d' $((SECONDS / 60)) $((SECONDS % 60)); }
 lg() { [ -n "$LOGFILE" ] || return 0; printf '%s  %s\n' "$(tplus)" "$*" >> "$LOGFILE" 2>/dev/null; }
 
@@ -256,15 +260,17 @@ stop_watch() {
 # ---- fixture capture (mos probe --capture) -----------------------------------
 # Sanitized vendor+product token for fixture filenames (e.g. HL-DT-ST_BD-RE_WH16NS60).
 # Short model token for filenames. Product strings carry a class prefix that is
-# noise for identity ("BD-RE WH16NS60" -> "WH16NS60"): take the LAST whitespace-
-# delimited token (the model number), sanitized. Falls back to the whole product
-# then "drive".
+# noise for identity, and INQUIRY fields are space-padded with arbitrary runs:
+# "BD-RE  WH16NS60   " -> "WH16NS60". awk '{print $NF}' takes the last whitespace-
+# delimited field, robust to multiple/leading/trailing spaces. Falls back to the
+# whole product then "drive".
 drive_model() {
     p=""
     [ -n "$FIELD" ] && p="$("$MOS" drive --json 2>/dev/null | python3 "$FIELD" product 2>/dev/null)"
     [ -z "$p" ] && p="$(list_field product 2>/dev/null)"
     [ -z "$p" ] && p="drive"
-    last="${p##* }"                         # last whitespace token: BD-RE WH16NS60 -> WH16NS60
+    last="$(printf '%s' "$p" | awk '{print $NF}')"   # last field; collapses any whitespace runs
+    [ -z "$last" ] && last="$p"
     printf '%s' "$last" | tr -dc 'A-Za-z0-9._-'
 }
 
@@ -459,11 +465,11 @@ PY
 # scrubbed + sha-recomputed inline at capture time). Reads structured provenance
 # fields off each record (disc_type/state/command/sha256/fixture), not filenames.
 build_manifest() {
-    mout="$1"; mmodel="$2"; mver="$3"; mrev="$4"; mvendor="$5"
+    mout="$1"; mmodel="$2"; mver="$3"; mrev="$4"; mvendor="$5"; mstatus="${6:-complete}"
     [ "$HAVE_PY" = 1 ] || return 0
-    python3 - "$mout" "$mmodel" "$mver" "$mrev" "$mvendor" "$START_ISO" "$RAW" "$(basename "$LOGFILE")" <<'PY'
+    python3 - "$mout" "$mmodel" "$mver" "$mrev" "$mvendor" "$START_ISO" "$RAW" "$(basename "$LOGFILE")" "$mstatus" <<'PY'
 import sys, os, json, glob, datetime
-mout, model, ver, rev, vendor, started, rawmode, logname = (sys.argv + [""]*8)[1:9]
+mout, model, ver, rev, vendor, started, rawmode, logname, status = (sys.argv + [""]*9)[1:10]
 raw = (rawmode == "1")
 mans = sorted(glob.glob(os.path.join(mout, "*.ndjson")))
 rows, logs = [], []
@@ -501,7 +507,10 @@ if os.path.exists(sp):
     scrub = open(sp).read()
 
 now = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-out = ["# mos capture manifest\n\n"]
+out = ["# mos capture manifest (%s)\n\n" % status.upper()]
+if status != "complete":
+    out.append("> **PARTIAL run** — not every disc/state was captured (steps skipped or "
+               "no disc loaded). The fixtures present are valid; the matrix is incomplete.\n\n")
 if raw:
     out.append("**RAW MODE — NOT scrubbed.** These fixtures/logs are byte-perfect and "
                "CONTAIN THE REAL DRIVE SERIAL. Keep private; do not post publicly.\n")
@@ -510,9 +519,9 @@ else:
                "and replaced with a deterministic false serial (keyed BLAKE2b); the mos "
                "sha256 checksums are recomputed over the scrubbed bytes.\n")
 out.append("\n## Run\n\n| field | value |\n|---|---|\n")
-out.append("| generated | %s |\n| started | %s |\n| mos version | %s |\n"
+out.append("| status | %s |\n| generated | %s |\n| started | %s |\n| mos version | %s |\n"
            "| vendor | %s |\n| model | %s |\n| revision | %s |\n| run log | %s |\n"
-           % (now, started, ver, vendor, model, rev, logname))
+           % (status, now, started, ver, vendor, model, rev, logname))
 if scrub:
     out.append("\n## Serial scrub\n\n```\n%s```\n" % scrub)
 out.append("\n## Results (%d command record(s))\n\n" % len(rows))
@@ -799,38 +808,80 @@ phase_watch() {
     fi
 }
 
+# Interactive capture setup. Surfaces the three things to confirm before we touch
+# the filesystem: (1) we will CREATE per-drive subdirectories under the output
+# root (the mos repo root by default); (2) scrub the serial or keep byte-perfect;
+# (3) save the run log + manifest. Returns 0 to proceed, 1 to cancel. Sets RAW
+# and SAVE_LOG. Non-interactive uses the flag/env defaults. The salt stays a quiet
+# runtime flag — never prompted.
+capture_setup() {
+    csbase="$1"
+    printf '\n%sCapture setup%s — fixture + diagnostic capture\n' "$B" "$Z"
+    info "Output root : $csbase"
+    info "I will CREATE per-drive subdirectories there (vendor/model/) and write the"
+    info "fixtures (and, if you choose, a run log + manifest) into them."
+    if [ "${SMOKE_NONINTERACTIVE:-0}" = 1 ]; then
+        info "(non-interactive: proceeding; scrub=$([ "$RAW" = 1 ] && echo off || echo on), save-log=$SAVE_LOG)"
+        return 0
+    fi
+    printf '   %screate capture subdirectories under that path?  [Enter] yes   [q] cancel%s ' "$D" "$Z"
+    read -r r || r=q
+    case "$r" in q|Q) info "capture cancelled — nothing written"; return 1 ;; esac
+
+    if [ "$RAW_FORCED" = 1 ]; then
+        info "--raw: serial will NOT be scrubbed — byte-perfect output (keep it private)."
+    else
+        printf '   %sscrub the drive serial from fixtures & logs?  [Enter] yes (safe to share)   [n] no, byte-perfect%s ' "$D" "$Z"
+        read -r r || r=y
+        case "$r" in n|N) RAW=1 ;; *) RAW=0 ;; esac
+    fi
+
+    printf '   %ssave the run log + manifest alongside the fixtures?  [Enter] yes   [n] no%s ' "$D" "$Z"
+    read -r r || r=y
+    case "$r" in n|N) SAVE_LOG=0 ;; *) SAVE_LOG=1 ;; esac
+    return 0
+}
+
 phase_capture() {
     hdr "CAPTURE — raw MMC hex fixtures (mos probe --capture)"
     if [ "$HAVE_PY" != 1 ]; then skp "capture" "needs python3 to decode hex → .bin"; return; fi
 
+    # Output root defaults to the mos repo root (SMOKE_CAPTURE_DIR overrides). Ask
+    # before creating anything (subdir permission, scrub-or-raw, save-log).
+    capbase="${SMOKE_CAPTURE_DIR:-$HERE/hw-captures}"
+    capture_setup "$capbase" || { skp "capture" "cancelled at setup"; return; }
+
     # Organize by vendor/model so many drives stay tidy; the filename carries the
     # rest (mos version, firmware revision, command, disc type, state), and the
     # whole run (bins + manifest + log) lands together under one drive dir.
-    capbase="${SMOKE_CAPTURE_DIR:-$HERE/hw-captures}"
     vendor="$(drive_vendor)"; model="$(drive_model)"; ver="$(mos_ver)"; rev="$(drive_revision)"
     outdir="$capbase/$vendor/$model"
     mkdir -p "$outdir" || { bad "capture: cannot create $outdir"; return; }
-    LOGFILE="$outdir/mos-v${ver}-${model}-${rev}-capture-run.log"
-    : > "$LOGFILE" 2>/dev/null
-    lg "mos hw-smoke capture run"
-    lg "started : $START_ISO   (UTC, same form as the C capture/probe ts)"
-    lg "binary  : $MOS"
-    lg "version : $ver   vendor: $vendor   model: $model   revision: $rev   raw: $RAW"
+    if [ "$SAVE_LOG" = 1 ]; then
+        LOGFILE="$outdir/mos-v${ver}-${model}-${rev}-capture-run.log"
+        : > "$LOGFILE" 2>/dev/null
+        lg "mos hw-smoke capture run"
+        lg "started : $START_ISO   (UTC, same form as the C capture/probe ts)"
+        lg "binary  : $MOS"
+        lg "version : $ver   vendor: $vendor   model: $model   revision: $rev   raw: $RAW"
+    else
+        LOGFILE=""
+    fi
     info "drive       : v$ver  $vendor/$model  fw $rev"
     info "fixtures    : mos-v$ver-$model-$rev-<command>-<disctype>-<state>.bin"
     info "output dir  : $outdir"
-    info "             (under \$SMOKE_CAPTURE_DIR or ./hw-captures, grouped vendor/model)"
-    info "run log     : $(basename "$LOGFILE")   started $START_ISO (UTC; aligns with the C ts)"
     if [ "$RAW" = 1 ]; then
-        info "MODE: --raw → BYTE-PERFECT, serial NOT scrubbed. Output contains your real serial."
+        info "MODE: byte-perfect (serial NOT scrubbed) — output contains your real serial, keep PRIVATE."
     else
-        info "STAGED captures, serial-scrubbed (keyed BLAKE2b). Review, then file chosen .bin"
-        info "into tests/fixtures/ per tests/fixtures/README.md (a hardware capture is a"
-        info "reviewed deliverable, not auto-canonical: AGENTS.md hardware-role ADR)."
+        info "MODE: serial-scrubbed (keyed BLAKE2b) — safe to share; file chosen .bin into"
+        info "tests/fixtures/ per tests/fixtures/README.md (hardware-role ADR: reviewed, not auto-canonical)."
     fi
+    [ "$SAVE_LOG" = 1 ] && info "run log     : $(basename "$LOGFILE")   (T+ timeline; started $START_ISO, UTC like the C ts)"
     info "Note: capture self-gates on exclusive access — a MOUNTED disc records BUSY;"
     info "the rich replies come from the auto-unmounted pass. I also race the spin-up"
     info "to grab a LOADING pass (becoming-ready replies) when the window is catchable."
+
+    CAP_PARTIAL=0; cap_discs=0   # completeness tracking for the log/manifest marker
 
     # 0) Read the serial FIRST, on an empty drive — feature 0108h (GET
     #    CONFIGURATION) reads cleanly there, so we know what to scrub before any
@@ -846,6 +897,8 @@ phase_capture() {
         "$MOS" tray eject >/dev/null 2>&1
         st="$(current_state)"
         capture_run baseline "${st:-empty}" "$outdir" "$model" "$ver" "$rev"
+    else
+        CAP_PARTIAL=1   # no baseline → partial run
     fi
 
     # 2) per-disc-type: race the spin-up for a LOADING pass → capture MOUNTED
@@ -854,7 +907,7 @@ phase_capture() {
     while : ; do
         [ "${SMOKE_NONINTERACTIVE:-0}" = 1 ] && break
         ask_disc_type || break
-        if ! step "Insert the '$DISC_TYPE' disc NOW (press Enter the moment it goes in)."; then continue; fi
+        if ! step "Insert the '$DISC_TYPE' disc NOW (press Enter the moment it goes in)."; then CAP_PARTIAL=1; continue; fi
 
         # LOADING pass: poll for the spin-up window (3–5s on many drives) and fire
         # a capture the moment the drive reports loading — grabs becoming-ready
@@ -888,17 +941,28 @@ phase_capture() {
         fi
         capture_run "$DISC_TYPE" unmounted "$outdir" "$model" "$ver" "$rev"
 
-        DISC_TYPES_DONE="$DISC_TYPES_DONE $DISC_TYPE"
+        DISC_TYPES_DONE="$DISC_TYPES_DONE $DISC_TYPE"; cap_discs=$((cap_discs + 1))
         info "disc types captured:${DISC_TYPES_DONE}"
         "$MOS" tray eject >/dev/null 2>&1 && info "ejected — ready for the next disc"
     done
 
+    # Completeness marker for the log/manifest: a run with no disc captured, or any
+    # skipped step, is PARTIAL — both are valid (this is a fixture AND diag tool),
+    # but a consumer should know whether the matrix was fully walked.
+    [ "$cap_discs" = 0 ] && CAP_PARTIAL=1
+    cap_status="complete"; [ "$CAP_PARTIAL" = 1 ] && cap_status="partial"
+    lg ""; lg "capture status: $cap_status ($cap_discs disc type(s); raw=$RAW)"
+
     # (Fixtures are already serial-scrubbed INLINE at capture time — born clean.)
     # Aggregate metadata + results + the scrubbed full logs into one postable file.
-    mout="$(build_manifest "$outdir" "$model" "$ver" "$rev" "$vendor")"
-    [ -n "$mout" ] && ok "$mout"
+    if [ "$SAVE_LOG" = 1 ]; then
+        mout="$(build_manifest "$outdir" "$model" "$ver" "$rev" "$vendor" "$cap_status")"
+        [ -n "$mout" ] && ok "$mout"
+    else
+        info "run log + manifest NOT saved (your choice); fixtures + per-capture NDJSON kept."
+    fi
 
-    hdr "CAPTURE OUTPUT"
+    hdr "CAPTURE OUTPUT ($cap_status)"
     if command -v find >/dev/null 2>&1; then
         nbin=$(find "$outdir" -name '*.bin' 2>/dev/null | wc -l | tr -d ' ')
         nman=$(find "$outdir" -name '*.ndjson' 2>/dev/null | wc -l | tr -d ' ')
@@ -987,7 +1051,7 @@ banner
 ARG=""
 for a in "$@"; do
     case "$a" in
-        --raw)     RAW=1 ;;
+        --raw)     RAW=1; RAW_FORCED=1 ;;
         --salt=*)  SCRUB_SALT="${a#--salt=}" ;;
         --*)       echo "unknown flag '$a' (--raw, --salt=VALUE)" >&2; exit 2 ;;
         *)         ARG="$a" ;;
