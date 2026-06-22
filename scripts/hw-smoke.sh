@@ -258,12 +258,10 @@ stop_watch() {
 }
 
 # ---- fixture capture (mos probe --capture) -----------------------------------
-# Sanitized vendor+product token for fixture filenames (e.g. HL-DT-ST_BD-RE_WH16NS60).
-# Short model token for filenames. The model identifier is always the LAST
-# whitespace-separated token of the product string, across every optical-drive
-# family (validated in tests/drive_model_cases.sh: LG/Pioneer/ASUS/Panasonic/
-# Samsung/Lite-On/HP/Sony/Plextor/TEAC, incl. prefix-less "DVD-E616P2", two-word
-# types "DVD A"/"DVD RW", multi-hyphen "BDR-XD08UMB-S", and space-padded INQUIRY).
+# Short model token for filenames: the model is the LAST whitespace token of the
+# INQUIRY product string across every optical-drive family — type prefix ("BD-RE
+# WH16NS60"), full inquiry ("HL-DT-ST BD-RE WH16NS60"), space-padded, prefix-less
+# ("DVD-E616P2"), two-word type ("DVD A"/"DVD RW"), multi-hyphen ("BDR-XD08UMB-S").
 # `awk 'NF { print $NF }'` — the NF guard emits nothing on empty/blank input.
 drive_model() {
     p=""
@@ -284,11 +282,10 @@ mos_ver() {
     printf '%s' "$v" | tr -dc 'A-Za-z0-9._-'
 }
 
-# Vendor token for the capture subdirectory (HL-DT-ST, Pioneer, …), sanitized.
 # Resolve an INQUIRY vendor string to the name the community / MakeMKV / forums /
 # AccurateRip actually use — nobody calls an LG drive "HL-DT-ST". The joint-venture
 # and OEM brand-holder strings are the ones that differ; everything else (LG,
-# Pioneer, ASUS, Sony, …) passes through. Validated in tests/drive_model_cases.sh.
+# Pioneer, ASUS, Sony, …) passes through.
 #   HL-DT-ST  Hitachi-LG Data Storage          -> LG
 #   MATSHITA  Matsushita (Panasonic)           -> Panasonic
 #   TSSTcorp  Toshiba-Samsung Storage Tech     -> Samsung
