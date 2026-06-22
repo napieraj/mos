@@ -28,10 +28,24 @@ Beyond routing, it uses `mos` as more than a classifier:
   rate-limited to the service's 1 req/s) parsed into artist / album / year /
   tracklist — and a **length cross-check** that catches a fuzzy `toc=` match or
   the wrong disc of a multi-disc set before it mistags the rip;
+- **every ecosystem's disc ID from one `mos` TOC read** — MusicBrainz, freedb/
+  CDDB, and both AccurateRip ids (ARID1/ARID2), plus the AccurateRip
+  results-DB URL — written to `disc-ids.json` beside the rip. No second tool
+  touches the drive; this is the spotlight that mos's TOC *is* the identity
+  primitive (the schemes differ only in framing — MusicBrainz/CDDB use LBA+150,
+  AccurateRip uses raw LBAs);
+- **protection prediction** before a multi-minute scan: `predict_protection`
+  compares the disc's `copyright.protection_name` (`mos metadata`) against the
+  **drive's** `protection` capability (`mos drive`), so an AACS disc in a
+  non-AACS drive (or CSS in a non-CSS drive) is flagged up front
+  (`STRICT_PROTECTION=1` to fail fast). BD+ / UHD-AACS2.0 stay honestly out of
+  scope — mos predicts only to the standard-MMC line;
 - a full **`makemkvcon -r info` parse** (the stable `apdefs.h` attribute ids:
   `2` name, `8` chapters, `9` duration, `11` bytes, `27` output name) into a
-  ranked title table + a `titles.tsv` manifest, so a box set and a single movie
-  are both handled;
+  ranked title table + a `titles.tsv` manifest — and the **main feature** honors
+  MakeMKV's `FPL_MainFeature` verdict (its answer to fake-playlist obfuscation)
+  over raw longest-duration; AACS/decrypt **failure messages** are surfaced
+  verbatim from the info pass;
 - an append-only **inventory** (JSONL) keyed by the drive's durable **serial**
   (`mos drive`) plus a **sha256 of mos's closed `disc` fingerprint subtree** —
   the one dedup key that works even for Blu-ray, where no standard disc ID
@@ -92,7 +106,15 @@ one request a second. Other config (environment overrides): `RIPS_DIR` /
 `ARCHIVE_DIR` (output roots), `INVENTORY` (JSONL path; empty disables),
 `SIDECAR=1`, `EJECT_WHEN_DONE=0`, `LOCK_DURING_RIP=0`, `MINLENGTH=120`
 (makemkvcon title filter, seconds), `MOVIE_MODE=all` (or `main` for the longest
-title only), `LENGTH_TOLERANCE=5` (per-track TOC-vs-MusicBrainz slack, seconds).
+/ `FPL_MainFeature` title only), `LENGTH_TOLERANCE=5` (per-track
+TOC-vs-MusicBrainz slack, seconds), `STRICT_PROTECTION=0` (1 = skip makemkvcon
+when `mos` predicts the drive can't decrypt the disc).
+
+Every rip branch writes a **checksummed provenance record** (`SIDECAR=1`): a
+`manifest.json` inside an audio/movie rip dir (mos metadata + drive identity +
+fingerprint + sha256 of each output file), or `<image>.mos.json` beside an
+archived `.iso`. Audio rips also get `disc-ids.json`, `tracklist.txt`, the raw
+`musicbrainz.json`, and a `NEEDS_REVIEW.txt` when the length cross-check fails.
 
 ### Dependencies
 
