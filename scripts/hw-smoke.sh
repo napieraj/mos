@@ -19,8 +19,11 @@
 #   scripts/hw-smoke.sh                 # interactive menu (recommended)
 #   scripts/hw-smoke.sh <section>       # run one section non-interactively
 #       sections: static empty tray disc watch errors capture all
-#   SMOKE_CAPTURE_DIR=/path scripts/hw-smoke.sh capture   # where .bin fixtures land
-#   MOS_SCRUB_SALT=secret  scripts/hw-smoke.sh capture    # salt the serial scrub
+#   scripts/hw-smoke.sh capture            # capture hex fixtures (per disc type),
+#                                          # serial-scrubbed (keyed BLAKE2b) by default
+#   scripts/hw-smoke.sh capture --raw      # BYTE-PERFECT: do NOT scrub the serial (private)
+#   scripts/hw-smoke.sh capture --salt=KEY # BLAKE2b key for the scrub (or MOS_SCRUB_SALT)
+#   SMOKE_CAPTURE_DIR=/path scripts/hw-smoke.sh capture   # output root (grouped vendor/model)
 #   MOS=/path/to/mos scripts/hw-smoke.sh         # force a specific binary
 #   SMOKE_NONINTERACTIVE=1 scripts/hw-smoke.sh all   # assume "ready" at prompts
 #   SMOKE_INSTALL_DEPS=0 scripts/hw-smoke.sh     # don't auto-install python deps
@@ -62,11 +65,25 @@ else B=; R=; G=; Y=; C=; D=; Z=; fi
 
 PASS=0; FAIL=0; SKIP=0; FAILED_NAMES=""
 
-hdr()  { printf '\n%s━━ %s %s\n' "$B$C" "$1" "$Z"; }
-info() { printf '%s   %s%s\n' "$D" "$*" "$Z"; }
-ok()   { PASS=$((PASS+1)); printf '   %sPASS%s %s\n' "$G" "$Z" "$1"; }
-bad()  { FAIL=$((FAIL+1)); FAILED_NAMES="$FAILED_NAMES\n   - $1"; printf '   %sFAIL%s %s\n' "$R" "$Z" "$1"; }
-skp()  { SKIP=$((SKIP+1)); printf '   %sSKIP%s %s%s%s\n' "$Y" "$Z" "$1" "${2:+  — }" "${2:-}"; }
+# ---- timing + run log --------------------------------------------------------
+# START_ISO is the wall-clock start in the SAME RFC 3339 UTC form the C side
+# stamps capture/probe records with (cli/probe.c format_rfc3339_utc), so the
+# script's timeline lines up with the C `ts` fields. SECONDS (bash builtin, reset
+# at main) drives the T+mm:ss markers. When LOGFILE is set (capture phase) every
+# emitted line is appended to it, T+-prefixed, so the log reads as a timeline.
+START_ISO=""; LOGFILE=""
+# --raw (or SMOKE_RAW=1): skip serial hashing — byte-perfect fixtures/logs that DO
+# contain the real serial (opt-in). --salt=VALUE (or MOS_SCRUB_SALT): the BLAKE2b
+# key for the scrub. Both are parsed from argv in main.
+RAW="${SMOKE_RAW:-0}"; SCRUB_SALT="${MOS_SCRUB_SALT:-}"
+tplus() { printf 'T+%02d:%02d' $((SECONDS / 60)) $((SECONDS % 60)); }
+lg() { [ -n "$LOGFILE" ] || return 0; printf '%s  %s\n' "$(tplus)" "$*" >> "$LOGFILE" 2>/dev/null; }
+
+hdr()  { printf '\n%s━━ %s %s%s%s\n' "$B$C" "$1" "$D" "$(tplus)" "$Z"; lg ""; lg "== $1 ($(tplus)) =="; }
+info() { printf '%s   %s%s\n' "$D" "$*" "$Z"; lg "     $*"; }
+ok()   { PASS=$((PASS+1)); printf '   %sPASS%s %s\n' "$G" "$Z" "$1"; lg "PASS $1"; }
+bad()  { FAIL=$((FAIL+1)); FAILED_NAMES="$FAILED_NAMES\n   - $1"; printf '   %sFAIL%s %s\n' "$R" "$Z" "$1"; lg "FAIL $1"; }
+skp()  { SKIP=$((SKIP+1)); printf '   %sSKIP%s %s%s%s\n' "$Y" "$Z" "$1" "${2:+  — }" "${2:-}"; lg "SKIP $1${2:+ — $2}"; }
 
 # step "physical instruction" → 0 proceed, 1 skip-this-section.
 # Enter = proceed, s = skip section, q = quit to menu/exit. Honors
@@ -85,6 +102,8 @@ run() {  # run <mos-args...>; fills OUT/RC and prints a compact view
     OUT="$("$MOS" "$@" 2>&1)"; RC=$?
     printf '%s   $ mos %s%s\n' "$D" "$*" "$Z"
     printf '%s\n' "$OUT" | sed 's/^/       /' | head -14
+    lg "\$ mos $*  (rc=$RC)"
+    lg "$(printf '%s\n' "$OUT" | sed 's/^/       /')"
 }
 
 expect_rc()   { if [ "$RC" = "$1" ]; then ok "$2"; else bad "$2 (exit $RC, wanted $1)"; fi; }
@@ -236,14 +255,44 @@ stop_watch() {
 
 # ---- fixture capture (mos probe --capture) -----------------------------------
 # Sanitized vendor+product token for fixture filenames (e.g. HL-DT-ST_BD-RE_WH16NS60).
+# Short model token for filenames. Product strings carry a class prefix that is
+# noise for identity ("BD-RE WH16NS60" -> "WH16NS60"): take the LAST whitespace-
+# delimited token (the model number), sanitized. Falls back to the whole product
+# then "drive".
 drive_model() {
     p=""
     [ -n "$FIELD" ] && p="$("$MOS" drive --json 2>/dev/null | python3 "$FIELD" product 2>/dev/null)"
     [ -z "$p" ] && p="$(list_field product 2>/dev/null)"
     [ -z "$p" ] && p="drive"
+    last="${p##* }"                         # last whitespace token: BD-RE WH16NS60 -> WH16NS60
+    printf '%s' "$last" | tr -dc 'A-Za-z0-9._-'
+}
+
+# mos version token for filenames, derived in-shell from `mos --version`
+# ("mos 0.4.0" -> "0.4.0"; strips any leading non-version words). Falls back to
+# "x" when --version is unavailable.
+mos_ver() {
+    v="$("$MOS" --version 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]' | head -1)"
+    [ -z "$v" ] && v="x"
+    printf '%s' "$v" | tr -dc 'A-Za-z0-9._-'
+}
+
+# Vendor token for the capture subdirectory (HL-DT-ST, Pioneer, …), sanitized.
+drive_vendor() {
     v=""
     [ -n "$FIELD" ] && v="$("$MOS" drive --json 2>/dev/null | python3 "$FIELD" vendor 2>/dev/null)"
-    printf '%s_%s' "${v:-x}" "$p" | tr ' /' '__' | tr -dc 'A-Za-z0-9_.-'
+    [ -z "$v" ] && v="$(list_field vendor 2>/dev/null)"
+    [ -z "$v" ] && v="unknown"
+    printf '%s' "$v" | tr ' /' '__' | tr -dc 'A-Za-z0-9._-'
+}
+
+# Firmware revision token for filenames — fixtures are firmware-specific, so the
+# drive's PRODUCT_REVISION_LEVEL ("1.00") belongs in the name. "x" when absent.
+drive_revision() {
+    r=""
+    [ -n "$FIELD" ] && r="$("$MOS" drive --json 2>/dev/null | python3 "$FIELD" revision 2>/dev/null)"
+    [ -z "$r" ] && r="x"
+    printf '%s' "$r" | tr ' /' '__' | tr -dc 'A-Za-z0-9._-'
 }
 
 # A probe-usable selector: diskN when media is present, else the list Index
@@ -280,165 +329,205 @@ EOF
 }
 
 # capture_run <disctype> <state> <outdir> <model>
-# Run `mos probe --capture <sel>`, save the NDJSON manifest, decode each
-# command's reply hex into <command>_<disctype>_<state>_<model>.bin, and verify
-# every .bin against the manifest's sha256. ok:false / empty-reply lines (BUSY on
-# a mounted disc, no-media, CHECK CONDITION on the wrong medium) are recorded in
-# the manifest and reported, not written as .bin.
+# Run `mos probe --capture <sel>`; for each reply, UNLESS --raw, replace the real
+# serial bytes with the false serial and recompute the mos sha256 over the
+# MODIFIED bytes — THEN write the .bin and the scrubbed .ndjson line (modify-then-
+# write: the raw reply, which may carry the real serial, is a temp, never
+# committed). With --raw the bytes are written byte-perfect (real serial intact).
 capture_run() {
-    cdt="$1"; cstate="$2"; cout="$3"; cmodel="$4"
+    cdt="$1"; cstate="$2"; cout="$3"; cmodel="$4"; cver="$5"; crev="$6"
     sel="$(capture_selector)"
-    ndj="$cout/capture_${cdt}_${cstate}_${cmodel}.ndjson"
+    ndj="$cout/mos-v${cver}-${cmodel}-${crev}-${cdt}-${cstate}.ndjson"
+    raw="$(mktemp -t mos_cap.XXXXXX)"
     printf '%s   $ mos probe --capture %s   (%s / %s)%s\n' "$D" "$sel" "$cdt" "$cstate" "$Z"
-    "$MOS" probe --capture "$sel" >"$ndj" 2>/dev/null
-    if ! grep -q 'mos.capture.v0' "$ndj" 2>/dev/null; then
-        if grep -qi 'not built' "$ndj" 2>/dev/null; then
-            bad "capture $cdt/$cstate: probe not built in (configure -DMOS_CLI_PROBE=ON)"
-        else
-            bad "capture $cdt/$cstate: no mos.capture.v0 output (see $ndj)"
-        fi
-        return
+    lg "\$ mos probe --capture $sel   ($cdt / $cstate)"
+    "$MOS" probe --capture "$sel" >"$raw" 2>/dev/null
+    if ! grep -q 'mos.capture.v0' "$raw" 2>/dev/null; then
+        if grep -qi 'not built' "$raw" 2>/dev/null; then bad "capture $cdt/$cstate: probe not built in (configure -DMOS_CLI_PROBE=ON)"
+        else bad "capture $cdt/$cstate: no mos.capture.v0 output"; fi
+        rm -f "$raw"; return
     fi
-    out="$(python3 - "$ndj" "$cout" "$cdt" "$cstate" "$cmodel" <<'PY'
+    out="$(python3 - "$raw" "$ndj" "$cout" "$cdt" "$cstate" "$cmodel" "$SERIAL_REAL" "$SERIAL_FALSE" "$RAW" "$cver" "$START_ISO" "$crev" <<'PY'
 import sys, json, hashlib, os
-ndj, outdir, dt, state, model = sys.argv[1:6]
-wrote=empty=err=mism=0
-for line in open(ndj):
+raw, ndj, outdir, dt, state, model, real, false, rawmode, ver, started, rev = sys.argv[1:13]
+rawmode = (rawmode == "1")
+real_hex = real.encode().hex(); false_hex = false.encode().hex()
+# fixture filename: mos-v<ver>-<model>-<revision>-<command>-<disctype>-<state>.bin
+def binname(cmd): return "mos-v%s-%s-%s-%s-%s-%s.bin" % (ver, model, rev, cmd, dt, state)
+wrote=empty=err=scr=0; outlines=[]
+for line in open(raw):
     line=line.strip()
     if not line: continue
     try: d=json.loads(line)
     except Exception: continue
-    if d.get("schema")!="mos.capture.v0": continue
+    if d.get("schema")!="mos.capture.v0": outlines.append(line); continue
     cmd=d.get("command","cmd"); sn=d.get("sense",{}) or {}
+    # structured provenance so the manifest reads fields, not filenames
+    d["mos_version"]=ver; d["model"]=model; d["revision"]=rev; d["disc_type"]=dt; d["state"]=state; d["run_started"]=started
     if not d.get("ok"):
-        print("  . %-24s error=%s"%(cmd,d.get("error"))); err+=1; continue
+        outlines.append(json.dumps(d)); print("  . %-24s error=%s"%(cmd,d.get("error"))); err+=1; continue
     reply=d.get("reply","") or ""
     if not reply:
-        print("  . %-24s no data (sense %s/%s/%s)"%(cmd,sn.get("sk"),sn.get("asc"),sn.get("ascq"))); empty+=1; continue
-    raw=bytes.fromhex(reply)
-    fn=os.path.join(outdir,"%s_%s_%s_%s.bin"%(cmd,dt,state,model))
-    open(fn,"wb").write(raw)
-    exp=d.get("sha256","") or ""
-    got=hashlib.sha256(raw).hexdigest()
-    if exp and got!=exp:
-        print("  ! %-24s %5d B  SHA MISMATCH -> %s"%(cmd,len(raw),os.path.basename(fn))); mism+=1
-    else:
-        print("  + %-24s %5d B  sha-ok -> %s"%(cmd,len(raw),os.path.basename(fn))); wrote+=1
-print("SUMMARY %d written, %d no-data, %d error, %d sha-mismatch"%(wrote,empty,err,mism))
+        outlines.append(json.dumps(d)); print("  . %-24s no data (sense %s/%s/%s)"%(cmd,sn.get("sk"),sn.get("asc"),sn.get("ascq"))); empty+=1; continue
+    tag=""
+    if (not rawmode) and real and real_hex in reply:
+        reply=reply.replace(real_hex,false_hex); d["reply"]=reply; d["serial_scrubbed"]=True; scr+=1; tag=" [serial scrubbed]"
+    rb=bytes.fromhex(reply)
+    d["sha256"]=hashlib.sha256(rb).hexdigest()
+    bn=binname(cmd); d["fixture"]=bn
+    outlines.append(json.dumps(d))
+    open(os.path.join(outdir,bn),"wb").write(rb)
+    print("  + %-24s %5d B  sha=%s -> %s%s"%(cmd,len(rb),d["sha256"][:12],bn,tag)); wrote+=1
+open(ndj,"w").write("\n".join(outlines)+"\n")
+print("SUMMARY %d written, %d no-data, %d error, %d serial-scrubbed"%(wrote,empty,err,scr))
 PY
 )"
+    rm -f "$raw"
     printf '%s\n' "$out" | sed 's/^/     /'
-    mism="$(printf '%s' "$out" | sed -n 's/.*, \([0-9]*\) sha-mismatch/\1/p')"
-    if [ "${mism:-0}" -gt 0 ]; then bad "capture $cdt/$cstate: $mism sha mismatch (see $ndj)"
-    else ok "capture $cdt/$cstate → $(basename "$ndj") + .bin files"; fi
+    lg "$(printf '%s\n' "$out" | sed 's/^/     /')"
+    ok "capture $cdt/$cstate -> $(basename "$ndj") + .bin files"
 }
 
-# Scrub the drive serial out of every captured fixture. The serial appears in
-# several replies for some drive families (GET CONFIGURATION feature 0108h, the
-# standard INQUIRY vendor tail, and VPD 0x80 when populated), so we grab the
-# canonical serial ONCE (mos drive --json .serial) and do a localized,
-# same-length substring replace wherever those bytes appear in any .bin (and the
-# .ndjson reply hex). The replacement is a deterministic FALSE serial derived
-# from keyed BLAKE2b (RFC 7693, community / non-NSA, ChaCha-based) of the serial
-# with the salt as key: reverse-validatable (recompute the keyed hash from your
-# real serial to confirm) but not invertible (preimage resistance). Set a secret
-# MOS_SCRUB_SALT for brute-force resistance (serials are low-entropy). (The
-# mos.capture.v0 `sha256` is a separate content-integrity checksum — the drive
-# reply's checksum, matching the repo's `shasum` fixture workflow — not a secrecy
-# primitive, so it stays SHA-256.)
-scrub_serials() {
-    sout="$1"
+# Grab the drive serial ONCE, up front, on an empty drive (the cleanest read:
+# feature 0108h via GET CONFIGURATION is non-exclusive and reads on an empty
+# drive), and derive the false serial + keyed-BLAKE2b commitment so every capture
+# is scrubbed INLINE. Sets SERIAL_REAL/SERIAL_FALSE/SERIAL_HASH; writes
+# SERIAL-SCRUB.txt. Skipped under --raw. The real serial is never printed/logged.
+SERIAL_REAL=""; SERIAL_FALSE=""; SERIAL_HASH=""
+serial_arm() {
+    sdir="$1"
+    if [ "$RAW" = 1 ]; then
+        info "--raw: serial hashing DISABLED — fixtures/logs are BYTE-PERFECT and contain"
+        info "your REAL serial. Do NOT post these publicly. (Drop --raw to scrub.)"
+        lg "RAW MODE: serial scrub disabled; output is byte-perfect (contains real serial)"
+        return
+    fi
     [ "$HAVE_PY" = 1 ] || { skp "serial scrub" "needs python3"; return; }
-    real="$("$MOS" drive --json 2>/dev/null | python3 "$FIELD" serial 2>/dev/null)"
-    if [ -z "$real" ]; then info "no drive serial reported — nothing to scrub"; return; fi
-    out="$(python3 - "$sout" "$real" "${MOS_SCRUB_SALT:-}" <<'PY'
-import sys, os, json, hashlib, glob
-outdir, real, salt = sys.argv[1], sys.argv[2], sys.argv[3]
-# Custom format-preserving serial generator. The entropy CORE is keyed BLAKE2b
-# (RFC 7693) — a community-designed, non-NSA hash whose permutation is built on
-# Bernstein's ChaCha; the salt is the BLAKE2b KEY (a proper MAC, not a prefix).
-# BLAKE2b is preimage-resistant, so the real serial is NOT recoverable from the
-# output. Our own keystream + unbiased draw maps the digest onto a serial that
-# MIRRORS the real one's per-position character class — uppercase->uppercase,
-# lowercase->lowercase, digit->digit, separators (e.g. '-') kept verbatim — so
-# the false serial looks like a real serial of that family (same shape, length).
-salt_key = salt.encode()[:64]         # BLAKE2b key is max 64 bytes
-def _digest(data):
-    return hashlib.blake2b(data, key=salt_key).digest()
-seed = _digest(real.encode())         # commitment + keystream seed
-hash_hex = seed.hex()
-def _keystream(s):                    # endless deterministic byte stream
-    block = _digest(s); i = 0
+    SERIAL_REAL="$("$MOS" drive --json 2>/dev/null | python3 "$FIELD" serial 2>/dev/null)"
+    if [ -z "$SERIAL_REAL" ]; then
+        info "drive reports no serial (feature 0108h absent/blank) — captures left unscrubbed."
+        info "If your drive only carries the serial in the INQUIRY tail, weigh --raw knowingly."
+        return
+    fi
+    setup="$(python3 - "$SERIAL_REAL" "$SCRUB_SALT" <<'PY'
+import sys, hashlib
+real, salt = sys.argv[1], sys.argv[2]
+salt_key = salt.encode()[:64]
+def _d(x): return hashlib.blake2b(x, key=salt_key).digest()
+seed = _d(real.encode())
+def _ks(s):
+    b = _d(s); i = 0
     while True:
-        if i >= len(block):
-            block = _digest(block); i = 0
-        yield block[i]; i += 1
-def _draw(ks, n):                     # pick in [0,n) with the modulo bias removed
-    limit = 256 - (256 % n)
-    for b in ks:
-        if b < limit:
-            return b % n
+        if i >= len(b): b = _d(b); i = 0
+        yield b[i]; i += 1
+def _draw(ks, n):
+    lim = 256 - (256 % n)
+    for x in ks:
+        if x < lim: return x % n
     return 0
-UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"; LOWER = UPPER.lower(); DIGIT = "0123456789"
-ks = _keystream(seed)
-false = "".join(
-    DIGIT[_draw(ks, 10)] if ch.isdigit() else
-    UPPER[_draw(ks, 26)] if "A" <= ch <= "Z" else
-    LOWER[_draw(ks, 26)] if "a" <= ch <= "z" else ch
-    for ch in real)
-sha_hex = hash_hex
-real_b, false_b = real.encode(), false.encode()
-real_hex, false_hex = real_b.hex(), false_b.hex()
-nbin = nman = hits = 0
-for fn in glob.glob(os.path.join(outdir, "*.bin")):
-    data = open(fn, "rb").read()
-    c = data.count(real_b)
-    if c:
-        open(fn, "wb").write(data.replace(real_b, false_b)); nbin += 1; hits += c
-for fn in glob.glob(os.path.join(outdir, "*.ndjson")):
-    changed = False; lines = []
-    for line in open(fn):
-        s = line.rstrip("\n")
-        try: d = json.loads(s)
-        except Exception: d = None
-        if d and d.get("schema") == "mos.capture.v0" and isinstance(d.get("reply"), str) \
-           and real_hex in d["reply"]:
-            d["reply"] = d["reply"].replace(real_hex, false_hex)
-            d["sha256"] = hashlib.sha256(bytes.fromhex(d["reply"])).hexdigest()
-            d["serial_scrubbed"] = True
-            s = json.dumps(d); changed = True
-        lines.append(s)
-    if changed:
-        open(fn, "w").write("\n".join(lines) + "\n"); nman += 1
-note = os.path.join(outdir, "SERIAL-SCRUB.txt")
-salt_line = "yes" if salt else "no (set MOS_SCRUB_SALT for brute-force resistance)"
-open(note, "w").write(
-    "Serial scrub — the real drive serial was replaced in every captured fixture\n"
-    "with a deterministic false serial of the same length and structure.\n\n"
-    f"false_serial  : {false}\n"
-    f"serial_blake2b: {hash_hex}\n"
-    f"salt_used     : {salt_line}\n\n"
-    "Algorithm: keyed BLAKE2b (RFC 7693, community-designed / non-NSA, ChaCha-based\n"
-    "core) with the salt as the key. false_serial MIRRORS your serial's structure\n"
-    "(letter/digit positions) via a custom keystream over the digest — reproducible\n"
-    "from the hash, but the real serial is NOT derivable from it (preimage\n"
-    "resistance). Serials are low-entropy — use a SECRET MOS_SCRUB_SALT to resist\n"
-    "brute force.\n\n"
-    "Reverse-validate (prove the false serial corresponds to YOUR real serial\n"
-    "without revealing it): recompute the keyed hash and confirm it equals the\n"
-    "recorded value above:\n"
-    "    python3 -c 'import hashlib,sys; print(hashlib.blake2b(sys.argv[2].encode(),\\\n"
-    "      key=sys.argv[1].encode()[:64]).hexdigest())' \"$MOS_SCRUB_SALT\" <REAL_SERIAL>\n")
-print(f"scrubbed {hits} occurrence(s) across {nbin} .bin and {nman} manifest(s)")
-print(f"false_serial={false}  serial_blake2b={hash_hex[:16]}…")
+U = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"; L = U.lower(); D = "0123456789"
+ks = _ks(seed)
+false = "".join(D[_draw(ks,10)] if c.isdigit() else U[_draw(ks,26)] if "A"<=c<="Z" else L[_draw(ks,26)] if "a"<=c<="z" else c for c in real)
+print(false); print(seed.hex())
 PY
 )"
-    printf '%s\n' "$out" | sed 's/^/     /'
-    if printf '%s' "$out" | grep -q 'scrubbed 0 '; then
-        info "serial '$real' not found in any .bin (already absent) — nothing changed"
-    else
-        ok "serial scrubbed from fixtures (false serial recorded in SERIAL-SCRUB.txt)"
-    fi
+    SERIAL_FALSE="$(printf '%s' "$setup" | sed -n '1p')"
+    SERIAL_HASH="$(printf '%s' "$setup" | sed -n '2p')"
+    salt_line="no (set --salt= or MOS_SCRUB_SALT for brute-force resistance)"
+    [ -n "$SCRUB_SALT" ] && salt_line="yes"
+    {
+        printf 'Serial scrub - the real drive serial was replaced in every captured fixture\n'
+        printf 'with a deterministic false serial of the same length and structure.\n\n'
+        printf 'false_serial  : %s\n' "$SERIAL_FALSE"
+        printf 'serial_blake2b: %s\n' "$SERIAL_HASH"
+        printf 'salt_used     : %s\n' "$salt_line"
+        printf 'started       : %s\n\n' "$START_ISO"
+        printf 'Algorithm: keyed BLAKE2b (RFC 7693, community/non-NSA, ChaCha-based core)\n'
+        printf 'with the salt as key; false_serial mirrors the real serial structure\n'
+        printf '(letter/digit positions) via a custom keystream over the digest -\n'
+        printf 'reproducible from the hash, real serial NOT derivable (preimage resistance).\n'
+        printf 'Reverse-validate (use the SAME salt you ran with):\n'
+        printf "    python3 -c 'import hashlib,sys; print(hashlib.blake2b(sys.argv[2].encode(),\\\\\n"
+        printf "      key=sys.argv[1].encode()[:64]).hexdigest())' '<SALT>' '<REAL_SERIAL>'\n"
+    } > "$sdir/SERIAL-SCRUB.txt"
+    info "serial scrub armed - replacement $SERIAL_FALSE (keyed BLAKE2b); real serial not shown/logged"
+    ok "serial grabbed up front on the empty drive"
+}
+
+# Build one postable capture-manifest.md aggregating run metadata, a results
+# table, and the FULL command logs (the mos.capture.v0 NDJSON, already serial-
+# scrubbed + sha-recomputed inline at capture time). Reads structured provenance
+# fields off each record (disc_type/state/command/sha256/fixture), not filenames.
+build_manifest() {
+    mout="$1"; mmodel="$2"; mver="$3"; mrev="$4"; mvendor="$5"
+    [ "$HAVE_PY" = 1 ] || return 0
+    python3 - "$mout" "$mmodel" "$mver" "$mrev" "$mvendor" "$START_ISO" "$RAW" "$(basename "$LOGFILE")" <<'PY'
+import sys, os, json, glob, datetime
+mout, model, ver, rev, vendor, started, rawmode, logname = (sys.argv + [""]*8)[1:9]
+raw = (rawmode == "1")
+mans = sorted(glob.glob(os.path.join(mout, "*.ndjson")))
+rows, logs = [], []
+for m in mans:
+    body = open(m).read()
+    logs.append((os.path.basename(m), body))
+    for line in body.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if d.get("schema") != "mos.capture.v0":
+            continue
+        dt = d.get("disc_type", "?"); st = d.get("state", "?")
+        cmd = d.get("command", "?")
+        if not d.get("ok"):
+            outcome, nb, sha, fx = "error:" + str(d.get("error")), "", "", ""
+        elif not d.get("reply"):
+            sn = d.get("sense", {}) or {}
+            outcome = "no-data %s/%s/%s" % (sn.get("sk"), sn.get("asc"), sn.get("ascq"))
+            nb, sha, fx = "0", "", ""
+        else:
+            outcome = "ok"
+            nb = str(d.get("bytes_transferred", ""))
+            sha = (d.get("sha256", "") or "")[:12]
+            fx = d.get("fixture", "")
+        rows.append((dt, st, cmd, outcome, nb, sha, fx))
+
+scrub = ""
+sp = os.path.join(mout, "SERIAL-SCRUB.txt")
+if os.path.exists(sp):
+    scrub = open(sp).read()
+
+now = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+out = ["# mos capture manifest\n\n"]
+if raw:
+    out.append("**RAW MODE — NOT scrubbed.** These fixtures/logs are byte-perfect and "
+               "CONTAIN THE REAL DRIVE SERIAL. Keep private; do not post publicly.\n")
+else:
+    out.append("SAFE TO POST: the drive serial is scrubbed from every fixture/log below "
+               "and replaced with a deterministic false serial (keyed BLAKE2b); the mos "
+               "sha256 checksums are recomputed over the scrubbed bytes.\n")
+out.append("\n## Run\n\n| field | value |\n|---|---|\n")
+out.append("| generated | %s |\n| started | %s |\n| mos version | %s |\n"
+           "| vendor | %s |\n| model | %s |\n| revision | %s |\n| run log | %s |\n"
+           % (now, started, ver, vendor, model, rev, logname))
+if scrub:
+    out.append("\n## Serial scrub\n\n```\n%s```\n" % scrub)
+out.append("\n## Results (%d command record(s))\n\n" % len(rows))
+out.append("| disc | state | command | outcome | bytes | sha256… | fixture |\n")
+out.append("|---|---|---|---|---|---|---|\n")
+for r in rows:
+    out.append("| %s | %s | %s | %s | %s | %s | %s |\n" % r)
+out.append("\n## Full logs (mos.capture.v0 NDJSON)\n")
+for base, body in logs:
+    out.append("\n### %s\n\n```json\n%s\n```\n" % (base, body.rstrip("\n")))
+
+mf = os.path.join(mout, "capture-manifest.md")
+open(mf, "w").write("".join(out))
+print("manifest: %s (%d records, %d log file(s))" % (mf, len(rows), len(logs)))
+PY
 }
 
 # ---- cleanup: never leave the tray locked or open ----------------------------
@@ -714,24 +803,49 @@ phase_capture() {
     hdr "CAPTURE — raw MMC hex fixtures (mos probe --capture)"
     if [ "$HAVE_PY" != 1 ]; then skp "capture" "needs python3 to decode hex → .bin"; return; fi
 
-    outdir="${SMOKE_CAPTURE_DIR:-$HERE/hw-captures}"
+    # Organize by vendor/model so many drives stay tidy; the filename carries the
+    # rest (mos version, firmware revision, command, disc type, state), and the
+    # whole run (bins + manifest + log) lands together under one drive dir.
+    capbase="${SMOKE_CAPTURE_DIR:-$HERE/hw-captures}"
+    vendor="$(drive_vendor)"; model="$(drive_model)"; ver="$(mos_ver)"; rev="$(drive_revision)"
+    outdir="$capbase/$vendor/$model"
     mkdir -p "$outdir" || { bad "capture: cannot create $outdir"; return; }
-    model="$(drive_model)"
-    info "model token : $model"
-    info "output dir  : $outdir   (override with SMOKE_CAPTURE_DIR=)"
-    info "These are STAGED captures — review, then file chosen .bin into tests/fixtures/"
-    info "per tests/fixtures/README.md (a hardware capture is a reviewed deliverable,"
-    info "not auto-canonical: AGENTS.md hardware-role ADR). Every .bin is sha256-verified."
+    LOGFILE="$outdir/mos-v${ver}-${model}-${rev}-capture-run.log"
+    : > "$LOGFILE" 2>/dev/null
+    lg "mos hw-smoke capture run"
+    lg "started : $START_ISO   (UTC, same form as the C capture/probe ts)"
+    lg "binary  : $MOS"
+    lg "version : $ver   vendor: $vendor   model: $model   revision: $rev   raw: $RAW"
+    info "drive       : v$ver  $vendor/$model  fw $rev"
+    info "fixtures    : mos-v$ver-$model-$rev-<command>-<disctype>-<state>.bin"
+    info "output dir  : $outdir"
+    info "             (under \$SMOKE_CAPTURE_DIR or ./hw-captures, grouped vendor/model)"
+    info "run log     : $(basename "$LOGFILE")   started $START_ISO (UTC; aligns with the C ts)"
+    if [ "$RAW" = 1 ]; then
+        info "MODE: --raw → BYTE-PERFECT, serial NOT scrubbed. Output contains your real serial."
+    else
+        info "STAGED captures, serial-scrubbed (keyed BLAKE2b). Review, then file chosen .bin"
+        info "into tests/fixtures/ per tests/fixtures/README.md (a hardware capture is a"
+        info "reviewed deliverable, not auto-canonical: AGENTS.md hardware-role ADR)."
+    fi
     info "Note: capture self-gates on exclusive access — a MOUNTED disc records BUSY;"
     info "the rich replies come from the auto-unmounted pass. I also race the spin-up"
     info "to grab a LOADING pass (becoming-ready replies) when the window is catchable."
 
+    # 0) Read the serial FIRST, on an empty drive — feature 0108h (GET
+    #    CONFIGURATION) reads cleanly there, so we know what to scrub before any
+    #    hex is captured. (Skipped under --raw.)
+    if step "EMPTY the drive (no disc) so I can read the serial cleanly first."; then
+        "$MOS" tray eject >/dev/null 2>&1
+    fi
+    serial_arm "$outdir"
+
     # 1) empty / open baseline: INQUIRY + GET CONFIGURATION return data with no
     #    media; the media commands record their no-media sense.
-    if step "EMPTY-DRIVE capture: eject the tray / remove any disc, then continue."; then
+    if step "EMPTY-DRIVE capture: confirm the drive is empty, then continue."; then
         "$MOS" tray eject >/dev/null 2>&1
         st="$(current_state)"
-        capture_run baseline "${st:-empty}" "$outdir" "$model"
+        capture_run baseline "${st:-empty}" "$outdir" "$model" "$ver" "$rev"
     fi
 
     # 2) per-disc-type: race the spin-up for a LOADING pass → capture MOUNTED
@@ -749,7 +863,7 @@ phase_capture() {
         got_loading=0; i=0
         while [ $i -lt 16 ]; do
             case "$(current_state)" in
-                *loading*) capture_run "$DISC_TYPE" loading "$outdir" "$model"; got_loading=1; break ;;
+                *loading*) capture_run "$DISC_TYPE" loading "$outdir" "$model" "$ver" "$rev"; got_loading=1; break ;;
                 *ready*|*open*|*empty*|*unreadable*|*fault*) break ;;
             esac
             sleep 0.3; i=$((i+1))
@@ -763,7 +877,7 @@ phase_capture() {
         done
 
         # MOUNTED pass (as inserted) — records the exclusive-access BUSY behavior
-        capture_run "$DISC_TYPE" mounted "$outdir" "$model"
+        capture_run "$DISC_TYPE" mounted "$outdir" "$model" "$ver" "$rev"
 
         # UNMOUNTED pass — the canonical fixtures. Unmount the filesystem; the disc
         # stays in the drive (diskutil unmountDisk, not eject).
@@ -772,24 +886,32 @@ phase_capture() {
             if diskutil unmountDisk "${bn##*/}" >/dev/null 2>&1; then info "unmounted ${bn##*/} (disc still loaded)"
             else info "could not unmount ${bn##*/} — the unmounted pass may also report BUSY"; fi
         fi
-        capture_run "$DISC_TYPE" unmounted "$outdir" "$model"
+        capture_run "$DISC_TYPE" unmounted "$outdir" "$model" "$ver" "$rev"
 
         DISC_TYPES_DONE="$DISC_TYPES_DONE $DISC_TYPE"
         info "disc types captured:${DISC_TYPES_DONE}"
         "$MOS" tray eject >/dev/null 2>&1 && info "ejected — ready for the next disc"
     done
 
-    # Scrub the drive serial out of every captured fixture before it can be filed.
-    scrub_serials "$outdir"
+    # (Fixtures are already serial-scrubbed INLINE at capture time — born clean.)
+    # Aggregate metadata + results + the scrubbed full logs into one postable file.
+    mout="$(build_manifest "$outdir" "$model" "$ver" "$rev" "$vendor")"
+    [ -n "$mout" ] && ok "$mout"
 
     hdr "CAPTURE OUTPUT"
     if command -v find >/dev/null 2>&1; then
         nbin=$(find "$outdir" -name '*.bin' 2>/dev/null | wc -l | tr -d ' ')
         nman=$(find "$outdir" -name '*.ndjson' 2>/dev/null | wc -l | tr -d ' ')
-        info "$nbin .bin fixture(s) + $nman NDJSON manifest(s) in $outdir"
+        info "$nbin .bin fixture(s) + $nman NDJSON log(s) in $outdir"
     fi
-    info "file chosen ones as tests/fixtures/<command>_<state>_<model>.bin with a dated"
-    info "README entry; the NDJSON carries the sha256 + parsed sense for provenance."
+    if [ "$RAW" = 1 ]; then
+        info "RAW: artifacts are BYTE-PERFECT and contain the real serial — keep them PRIVATE."
+    else
+        info "POSTABLE (serial-scrubbed inline, sha recomputed): capture-manifest.md aggregates"
+        info "the full logs + results; SERIAL-SCRUB.txt records the false serial + BLAKE2b hash."
+    fi
+    info "File chosen .bin into tests/fixtures/ with a dated README entry"
+    info "(tests/fixtures/README.md)."
 }
 
 # =============================================================================
@@ -852,10 +974,26 @@ EOF
 }
 
 # ---- main --------------------------------------------------------------------
+SECONDS=0
+# Wall-clock start in the C side's RFC 3339 UTC form (ms precision via python when
+# present; whole-second fallback otherwise) so the script timeline aligns with the
+# capture/probe `ts` fields.
+START_ISO="$(python3 -c 'import datetime; n=datetime.datetime.utcnow(); print(n.strftime("%Y-%m-%dT%H:%M:%S.")+("%03dZ"%(n.microsecond//1000)))' 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%S.000Z)"
 setup_validator
 banner
 
-ARG="${1:-}"
+# Parse flags (--raw, --salt=VALUE) from anywhere in argv; the remaining non-flag
+# word (if any) is the section. Flags override the SMOKE_RAW / MOS_SCRUB_SALT env.
+ARG=""
+for a in "$@"; do
+    case "$a" in
+        --raw)     RAW=1 ;;
+        --salt=*)  SCRUB_SALT="${a#--salt=}" ;;
+        --*)       echo "unknown flag '$a' (--raw, --salt=VALUE)" >&2; exit 2 ;;
+        *)         ARG="$a" ;;
+    esac
+done
+
 case "$ARG" in
     static|errors|empty|tray|disc|watch|capture|all)
         run_section "$ARG"; summary; [ "$FAIL" -eq 0 ] ;;
