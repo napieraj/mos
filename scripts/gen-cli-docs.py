@@ -59,12 +59,6 @@ GENERATED_NOTE = (
     "here."
 )
 
-# Flags scoped to a single verb (mirrors main.c's validation guards:
-# `flag_force && !flag_tray` and `flag_dump && !flag_probe`).
-TRAY_FLAGS = ["--force"]
-PROBE_FLAGS = ["--dump", "--capture"]
-
-
 def read(path):
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
