@@ -252,17 +252,9 @@ static void emit_human(const drive_doc *d)
 
     pairs[n++] = (mos_cli_human_pair){ "Serial",  d->serial   ? s_esc : NULL };
 
-    /* Interconnect: bus, with the location in parens when known
-       ("usb (external)"); just the bus when location is absent. Fixed token
-       vocabulary — no hostile bytes. */
-    char ic_row[32];
-    if (d->interconnect && d->interconnect_location)
-        snprintf(ic_row, sizeof ic_row, "%s (%s)",
-                 d->interconnect, d->interconnect_location);
-    else if (d->interconnect)
-        snprintf(ic_row, sizeof ic_row, "%s", d->interconnect);
-    pairs[n++] = (mos_cli_human_pair){ "Interconnect",
-                                       d->interconnect ? ic_row : NULL };
+    /* Interconnect: JSON-only (mos.drive.v1 interconnect/interconnect_location).
+       Suppressed from the human block — external USB is the common case and
+       the row adds noise without signal for most users. */
 
     /* Protection: the schemes the drive can authenticate, comma-joined; the
        version (and AACS bus-encryption notes) ride in parentheses. A modern BD
