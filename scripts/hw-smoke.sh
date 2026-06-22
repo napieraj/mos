@@ -339,9 +339,13 @@ PY
 # canonical serial ONCE (mos drive --json .serial) and do a localized,
 # same-length substring replace wherever those bytes appear in any .bin (and the
 # .ndjson reply hex). The replacement is a deterministic FALSE serial derived
-# from sha256(salt+serial): reverse-validatable (recompute the hash from your
-# real serial to confirm) but not invertible (SHA-256 preimage resistance). Set a
-# secret MOS_SCRUB_SALT for brute-force resistance (serials are low-entropy).
+# from keyed BLAKE2b (RFC 7693, community / non-NSA, ChaCha-based) of the serial
+# with the salt as key: reverse-validatable (recompute the keyed hash from your
+# real serial to confirm) but not invertible (preimage resistance). Set a secret
+# MOS_SCRUB_SALT for brute-force resistance (serials are low-entropy). (The
+# mos.capture.v0 `sha256` is a separate content-integrity checksum — the drive
+# reply's checksum, matching the repo's `shasum` fixture workflow — not a secrecy
+# primitive, so it stays SHA-256.)
 scrub_serials() {
     sout="$1"
     [ "$HAVE_PY" = 1 ] || { skp "serial scrub" "needs python3"; return; }
@@ -350,17 +354,24 @@ scrub_serials() {
     out="$(python3 - "$sout" "$real" "${MOS_SCRUB_SALT:-}" <<'PY'
 import sys, os, json, hashlib, glob
 outdir, real, salt = sys.argv[1], sys.argv[2], sys.argv[3]
-# Custom format-preserving serial generator. SHA-256(salt+serial) is the
-# preimage-resistant entropy CORE (so the real serial is NOT recoverable from
-# the output); our own keystream + unbiased draw maps it onto a serial that
+# Custom format-preserving serial generator. The entropy CORE is keyed BLAKE2b
+# (RFC 7693) — a community-designed, non-NSA hash whose permutation is built on
+# Bernstein's ChaCha; the salt is the BLAKE2b KEY (a proper MAC, not a prefix).
+# BLAKE2b is preimage-resistant, so the real serial is NOT recoverable from the
+# output. Our own keystream + unbiased draw maps the digest onto a serial that
 # MIRRORS the real one's per-position character class — uppercase->uppercase,
 # lowercase->lowercase, digit->digit, separators (e.g. '-') kept verbatim — so
 # the false serial looks like a real serial of that family (same shape, length).
-def _keystream(seed):                 # endless deterministic byte stream
-    block = hashlib.sha256(seed).digest(); i = 0
+salt_key = salt.encode()[:64]         # BLAKE2b key is max 64 bytes
+def _digest(data):
+    return hashlib.blake2b(data, key=salt_key).digest()
+seed = _digest(real.encode())         # commitment + keystream seed
+hash_hex = seed.hex()
+def _keystream(s):                    # endless deterministic byte stream
+    block = _digest(s); i = 0
     while True:
         if i >= len(block):
-            block = hashlib.sha256(block).digest(); i = 0
+            block = _digest(block); i = 0
         yield block[i]; i += 1
 def _draw(ks, n):                     # pick in [0,n) with the modulo bias removed
     limit = 256 - (256 % n)
@@ -369,13 +380,13 @@ def _draw(ks, n):                     # pick in [0,n) with the modulo bias remov
             return b % n
     return 0
 UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"; LOWER = UPPER.lower(); DIGIT = "0123456789"
-ks = _keystream((salt + real).encode())
+ks = _keystream(seed)
 false = "".join(
     DIGIT[_draw(ks, 10)] if ch.isdigit() else
     UPPER[_draw(ks, 26)] if "A" <= ch <= "Z" else
     LOWER[_draw(ks, 26)] if "a" <= ch <= "z" else ch
     for ch in real)
-sha_hex = hashlib.sha256((salt + real).encode()).hexdigest()
+sha_hex = hash_hex
 real_b, false_b = real.encode(), false.encode()
 real_hex, false_hex = real_b.hex(), false_b.hex()
 nbin = nman = hits = 0
@@ -403,20 +414,23 @@ note = os.path.join(outdir, "SERIAL-SCRUB.txt")
 salt_line = "yes" if salt else "no (set MOS_SCRUB_SALT for brute-force resistance)"
 open(note, "w").write(
     "Serial scrub — the real drive serial was replaced in every captured fixture\n"
-    "with a deterministic false serial of the same length.\n\n"
-    f"false_serial : {false}\n"
-    f"serial_sha256: {sha_hex}\n"
-    f"salt_used    : {salt_line}\n\n"
+    "with a deterministic false serial of the same length and structure.\n\n"
+    f"false_serial  : {false}\n"
+    f"serial_blake2b: {hash_hex}\n"
+    f"salt_used     : {salt_line}\n\n"
+    "Algorithm: keyed BLAKE2b (RFC 7693, community-designed / non-NSA, ChaCha-based\n"
+    "core) with the salt as the key. false_serial MIRRORS your serial's structure\n"
+    "(letter/digit positions) via a custom keystream over the digest — reproducible\n"
+    "from the hash, but the real serial is NOT derivable from it (preimage\n"
+    "resistance). Serials are low-entropy — use a SECRET MOS_SCRUB_SALT to resist\n"
+    "brute force.\n\n"
     "Reverse-validate (prove the false serial corresponds to YOUR real serial\n"
-    "without revealing it): recompute the hash from your real serial + same salt\n"
-    "    printf '%s' \"$MOS_SCRUB_SALT<REAL_SERIAL>\" | shasum -a 256\n"
-    "and confirm it equals serial_sha256 above. false_serial MIRRORS your serial's\n"
-    "structure (letter/digit positions), generated by a custom keystream over\n"
-    "sha256(salt+serial): reproducible from the hash, but the real serial is NOT\n"
-    "derivable from it (SHA-256 preimage resistance). Serials are low-entropy —\n"
-    "use a SECRET MOS_SCRUB_SALT to resist brute force.\n")
+    "without revealing it): recompute the keyed hash and confirm it equals the\n"
+    "recorded value above:\n"
+    "    python3 -c 'import hashlib,sys; print(hashlib.blake2b(sys.argv[2].encode(),\\\n"
+    "      key=sys.argv[1].encode()[:64]).hexdigest())' \"$MOS_SCRUB_SALT\" <REAL_SERIAL>\n")
 print(f"scrubbed {hits} occurrence(s) across {nbin} .bin and {nman} manifest(s)")
-print(f"false_serial={false}  serial_sha256={sha_hex[:16]}…")
+print(f"false_serial={false}  serial_blake2b={hash_hex[:16]}…")
 PY
 )"
     printf '%s\n' "$out" | sed 's/^/     /'
