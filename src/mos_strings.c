@@ -13,6 +13,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>  /* strcmp for the media-type token map */
+#include <ctype.h>   /* tolower for vendor_prefix_ci */
 
 const char *mos_state_description(mos_state s)
 {
@@ -277,6 +278,125 @@ const char *mos_version_descriptor_name(uint16_t code)
         case 0x1F00: return "sat_4";
         default:     return NULL;   /* per-revision / non-listed → hex fallback */
     }
+}
+
+/* SCSI INQUIRY vendor identification (bytes 8-15, trailing-space trimmed) →
+ * community-recognized manufacturer name used by `mos drive`, `mos state`,
+ * `mos list`, and `mos watch` for the vendor JSON field and the human
+ * Vendor row ("LG (HL-DT-ST)").
+ *
+ * Matching is case-insensitive prefix: strncasecmp over len(key) so a vendor
+ * shorter than the key correctly fails (NUL terminates s1 before the key
+ * ends) while a vendor with a known prefix still resolves. Entries run
+ * longest-first within each family so specific prefixes shadow shorter
+ * catch-alls; first match wins. Returns NULL for unknown vendors. */
+static int vendor_prefix_ci(const char *s, const char *key, size_t klen)
+{
+    for (size_t i = 0; i < klen; i++) {
+        if (!s[i]) return -1;
+        int d = tolower((unsigned char)s[i]) - tolower((unsigned char)key[i]);
+        if (d) return d;
+    }
+    return 0;
+}
+
+const char *mos_vendor_friendly_name(const char *vendor)
+{
+    if (!vendor || !*vendor) return NULL;
+
+    static const struct { const char *key; const char *friendly; } lut[] = {
+        /* ── LG / Hitachi-LG Data Storage ─────────────────────────────── */
+        { "HL-DT-ST",       "LG"        },
+        { "HL-DT",          "LG"        },
+        { "HL",             "LG"        },
+        { "HLDS",           "LG"        },
+        { "GoldStar",       "LG"        },
+        { "LG Electronics", "LG"        },
+        { "LGHL",           "LG"        },
+        { "LG",             "LG"        },
+        /* ── Pioneer ──────────────────────────────────────────────────── */
+        { "PIONEER",        "Pioneer"   },
+        { "PIODATA",        "Pioneer"   },
+        /* ── Panasonic (MATSHITA = Matsushita Electric, rebranded 2008) ─ */
+        { "MATSHITA",       "Panasonic" },
+        { "Panasonic",      "Panasonic" },
+        /* ── Samsung / TSSTcorp ────────────────────────────────────────── */
+        { "TSSTcorp",       "Samsung"   },
+        { "SAMSUNG",        "Samsung"   },
+        /* ── Lite-On and OEM sub-brands ───────────────────────────────── */
+        { "PLDS",           "Lite-On"   },
+        { "PBDS",           "Lite-On"   },
+        { "JLMS",           "Lite-On"   },
+        { "Slimtype",       "Lite-On"   },
+        { "SIimtype",       "Lite-On"   },
+        { "LITE-ON",        "Lite-On"   },
+        { "LITEON",         "Lite-On"   },
+        /* ── Sony / Sony Optiarc ───────────────────────────────────────── */
+        { "OPTIARC",        "Sony"      },
+        { "OPRIARC",        "Sony"      },
+        { "SONY",           "Sony"      },
+        /* ── Plextor ───────────────────────────────────────────────────── */
+        { "PLEXTOR",        "Plextor"   },
+        { "PLEXTOB",        "Plextor"   },
+        /* ── ASUS ──────────────────────────────────────────────────────── */
+        { "ASUS",           "ASUS"      },
+        /* ── NEC ───────────────────────────────────────────────────────── */
+        { "NECVMWar",       "NEC"       },
+        { "NEC",            "NEC"       },
+        /* ── Toshiba ───────────────────────────────────────────────────── */
+        { "TOSHIBA",        "Toshiba"   },
+        { "dynabook",       "Toshiba"   },
+        /* ── Hitachi ───────────────────────────────────────────────────── */
+        { "HITACHI",        "Hitachi"   },
+        /* ── HP / Compaq ───────────────────────────────────────────────── */
+        { "COMPAQ",         "HP"        },
+        { "HPE",            "HP"        },
+        { "HP",             "HP"        },
+        /* ── TEAC ──────────────────────────────────────────────────────── */
+        { "TEAC",           "TEAC"      },
+        /* ── Yamaha ────────────────────────────────────────────────────── */
+        { "YAMAHA",         "Yamaha"    },
+        /* ── BenQ ──────────────────────────────────────────────────────── */
+        { "BENQ",           "BenQ"      },
+        /* ── Philips ───────────────────────────────────────────────────── */
+        { "PHILIPS",        "Philips"   },
+        /* ── Ricoh ─────────────────────────────────────────────────────── */
+        { "RICOH",          "Ricoh"     },
+        /* ── Mitsumi ───────────────────────────────────────────────────── */
+        { "MITSUMI",        "Mitsumi"   },
+        /* ── Kenwood ───────────────────────────────────────────────────── */
+        { "KENWOOD",        "Kenwood"   },
+        /* ── Sanyo ─────────────────────────────────────────────────────── */
+        { "SANYO",          "Sanyo"     },
+        /* ── Lenovo (ThinkPad sub-brand; acquired IBM PC division 2005) ── */
+        { "LENOVO",         "Lenovo"    },
+        { "ThinkPad",       "Lenovo"    },
+        /* ── IBM ───────────────────────────────────────────────────────── */
+        { "IBM",            "IBM"       },
+        /* ── Buffalo ───────────────────────────────────────────────────── */
+        { "BUFFALO",        "Buffalo"   },
+        /* ── Verbatim ──────────────────────────────────────────────────── */
+        { "VERBATIM",       "Verbatim"  },
+        /* ── Freecom ───────────────────────────────────────────────────── */
+        { "FREECOM",        "Freecom"   },
+        /* ── LaCie ─────────────────────────────────────────────────────── */
+        { "LACIE",          "LaCie"     },
+        /* ── Creative ──────────────────────────────────────────────────── */
+        { "CREATIVE",       "Creative"  },
+        /* ── Iomega ────────────────────────────────────────────────────── */
+        { "IOMEGA",         "Iomega"    },
+        /* ── Memorex ───────────────────────────────────────────────────── */
+        { "MEMOREX",        "Memorex"   },
+        /* ── TDK ───────────────────────────────────────────────────────── */
+        { "TDK",            "TDK"       },
+    };
+
+    for (size_t i = 0; i < sizeof lut / sizeof lut[0]; i++) {
+        size_t klen = strlen(lut[i].key);
+        if (vendor_prefix_ci(vendor, lut[i].key, klen) == 0)
+            return lut[i].friendly;
+    }
+    return NULL;
 }
 
 /* Physical Format Information book-type codes (MMC-5 / Linux uapi dvd_layer

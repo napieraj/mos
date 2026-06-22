@@ -9,6 +9,7 @@
     "bsd_node",
     "registry_id",
     "vendor",
+    "vendor_oem",
     "product",
     "revision",
     "serial",
@@ -41,7 +42,11 @@
     },
     "vendor": {
       "type": ["string", "null"],
-      "description": "Vendor identification. FRESH from this verb's raw standard INQUIRY (the canonical drive truth), falling back to the DiscRecording pre-parsed directory cache when the raw read can't run (BUSY/mounted); null when neither has it. Same sanitization rules as mos.state.v1. (Other verbs that don't issue the raw INQUIRY — list/state — use the DR cache.)"
+      "description": "Friendly vendor name (mos_vendor_friendly_name) when mos maps the raw SCSI string to a community name (e.g. \"LG\"); otherwise the raw INQUIRY vendor string. FRESH from this verb's raw standard INQUIRY, falling back to the DR cache when the raw read can't run (BUSY/mounted); null when neither has it. Same sanitization rules as mos.state.v1."
+    },
+    "vendor_oem": {
+      "type": ["string", "null"],
+      "description": "Raw SCSI INQUIRY vendor string (SPC-4 §6.4.2 bytes 8-15, trailing-space trimmed). Same source/sanitization/fallback rules as vendor. null when vendor is null."
     },
     "product": {
       "type": ["string", "null"],

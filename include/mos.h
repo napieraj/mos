@@ -1407,6 +1407,14 @@ const char *mos_spc_version_name(uint8_t version);
    returns NULL so consumers fall back to the hex code. */
 const char *mos_version_descriptor_name(uint16_t code);
 
+/* Community-recognized manufacturer name for a raw SCSI INQUIRY vendor
+   string (bytes 8-15, trailing-space trimmed), e.g. "HL-DT-ST" → "LG",
+   "MATSHITA" → "Panasonic", "TSSTcorp" → "Samsung". Case-insensitive
+   prefix match. Returns NULL when absent, empty, or not in the table;
+   callers fall back to vendor_oem. Used by the CLI (drive/state/list/
+   watch) for the vendor JSON field and the Vendor row ("LG (HL-DT-ST)"). */
+const char *mos_vendor_friendly_name(const char *vendor);
+
 
 /* sysexits.h class for an error, suitable for use as a process exit
    code. EX_OK (0) for MOS_OK; the failure mapping is:

@@ -46,6 +46,19 @@ static char *capture_table(const char *const *headers,
     return buf;
 }
 
+static char *capture_table_ex(const char *const *headers,
+                              const char *const *cells,
+                              const char *const *display_cells,
+                              size_t nrows, size_t ncols,
+                              const bool *ra, bool *ok)
+{
+    char *buf = NULL; size_t len = 0;
+    FILE *f = open_memstream(&buf, &len);
+    *ok = mos_cli_human_table_ex(f, headers, cells, display_cells, nrows, ncols, ra);
+    fclose(f);
+    return buf;
+}
+
 TEST(human_block_ready_mounted_golden)
 {
     /* A faithful `mos state` for a mounted, readable disc — an M-DISC data
@@ -58,7 +71,7 @@ TEST(human_block_ready_mounted_golden)
         { "Registry ID", "4295032831" },
         { "BSD",         "/dev/disk4" },
         { "State",       "ready" },
-        { "Media",       "bd — bd_r" },
+        { "Media",       "BD — BD-R" },
         { "Volume",      "ARCHIVE" },
         { "Vendor",      "HL-DT-ST" },
         { "Product",     "BD-RE WH16NS60" },
@@ -70,7 +83,7 @@ TEST(human_block_ready_mounted_golden)
         "Registry ID:  4295032831\n"
         "        BSD:  /dev/disk4\n"
         "      State:  ready\n"
-        "      Media:  bd — bd_r\n"
+        "      Media:  BD — BD-R\n"
         "     Volume:  ARCHIVE\n"
         "     Vendor:  HL-DT-ST\n"
         "    Product:  BD-RE WH16NS60\n"
@@ -268,6 +281,87 @@ TEST(human_rate_x_multiples)
     return 0;
 }
 
+TEST(human_table_ex_display_cells_used_for_render)
+{
+    /* display_cells override is rendered instead of the plain cell, while the
+       plain cell still drives the column width. An ANSI-coded value that is
+       longer in bytes than the plain cell must not inflate the column. */
+    static const char *const headers[] = { "State", "BSD" };
+    static const char *const cells[]   = { "ready", "/dev/disk4" };
+    /* display cell is longer in bytes (ANSI codes) but same display width. */
+    static const char *const dcells[]  = { "\033[32mready\033[0m", NULL };
+    static const bool ra[] = { false, false };
+    bool ok;
+    char *out = capture_table_ex(headers, cells, dcells, 1, 2, ra, &ok);
+    EXPECT_EQ(true, ok);
+    /* The plain cell "ready" (5 chars) drives width; ANSI codes don't inflate it.
+       "BSD" header is 3 chars, "/dev/disk4" is 10 → BSD column is 10 wide. */
+    EXPECT_STREQ(
+        " State  BSD\n"
+        " \033[32mready\033[0m  /dev/disk4\n", out);
+    free(out);
+    return 0;
+}
+
+TEST(human_table_ex_null_display_cells_matches_base)
+{
+    /* When display_cells is NULL, mos_cli_human_table_ex must produce
+       exactly the same output as mos_cli_human_table. */
+    static const char *const headers[] = { "Index", "State" };
+    static const char *const cells[]   = { "1", "ready", "2", NULL };
+    static const bool ra[] = { true, false };
+    bool ok_base, ok_ex;
+    char *base = capture_table(headers, cells, 2, 2, ra, &ok_base);
+    char *ex   = capture_table_ex(headers, cells, NULL, 2, 2, ra, &ok_ex);
+    EXPECT_EQ(true, ok_base);
+    EXPECT_EQ(true, ok_ex);
+    EXPECT_STREQ(base, ex);
+    free(base); free(ex);
+    return 0;
+}
+
+/* Label function contract tests. */
+TEST(human_profile_label_cd_dvd_bd)
+{
+    EXPECT_STREQ("CD-ROM",    mos_cli_profile_label(0x0008));
+    EXPECT_STREQ("CD-R",      mos_cli_profile_label(0x0009));
+    EXPECT_STREQ("CD-RW",     mos_cli_profile_label(0x000A));
+    EXPECT_STREQ("DVD-ROM",   mos_cli_profile_label(0x0010));
+    EXPECT_STREQ("DVD+RW",    mos_cli_profile_label(0x001A));
+    EXPECT_STREQ("DVD+R DL",  mos_cli_profile_label(0x002B));
+    EXPECT_STREQ("BD-ROM",    mos_cli_profile_label(0x0040));
+    EXPECT_STREQ("BD-R",      mos_cli_profile_label(0x0041));
+    EXPECT_STREQ("BD-RE",     mos_cli_profile_label(0x0043));
+    /* HD DVD not labelled (impossible on Mac). */
+    EXPECT_EQ(NULL, mos_cli_profile_label(0x0050));
+    EXPECT_EQ(NULL, mos_cli_profile_label(0x0051));
+    /* Unknown code. */
+    EXPECT_EQ(NULL, mos_cli_profile_label(0x00FF));
+    return 0;
+}
+
+TEST(human_class_label_tokens)
+{
+    EXPECT_STREQ("CD",     mos_cli_class_label("cd"));
+    EXPECT_STREQ("DVD",    mos_cli_class_label("dvd"));
+    EXPECT_STREQ("BD",     mos_cli_class_label("bd"));
+    EXPECT_STREQ("HD DVD", mos_cli_class_label("hd_dvd"));
+    EXPECT_EQ(NULL,        mos_cli_class_label("mo"));
+    EXPECT_EQ(NULL,        mos_cli_class_label(NULL));
+    return 0;
+}
+
+TEST(human_media_type_label_tokens)
+{
+    EXPECT_STREQ("CD-ROM",  mos_cli_media_type_label("cd_rom"));
+    EXPECT_STREQ("BD-R",    mos_cli_media_type_label("bd_r"));
+    EXPECT_STREQ("BD-RE",   mos_cli_media_type_label("bd_re"));
+    EXPECT_STREQ("DVD-ROM", mos_cli_media_type_label("dvd_rom"));
+    EXPECT_EQ(NULL,         mos_cli_media_type_label("unknown_type"));
+    EXPECT_EQ(NULL,         mos_cli_media_type_label(NULL));
+    return 0;
+}
+
 void register_human_tests(void)
 {
     RUN(human_block_ready_mounted_golden);
@@ -280,4 +374,9 @@ void register_human_tests(void)
     RUN(human_bytes_scaling);
     RUN(human_rate_scaling);
     RUN(human_rate_x_multiples);
+    RUN(human_table_ex_display_cells_used_for_render);
+    RUN(human_table_ex_null_display_cells_matches_base);
+    RUN(human_profile_label_cd_dvd_bd);
+    RUN(human_class_label_tokens);
+    RUN(human_media_type_label_tokens);
 }

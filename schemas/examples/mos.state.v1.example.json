@@ -13,6 +13,7 @@
     "max_write_kbps": 0
   },
   "vendor": "HL-DT-ST",
+  "vendor_oem": "HL-DT-ST",
   "product": "BD-RE BH16NS55",
   "revision": "1.00",
   "registry_id": 4295032831,

@@ -348,11 +348,13 @@ static void emit_human(const metadata_doc *d)
 
     char prof_buf[64];
     if (mos_cli_profile_present(d->profile)) {
-        const char *pn = mos_profile_name(d->profile);
-        const char *pc = mos_profile_class(d->profile);
-        /* Coarse — precise, the same "class — name" form the state verb's
-           Media row and the drive verb's Standards row use. Machine-key hex is
-           in --json; here it is only the fallback when the code is unnamed. */
+        const char *pn_raw = mos_profile_name(d->profile);
+        const char *pc_raw = mos_profile_class(d->profile);
+        /* Marketing labels for the human view; hex fallback for unknown codes. */
+        const char *pn = mos_cli_profile_label(d->profile);
+        if (!pn) pn = pn_raw;
+        const char *pc = mos_cli_class_label(pc_raw);
+        if (!pc) pc = pc_raw;
         if (pn && pc)
             snprintf(prof_buf, sizeof prof_buf, "%s — %s", pc, pn);
         else

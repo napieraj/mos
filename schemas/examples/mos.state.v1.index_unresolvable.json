@@ -8,6 +8,7 @@
   "current_profile_name": "cd_rom",
   "media_class": "cd",
   "vendor": "HL-DT-ST",
+  "vendor_oem": "HL-DT-ST",
   "product": "BD-RE BH16NS55",
   "revision": "1.00"
 }

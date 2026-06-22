@@ -94,16 +94,18 @@ bool mos_cli_human_block(FILE *f, const mos_cli_human_pair *pairs, size_t n)
     return true;
 }
 
-bool mos_cli_human_table(FILE *f,
+bool mos_cli_human_table_ex(FILE *f,
                      const char *const *headers,
                      const char *const *cells,
+                     const char *const *display_cells,
                      size_t nrows, size_t ncols,
                      const bool *right_align)
 {
     if (!f || !headers || ncols == 0) return false;
     if (nrows > 0 && !cells) return false;
 
-    /* Column widths: max of header and every cell in the column. */
+    /* Column widths: always from PLAIN cells and headers so that ANSI codes
+       and multi-byte glyphs in display_cells do not inflate column widths. */
     size_t w[32];
     if (ncols > 32) return false;
     for (size_t c = 0; c < ncols; c++) {
@@ -116,15 +118,24 @@ bool mos_cli_human_table(FILE *f,
     }
 
     /* Leading space, cells padded to w[c], two-space gutters, no trailing
-       whitespace (last left-aligned column unpadded). Pinned by the
-       golden-string tests. */
+       whitespace (last left-aligned column unpadded). Padding is computed
+       from the PLAIN cell's strlen even when a display_cells override is
+       rendered. Pinned by the golden-string tests (NULL display_cells path). */
     for (size_t r = 0; r <= nrows; r++) {
         const bool header_row = (r == 0);
         fputc(' ', f);
         for (size_t c = 0; c < ncols; c++) {
-            const char *s = header_row ? headers[c]
-                                       : cell_or_dash(cells[(r - 1) * ncols + c]);
-            size_t l   = strlen(s);
+            const char *plain = header_row ? headers[c]
+                                           : cell_or_dash(cells[(r - 1) * ncols + c]);
+            /* Display string: use display_cells override when present. */
+            const char *s;
+            if (!header_row && display_cells) {
+                const char *dc = display_cells[(r - 1) * ncols + c];
+                s = dc ? dc : plain;
+            } else {
+                s = plain;
+            }
+            size_t l   = strlen(plain);   /* padding from plain width, always */
             size_t pad = w[c] - l;
             bool   ra  = right_align && right_align[c] && !header_row;
             /* A right-aligned column gets a right-aligned header too, so
@@ -143,4 +154,76 @@ bool mos_cli_human_table(FILE *f,
         fputc('\n', f);
     }
     return true;
+}
+
+bool mos_cli_human_table(FILE *f,
+                     const char *const *headers,
+                     const char *const *cells,
+                     size_t nrows, size_t ncols,
+                     const bool *right_align)
+{
+    return mos_cli_human_table_ex(f, headers, cells, NULL, nrows, ncols,
+                                  right_align);
+}
+
+const char *mos_cli_profile_label(uint16_t code)
+{
+    switch (code) {
+        case 0x0008: return "CD-ROM";
+        case 0x0009: return "CD-R";
+        case 0x000A: return "CD-RW";
+        case 0x0010: return "DVD-ROM";
+        case 0x0011: return "DVD-R";
+        case 0x0012: return "DVD-RAM";
+        case 0x0013: return "DVD-RW";
+        case 0x0014: return "DVD-RW Seq";
+        case 0x0015: return "DVD-R DL";
+        case 0x0016: return "DVD-R DL Jump";
+        case 0x0017: return "DVD-RW DL";
+        case 0x001A: return "DVD+RW";
+        case 0x001B: return "DVD+R";
+        case 0x002A: return "DVD+RW DL";
+        case 0x002B: return "DVD+R DL";
+        case 0x0040: return "BD-ROM";
+        case 0x0041: return "BD-R";
+        case 0x0042: return "BD-R RRM";
+        case 0x0043: return "BD-RE";
+        default:     return NULL;
+    }
+}
+
+const char *mos_cli_class_label(const char *token)
+{
+    if (!token) return NULL;
+    if (strcmp(token, "cd")     == 0) return "CD";
+    if (strcmp(token, "dvd")    == 0) return "DVD";
+    if (strcmp(token, "bd")     == 0) return "BD";
+    if (strcmp(token, "hd_dvd") == 0) return "HD DVD";
+    return NULL;
+}
+
+const char *mos_cli_media_type_label(const char *token)
+{
+    if (!token) return NULL;
+    static const struct { const char *token, *label; } map[] = {
+        { "cd_rom",       "CD-ROM"     },
+        { "cd_r",         "CD-R"       },
+        { "cd_rw",        "CD-RW"      },
+        { "dvd_rom",      "DVD-ROM"    },
+        { "dvd_minus_r",  "DVD-R"      },
+        { "dvd_minus_rw", "DVD-RW"     },
+        { "dvd_plus_r",   "DVD+R"      },
+        { "dvd_plus_rw",  "DVD+RW"     },
+        { "dvd_ram",      "DVD-RAM"    },
+        { "hd_dvd_rom",   "HD DVD-ROM" },
+        { "hd_dvd_r",     "HD DVD-R"   },
+        { "hd_dvd_rw",    "HD DVD-RW"  },
+        { "hd_dvd_ram",   "HD DVD-RAM" },
+        { "bd_rom",       "BD-ROM"     },
+        { "bd_r",         "BD-R"       },
+        { "bd_re",        "BD-RE"      },
+    };
+    for (size_t i = 0; i < sizeof map / sizeof map[0]; i++)
+        if (strcmp(token, map[i].token) == 0) return map[i].label;
+    return NULL;
 }

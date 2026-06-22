@@ -1,5 +1,6 @@
 /* cli/common.c — shared CLI state and helpers; see common.h. */
 #include "common.h"
+#include "color.h"
 
 #include <string.h>
 #include <sysexits.h>
@@ -237,7 +238,13 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
                         mos_watch_event_max_write_kbps(e));
         }
         if (vendor && *vendor) {
-            fputs(",\"vendor\":", stdout);  mos_cli_json_str(stdout, vendor);
+            const char *vfr = mos_vendor_friendly_name(vendor);
+            if (vfr) {
+                fputs(",\"vendor\":", stdout); mos_cli_json_str(stdout, vfr);
+            } else {
+                fputs(",\"vendor\":", stdout); mos_cli_json_str(stdout, vendor);
+            }
+            fputs(",\"vendor_oem\":", stdout); mos_cli_json_str(stdout, vendor);
         }
         if (product && *product) {
             fputs(",\"product\":", stdout); mos_cli_json_str(stdout, product);
@@ -334,8 +341,13 @@ static void query_row(const mos_device_info_t *info, mos_cli_list_row *row)
     const char *v = mos_state_result_vendor(r);
     const char *p = mos_state_result_product(r);
     const char *rv = mos_state_result_revision(r);
-    /* RAW bytes; escaping is per-surface, at emit time. */
-    if (v)  snprintf(row->vendor,   sizeof row->vendor,   "%s", v);
+    /* vendor_oem: raw SCSI bytes. vendor: friendly name (mos_vendor_friendly_name)
+       or raw fallback. Escaping is per-surface, at emit time. */
+    if (v) {
+        snprintf(row->vendor_oem, sizeof row->vendor_oem, "%s", v);
+        const char *vfr = mos_vendor_friendly_name(v);
+        snprintf(row->vendor, sizeof row->vendor, "%s", vfr ? vfr : v);
+    }
     if (p)  snprintf(row->product,  sizeof row->product,  "%s", p);
     if (rv) snprintf(row->revision, sizeof row->revision, "%s", rv);
     bool mounted = false;
@@ -349,26 +361,38 @@ static void query_row(const mos_device_info_t *info, mos_cli_list_row *row)
 void mos_cli_emit_list_table(FILE *f, const mos_cli_list_row *rows, int n,
                             bool with_volume)
 {
-    enum { MAXC = 7 };
-    const char *headers_v[MAXC] =
-        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Firmware" };
-    const char *headers_nv[MAXC - 1] =
-        { "Index", "State", "BSD", "Vendor", "Product", "Firmware" };
-    static const bool ra_v[MAXC]      = { true, false, false, false, false, false, false };
-    static const bool ra_nv[MAXC - 1] = { true, false, false, false, false, false };
+    bool color = mos_cli_color_enabled();
+    /* With color: prepend a bullet indicator column. */
+    enum { MAXC_COLOR = 8, MAXC_PLAIN = 7 };
+    int maxc = color ? MAXC_COLOR : MAXC_PLAIN;
 
-    size_t ncols = with_volume ? MAXC : MAXC - 1;
+    const char *headers_v_color[MAXC_COLOR] =
+        { " ", "Index", "State", "Volume", "BSD", "Vendor", "Product", "Firmware" };
+    const char *headers_v_plain[MAXC_PLAIN] =
+        { "Index", "State", "Volume", "BSD", "Vendor", "Product", "Firmware" };
+    const char *headers_nv_color[MAXC_COLOR - 1] =
+        { " ", "Index", "State", "BSD", "Vendor", "Product", "Firmware" };
+    const char *headers_nv_plain[MAXC_PLAIN - 1] =
+        { "Index", "State", "BSD", "Vendor", "Product", "Firmware" };
+
+    static const bool ra_v_color[MAXC_COLOR]      = { false, true, false, false, false, false, false, false };
+    static const bool ra_v_plain[MAXC_PLAIN]       = { true, false, false, false, false, false, false };
+    static const bool ra_nv_color[MAXC_COLOR - 1]  = { false, true, false, false, false, false, false };
+    static const bool ra_nv_plain[MAXC_PLAIN - 1]  = { true, false, false, false, false, false };
+
+    size_t ncols = (size_t)(with_volume ? maxc : maxc - 1);
     if (n > MOS_CLI_LIST_CAP) n = MOS_CLI_LIST_CAP;
-    char idx[MOS_CLI_LIST_CAP][12];   /* index strings need storage */
-    /* Rows hold raw bytes; \xNN escaping is owed here, at the terminal. */
-    char v_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];
+    char idx[MOS_CLI_LIST_CAP][12];
+    /* vendor is the friendly name (MOS_CLI_VENDOR_FRIENDLY_CAP); escape it. */
+    char v_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_FRIENDLY_CAP)];
     char p_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
     char r_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];
-    /* Volume cell shows the mount path only (mos_cli_list_volume_cell);
-       the label stays in --json and metadata. Bounded so a long or hostile
-       path can't wreck the table — JSON carries the faithful form. */
     char vol_esc[MOS_CLI_LIST_CAP][MOS_CLI_ESC_CAP(96)];
-    const char *cells[MOS_CLI_LIST_CAP * MAXC];
+    /* Color display cells — only allocated/used when color is on. */
+    char state_display[MOS_CLI_LIST_CAP][48];
+    const char *cells        [MOS_CLI_LIST_CAP * MAXC_COLOR];
+    const char *display_cells[MOS_CLI_LIST_CAP * MAXC_COLOR];
+
     for (int r = 0; r < n; r++) {
         snprintf(idx[r], sizeof idx[r], "%d", r + 1);
         (void)mos_safe_ascii(rows[r].vendor,   v_esc[r], sizeof v_esc[r]);
@@ -377,20 +401,56 @@ void mos_cli_emit_list_table(FILE *f, const mos_cli_list_row *rows, int n,
         char vol_cell[96];
         mos_cli_list_volume_cell(rows[r].volume_path, vol_cell, sizeof vol_cell);
         (void)mos_safe_ascii(vol_cell, vol_esc[r], sizeof vol_esc[r]);
+
+        if (color) {
+            const char *open = mos_cli_state_open(rows[r].state);
+            snprintf(state_display[r], sizeof state_display[r], "%s%s%s",
+                     open, rows[r].state, *open ? "\033[0m" : "");
+        }
+
         size_t c = 0;
-        cells[r * ncols + c++] = idx[r];
-        cells[r * ncols + c++] = rows[r].state;
-        if (with_volume)
-            cells[r * ncols + c++] =
-                rows[r].volume_path[0] ? vol_esc[r] : NULL;
-        cells[r * ncols + c++] = rows[r].bsd_node[0] ? rows[r].bsd_node : NULL;
-        cells[r * ncols + c++] = rows[r].vendor[0]   ? v_esc[r] : NULL;
-        cells[r * ncols + c++] = rows[r].product[0]  ? p_esc[r] : NULL;
-        cells[r * ncols + c++] = rows[r].revision[0] ? r_esc[r] : NULL;
+        if (color) {
+            /* Bullet: plain width reference "*", display is the colored glyph. */
+            cells        [r * ncols + c] = mos_cli_state_bullet_plain();
+            display_cells[r * ncols + c] = mos_cli_state_bullet_display(rows[r].state);
+            c++;
+        }
+        cells[r * ncols + c] = idx[r];
+        if (color) display_cells[r * ncols + c] = NULL;
+        c++;
+        /* State: plain for width, display is colored when color is on. */
+        cells[r * ncols + c] = rows[r].state;
+        if (color) display_cells[r * ncols + c] = state_display[r];
+        c++;
+        if (with_volume) {
+            cells[r * ncols + c] = rows[r].volume_path[0] ? vol_esc[r] : NULL;
+            if (color) display_cells[r * ncols + c] = NULL;
+            c++;
+        }
+        cells[r * ncols + c] = rows[r].bsd_node[0] ? rows[r].bsd_node : NULL;
+        if (color) display_cells[r * ncols + c] = NULL;
+        c++;
+        cells[r * ncols + c] = rows[r].vendor[0] ? v_esc[r] : NULL;
+        if (color) display_cells[r * ncols + c] = NULL;
+        c++;
+        cells[r * ncols + c] = rows[r].product[0] ? p_esc[r] : NULL;
+        if (color) display_cells[r * ncols + c] = NULL;
+        c++;
+        cells[r * ncols + c] = rows[r].revision[0] ? r_esc[r] : NULL;
+        if (color) display_cells[r * ncols + c] = NULL;
+        c++;
     }
-    (void)mos_cli_human_table(f, with_volume ? headers_v : headers_nv,
-                          cells, (size_t)n, ncols,
-                          with_volume ? ra_v : ra_nv);
+
+    if (color) {
+        const char *const *hdr = with_volume ? headers_v_color : headers_nv_color;
+        const bool        *ra  = with_volume ? ra_v_color : ra_nv_color;
+        (void)mos_cli_human_table_ex(f, hdr, cells, display_cells,
+                                     (size_t)n, ncols, ra);
+    } else {
+        const char *const *hdr = with_volume ? headers_v_plain : headers_nv_plain;
+        const bool        *ra  = with_volume ? ra_v_plain : ra_nv_plain;
+        (void)mos_cli_human_table(f, hdr, cells, (size_t)n, ncols, ra);
+    }
 }
 
 void mos_cli_emit_list_json(const mos_cli_list_row *rows, int n)
@@ -415,6 +475,9 @@ void mos_cli_emit_list_json(const mos_cli_list_row *rows, int n)
         fputs(", \"vendor\": ", stdout);
         if (rows[r].vendor[0]) mos_cli_json_str(stdout, rows[r].vendor);
         else                   fputs("null", stdout);
+        fputs(", \"vendor_oem\": ", stdout);
+        if (rows[r].vendor_oem[0]) mos_cli_json_str(stdout, rows[r].vendor_oem);
+        else                       fputs("null", stdout);
         fputs(", \"product\": ", stdout);
         if (rows[r].product[0]) mos_cli_json_str(stdout, rows[r].product);
         else                    fputs("null", stdout);
