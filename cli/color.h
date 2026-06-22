@@ -15,10 +15,29 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 
-/* True iff stdout is a terminal and NO_COLOR is unset. */
+/* Color mode, set once by the CLI's option parser (--color / --no-color) and
+   read by mos_cli_color_enabled() below. AUTO is the default and the only mode
+   that consults the terminal + environment; ALWAYS/NEVER are explicit
+   overrides (the `git`/`ls`/`ripgrep` convention) so a user can force color
+   through a pipe (`mos list --color=always | less -R`) or off in CI.
+   Defined in cli/common.c. */
+enum {
+    MOS_CLI_COLOR_AUTO = 0,   /* tty + NO_COLOR/TERM=dumb checks (default) */
+    MOS_CLI_COLOR_ALWAYS,     /* force on regardless of tty/env */
+    MOS_CLI_COLOR_NEVER       /* force off regardless of tty/env */
+};
+extern int mos_cli_color_mode;
+
+/* True iff color should be emitted. AUTO (the default) requires stdout to be a
+   terminal with NO_COLOR unset and TERM not "dumb" (https://no-color.org and
+   the de-facto dumb-terminal convention); ALWAYS/NEVER short-circuit it. */
 static inline bool mos_cli_color_enabled(void)
 {
-    return isatty(STDOUT_FILENO) && !getenv("NO_COLOR");
+    if (mos_cli_color_mode == MOS_CLI_COLOR_ALWAYS) return true;
+    if (mos_cli_color_mode == MOS_CLI_COLOR_NEVER)  return false;
+    if (!isatty(STDOUT_FILENO) || getenv("NO_COLOR")) return false;
+    const char *term = getenv("TERM");
+    return !(term && strcmp(term, "dumb") == 0);
 }
 
 /* Terminal column count. Returns 0 when stdout is not a terminal so callers

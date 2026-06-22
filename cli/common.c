@@ -13,6 +13,7 @@ bool        flag_json   = false;
 bool        flag_force  = false;  /* tray eject --force */
 bool        flag_dump   = false;  /* probe --dump one-shot DR capture */
 bool        flag_capture = false; /* probe --capture fixed-menu raw MMC capture */
+int         mos_cli_color_mode = MOS_CLI_COLOR_AUTO; /* --color / --no-color */
 
 /* The command selected for this invocation; see common.h. NULL until main
    sets it — and in the emit-fixtures harness, which calls run fns directly,

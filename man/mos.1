@@ -160,8 +160,28 @@ Emit JSON
 .RI ( mos.state.v1 " / " mos.error.v1 " / " mos.list.v1 ).
 Takes no argument \(em each schema name carries its own version.
 .TP
+.BR \-\-color " \fIWHEN\fR"
+Colorize human output:
+.B auto
+(the default \(em color when stdout is a terminal and neither
+.B NO_COLOR
+nor
+.B "TERM=dumb"
+is set),
+.B always
+(force color, e.g. when piping to
+.BR "less \-R" ),
+or
+.BR never .
+.TP
+.B \-\-no\-color
+Disable color; an alias for
+.BR "\-\-color never" .
+.TP
 .BR \-h ", " \-\-help
-Show usage and exit.
+Show usage and exit. With a subcommand
+.RI ( "mos " <verb> " \-h" ),
+show that verb's help and examples.
 .TP
 .B \-\-version
 Show version and exit.

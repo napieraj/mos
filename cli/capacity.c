@@ -186,6 +186,17 @@ static void emit_human(const capacity_doc *d)
 const mos_cli_command mos_cli_command_capacity = {
     .name = "capacity", .synopsis = "[drive]", .run = mos_cli_run_capacity,
     .summary = "Disc capacity (media size + free/append space)",
+    .help =
+        "Report how big the loaded disc is (mos.capacity.v1): whole-disk byte\n"
+        "size (the kernel's cached READ CAPACITY, readable on mounted media),\n"
+        "the recordable free/append view, and the formattable view for\n"
+        "rewritable media. Each half is independently nullable; an empty drive\n"
+        "or not-ready disc reports a null document.\n"
+        "\n"
+        "Examples:\n"
+        "  mos capacity 1       size + free/append space\n"
+        "  mos capacity disk4   by BSD form\n"
+        "  mos capacity 1 --json    mos.capacity.v1",
 };
 
 int mos_cli_run_capacity(void)

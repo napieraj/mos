@@ -44,6 +44,11 @@ Registry ID:  4295032831
    Firmware:  1.00
 ```
 
+Human output is colorized when stdout is a terminal (respecting
+[`NO_COLOR`](https://no-color.org/) and `TERM=dumb`). Force it with
+`--color always` (e.g. piping to `less -R`) or off with `--color never` /
+`--no-color`. Run `mos <verb> -h` for a verb's help and examples.
+
 Add `--json` to any verb for a machine-readable document:
 
 ```

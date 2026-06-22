@@ -145,6 +145,20 @@ static bool parse_action(tray_act *act)
 const mos_cli_command mos_cli_command_tray = {
     .name = "tray", .synopsis = "<action> [drive]", .run = mos_cli_run_tray,
     .summary = "Control the tray (eject, close, lock, unlock)",
+    .help =
+        "Control the tray. Actions: eject (gracefully unmounts a mounted disc,\n"
+        "then ejects, clearing the OS mount-protection lock macOS arms), close,\n"
+        "lock (basic removal block, for idle/unmounted drives), unlock (clears\n"
+        "both Prevent states). --force (eject only) also clears a COLD\n"
+        "deliberate Prevent lock in the way; it NEVER forces the filesystem --\n"
+        "a busy disc reports busy. A command the drive answered (refusals\n"
+        "included) exits 0 with the result in the outcome field.\n"
+        "\n"
+        "Examples:\n"
+        "  mos tray eject 1             unmount (if mounted) + eject\n"
+        "  mos tray eject disk4 --force also clear a COLD Prevent lock, then eject\n"
+        "  mos tray lock 1             removal lock on an idle drive\n"
+        "  mos tray unlock 1           clear the lock (both Prevent states)",
     .flags = MOS_CLI_CMD_TRAY_ACTION,
 };
 

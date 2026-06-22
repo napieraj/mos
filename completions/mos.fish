@@ -75,6 +75,8 @@ complete -c mos -s i -l index   -d '1-based drive index' -x
 complete -c mos      -l bsd     -d 'BSD form selector' -a '(__fish_mos_list_drives)' -x
 complete -c mos      -l registry -d 'registry_id selector' -x
 complete -c mos -s j -l json    -d 'Emit JSON output'
+complete -c mos      -l color   -d 'Colorize human output' -x -a 'auto always never'
+complete -c mos      -l no-color -d 'Disable color (alias for --color never)'
 complete -c mos -s h -l help    -d 'Show help'
 complete -c mos      -l version -d 'Show version'
 

@@ -118,6 +118,22 @@ run_mos --help
 assert_ec       "help exit code"          "0" "$EC"
 assert_contains "help mentions Options"   "$OUT" "Options:"
 assert_contains "help advertises the watch subcommand" "$OUT" "watch"
+assert_contains "help has an Examples block"           "$OUT" "Examples:"
+assert_contains "help documents --color"               "$OUT" "--color"
+
+# Test 2a: per-verb help (mos <verb> -h) shows that verb's own usage + examples,
+# distinct from the global usage. Parse-level, no hardware needed.
+run_mos tray --help
+assert_ec       "per-verb help exit code"  "0" "$EC"
+assert_contains "per-verb help is tray-specific"  "$OUT" "usage: mos tray"
+assert_contains "per-verb help lists examples"    "$OUT" "Examples:"
+
+# Test 2b: --color validates its argument; a bogus value is a usage error.
+run_mos --color always --help
+assert_ec       "valid --color value parses"       "0"  "$EC"
+run_mos --color bogus
+assert_ec       "invalid --color value exits 64"   "64" "$EC"
+assert_contains "invalid --color diagnostic"       "$ERR" "invalid --color"
 
 # Test 3: unknown flag exits 64 (EX_USAGE), distinguishing getopt-level
 # errors from query failures (which use other classes like 66 EX_NOINPUT).
@@ -274,6 +290,13 @@ run_mos garbage
 assert_ec "unknown subcommand exits 64" "64" "$EC"
 ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
 assert_contains "unknown subcommand diagnostic names recognized set" "$ERR" "state, list, watch"
+
+# Test 17a: a near-miss typo gets a git-style "Did you mean" suggestion
+# (edit distance <= 2). "statu" -> "state".
+run_mos statu
+assert_ec "near-miss typo still exits 64" "64" "$EC"
+ERR=$(cat /tmp/mos_cli_stderr 2>/dev/null || echo "")
+assert_contains "near-miss typo suggests the nearest verb" "$ERR" "Did you mean 'state'?"
 
 # Test 18 (capacity verb): 'capacity' is a recognized verb (mos.capacity.v1).
 # A selector miss carries the same mos.error.v1 envelope as the others and

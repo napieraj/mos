@@ -417,6 +417,18 @@ static void emit_human(const drive_doc *d)
 const mos_cli_command mos_cli_command_drive = {
     .name = "drive", .synopsis = "[drive]", .run = mos_cli_run_drive,
     .summary = "Drive facts (identity, protection, firmware)",
+    .help =
+        "Report what this drive IS (mos.drive.v1): vendor/product/revision,\n"
+        "serial, content-protection and write-protect capabilities, supported\n"
+        "profiles, firmware date, standards, and mechanical / error-recovery\n"
+        "facts. Static drive truth, distinct from metadata's per-disc identity;\n"
+        "reads that need exclusive access fall back to the DiscRecording cache\n"
+        "or null on mounted (BUSY) media.\n"
+        "\n"
+        "Examples:\n"
+        "  mos drive            the sole attached drive\n"
+        "  mos drive 1          by Index\n"
+        "  mos drive disk4 --json   mos.drive.v1",
 };
 
 int mos_cli_run_drive(void)
