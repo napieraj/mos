@@ -352,6 +352,11 @@ make test       # pure-data unit tests — no drive or hardware needed
 bash/zsh/fish completions; raw files live in [`completions/`](completions) and
 [`man/mos.1`](man/mos.1).
 
+The zsh completion completes verb names statically with no extra dependencies.
+Install [`jq`](https://jqlang.org) for full autocompletion: with `jq` on PATH,
+`mos <TAB>` and `mos --bsd <TAB>` also offer the attached drives by BSD node
+with their current state and identity (e.g. `/dev/disk4:ready LG BD-RE WH16NS60`).
+
 ## Requirements
 
 - macOS 12 Monterey or later (arm64 or x86_64)
