@@ -50,6 +50,7 @@
 #                                    #   that turns ready, hot-plug included
 #   ./disc-ingest.sh <drive>...      # one-shot on the given drive selector(s)
 #   ./disc-ingest.sh identify <drive>      # full plan, read-only — no rip, no writes
+#   ./disc-ingest.sh drive <drive>         # drive identity + community-DB lookup keys
 #   ./disc-ingest.sh fingerprint <drive>   # print the dedup hash and exit
 #   ./disc-ingest.sh offset <drive>        # print the drive's AccurateRip read
 #                                          #   offset + the disc TOC fingerprint
@@ -94,7 +95,9 @@ MOVIE_MODE=${MOVIE_MODE:-all}             # all | main
 MINLENGTH=${MINLENGTH:-120}
 LENGTH_TOLERANCE=${LENGTH_TOLERANCE:-5}   # seconds of slack on the TOC-vs-MB check
 MB_USER_AGENT=${MB_USER_AGENT:-"mos-disc-ingest/1.0 ( you@example.com )"}
-MB_INC=${MB_INC:-"artist-credits+recordings"}   # MusicBrainz subqueries
+MB_INC=${MB_INC:-"artist-credits+recordings+release-groups+labels"}   # MusicBrainz subqueries
+COVER_ART=${COVER_ART:-1}                 # fetch front cover from Cover Art Archive
+COVER_SIZE=${COVER_SIZE:-500}             # 250 | 500 | 1200 | front (original)
 AR_OFFSET_URL=${AR_OFFSET_URL:-"http://www.accuraterip.com/driveoffsets.htm"}
 AR_MIRROR_URL=${AR_MIRROR_URL:-"https://raw.githubusercontent.com/saramibreak/DiscImageCreator/master/Release_ANSI/driveOffset.txt"}
 # AccurateRip refuses a bare curl UA with HTTP 403; present a browser UA.
@@ -147,6 +150,11 @@ main() {
         [ -n "${2:-}" ] || { warn "usage: $0 identify <drive>"; exit 64; }
         DRY_RUN=1                            # terminal path — script exits after
         ingest_one "$2"; return
+    fi
+
+    if [ "${1:-}" = drive ]; then           # drive identity + community-DB keys
+        [ -n "${2:-}" ] || { warn "usage: $0 drive <drive>"; exit 64; }
+        drive_report "$2"; return
     fi
 
     if [ "${1:-}" = fingerprint ]; then     # dedup hash, no side effects
@@ -382,6 +390,8 @@ ingest_audio_cd() {                         # <sel> <meta> <drive> <node_n> <lab
         printf '%s\n' "$mbjson" | jq . 2>/dev/null | write_text_file "$out/musicbrainz.json" || true
         { printf '%s — %s%s\n\n' "$artist" "$album" "${year:+ ($year)}"
           mb_tracklist "$mbjson"; } | write_text_file "$out/tracklist.txt"
+        fetch_cover_art "$mbjson" "$out"        # front cover, keyed on the release MBID
+        write_tags "$mbjson" "$out"             # per-track NN.tags for metaflac
     elif printf '%s' "$meta" | jq -e '.disc.cdtext.tracks | length > 0' >/dev/null 2>&1; then
         { printf '%s — %s (CD-TEXT)\n\n' "$artist" "$album"
           cdtext_tracklist "$meta"; } | write_text_file "$out/tracklist.txt"
@@ -722,6 +732,69 @@ mb_tracklist() {                            # mb_tracklist <mb-json>
           + (if $s != null then "  [\($s / 60 | floor):\($s % 60 | pad2)]" else "" end)'
 }
 
+# fetch_cover_art <mb-json> <outdir> — pull the front cover from the Cover Art
+# Archive, keyed on the RELEASE MBID the MusicBrainz lookup returned (releases[0]
+# .id). CAA /release/{mbid}/front-NNN is a 307 redirect to archive.org, so -L is
+# required; a 404 means no art, where we fall back to the release-GROUP cover
+# (many releases inherit art only at the group level). Saved as cover.jpg in the
+# album dir (the sidecar headless servers read). Spotlight: the MBID is resolved
+# from mos's TOC — the disc itself located its own artwork.
+fetch_cover_art() {                         # fetch_cover_art <mb-json> <outdir>
+    [ "$COVER_ART" = 1 ] || return 0
+    local relid rgid f="$2/cover.jpg"
+    relid=$(jq -r '.releases[0].id // ""' <<<"$1")
+    rgid=$(jq -r '.releases[0]["release-group"].id // ""' <<<"$1")
+    [ -n "$relid" ] || return 0
+    if [ "${DRY_RUN:-0}" = 1 ]; then log "would fetch cover art (release $relid) -> $f"; return 0; fi
+    have curl || return 0
+    if curl -fLs -A "$MB_USER_AGENT" -o "$f" "https://coverartarchive.org/release/$relid/front-$COVER_SIZE" && [ -s "$f" ]; then
+        log "cover art -> $f"
+    elif [ -n "$rgid" ] && curl -fLs -A "$MB_USER_AGENT" -o "$f" "https://coverartarchive.org/release-group/$rgid/front-$COVER_SIZE" && [ -s "$f" ]; then
+        log "cover art (release-group) -> $f"
+    else
+        rm -f "$f" 2>/dev/null || true
+        log "no cover art on the Cover Art Archive for this release"
+    fi
+}
+
+# write_tags <mb-json> <outdir> — one portable tag file per track (NN.tags), in
+# metaflac's KEY=value line format, ready for `metaflac --import-tags-from`. The
+# field names are exactly what Picard/beets/Navidrome round-trip (Vorbis
+# comments + the MUSICBRAINZ_* id set). Per-track ARTIST falls back to the album
+# artist; a various-artists disc carries its own track artist-credit. Note
+# MUSICBRAINZ_TRACKID holds the RECORDING mbid (historical), the per-release
+# track id is MUSICBRAINZ_RELEASETRACKID. Empty-valued fields are dropped.
+write_tags() {                              # write_tags <mb-json> <outdir>
+    if [ "${DRY_RUN:-0}" = 1 ]; then log "would write per-track tags -> $2/NN.tags (metaflac --import-tags-from)"; return 0; fi
+    local pos
+    jq -r '.releases[0].media[]?.tracks[]?.position' <<<"$1" | while read -r pos; do
+        [ -n "$pos" ] || continue
+        jq -r --argjson pos "$pos" '
+            .releases[0] as $r
+            | ($r."artist-credit" | map(.name + (.joinphrase // "")) | add) as $aa
+            | ($r.media[] | select(any(.tracks[]?; .position == $pos))) as $m
+            | ($m.tracks[] | select(.position == $pos)) as $t
+            | [ "TITLE="          + ($t.title // ""),
+                "ARTIST="         + ((($t."artist-credit" // $r."artist-credit") | map(.name + (.joinphrase // "")) | add)),
+                "ALBUM="          + ($r.title // ""),
+                "ALBUMARTIST="    + $aa,
+                "TRACKNUMBER="    + ($t.number // ($t.position | tostring)),
+                "TOTALTRACKS="    + ($m."track-count" | tostring),
+                "DISCNUMBER="     + ($m.position | tostring),
+                "DATE="           + ($r.date // ""),
+                "LABEL="          + (($r."label-info"[0].label.name) // ""),
+                "CATALOGNUMBER="  + (($r."label-info"[0]."catalog-number") // ""),
+                "BARCODE="        + ($r.barcode // ""),
+                "MUSICBRAINZ_ALBUMID="        + ($r.id // ""),
+                "MUSICBRAINZ_RELEASEGROUPID=" + (($r."release-group".id) // ""),
+                "MUSICBRAINZ_RELEASETRACKID=" + ($t.id // ""),
+                "MUSICBRAINZ_TRACKID="        + (($t.recording.id) // "")
+              ] | map(select(endswith("=") | not)) | .[]' <<<"$1" \
+            > "$(printf '%s/%02d.tags' "$2" "$pos")"
+    done
+    log "per-track tags -> $2/NN.tags (apply with: metaflac --import-tags-from=NN.tags track.flac)"
+}
+
 # cdtext_tracklist <metadata-json> — the disc's OWN tracklist from CD-TEXT, the
 # offline fallback when MusicBrainz has no match. Sparse (only titled tracks).
 cdtext_tracklist() {                        # cdtext_tracklist <metadata-json>
@@ -842,6 +915,7 @@ accuraterip_offset() {
         HL-DT-ST) ar_vendor="LG Electronics" ;;
         JLMS)     ar_vendor="Lite-ON" ;;
         Matshita) ar_vendor="Panasonic" ;;
+        TSSTcorp) ar_vendor="Toshiba Samsung" ;;
         *)        ar_vendor="$vendor" ;;
     esac
     key="$ar_vendor - $product"                  # AR name column is "VENDOR - MODEL"
@@ -869,6 +943,49 @@ offset_and_fingerprint() {
         *)          log "AccurateRip offset: $off samples (confirm: whipper offset find -o $off)" ;;
     esac
     log "disc TOC fingerprint: $fp"
+}
+
+# drive_report <selector> — "what is known about THIS drive": mos's identity,
+# the AccurateRip read offset (the ONE community DB that is machine-readable,
+# auto-resolved), and the lookup KEYS + canonical URLs for the human-only DBs
+# (LibreDrive/MakeMKV, UHD crossflash, redump CD compat) — all keyed on exactly
+# the identity mos reports. Honest by design: those three forum/wiki sources
+# publish no machine-readable list (and 403 bots), so the script hands you the
+# key to paste, not a scraped answer. A coarse local table flags known UHD
+# models; `makemkvcon` (if present) is the live LibreDrive oracle.
+drive_report() {                            # drive_report <selector>
+    local sel="$1" d vendor product revision serial fw inter caps off
+    d=$("$MOS" drive "$sel" --json 2>/dev/null) || { warn "mos drive failed for $sel"; return 1; }
+    if [ "$(jq -r '.schema // ""' <<<"$d")" = mos.error.v1 ]; then
+        warn "$sel: $(jq -r '.error.code // "error"' <<<"$d")"; return 0
+    fi
+    vendor=$(jq -r '.vendor // "?"' <<<"$d");   product=$(jq -r '.product // "?"' <<<"$d")
+    revision=$(jq -r '.revision // "?"' <<<"$d"); serial=$(jq -r '.serial // "(none)"' <<<"$d")
+    fw=$(jq -r '.firmware_date // "?"' <<<"$d")
+    inter=$(jq -r '"\(.interconnect // "?")/\(.interconnect_location // "?")"' <<<"$d")
+    caps=$(jq -r '(.protection // {}) | [to_entries[] | select(.value != null and .value != false) | .key] | join(", ")' <<<"$d")
+
+    printf 'Drive: %s %s   (rev %s, firmware %s)\n' "$vendor" "$product" "$revision" "$fw"
+    printf '  serial: %s    interconnect: %s    protection: %s\n' "$serial" "$inter" "${caps:-none}"
+
+    if have curl && have python3; then off=$(accuraterip_offset "$d" 2>/dev/null || true); fi
+    case "${off:-}" in
+        "")         printf '  AccurateRip read offset: unlisted (measure: whipper offset find)\n' ;;
+        "[Purged]") printf '  AccurateRip read offset: [Purged]\n' ;;
+        *)          printf '  AccurateRip read offset: %s samples (auto-resolved)\n' "$off" ;;
+    esac
+
+    printf '  Lookup keys for the human-only DBs (no public machine-readable list — paste these):\n'
+    printf '    LibreDrive/MakeMKV : "%s %s" rev %s      https://forum.makemkv.com/forum/viewforum.php?f=19\n' "$vendor" "$product" "$revision"
+    printf '    UHD crossflash     : %s rev %s (fw %s)   https://forum.makemkv.com/forum/viewtopic.php?t=19634\n' "$product" "$revision" "$fw"
+    printf '    redump CD compat   : %s %s rev %s        http://wiki.redump.org/index.php?title=Optical_Disc_Drive_Compatibility:_CD\n' "$vendor" "$product" "$revision"
+    case "$product" in
+        *WH16NS60*|*BU40N*)               printf '  hint: %s is a known UHD-Official model (firmware-dependent)\n' "$product" ;;
+        *WH16NS40*|*WH14NS40*|*BW-16D1HT*) printf '  hint: %s is a known UHD-Friendly model (firmware-dependent)\n' "$product" ;;
+        *BDR-2*|*BDR-S*|*BDR-X*)          printf '  hint: Pioneer drive — UHD crossflash needs firmware pre-~Dec 2022 (fw %s)\n' "$fw" ;;
+    esac
+    have makemkvcon && printf '  live LibreDrive status: makemkvcon -r --cache=1 info disc:9999\n'
+    return 0
 }
 
 # --- makemkvcon -r robot-mode parsing -------------------------------------
