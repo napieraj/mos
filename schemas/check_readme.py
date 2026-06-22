@@ -151,7 +151,7 @@ def c_list_headers():
     bearing, dynamically-widthed cells, so it isn't round-trippable and isn't
     checked."""
     src = (ROOT / "cli" / "common.c").read_text()
-    arrs = re.findall(r'headers_(?:v|nv)\[[^\]]*\]\s*=\s*\{([^}]*)\}', src)
+    arrs = re.findall(r'headers_(?:v|nv)_plain\[[^\]]*\]\s*=\s*\{([^}]*)\}', src)
     return [re.findall(r'"([^"]+)"', a) for a in arrs] or None
 
 

@@ -84,7 +84,8 @@ mos/
 │   ├── metadata.c / drive.c / features.c / capacity.c / tray.c # one file per command
 │   ├── probe.c                  # diagnostic substrate observer ('mos probe', MOS_CLI_PROBE)
 │   ├── io.c / .h                # output/escaping helpers
-│   └── human.c / .h             # human-readable layout engine
+│   ├── human.c / .h             # human-readable layout engine
+│   └── color.h                  # ANSI color helpers (header-only, isatty+NO_COLOR gate)
 ├── tests/                       # one test_<unit>.c per pure parser; subdirs for suites
 │   ├── test_harness.h           # tiny TEST/RUN/EXPECT macros
 │   ├── test_main.c              # aggregator
