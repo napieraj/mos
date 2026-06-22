@@ -282,36 +282,17 @@ mos_ver() {
     printf '%s' "$v" | tr -dc 'A-Za-z0-9._-'
 }
 
-# Resolve an INQUIRY vendor string to the name the community / MakeMKV / forums /
-# AccurateRip actually use — nobody calls an LG drive "HL-DT-ST". The joint-venture
-# and OEM brand-holder strings are the ones that differ; everything else (LG,
-# Pioneer, ASUS, Sony, …) passes through.
-#   HL-DT-ST  Hitachi-LG Data Storage          -> LG
-#   MATSHITA  Matsushita (Panasonic)           -> Panasonic
-#   TSSTcorp  Toshiba-Samsung Storage Tech     -> Samsung
-#   PLDS      Philips & Lite-On Digital Sol.   -> Lite-On
-#   Slimtype  Lite-On slim brand               -> Lite-On
-vendor_canonical() {
-    # normalize: uppercase, drop spaces/dots/dashes/underscores, for matching
-    key="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -d ' ._-')"
-    case "$key" in
-        HLDTST)                       printf 'LG' ;;
-        MATSHITA|MATSUSHITA)          printf 'Panasonic' ;;
-        TSSTCORP|TOSHIBASAMSUNG)      printf 'Samsung' ;;
-        PLDS|SLIMTYPE|PHILIPSLITEON)  printf 'Lite-On' ;;
-        LITEON)                       printf 'Lite-On' ;;
-        SONYNEC|SONYOPTIARC)          printf 'Optiarc' ;;
-        *)                            printf '%s' "$1" ;;   # already a brand
-    esac
-}
-
+# In --raw mode use vendor_oem (raw SCSI INQUIRY string, e.g. "HL-DT-ST") so the
+# fixture directory name reflects the wire bytes exactly.  Otherwise use vendor,
+# which the C layer (mos_vendor_friendly_name) maps to the community name (e.g. "LG").
 drive_vendor() {
+    key="$([ "${RAW:-0}" = 1 ] && printf 'vendor_oem' || printf 'vendor')"
     v=""
-    [ -n "$FIELD" ] && v="$("$MOS" drive --json 2>/dev/null | python3 "$FIELD" vendor 2>/dev/null)"
-    [ -z "$v" ] && v="$(list_field vendor 2>/dev/null)"
+    [ -n "$FIELD" ] && v="$("$MOS" drive --json 2>/dev/null | python3 "$FIELD" "$key" 2>/dev/null)"
+    [ -z "$v" ] && v="$(list_field "$key" 2>/dev/null)"
     [ -z "$v" ] && v="unknown"
     v="$(printf '%s' "$v" | awk '{$1=$1};1')"   # trim/collapse whitespace
-    printf '%s' "$(vendor_canonical "$v")" | tr ' /' '__' | tr -dc 'A-Za-z0-9._-'
+    printf '%s' "$v" | tr ' /' '__' | tr -dc 'A-Za-z0-9._-'
 }
 
 # Firmware revision token for filenames — fixtures are firmware-specific, so the
