@@ -67,6 +67,8 @@
 #   MOVIE_MODE=all           rip "all" titles, or "main" (longest / FPL feature)
 #   STRICT_PROTECTION=0      1 = skip makemkvcon when mos predicts the drive
 #                            can't decrypt the disc (AACS disc, non-AACS drive)
+#   NOTIFY_CMD               hook run as `$NOTIFY_CMD <event> <detail>` on each
+#                            ready/completion (e.g. terminal-notifier, ntfy)
 #   MINLENGTH=120            makemkvcon --minlength (seconds; drops menus/junk)
 #   LENGTH_TOLERANCE=5       per-track TOC-vs-MusicBrainz length slack (seconds)
 #   MB_USER_AGENT            MusicBrainz UA — PUT A REAL CONTACT HERE; the
@@ -204,6 +206,7 @@ main() {
             *)                tier=unknown-type ;;
         esac
         log "ready: $dev — ${mtype} ($tier, writable=$writable)"
+        notify ready "$dev: $mtype ($tier)"
         ingest_one "$dev"
     done
 }
@@ -401,6 +404,7 @@ ingest_audio_cd() {                         # <sel> <meta> <drive> <node_n> <lab
               id_source:$s, length_check:$lc,
               freedb:$ids.freedb, accuraterip:($ids.accuraterip_id1+"-"+$ids.accuraterip_id2)}')"
     write_manifest "$meta" "$drive_json" "$out" audio_cd
+    notify ripped "audio: $artist — $album"
     tray_eject "$sel"
 }
 
@@ -506,6 +510,7 @@ ingest_video() {                            # <sel> <meta> <drive> <raw> <label>
             '{disc_name:$n, title_count:$tc, main_title:(($mt|select(.!="")) // null),
               protection_predict:$pv}')"
     write_manifest "$meta" "$drive_json" "$out" video
+    notify ripped "video: $name ($titles title(s))"
     tray_eject "$sel"
     return 0
 }
@@ -528,6 +533,22 @@ ingest_data() {                             # <sel> <meta> <drive> <node_n> <raw
     log "$kind on volume $label: archiving to ISO"
     local img="$ARCHIVE_DIR/${label:-disc}.iso"
     local size; size=$("$MOS" capacity "$sel" --json 2>/dev/null | jq -r '.media_bytes // empty')
+
+    # Preservation oracle from mos's disc_structure.physical (DVD/HD-DVD): the
+    # exact data-area sector extent and the dual-layer break. A DVD-9 image must
+    # be the right TOTAL sector count, and an OTP disc has a layer break at
+    # end_sector_l0 that a one-pass tool must know about — mos reports both, so
+    # the consumer verifies completeness against the disc's own geometry instead
+    # of re-probing. (BD geometry isn't in physical; capacity is the BD oracle.)
+    local phys_bytes=""
+    if printf '%s' "$meta" | jq -e '.disc.disc_structure.physical != null' >/dev/null 2>&1; then
+        phys_bytes=$(printf '%s' "$meta" | jq -r '.disc.disc_structure.physical
+            | ((.end_sector - .start_sector + 1) * 2048)')
+        printf '%s' "$meta" | jq -e '.disc.disc_structure.physical.num_layers == 2' >/dev/null 2>&1 \
+            && log "dual-layer (OTP): layer break at sector $(printf '%s' "$meta" | jq -r '.disc.disc_structure.physical.end_sector_l0') — image must span both layers"
+        log "expected data-area extent: $phys_bytes bytes ($(human_bytes "$phys_bytes")) from disc_structure.physical"
+    fi
+
     run mkdir -p "$ARCHIVE_DIR"
     need ddrescue "archive imaging" || return 0
     tray_lock "$sel"
@@ -541,9 +562,14 @@ ingest_data() {                             # <sel> <meta> <drive> <node_n> <raw
         elif [ -n "$size" ]; then
             warn "size mismatch: $img is $got, mos capacity says $size"
         fi
+        # Second, independent check against the DVD data-area extent.
+        if [ -n "$phys_bytes" ] && [ "$got" != "$phys_bytes" ]; then
+            warn "image $got bytes vs disc_structure data-area $phys_bytes — runout/padding is normal, a large gap is not"
+        fi
     fi
     write_sidecar "$meta" "$drive_json" "$img"
     inventory_append "$meta" "$drive_json" archive
+    notify archived "$kind $label -> $img"
     tray_eject "$sel"
 }
 
@@ -1037,6 +1063,15 @@ write_text_file() {
 # universal "this disc is finished, swap it" signal.
 tray_lock()  { [ "$LOCK_DURING_RIP" = 1 ] || return 0; run "$MOS" tray lock  "$1" || true; }
 tray_eject() { [ "$EJECT_WHEN_DONE" = 1 ] || return 0; run "$MOS" tray eject "$1" || true; }
+
+# notify <event> <detail> — fire the user's NOTIFY_CMD hook (ARM's bash_notify
+# pattern), e.g. NOTIFY_CMD=terminal-notifier or a curl to ntfy.sh. Called as
+# `$NOTIFY_CMD <event> <detail>`; no-op when unset. Best-effort, never fatal.
+notify() {
+    [ -n "${NOTIFY_CMD:-}" ] || return 0
+    if [ "${DRY_RUN:-0}" = 1 ]; then log "notify: $1 — $2"; return 0; fi
+    "$NOTIFY_CMD" "$1" "$2" >/dev/null 2>&1 || true
+}
 
 # protection_note <metadata-json> — surface what the disc/drive say about
 # content protection (a reported fact, never enforcement). DVD carries a
