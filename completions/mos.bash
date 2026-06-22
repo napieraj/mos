@@ -2,6 +2,16 @@
 # Do not edit by hand: run `python3 scripts/gen-cli-docs.py` (or `make cli-docs`) and commit.
 # The verb and action lists are derived, so adding a command needs no edit here.
 
+# Query attached optical drives from `mos list --json`. Appends BSD-node paths
+# to COMPREPLY. Requires jq; no-op when absent (mos itself has no runtime deps).
+_mos_drives()
+{
+    command -v jq >/dev/null 2>&1 || return
+    local drives
+    drives=$(mos list --json 2>/dev/null | jq -r '.drives[].bsd_node' 2>/dev/null)
+    [[ -n "$drives" ]] && COMPREPLY+=( $(compgen -W "$drives" -- "$cur") )
+}
+
 _mos()
 {
     local cur prev words cword
@@ -15,11 +25,12 @@ _mos()
     fi
 
     local subcommands="state list watch metadata drive features tray capacity probe"
-    local global_opts="-i --index --bsd --registry -j --json -h --help --version"
+    local global_opts="-i --index --bsd --registry -j --json --color --no-color -h --help --version"
 
     case "$prev" in
         -i|--index|--registry) return ;;
-        --bsd) COMPREPLY=( $(compgen -W "disk" -- "$cur") ); return ;;
+        --bsd) _mos_drives; return ;;
+        --color) COMPREPLY=( $(compgen -W "auto always never" -- "$cur") ); return ;;
     esac
 
     local i sub="" subidx=0
@@ -35,6 +46,7 @@ _mos()
             COMPREPLY=( $(compgen -W "$global_opts" -- "$cur") )
         else
             COMPREPLY=( $(compgen -W "$subcommands" -- "$cur") )
+            _mos_drives
         fi
         return
     fi
@@ -46,8 +58,14 @@ _mos()
 
     local opts="$global_opts"
     case "$sub" in
-        tray)  opts="-i --index --bsd --registry -j --json -h --help --version --force" ;;
-        probe) opts="-i --index --bsd --registry -j --json -h --help --version --dump --capture" ;;
+        tray)
+            local tray_act="" j
+            for ((j=subidx+1; j < cword; j++)); do
+                case "${words[j]}" in -*) ;; *) tray_act="${words[j]}"; break ;; esac
+            done
+            [[ -z "$tray_act" || "$tray_act" == "eject" ]] && opts="$opts --force"
+            ;;
+        probe) opts="$opts --dump --capture" ;;
     esac
 
     if [[ "$cur" == -* ]]; then

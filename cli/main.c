@@ -4,6 +4,7 @@
  * mos_cli_commands[] table below — which drives dispatch, --help's subcommand
  * list, and (parsed from source) the shell completions, all from one place. */
 #include "common.h"
+#include "color.h"      /* mos_cli_color_mode + MOS_CLI_COLOR_* (--color) */
 #include "mos_pure.h"   /* mos_internal_value_is_registry_id (selector floor) */
 
 #include <errno.h>
@@ -93,7 +94,11 @@ void mos_cli_print_usage(FILE *f)
         "  -j, --json        Emit JSON (mos.state.v1 / mos.error.v1 /\n"
         "                    mos.list.v1). watch is always NDJSON\n"
         "                    (mos.event.v1); --json is a no-op there.\n"
-        "  -h, --help        Show this help\n"
+        "      --color WHEN  Colorize human output: auto (default; on when\n"
+        "                    stdout is a tty and NO_COLOR/TERM=dumb are unset),\n"
+        "                    always (force, e.g. piping to 'less -R'), never.\n"
+        "      --no-color    Alias for --color never.\n"
+        "  -h, --help        Show this help (mos <subcommand> -h for one verb)\n"
         "      --version     Show version\n"
         "\n"
         "Environment (watch only; integer ms, 0..3600000, 0 = library\n"
@@ -101,12 +106,34 @@ void mos_cli_print_usage(FILE *f)
         "  MOS_WATCH_STABLE_MS      poll period in stable states (default 2000)\n"
         "  MOS_WATCH_TRANSITION_MS  poll period in transitional states (default 200)\n"
         "\n"
+        "Examples:\n"
+        "  mos                  state of the sole attached drive\n"
+        "  mos list             all drives and their states\n"
+        "  mos 2                state of Index 2 (bare selector runs state)\n"
+        "  mos disk4 --json     mos.state.v1 for /dev/disk4\n"
+        "  mos drive 1          drive identity (vendor, protection, firmware)\n"
+        "  mos tray eject 1     graceful unmount (if mounted), then eject\n"
+        "  mos watch | jq .     stream state events as NDJSON\n"
+        "\n"
         "States: open, empty, loading, ready, busy, formatting,\n"
         "        media_unreadable, device_fault, empty_or_open, unknown\n"
         "Exit:   sysexits.h codes — 0 on observed state, 64 usage, 66 no\n"
         "        device, 69 unavailable, 70 internal, 71 OS err, 74 I/O,\n"
         "        75 temp-fail.\n",
         f);
+}
+
+void mos_cli_print_command_help(FILE *f, const mos_cli_command *cmd)
+{
+    if (!cmd || !cmd->help) {           /* no per-verb body: global usage */
+        mos_cli_print_usage(f);
+        return;
+    }
+    if (cmd->synopsis && *cmd->synopsis)
+        fprintf(f, "usage: %s %s %s\n\n", progname, cmd->name, cmd->synopsis);
+    else
+        fprintf(f, "usage: %s %s\n\n", progname, cmd->name);
+    fprintf(f, "%s\n", cmd->help);
 }
 
 static void print_version(void)
@@ -119,6 +146,8 @@ enum {
     OPT_REGISTRY,
     OPT_VERSION,
     OPT_FORCE,
+    OPT_COLOR,
+    OPT_NO_COLOR,
 #ifdef MOS_CLI_PROBE
     OPT_DUMP,
     OPT_CAPTURE,
@@ -131,6 +160,8 @@ static const struct option long_options[] = {
     { "registry", required_argument, 0, OPT_REGISTRY },
     /* tray-only; the verb match is enforced below. */
     { "force",      no_argument,    0, OPT_FORCE },
+    { "color",    required_argument, 0, OPT_COLOR },
+    { "no-color", no_argument,       0, OPT_NO_COLOR },
 #ifdef MOS_CLI_PROBE
     /* Compiled out so an OFF build rejects --dump/--capture as unknown rather
        than half-recognizing them. */
@@ -154,6 +185,46 @@ static int parse_index(const char *arg)
     long v = strtol(arg, &end, 10);
     if (errno != 0 || !end || *end != 0 || v < 1 || v > INT32_MAX) return -1;
     return (int)v;
+}
+
+/* Levenshtein distance between a and b (case-sensitive; verb names are all
+   lowercase). Bounded by the longest verb name, so the fixed-size row is
+   ample. Used only to suggest a near-miss on an unknown subcommand. */
+static size_t edit_distance(const char *a, const char *b)
+{
+    size_t la = strlen(a), lb = strlen(b);
+    if (la > 31 || lb > 31) return la > lb ? la : lb; /* no verb is this long */
+    size_t prev[32], curr[32];
+    for (size_t j = 0; j <= lb; j++) prev[j] = j;
+    for (size_t i = 1; i <= la; i++) {
+        curr[0] = i;
+        for (size_t j = 1; j <= lb; j++) {
+            size_t cost = a[i - 1] == b[j - 1] ? 0 : 1;
+            size_t del = prev[j] + 1, ins = curr[j - 1] + 1, sub = prev[j - 1] + cost;
+            size_t m = del < ins ? del : ins;
+            curr[j] = m < sub ? m : sub;
+        }
+        for (size_t j = 0; j <= lb; j++) prev[j] = curr[j];
+    }
+    return prev[lb];
+}
+
+/* Nearest verb name to cmd, or NULL when none is close enough. The threshold
+   (distance <= 2 and < the verb's length) catches typos like "statu" -> state
+   without matching unrelated words. */
+static const char *nearest_subcommand(const char *cmd)
+{
+    const char *best = NULL;
+    size_t best_d = 3; /* exclusive upper bound: accept only 1 or 2 */
+    for (size_t k = 0; k < mos_cli_ncommands; k++) {
+        const char *name = mos_cli_commands[k]->name;
+        size_t d = edit_distance(cmd, name);
+        if (d < best_d && d < strlen(name)) {
+            best_d = d;
+            best = name;
+        }
+    }
+    return best;
 }
 
 /* True if the argument contains a decimal digit. The bare-selector gate
@@ -224,6 +295,9 @@ int main(int argc, char **argv)
        `mos /dev/disk4` report state with no verb word; a digit-free
        non-verb still reaches the unknown-subcommand diagnostic. */
     const mos_cli_command *selected = &mos_cli_command_state; /* default verb */
+    bool verb_word_given = false; /* true once an explicit verb word matches,
+                                     so `mos <verb> -h` shows that verb's help
+                                     while bare `mos -h` shows the global usage */
     if (argc >= 2 && argv[1][0] != '-' && argv[1][0] != '\0' &&
         !mos_cli_arg_has_digit(argv[1])) {
         const char *cmd = argv[1];
@@ -232,6 +306,7 @@ int main(int argc, char **argv)
         for (size_t k = 0; k < mos_cli_ncommands; k++) {
             if (strcmp(cmd, mos_cli_commands[k]->name) == 0) {
                 selected = mos_cli_commands[k];
+                verb_word_given = true;
                 break;
             }
         }
@@ -249,6 +324,11 @@ int main(int argc, char **argv)
 #endif
             fprintf(stderr, "%s: unknown subcommand: ", progname);
             mos_cli_safe_ascii(stderr, cmd);
+            /* Near-miss suggestion (git-style) before the full list, when the
+               typo is within edit distance 2 of a real verb. */
+            const char *guess = nearest_subcommand(cmd);
+            if (guess)
+                fprintf(stderr, "\nDid you mean '%s'?", guess);
             /* Recognized list, generated from the same table so it can't drift
                from what actually dispatches. */
             fputs("\nRecognized:", stderr);
@@ -322,6 +402,21 @@ int main(int argc, char **argv)
                 break;
             }
             case OPT_FORCE:      flag_force = true; break;
+            case OPT_COLOR:
+                if (strcmp(optarg, "auto") == 0)
+                    mos_cli_color_mode = MOS_CLI_COLOR_AUTO;
+                else if (strcmp(optarg, "always") == 0)
+                    mos_cli_color_mode = MOS_CLI_COLOR_ALWAYS;
+                else if (strcmp(optarg, "never") == 0)
+                    mos_cli_color_mode = MOS_CLI_COLOR_NEVER;
+                else {
+                    fprintf(stderr, "%s: invalid --color value: ", progname);
+                    mos_cli_safe_ascii(stderr, optarg);
+                    fputs(" (expected auto, always, or never)\n", stderr);
+                    return EX_USAGE;
+                }
+                break;
+            case OPT_NO_COLOR: mos_cli_color_mode = MOS_CLI_COLOR_NEVER; break;
 #ifdef MOS_CLI_PROBE
             case OPT_DUMP:    flag_dump = true; break;
             case OPT_CAPTURE: flag_capture = true; break;
@@ -330,7 +425,12 @@ int main(int argc, char **argv)
                 if (!reject_legacy_json_version(optarg)) return EX_USAGE;
                 flag_json = true;
                 break;
-            case 'h': mos_cli_print_usage(stdout); return EX_OK;
+            case 'h':
+                if (verb_word_given)
+                    mos_cli_print_command_help(stdout, selected);
+                else
+                    mos_cli_print_usage(stdout);
+                return EX_OK;
             case OPT_VERSION: print_version(); return EX_OK;
             case '?':
             default:

@@ -29,6 +29,32 @@ function __fish_mos_using_subcommand
     return 1
 end
 
+# Query attached optical drives from `mos list --json`. Each line is
+# "bsd_node<TAB>state vendor product" for fish's description display.
+# Requires jq; no-op when absent (mos itself has no runtime deps).
+function __fish_mos_list_drives
+    type -q jq; or return
+    mos list --json 2>/dev/null | jq -r '.drives[]|"\(.bsd_node)\t\(.state) \(.vendor) \(.product)"' 2>/dev/null
+end
+
+
+# True when the current mos invocation has 'tray eject' as its action context.
+# Used to gate --force to the eject action only.
+function __fish_mos_tray_eject
+    set -l cmd (commandline -opc)
+    set -l found_tray 0
+    for word in $cmd[2..-1]
+        if test $found_tray -eq 1
+            test "$word" = "eject"
+            return
+        end
+        if test "$word" = "tray"
+            set found_tray 1
+        end
+    end
+    return 1
+end
+
 # Subcommands (only before one is chosen).
 complete -c mos -f -n __fish_mos_no_subcommand -a state -d 'Report drive state (default verb)'
 complete -c mos -f -n __fish_mos_no_subcommand -a list -d 'List all drives with their states'
@@ -39,19 +65,22 @@ complete -c mos -f -n __fish_mos_no_subcommand -a features -d 'MMC feature list 
 complete -c mos -f -n __fish_mos_no_subcommand -a tray -d 'Control the tray (eject, close, lock, unlock)'
 complete -c mos -f -n __fish_mos_no_subcommand -a capacity -d 'Disc capacity (media size + free/append space)'
 complete -c mos -f -n __fish_mos_no_subcommand -a probe -d 'Diagnostic notification stream (mos.probe.v0)'
+complete -c mos -f -n __fish_mos_no_subcommand -a '(__fish_mos_list_drives)'
 
 # tray actions (only right after `tray`).
 complete -c mos -f -n '__fish_mos_using_subcommand tray' -a 'eject open close lock unlock' -d 'tray action'
 
 # Global options.
 complete -c mos -s i -l index   -d '1-based drive index' -x
-complete -c mos      -l bsd     -d 'BSD form selector' -x
+complete -c mos      -l bsd     -d 'BSD form selector' -a '(__fish_mos_list_drives)' -x
 complete -c mos      -l registry -d 'registry_id selector' -x
 complete -c mos -s j -l json    -d 'Emit JSON output'
+complete -c mos      -l color   -d 'Colorize human output' -x -a 'auto always never'
+complete -c mos      -l no-color -d 'Disable color (alias for --color never)'
 complete -c mos -s h -l help    -d 'Show help'
 complete -c mos      -l version -d 'Show version'
 
 # Subcommand-scoped options.
-complete -c mos -l force      -n '__fish_mos_using_subcommand tray'  -d 'eject: also clear a tray Prevent lock (never forces the filesystem)'
+complete -c mos -l force      -n __fish_mos_tray_eject  -d 'eject: also clear a tray Prevent lock (never forces the filesystem)'
 complete -c mos -l dump       -n '__fish_mos_using_subcommand probe' -d 'One-shot DiscRecording capture'
 complete -c mos -l capture    -n '__fish_mos_using_subcommand probe' -d 'Fixed-menu raw MMC capture'

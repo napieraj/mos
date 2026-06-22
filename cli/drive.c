@@ -252,17 +252,9 @@ static void emit_human(const drive_doc *d)
 
     pairs[n++] = (mos_cli_human_pair){ "Serial",  d->serial   ? s_esc : NULL };
 
-    /* Interconnect: bus, with the location in parens when known
-       ("usb (external)"); just the bus when location is absent. Fixed token
-       vocabulary — no hostile bytes. */
-    char ic_row[32];
-    if (d->interconnect && d->interconnect_location)
-        snprintf(ic_row, sizeof ic_row, "%s (%s)",
-                 d->interconnect, d->interconnect_location);
-    else if (d->interconnect)
-        snprintf(ic_row, sizeof ic_row, "%s", d->interconnect);
-    pairs[n++] = (mos_cli_human_pair){ "Interconnect",
-                                       d->interconnect ? ic_row : NULL };
+    /* Interconnect: JSON-only (mos.drive.v1 interconnect/interconnect_location).
+       Suppressed from the human block — external USB is the common case and
+       the row adds noise without signal for most users. */
 
     /* Protection: the schemes the drive can authenticate, comma-joined; the
        version (and AACS bus-encryption notes) ride in parentheses. A modern BD
@@ -425,6 +417,18 @@ static void emit_human(const drive_doc *d)
 const mos_cli_command mos_cli_command_drive = {
     .name = "drive", .synopsis = "[drive]", .run = mos_cli_run_drive,
     .summary = "Drive facts (identity, protection, firmware)",
+    .help =
+        "Report what this drive IS (mos.drive.v1): vendor/product/revision,\n"
+        "serial, content-protection and write-protect capabilities, supported\n"
+        "profiles, firmware date, standards, and mechanical / error-recovery\n"
+        "facts. Static drive truth, distinct from metadata's per-disc identity;\n"
+        "reads that need exclusive access fall back to the DiscRecording cache\n"
+        "or null on mounted (BUSY) media.\n"
+        "\n"
+        "Examples:\n"
+        "  mos drive            the sole attached drive\n"
+        "  mos drive 1          by Index\n"
+        "  mos drive disk4 --json   mos.drive.v1",
 };
 
 int mos_cli_run_drive(void)

@@ -301,6 +301,18 @@ static void emit_json(const mos_state_result *r, int index1,
 const mos_cli_command mos_cli_command_state = {
     .name = "state", .synopsis = "[drive]", .run = mos_cli_run_state,
     .summary = "Report drive state (default verb)",
+    .help =
+        "Report the drive's classified state (open, empty, loading, ready,\n"
+        "busy, ...) with the raw sense triplet when set, the media class /\n"
+        "profile, and drive identity. The default verb: a bare drive selector\n"
+        "runs it. Exits 0 on any observed state (unknown included); a non-zero\n"
+        "code means no observation was produced.\n"
+        "\n"
+        "Examples:\n"
+        "  mos state            the sole attached drive\n"
+        "  mos 2                bare selector runs state (Index 2)\n"
+        "  mos disk4            by BSD form\n"
+        "  mos state 1 --json   mos.state.v1",
 };
 
 int mos_cli_run_state(void)

@@ -53,9 +53,17 @@ typedef struct {
                                 bare-selector gate in main.c relies on it) */
     const char *synopsis;    /* args after the verb ("[drive]", ""); help text */
     const char *summary;     /* one-line description: help list + completions */
+    const char *help;        /* multi-line per-verb help body (description +
+                                Examples) printed by `mos <verb> -h`; may be
+                                NULL, in which case -h falls back to the global
+                                usage. Plain ASCII, no trailing newline. */
     int       (*run)(void);  /* entry point */
     unsigned    flags;       /* MOS_CLI_CMD_* */
 } mos_cli_command;
+
+/* Print per-verb help for `cmd` (synopsis line + its .help body) to f. Falls
+   back to the global usage when the verb carries no .help. Defined in main.c. */
+void mos_cli_print_command_help(FILE *f, const mos_cli_command *cmd);
 
 extern const mos_cli_command mos_cli_command_state;
 extern const mos_cli_command mos_cli_command_list;

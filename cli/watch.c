@@ -56,6 +56,17 @@ static uint32_t getenv_uint(const char *name, uint32_t default_value)
 const mos_cli_command mos_cli_command_watch = {
     .name = "watch", .synopsis = "[drive]", .run = mos_cli_run_watch,
     .summary = "Stream state events as NDJSON until SIGINT",
+    .help =
+        "Stream state-change events as NDJSON (mos.event.v1), one line per\n"
+        "event, until SIGINT. With no selector it watches the whole bus (zero\n"
+        "drives is a valid empty stream awaiting hot-plug); a selector narrows\n"
+        "to one drive. Output is always NDJSON, so --json is a no-op here. Poll\n"
+        "cadence is tunable via MOS_WATCH_STABLE_MS / MOS_WATCH_TRANSITION_MS.\n"
+        "\n"
+        "Examples:\n"
+        "  mos watch            every drive, NDJSON to stdout\n"
+        "  mos watch 2          one drive until SIGINT\n"
+        "  mos watch disk4 | jq .   pipe the event stream",
     .flags = MOS_CLI_CMD_NDJSON,
 };
 

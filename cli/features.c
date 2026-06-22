@@ -89,6 +89,17 @@ static void emit_human(const feat_collect *c, int64_t bsd_unit)
 const mos_cli_command mos_cli_command_features = {
     .name = "features", .synopsis = "[drive]", .run = mos_cli_run_features,
     .summary = "MMC feature list with current bits",
+    .help =
+        "Print the raw MMC feature list (GET CONFIGURATION RT=0), one row per\n"
+        "descriptor in reply order: code, current bit, persistent bit, and\n"
+        "version. A write feature's current bit answers whether the drive can\n"
+        "write the mounted medium now. Codes map to MMC-6 consumer-side (no\n"
+        "name table).\n"
+        "\n"
+        "Examples:\n"
+        "  mos features 1       feature table for Index 1\n"
+        "  mos features disk4   by BSD form\n"
+        "  mos features 1 --json    mos.features.v1",
 };
 
 int mos_cli_run_features(void)

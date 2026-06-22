@@ -13,6 +13,7 @@ bool        flag_json   = false;
 bool        flag_force  = false;  /* tray eject --force */
 bool        flag_dump   = false;  /* probe --dump one-shot DR capture */
 bool        flag_capture = false; /* probe --capture fixed-menu raw MMC capture */
+int         mos_cli_color_mode = MOS_CLI_COLOR_AUTO; /* --color / --no-color */
 
 /* The command selected for this invocation; see common.h. NULL until main
    sets it — and in the emit-fixtures harness, which calls run fns directly,
@@ -439,6 +440,54 @@ void mos_cli_emit_list_table(FILE *f, const mos_cli_list_row *rows, int n,
         cells[r * ncols + c] = rows[r].revision[0] ? r_esc[r] : NULL;
         if (color) display_cells[r * ncols + c] = NULL;
         c++;
+    }
+
+    /* Terminal-width clamping: proportionally budget the Volume column so the
+       table fits a narrow tty without wrapping. Volume path is the widest and
+       most expendable column. mos_cli_term_cols() returns 0 when stdout is not
+       a tty, so no-op for pipes/redirects and the mini-list (with_volume=false
+       never reaches here). */
+    if (with_volume && f == stdout) {
+        int term_cols = mos_cli_term_cols();
+        if (term_cols >= 40) {
+            size_t tw = (size_t)term_cols;
+
+            /* Volume column index (0-based in ncols). */
+            size_t vol_col = (size_t)(color ? 3 : 2);
+            const char *const *hdr = color ? headers_v_color : headers_v_plain;
+
+            /* Total width consumed by every column except Volume, plus all
+               (ncols-1) two-space gutters and the 1-char leading space. This
+               is the fixed cost regardless of Volume width. */
+            size_t fixed = 1 + 2 * (ncols - 1);
+            for (size_t c = 0; c < ncols; c++) {
+                if (c == vol_col) continue;
+                size_t cw = strlen(hdr[c]);
+                for (int r2 = 0; r2 < n; r2++) {
+                    const char *cell = cells[r2 * ncols + c];
+                    size_t l = cell ? strlen(cell) : 1; /* NULL renders as "-" */
+                    if (l > cw) cw = l;
+                }
+                fixed += cw;
+            }
+
+            size_t vol_budget = tw > fixed ? tw - fixed : 3;
+            if (vol_budget < 3) vol_budget = 3;
+
+            /* Truncate in-place; cells[] points into vol_esc so no extra
+               wiring needed. Skip rows with no volume (NULL cell). */
+            for (int r2 = 0; r2 < n; r2++) {
+                if (!rows[r2].volume_path[0]) continue;
+                size_t vl = strlen(vol_esc[r2]);
+                if (vl > vol_budget) {
+                    size_t keep = vol_budget - 3;
+                    vol_esc[r2][keep]   = '.';
+                    vol_esc[r2][keep+1] = '.';
+                    vol_esc[r2][keep+2] = '.';
+                    vol_esc[r2][keep+3] = '\0';
+                }
+            }
+        }
     }
 
     if (color) {

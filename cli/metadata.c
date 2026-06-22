@@ -529,6 +529,16 @@ static void emit_human(const metadata_doc *d)
 const mos_cli_command mos_cli_command_metadata = {
     .name = "metadata", .synopsis = "[drive]", .run = mos_cli_run_metadata,
     .summary = "Disc identity record (profile, TOC, volume)",
+    .help =
+        "Emit the on-demand disc-identity record (mos.metadata.v1): profile,\n"
+        "TOC, disc info, disc structure, track info, CD-TEXT, session layout,\n"
+        "ATIP, and mounted-volume name/path. Unreadable or inapplicable facts\n"
+        "emit null; the verb fails only when no observation was produced.\n"
+        "\n"
+        "Examples:\n"
+        "  mos metadata 1            disc fingerprint for Index 1\n"
+        "  mos metadata disk4 --json mos.metadata.v1\n"
+        "  mos metadata /dev/disk4   by dev node",
 };
 
 int mos_cli_run_metadata(void)

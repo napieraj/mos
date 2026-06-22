@@ -59,12 +59,6 @@ GENERATED_NOTE = (
     "here."
 )
 
-# Flags scoped to a single verb (mirrors main.c's validation guards:
-# `flag_force && !flag_tray` and `flag_dump && !flag_probe`).
-TRAY_FLAGS = ["--force"]
-PROBE_FLAGS = ["--dump", "--capture"]
-
-
 def read(path):
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
@@ -152,19 +146,17 @@ def comment_block(prefix):
 
 
 def gen_bash(verbs, actions, long_opts):
-    globals_ = ["-i", "--index", "--bsd", "--registry", "-j", "--json", "-h",
-                "--help", "--version"]
+    globals_ = ["-i", "--index", "--bsd", "--registry", "-j", "--json",
+                "--color", "--no-color", "-h", "--help", "--version"]
     # Sanity: every global long opt we list must exist in the table.
-    for name in ("index", "bsd", "registry", "json", "help", "version"):
+    for name in ("index", "bsd", "registry", "json", "color", "help", "version"):
         if name not in long_opts:
             sys.exit(f"gen-cli-docs: expected long option --{name} missing")
     sub = " ".join(verbs)
     g = " ".join(globals_)
     acts = " ".join(actions)
-    tray = g + " " + " ".join(TRAY_FLAGS)
-    probe = g + " " + " ".join(PROBE_FLAGS)
     return f"""{comment_block('# ')}
-
+{BASH_DRIVES_HELPER}
 _mos()
 {{
     local cur prev words cword
@@ -182,7 +174,8 @@ _mos()
 
     case "$prev" in
         -i|--index|--registry) return ;;
-        --bsd) COMPREPLY=( $(compgen -W "disk" -- "$cur") ); return ;;
+        --bsd) _mos_drives; return ;;
+        --color) COMPREPLY=( $(compgen -W "auto always never" -- "$cur") ); return ;;
     esac
 
     local i sub="" subidx=0
@@ -198,6 +191,7 @@ _mos()
             COMPREPLY=( $(compgen -W "$global_opts" -- "$cur") )
         else
             COMPREPLY=( $(compgen -W "$subcommands" -- "$cur") )
+            _mos_drives
         fi
         return
     fi
@@ -209,8 +203,14 @@ _mos()
 
     local opts="$global_opts"
     case "$sub" in
-        tray)  opts="{tray}" ;;
-        probe) opts="{probe}" ;;
+        tray)
+            local tray_act="" j
+            for ((j=subidx+1; j < cword; j++)); do
+                case "${{words[j]}}" in -*) ;; *) tray_act="${{words[j]}}"; break ;; esac
+            done
+            [[ -z "$tray_act" || "$tray_act" == "eject" ]] && opts="$opts --force"
+            ;;
+        probe) opts="$opts --dump --capture" ;;
     esac
 
     if [[ "$cur" == -* ]]; then
@@ -233,6 +233,47 @@ _mos_drives() {
   drives=(${(f)"$(mos list --json 2>/dev/null | jq -r '.drives[]|"\(.bsd_node):\(.state) \(.vendor) \(.product)"' 2>/dev/null)"})
   _describe 'drives' drives
 }
+"""
+
+BASH_DRIVES_HELPER = r"""
+# Query attached optical drives from `mos list --json`. Appends BSD-node paths
+# to COMPREPLY. Requires jq; no-op when absent (mos itself has no runtime deps).
+_mos_drives()
+{
+    command -v jq >/dev/null 2>&1 || return
+    local drives
+    drives=$(mos list --json 2>/dev/null | jq -r '.drives[].bsd_node' 2>/dev/null)
+    [[ -n "$drives" ]] && COMPREPLY+=( $(compgen -W "$drives" -- "$cur") )
+}
+"""
+
+FISH_DRIVES_HELPER = r"""
+# Query attached optical drives from `mos list --json`. Each line is
+# "bsd_node<TAB>state vendor product" for fish's description display.
+# Requires jq; no-op when absent (mos itself has no runtime deps).
+function __fish_mos_list_drives
+    type -q jq; or return
+    mos list --json 2>/dev/null | jq -r '.drives[]|"\(.bsd_node)\t\(.state) \(.vendor) \(.product)"' 2>/dev/null
+end
+"""
+
+FISH_TRAY_EJECT_GUARD = r"""
+# True when the current mos invocation has 'tray eject' as its action context.
+# Used to gate --force to the eject action only.
+function __fish_mos_tray_eject
+    set -l cmd (commandline -opc)
+    set -l found_tray 0
+    for word in $cmd[2..-1]
+        if test $found_tray -eq 1
+            test "$word" = "eject"
+            return
+        end
+        if test "$word" = "tray"
+            set found_tray 1
+        end
+    end
+    return 1
+end
 """
 
 
@@ -261,6 +302,8 @@ _mos() {{
         '--bsd[BSD form selector]:bsd name:_mos_drives'
         '--registry[registry_id selector]:registry id:'
         '(-j --json)'{{-j,--json}}'[emit JSON output]'
+        '--color[colorize human output]:when:(auto always never)'
+        '--no-color[disable color (alias for --color never)]'
         '(-h --help)'{{-h,--help}}'[show help]'
         '--version[show version]'
     )
@@ -282,9 +325,14 @@ _mos() {{
         args)
             case $line[1] in
                 tray)
+                    local -a tray_opts
+                    tray_opts=("${{global_opts[@]}}")
+                    local _tray_act
+                    for w in "${{(@)line[2,-1]}}"; do [[ $w != -* ]] && {{ _tray_act=$w; break; }}; done
+                    [[ -z $_tray_act || $_tray_act == eject ]] && \\
+                        tray_opts+=('--force[tray eject: also clear a tray Prevent lock (never forces the filesystem)]')
                     _arguments \\
-                        "${{global_opts[@]}}" \\
-                        '--force[tray eject: also clear a tray Prevent lock (never forces the filesystem)]' \\
+                        "${{tray_opts[@]}}" \\
                         '1:action:({act})'
                     ;;
                 probe)
@@ -340,23 +388,27 @@ function __fish_mos_using_subcommand
     end
     return 1
 end
-
+{FISH_DRIVES_HELPER}
+{FISH_TRAY_EJECT_GUARD}
 # Subcommands (only before one is chosen).
 {sub_lines}
+complete -c mos -f -n __fish_mos_no_subcommand -a '(__fish_mos_list_drives)'
 
 # tray actions (only right after `tray`).
 complete -c mos -f -n '__fish_mos_using_subcommand tray' -a '{act}' -d 'tray action'
 
 # Global options.
 complete -c mos -s i -l index   -d '1-based drive index' -x
-complete -c mos      -l bsd     -d 'BSD form selector' -x
+complete -c mos      -l bsd     -d 'BSD form selector' -a '(__fish_mos_list_drives)' -x
 complete -c mos      -l registry -d 'registry_id selector' -x
 complete -c mos -s j -l json    -d 'Emit JSON output'
+complete -c mos      -l color   -d 'Colorize human output' -x -a 'auto always never'
+complete -c mos      -l no-color -d 'Disable color (alias for --color never)'
 complete -c mos -s h -l help    -d 'Show help'
 complete -c mos      -l version -d 'Show version'
 
 # Subcommand-scoped options.
-complete -c mos -l force      -n '__fish_mos_using_subcommand tray'  -d 'eject: also clear a tray Prevent lock (never forces the filesystem)'
+complete -c mos -l force      -n __fish_mos_tray_eject  -d 'eject: also clear a tray Prevent lock (never forces the filesystem)'
 complete -c mos -l dump       -n '__fish_mos_using_subcommand probe' -d 'One-shot DiscRecording capture'
 complete -c mos -l capture    -n '__fish_mos_using_subcommand probe' -d 'Fixed-menu raw MMC capture'
 """

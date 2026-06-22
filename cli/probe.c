@@ -566,6 +566,19 @@ static io_service_t resolve_io_service_by_bsd(const char *bsd_name) {
 const mos_cli_command mos_cli_command_probe = {
     .name = "probe", .synopsis = "<drive>", .run = mos_cli_run_probe,
     .summary = "Diagnostic notification stream (mos.probe.v0)",
+    .help =
+        "Diagnostic substrate observer (mos.probe.v0). Subscribes to one\n"
+        "drive's IOKit and DiscRecording push-notification sources and logs\n"
+        "each event as NDJSON until SIGINT. --dump does a one-shot\n"
+        "DiscRecording dictionary capture (XML plists; takes no drive).\n"
+        "--capture <drive> issues the fixed menu of known read-only MMC\n"
+        "commands and emits each raw reply as NDJSON for fixture capture.\n"
+        "Takes a drive by index or BSD form only (no registry_id).\n"
+        "\n"
+        "Examples:\n"
+        "  mos probe 1          stream notification events as NDJSON\n"
+        "  mos probe --dump     one-shot DR dictionary capture (no drive)\n"
+        "  mos probe --capture disk4   fixed-menu raw MMC capture",
     .flags = MOS_CLI_CMD_PROBE,
 };
 
