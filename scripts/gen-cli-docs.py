@@ -221,6 +221,21 @@ complete -F _mos mos
 """
 
 
+ZSH_DRIVES_HELPER = r"""
+# Query attached optical drives from `mos list --json`. Produces completions of
+# the form "/dev/disk4:ready LG BD-RE WH16NS60" — bsd_node as the completion
+# value, drive state + identity as the description.
+# Requires jq; silently yields no candidates when jq is absent (mos itself
+# has no runtime dependencies, so jq is never assumed to be present).
+_mos_drives() {
+  (( $+commands[jq] )) || return
+  local -a drives
+  drives=(${(f)"$(mos list --json 2>/dev/null | jq -r '.drives[]|"\(.bsd_node):\(.state) \(.vendor) \(.product)"' 2>/dev/null)"})
+  _describe 'drives' drives
+}
+"""
+
+
 def gen_zsh(verbs, actions, descs):
     sub_lines = "\n".join(
         f"                '{v}:{descs[v]}'" for v in verbs
@@ -229,9 +244,13 @@ def gen_zsh(verbs, actions, descs):
     # tray and probe get a dedicated _arguments call; everything else falls
     # through to the global options. Generated from the verb list so a new
     # verb is covered by the default branch automatically.
+    #
+    # _mos_drives is called alongside _describe in the subcmd state so the
+    # first positional completes both verb names and live drive BSD nodes.
+    # --bsd uses it directly instead of the generic _files glob.
     return f"""#compdef mos
 {comment_block('# ')}
-
+{ZSH_DRIVES_HELPER}
 _mos() {{
     local curcontext="$curcontext" state line
     typeset -A opt_args
@@ -239,7 +258,7 @@ _mos() {{
     local -a global_opts
     global_opts=(
         '(-i --index)'{{-i,--index}}'[1-based drive index]:index:'
-        '--bsd[BSD form selector]:bsd name:_files -g "disk*" -W /dev'
+        '--bsd[BSD form selector]:bsd name:_mos_drives'
         '--registry[registry_id selector]:registry id:'
         '(-j --json)'{{-j,--json}}'[emit JSON output]'
         '(-h --help)'{{-h,--help}}'[show help]'
@@ -258,6 +277,7 @@ _mos() {{
 {sub_lines}
             )
             _describe -t commands 'mos subcommand' subcommands
+            _mos_drives
             ;;
         args)
             case $line[1] in
