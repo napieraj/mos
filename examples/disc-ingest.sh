@@ -64,7 +64,9 @@
 #                            <image>.mos.json beside an archived .iso
 #   EJECT_WHEN_DONE=0        `mos tray eject` after a successful job (swap-me)
 #   LOCK_DURING_RIP=0        `mos tray lock` an idle drive across the job
-#   MOVIE_MODE=all           rip "all" titles, or "main" (longest only)
+#   MOVIE_MODE=all           rip "all" titles, or "main" (longest / FPL feature)
+#   STRICT_PROTECTION=0      1 = skip makemkvcon when mos predicts the drive
+#                            can't decrypt the disc (AACS disc, non-AACS drive)
 #   MINLENGTH=120            makemkvcon --minlength (seconds; drops menus/junk)
 #   LENGTH_TOLERANCE=5       per-track TOC-vs-MusicBrainz length slack (seconds)
 #   MB_USER_AGENT            MusicBrainz UA — PUT A REAL CONTACT HERE; the
@@ -344,6 +346,12 @@ ingest_audio_cd() {                         # <sel> <meta> <drive> <node_n> <lab
 
     offset_and_fingerprint "$meta" "$drive_json"
 
+    # Every ecosystem's disc id from the ONE mos TOC read — the spotlight: no
+    # second tool touches the drive to compute these.
+    local ids; ids=$(disc_ids "$meta")
+    log "disc ids: freedb=$(jq -r .freedb <<<"$ids")" \
+        "accuraterip=$(jq -r '.accuraterip_id1+"-"+.accuraterip_id2' <<<"$ids")"
+
     # Lay the rip out as Artist/Album (Year)/ — the layout a music library
     # expects, named from the lookup, not from the anonymous diskN.
     local a_dir b_dir base out
@@ -361,6 +369,10 @@ ingest_audio_cd() {                         # <sel> <meta> <drive> <node_n> <lab
         # redumper writes <image-name>.{bin,cue,log,...} into <image-path>.
         run redumper --drive="$node_n" --image-path="$out" --image-name="$base"
     fi
+
+    # All the disc ids beside the rip (incl. the AccurateRip results URL) — a
+    # tagger / accuraterip verifier reads one file, computed from mos's TOC.
+    printf '%s\n' "$ids" | jq . 2>/dev/null | write_text_file "$out/disc-ids.json" || true
 
     # The tracklist + raw lookup beside the rip: the metadata a tagger consumes.
     if [ -n "$mbjson" ] && [ "$source" = musicbrainz ]; then
@@ -384,8 +396,10 @@ ingest_audio_cd() {                         # <sel> <meta> <drive> <node_n> <lab
 
     inventory_append "$meta" "$drive_json" audio_cd \
         "$(jq -nc --arg a "$artist" --arg b "$album" --arg y "$year" \
-                  --arg s "$source" --arg lc "$length_check" \
-            '{artist:$a, album:$b, year:(($y|select(.!="")) // null), id_source:$s, length_check:$lc}')"
+                  --arg s "$source" --arg lc "$length_check" --argjson ids "$ids" \
+            '{artist:$a, album:$b, year:(($y|select(.!="")) // null),
+              id_source:$s, length_check:$lc,
+              freedb:$ids.freedb, accuraterip:($ids.accuraterip_id1+"-"+$ids.accuraterip_id2)}')"
     write_manifest "$meta" "$drive_json" "$out" audio_cd
     tray_eject "$sel"
 }
@@ -422,10 +436,23 @@ ingest_video() {                            # <sel> <meta> <drive> <raw> <label>
     printf '%s' "$meta" | jq -e '.disc.disc_structure.physical.num_layers == 2' >/dev/null 2>&1 \
         && log "dual-layer: layer break at sector $(printf '%s' "$meta" | jq -r '.disc.disc_structure.physical.end_sector_l0')"
 
+    # Predict decryptability from the disc protection + the DRIVE's capability
+    # (mos drive) before spending a multi-minute scan — the spotlight guard.
+    local verdict; verdict=$(predict_protection "$meta" "$drive_json")
+    if [ "${verdict%%:*}" = block ]; then
+        warn "protection: ${verdict#block:}"
+        if [ "${STRICT_PROTECTION:-0}" = 1 ]; then
+            warn "STRICT_PROTECTION=1 — not invoking makemkvcon (set 0 to try anyway)"
+            return 0                            # handled: a video disc we won't decrypt
+        fi
+        warn "trying makemkvcon anyway (it is the authority; set STRICT_PROTECTION=1 to fail fast)"
+    fi
+
     need makemkvcon "video rip" || return 0     # can't rip without it; treat as handled
 
     local info name titles
     info=$(makemkv_info "$raw")
+    makemkv_check_messages "$info"              # surface AACS/decrypt errors verbatim
     titles=$(printf '%s\n' "$info" | sed -n 's/^TCOUNT:\([0-9]*\).*/\1/p' | head -n1)
     if [ -z "${titles:-}" ] || [ "$titles" -eq 0 ]; then
         log "makemkvcon found 0 titles — not a movie; trying a data archive"
@@ -437,22 +464,31 @@ ingest_video() {                            # <sel> <meta> <drive> <raw> <label>
     local name_dir; name_dir=$(sanitize_component "${name:-disc}")
     local out="$RIPS_DIR/$name_dir"
 
-    # Parse every title; rank by duration; the longest is the main feature.
-    local rows main_title="" main_sec=0 t sec dur chap bytes oname
+    # Parse every title; rank by duration. The main feature is the longest title
+    # UNLESS MakeMKV flagged one "FPL_MainFeature" (its verdict on the real movie
+    # behind a fake-playlist obfuscated disc), which wins outright.
+    local rows main_title="" main_sec=0 fpl_title="" t sec dur chap bytes oname tname
     rows=$(makemkv_titles "$info")
     log "video $class: \"${name:-untitled}\" — $titles title(s) -> $out"
-    while IFS=$'\t' read -r t sec dur chap bytes oname; do
+    while IFS=$'\t' read -r t sec dur chap bytes oname tname; do
         [ -n "$t" ] || continue
-        log "  title $t: $dur, $chap chapter(s), $(human_bytes "$bytes")${oname:+  ->  $oname}"
+        [ "$oname" = - ] && oname=""; [ "$tname" = - ] && tname=""   # undo sentinels
+        log "  title $t: $dur, $chap chapter(s), $(human_bytes "$bytes")${tname:+  [$tname]}${oname:+  ->  $oname}"
+        case "$tname" in FPL_MainFeature*) fpl_title="$t" ;; esac
         if [ "$sec" -gt "$main_sec" ]; then main_sec="$sec"; main_title="$t"; fi
     done <<<"$rows"
-    [ -n "$main_title" ] && log "main feature: title $main_title (${main_sec}s)"
+    if [ -n "$fpl_title" ]; then
+        log "main feature: title $fpl_title (MakeMKV FPL_MainFeature — fake-playlist verdict)"
+        main_title="$fpl_title"
+    elif [ -n "$main_title" ]; then
+        log "main feature: title $main_title (${main_sec}s, longest)"
+    fi
 
     tray_lock "$sel"
     run mkdir -p "$out"
 
     # Manifest: the makemkvcon plan + the disc name, beside the rip.
-    { printf '# %s\n# title\tseconds\tlength\tchapters\tbytes\toutput\n' "$name"
+    { printf '# %s\n# title\tseconds\tlength\tchapters\tbytes\toutput\tname\n' "$name"
       printf '%s\n' "$rows"; } | write_text_file "$out/titles.tsv"
 
     # MOVIE_MODE=main rips only the longest title (a single movie); the default
@@ -466,7 +502,9 @@ ingest_video() {                            # <sel> <meta> <drive> <raw> <label>
 
     inventory_append "$meta" "$drive_json" video \
         "$(jq -nc --arg n "$name" --argjson tc "${titles:-0}" --arg mt "${main_title:-}" \
-            '{disc_name:$n, title_count:$tc, main_title:(($mt|select(.!="")) // null)}')"
+                  --arg pv "${verdict%%:*}" \
+            '{disc_name:$n, title_count:$tc, main_title:(($mt|select(.!="")) // null),
+              protection_predict:$pv}')"
     write_manifest "$meta" "$drive_json" "$out" video
     tray_eject "$sel"
     return 0
@@ -569,6 +607,38 @@ toc_query_string() {
     printf '%s' "$1" | jq -r '.disc.toc as $t
         | [ $t.first_track, $t.last_track, $t.leadout_lba + 150 ]
           + [ $t.tracks[].start_lba + 150 ] | join("+")'
+}
+
+# disc_ids <metadata-json> — EVERY audio-CD disc identifier that is a pure
+# function of mos's TOC, derived from ONE mos read with no tool touching the
+# drive. This is the spotlight: mos ships the TOC primitive and a consumer keys
+# MusicBrainz, freedb/CDDB, AND AccurateRip off it. The framings differ (verified
+# against libdiscid + whipper): MusicBrainz and CDDB use LBA+150 (the 150-frame
+# lead-in pregap), AccurateRip uses RAW LBAs. The AccurateRip ids also yield the
+# results-DB URL where a consumer fetches the expected per-track checksums +
+# confidence (still no audio read — mos's TOC alone locates the record). The two
+# AccurateRip ids cover AUDIO tracks only (a CD-Extra data track is excluded);
+# freedb counts all tracks, as the CDDB spec does. MusicBrainz id needs openssl.
+disc_ids() {                                # disc_ids <metadata-json>
+    local mb=null
+    have openssl && mb="\"$(discid_from_meta "$1")\""
+    printf '%s' "$1" | jq -c --argjson mb "$mb" '
+        def digitsum(n): (n|tostring)|explode|map(.-48)|add;
+        def tohex8: . as $n | [range(0;8)]|reverse|map(($n/pow(16;.)|floor)%16)
+                    | map(if .<10 then .+48 else .+87 end)|implode;
+        .disc.toc as $t
+        | [ $t.tracks[] | select(.data==false) ] as $au
+        | (($t.tracks|map((.start_lba/75|floor)+2|digitsum(.))|add)) as $sum
+        | (($t.leadout_lba/75|floor) - ($t.tracks[0].start_lba/75|floor)) as $total
+        | (((($sum%255)*16777216) + ($total*256) + ($t.tracks|length)) % 4294967296 | tohex8) as $fd
+        | ((($au|map(.start_lba)|add) + $t.leadout_lba) % 4294967296 | tohex8) as $a1
+        | ((($au|map((if .start_lba==0 then 1 else .start_lba end) * .track)|add)
+             + ($t.leadout_lba * (($au|length)+1))) % 4294967296 | tohex8) as $a2
+        | { musicbrainz: $mb, freedb: $fd, accuraterip_id1: $a1, accuraterip_id2: $a2,
+            accuraterip_url: ("http://www.accuraterip.com/accuraterip/"
+              + $a1[7:8] + "/" + $a1[6:7] + "/" + $a1[5:6]
+              + "/dBAR-" + (($au|length)|tostring|("00"+.)[-3:])
+              + "-" + $a1 + "-" + $a2 + "-" + $fd + ".bin") }'
 }
 
 # mb_throttle — MusicBrainz hard-caps anonymous clients at 1 request/second.
@@ -800,12 +870,16 @@ makemkv_disc_name() {
 }
 
 # makemkv_titles <info> — one TSV row per title:
-#   title <TAB> seconds <TAB> H:MM:SS <TAB> chapters <TAB> bytes <TAB> outname
-# Sorted by title index. Durations are converted to seconds for ranking.
+#   title <TAB> seconds <TAB> H:MM:SS <TAB> chapters <TAB> bytes <TAB> outname <TAB> name
+# Sorted by title index. Durations are converted to seconds for ranking. The
+# title NAME (id 2) is last so MakeMKV's "FPL_MainFeature" rename — its verdict
+# on which playlist is the real movie behind a fake-playlist obfuscated disc —
+# can be honored in selection.
 makemkv_titles() {
-    printf '%s\n' "$1" | awk '
+    printf '%s\n' "$1" | awk -F '\t' 'BEGIN{OFS="\t"}
         function unq(s){ sub(/^"/,"",s); sub(/"$/,"",s);
-                         gsub(/\\"/,"\"",s); gsub(/\\\\/,"\\",s); return s }
+                         gsub(/\\"/,"\"",s); gsub(/\\\\/,"\\",s);
+                         gsub(/\t/," ",s); return s }
         function dsec(d, n,p){ n=split(d,p,":");
                          if(n==3) return p[1]*3600+p[2]*60+p[3];
                          if(n==2) return p[1]*60+p[2]; return p[1]+0 }
@@ -815,7 +889,8 @@ makemkv_titles() {
             i=index(rest,","); a=substr(rest,1,i-1);   rest=substr(rest,i+1)
             i=index(rest,","); v=unq(substr(rest,i+1))
             seen[t]=1
-            if(a==9)  { dur[t]=v; sec[t]=dsec(v) }
+            if(a==2)       name[t]=v
+            else if(a==9)  { dur[t]=v; sec[t]=dsec(v) }
             else if(a==8)  chap[t]=v
             else if(a==11) bytes[t]=v
             else if(a==27) out[t]=v
@@ -824,13 +899,55 @@ makemkv_titles() {
             n=0; for(t in seen) idx[n++]=t+0
             for(i=1;i<n;i++){ k=idx[i]; j=i-1;
                 while(j>=0 && idx[j]>k){ idx[j+1]=idx[j]; j-- } idx[j+1]=k }
+            # "-" sentinels for the two optionally-empty columns: a bare empty
+            # field mid-row would be swallowed by the shell read loop (tab is
+            # IFS-whitespace, so adjacent tabs collapse). The loop maps "-" back.
             for(i=0;i<n;i++){ t=idx[i];
-                printf "%s\t%s\t%s\t%s\t%s\t%s\n",
-                    t, (sec[t]+0), (dur[t]=="" ? "?" : dur[t]),
-                    (chap[t]=="" ? "0" : chap[t]),
-                    (bytes[t]=="" ? "0" : bytes[t]),
-                    (out[t]=="" ? "" : out[t]) }
+                print t, (sec[t]+0), (dur[t]=="" ? "?" : dur[t]),
+                      (chap[t]=="" ? "0" : chap[t]),
+                      (bytes[t]=="" ? "0" : bytes[t]),
+                      (out[t]=="" ? "-" : out[t]), (name[t]=="" ? "-" : name[t]) }
         }'
+}
+
+# makemkv_check_messages <info> — scan robot MSG lines for the hard-failure
+# signatures (AACS host-cert revoked, undecryptable volume key, open failure)
+# and surface them verbatim. makemkvcon has no rich error enum — the MSG text +
+# a non-zero exit are the signal — so we grep the info pass for the decisive
+# phrases before committing to a multi-minute rip.
+makemkv_check_messages() {
+    printf '%s\n' "$1" | sed -n 's/^MSG:[0-9]*,[0-9]*,[0-9]*,"\(.*\)",".*$/\1/p' \
+        | grep -iE 'revoked|can.t be decrypted|failed to open|aacs' \
+        | while IFS= read -r m; do warn "makemkvcon: $m"; done || true
+}
+
+# predict_protection <metadata-json> <drive-json> — from the disc's protection
+# (mos metadata copyright) AND the DRIVE's protection CAPABILITY (mos drive),
+# predict whether makemkvcon can decrypt BEFORE a multi-minute scan. An AACS
+# disc on a drive that advertises no AACS (a plain DVD/BD-ROM unit, or a non-UHD
+# drive on a UHD disc) is the fail-fast case; a CSS disc on a CSS-capable drive
+# is green-lit. This is the spotlight: mos's drive-capability JSON gives a guard
+# makemkvcon alone cannot. BD+ and UHD/AACS-2.0 are deliberately invisible to
+# mos (disc-side VM / vendor microcode), so this predicts only to the standard-
+# MMC line. Echoes "ok" or "block:<reason>".
+predict_protection() {
+    local meta="$1" drive="$2" prot class d_aacs d_css
+    prot=$(jq -r '.disc.disc_structure.copyright.protection_name // ""' <<<"$meta")
+    class=$(jq -r '.disc.class // ""' <<<"$meta")
+    d_aacs=$(jq -r 'if .protection.aacs == null then "no" else "yes" end' <<<"$drive")
+    d_css=$(jq -r 'if .protection.css == null then "no" else "yes" end' <<<"$drive")
+    case "$prot" in
+        aacs)
+            [ "$d_aacs" = yes ] && echo ok \
+                || echo "block:disc is AACS but the drive advertises no AACS capability (mos drive .protection.aacs is null) — wrong or incapable drive" ;;
+        css_cppm|cprm)
+            [ "$d_css" = yes ] && echo ok \
+                || echo "block:disc is CSS/CPRM but the drive shows no CSS capability — likely the wrong drive" ;;
+        *)
+            if [ "$class" = bd ] && [ "$d_aacs" = no ]; then
+                echo "block:Blu-ray video is typically AACS but the drive advertises no AACS capability"
+            else echo ok; fi ;;
+    esac
 }
 
 # --- Inventory / sidecars / tray ------------------------------------------
