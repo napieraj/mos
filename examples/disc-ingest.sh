@@ -17,33 +17,26 @@
 # The tools it routes to (install what you need; each branch is independent):
 #   - jq           field extraction from mos's JSON                (required)
 #   - openssl      MusicBrainz Disc ID hash                        (audio CD)
-#   - curl         MusicBrainz release lookup                      (audio CD)
+#   - curl         MusicBrainz lookup, cover art, AccurateRip DB   (audio CD)
 #   - redumper     byte-perfect, offset-corrected preservation dump (redump.org)
 #   - ddrescue     error-tolerant 1:1 imaging of aging media       (GNU ddrescue)
 #   - makemkvcon   decrypt + rip encrypted video titles            (MakeMKV)
-#   - python3      parse AccurateRip's HTML offset DB               (audio CD)
 #   - shasum/diskutil  built into macOS
 #
 # Beyond routing, it shows mos used as more than a classifier:
 #   - audio CDs are NAMED from a real MusicBrainz release lookup (artist / album
-#     / year / tracklist), falling back to the disc's own CD-TEXT, then the
-#     volume label — so the rip lands in `Artist/Album (Year)/` with a
-#     `tracklist.txt` + the raw MusicBrainz JSON beside it. The lookup is
-#     CROSS-CHECKED against the disc: every track's TOC length is compared with
-#     MusicBrainz's, and a mismatch is flagged for manual review (a fuzzy match
-#     or the wrong disc of a set is caught, not silently trusted);
-#   - video discs are planned from `makemkvcon -r info`: every title's duration,
-#     chapter count and size is parsed, the MAIN FEATURE (longest title) is
-#     identified, the disc name becomes the output dir, and a `titles.tsv`
-#     manifest is written — so a box set and a single movie are both handled;
-#   - an append-only INVENTORY keyed by the drive's durable serial + a hash of
-#     mos's closed `disc` fingerprint subtree (the one dedup key that works
-#     even for Blu-ray, where no standard disc ID exists);
-#   - a per-archive SIDECAR manifest (the mos metadata + drive identity + image
-#     checksum) — the provenance record an archivist keeps beside the .iso;
-#   - a `mos tray` lifecycle (lock an idle drive during a rip so a stray
-#     operator eject becomes an event not a retraction; eject when done);
-#   - content-protection / region messaging from mos's own fields.
+#     / year / tracklist), cross-checked against the disc's own TOC lengths, with
+#     cover art + per-track tags + every ecosystem's disc id beside the rip;
+#   - video discs are PLANNED from `makemkvcon -r info` (durations, chapters, the
+#     main feature) and gated on a protection prediction from mos's drive caps;
+#   - data discs are imaged 1:1 with ddrescue, verified against mos's reported
+#     capacity AND its disc_structure geometry;
+#   - an append-only INVENTORY + a provenance manifest (sha256 of each output)
+#     keyed by the drive serial and a hash of mos's `disc` fingerprint subtree.
+#
+# This is a REFERENCE, not a product: it demonstrates what mos's JSON unlocks,
+# with as few knobs as possible. It reports and identifies; it does not control
+# the drive (no tray/eject — that is mos's separate control surface).
 #
 # Usage:
 #   ./disc-ingest.sh                 # follow `mos watch`: act on every disc
@@ -52,31 +45,15 @@
 #   ./disc-ingest.sh identify <drive>      # full plan, read-only — no rip, no writes
 #   ./disc-ingest.sh drive <drive>         # drive identity + community-DB lookup keys
 #   ./disc-ingest.sh fingerprint <drive>   # print the dedup hash and exit
-#   ./disc-ingest.sh offset <drive>        # print the drive's AccurateRip read
-#                                          #   offset + the disc TOC fingerprint
 #   echo /dev/disk4 | ./disc-ingest.sh -   # read dev nodes from stdin
 #
 # Config (environment overrides):
 #   RIPS_DIR / ARCHIVE_DIR   output roots          (default ~/Rips, ~/Archive)
 #   INVENTORY                append-only JSONL log (default ~/disc-inventory.jsonl;
 #                            set empty to disable)
-#   SIDECAR=1                write a checksummed provenance record per rip:
-#                            manifest.json inside an audio/movie rip dir, and
-#                            <image>.mos.json beside an archived .iso
-#   EJECT_WHEN_DONE=0        `mos tray eject` after a successful job (swap-me)
-#   LOCK_DURING_RIP=0        `mos tray lock` an idle drive across the job
-#   MOVIE_MODE=all           rip "all" titles, or "main" (longest / FPL feature)
-#   STRICT_PROTECTION=0      1 = skip makemkvcon when mos predicts the drive
-#                            can't decrypt the disc (AACS disc, non-AACS drive)
-#   NOTIFY_CMD               hook run as `$NOTIFY_CMD <event> <detail>` on each
-#                            ready/completion (e.g. terminal-notifier, ntfy)
 #   MINLENGTH=120            makemkvcon --minlength (seconds; drops menus/junk)
-#   LENGTH_TOLERANCE=5       per-track TOC-vs-MusicBrainz length slack (seconds)
 #   MB_USER_AGENT            MusicBrainz UA — PUT A REAL CONTACT HERE; the
 #                            service rejects a bare curl UA, cap 1 req/s.
-#   AR_OFFSET_URL            AccurateRip offset DB (default the canonical HTML
-#                            page; auto-falls back to a TSV mirror since
-#                            AccurateRip blocks bots; a file:// path works offline)
 #   DRY_RUN=1                print the command each branch WOULD run (read-only
 #                            probes — MusicBrainz, makemkvcon info — still run so
 #                            the plan is REAL; nothing is written or ripped)
@@ -88,23 +65,19 @@ set -euo pipefail
 RIPS_DIR=${RIPS_DIR:-"$HOME/Rips"}
 ARCHIVE_DIR=${ARCHIVE_DIR:-"$HOME/Archive"}
 INVENTORY=${INVENTORY-"$HOME/disc-inventory.jsonl"}
-SIDECAR=${SIDECAR:-1}
-EJECT_WHEN_DONE=${EJECT_WHEN_DONE:-0}
-LOCK_DURING_RIP=${LOCK_DURING_RIP:-0}
-MOVIE_MODE=${MOVIE_MODE:-all}             # all | main
 MINLENGTH=${MINLENGTH:-120}
-LENGTH_TOLERANCE=${LENGTH_TOLERANCE:-5}   # seconds of slack on the TOC-vs-MB check
 MB_USER_AGENT=${MB_USER_AGENT:-"mos-disc-ingest/1.0 ( you@example.com )"}
-MB_INC=${MB_INC:-"artist-credits+recordings+release-groups+labels"}   # MusicBrainz subqueries
-COVER_ART=${COVER_ART:-1}                 # fetch front cover from Cover Art Archive
-COVER_SIZE=${COVER_SIZE:-500}             # 250 | 500 | 1200 | front (original)
-AR_OFFSET_URL=${AR_OFFSET_URL:-"http://www.accuraterip.com/driveoffsets.htm"}
-AR_MIRROR_URL=${AR_MIRROR_URL:-"https://raw.githubusercontent.com/saramibreak/DiscImageCreator/master/Release_ANSI/driveOffset.txt"}
-# AccurateRip refuses a bare curl UA with HTTP 403; present a browser UA.
-AR_UA=${AR_UA:-"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605 (KHTML, like Gecko) Version/16 Safari/605"}
+MOS=${MOS:-mos}
+
+# Internal constants (not knobs — a reference keeps its surface small).
+MB_INC="artist-credits+recordings+release-groups+labels"   # MusicBrainz subqueries
+COVER_SIZE=500                            # Cover Art Archive thumb (250|500|1200)
+LENGTH_TOLERANCE=5                        # seconds of slack on the TOC-vs-MB check
+# AccurateRip offsets via the DiscImageCreator TSV mirror (tab-delimited, no
+# bot-blocking, no HTML parse): "VENDOR - MODEL <TAB> offset <TAB> n <TAB> pct%".
+AR_OFFSET_URL="https://raw.githubusercontent.com/saramibreak/DiscImageCreator/master/Release_ANSI/driveOffset.txt"
 AR_DB_CACHE="${TMPDIR:-/tmp}/disc-ingest.aroffsets.$$"
 MB_THROTTLE_STAMP="${TMPDIR:-/tmp}/disc-ingest.mbstamp.$$"
-MOS=${MOS:-mos}
 trap 'rm -f "$AR_DB_CACHE" "$MB_THROTTLE_STAMP"' EXIT
 
 # --- tiny plumbing the delegation leans on --------------------------------
@@ -162,14 +135,6 @@ main() {
         fingerprint "$("$MOS" metadata "$2" --json)"; return
     fi
 
-    if [ "${1:-}" = offset ]; then          # AccurateRip read offset + fingerprint
-        [ -n "${2:-}" ] || { warn "usage: $0 offset <drive>"; exit 64; }
-        local m d
-        m=$("$MOS" metadata "$2" --json) || { warn "mos metadata failed for $2"; exit 1; }
-        d=$("$MOS" drive "$2" --json 2>/dev/null || echo '{}')
-        offset_and_fingerprint "$m" "$d"; return
-    fi
-
     if [ "$#" -gt 0 ] && [ "$1" != - ]; then
         for sel in "$@"; do ingest_one "$sel"; done
         return
@@ -214,7 +179,6 @@ main() {
             *)                tier=unknown-type ;;
         esac
         log "ready: $dev — ${mtype} ($tier, writable=$writable)"
-        notify ready "$dev: $mtype ($tier)"
         ingest_one "$dev"
     done
 }
@@ -374,7 +338,6 @@ ingest_audio_cd() {                         # <sel> <meta> <drive> <node_n> <lab
         base="$b_dir"; out="$RIPS_DIR/$a_dir/$b_dir"
     fi
 
-    tray_lock "$sel"
     if need redumper "CD dump"; then
         run mkdir -p "$out"
         # redumper writes <image-name>.{bin,cue,log,...} into <image-path>.
@@ -414,8 +377,6 @@ ingest_audio_cd() {                         # <sel> <meta> <drive> <node_n> <lab
               id_source:$s, length_check:$lc,
               freedb:$ids.freedb, accuraterip:($ids.accuraterip_id1+"-"+$ids.accuraterip_id2)}')"
     write_manifest "$meta" "$drive_json" "$out" audio_cd
-    notify ripped "audio: $artist — $album"
-    tray_eject "$sel"
 }
 
 # --- Branch: blank / appendable -------------------------------------------
@@ -451,16 +412,11 @@ ingest_video() {                            # <sel> <meta> <drive> <raw> <label>
         && log "dual-layer: layer break at sector $(printf '%s' "$meta" | jq -r '.disc.disc_structure.physical.end_sector_l0')"
 
     # Predict decryptability from the disc protection + the DRIVE's capability
-    # (mos drive) before spending a multi-minute scan — the spotlight guard.
+    # (mos drive) before spending a multi-minute scan — the spotlight guard. We
+    # only WARN: makemkvcon is the authority, so the prediction informs, never
+    # blocks (a stale drive-cap reading shouldn't veto a rip).
     local verdict; verdict=$(predict_protection "$meta" "$drive_json")
-    if [ "${verdict%%:*}" = block ]; then
-        warn "protection: ${verdict#block:}"
-        if [ "${STRICT_PROTECTION:-0}" = 1 ]; then
-            warn "STRICT_PROTECTION=1 — not invoking makemkvcon (set 0 to try anyway)"
-            return 0                            # handled: a video disc we won't decrypt
-        fi
-        warn "trying makemkvcon anyway (it is the authority; set STRICT_PROTECTION=1 to fail fast)"
-    fi
+    [ "${verdict%%:*}" = block ] && warn "protection: ${verdict#block:} (trying makemkvcon anyway)"
 
     need makemkvcon "video rip" || return 0     # can't rip without it; treat as handled
 
@@ -498,21 +454,15 @@ ingest_video() {                            # <sel> <meta> <drive> <raw> <label>
         log "main feature: title $main_title (${main_sec}s, longest)"
     fi
 
-    tray_lock "$sel"
     run mkdir -p "$out"
 
     # Manifest: the makemkvcon plan + the disc name, beside the rip.
     { printf '# %s\n# title\tseconds\tlength\tchapters\tbytes\toutput\tname\n' "$name"
       printf '%s\n' "$rows"; } | write_text_file "$out/titles.tsv"
 
-    # MOVIE_MODE=main rips only the longest title (a single movie); the default
-    # "all" rips every title that passed --minlength (box sets, extras).
-    if [ "$MOVIE_MODE" = main ] && [ -n "$main_title" ]; then
-        log "MOVIE_MODE=main — ripping title $main_title only"
-        run makemkvcon mkv --minlength="$MINLENGTH" "dev:$raw" "$main_title" "$out"
-    else
-        run makemkvcon mkv --minlength="$MINLENGTH" "dev:$raw" all "$out"
-    fi
+    # Rip every title that passed --minlength (box set + extras); the main
+    # feature is identified above and recorded, but we don't drop the rest.
+    run makemkvcon mkv --minlength="$MINLENGTH" "dev:$raw" all "$out"
 
     inventory_append "$meta" "$drive_json" video \
         "$(jq -nc --arg n "$name" --argjson tc "${titles:-0}" --arg mt "${main_title:-}" \
@@ -520,8 +470,6 @@ ingest_video() {                            # <sel> <meta> <drive> <raw> <label>
             '{disc_name:$n, title_count:$tc, main_title:(($mt|select(.!="")) // null),
               protection_predict:$pv}')"
     write_manifest "$meta" "$drive_json" "$out" video
-    notify ripped "video: $name ($titles title(s))"
-    tray_eject "$sel"
     return 0
 }
 
@@ -561,7 +509,6 @@ ingest_data() {                             # <sel> <meta> <drive> <node_n> <raw
 
     run mkdir -p "$ARCHIVE_DIR"
     need ddrescue "archive imaging" || return 0
-    tray_lock "$sel"
     run diskutil unmountDisk "$node_n"        # ddrescue reads the raw node
     run ddrescue -b2048 -n     "$raw" "$img" "$img.map"   # fast pass, no split
     run ddrescue -b2048 -d -r3 "$raw" "$img" "$img.map"   # retry the gaps
@@ -579,8 +526,6 @@ ingest_data() {                             # <sel> <meta> <drive> <node_n> <raw
     fi
     write_sidecar "$meta" "$drive_json" "$img"
     inventory_append "$meta" "$drive_json" archive
-    notify archived "$kind $label -> $img"
-    tray_eject "$sel"
 }
 
 # =========================================================================
@@ -740,7 +685,6 @@ mb_tracklist() {                            # mb_tracklist <mb-json>
 # album dir (the sidecar headless servers read). Spotlight: the MBID is resolved
 # from mos's TOC — the disc itself located its own artwork.
 fetch_cover_art() {                         # fetch_cover_art <mb-json> <outdir>
-    [ "$COVER_ART" = 1 ] || return 0
     local relid rgid f="$2/cover.jpg"
     relid=$(jq -r '.releases[0].id // ""' <<<"$1")
     rgid=$(jq -r '.releases[0]["release-group"].id // ""' <<<"$1")
@@ -864,53 +808,18 @@ sha256() { shasum -a 256 | awk '{print $1}'; }
 # drive reports: there is no MMC command, mode page, or IOKit property for it.
 # It lives in AccurateRip's community DB, keyed on the drive IDENTITY mos DOES
 # report. So mos ships the key (vendor/product); this is the consumer lookup —
-# the boundary ROADMAP.md draws ("AccurateRip … permanently consumer-side";
-# scope doctrine in AGENTS.md). Defaults to AccurateRip's canonical HTML page,
-# falling back to a TSV mirror (AccurateRip blocks non-browser clients).
-
-# ar_normalize — stdin (HTML or TSV) -> "name<TAB>offset<TAB>count<TAB>pct" rows.
-# python only here, for the tolerant HTML-table parse (the TSV mirror needs none
-# of it): flatten newlines (cells sit on their own source lines), </tr> -> line,
-# cells -> tab, strip tags, then keep rows ending in the offset signature.
-ar_normalize() {
-    python3 -c "$(
-cat <<'PY'
-import sys, re, html
-data = sys.stdin.read()
-if re.search(r'<\s*tr', data, re.I):                 # the HTML page
-    data = data.replace('\r', ' ').replace('\n', ' ')  # cells are per-line
-    data = re.sub(r'(?i)</tr\s*>', '\n', data)       # rows -> lines
-    data = re.sub(r'(?i)<\s*t[dh][^>]*>', '\t', data)  # cells -> tabs
-    data = re.sub(r'(?i)<[^>]+>', '', data)          # drop remaining tags
-    data = html.unescape(data)
-row = re.compile(r'^(.*?)[\t ]+([+-]\d+)[\t ]+(\d+)[\t ]+(\d+)%\s*$')
-purged = re.compile(r'^(.*?)[\t ]+\[Purged\][\t ]*$')  # name + [Purged], no counts
-for line in data.splitlines():
-    line = line.replace('\r', '').rstrip()
-    m = row.match(line)
-    if m:
-        name = re.sub(r'\s+', ' ', m.group(1)).strip()
-        if name:
-            print('\t'.join([name, m.group(2), m.group(3), m.group(4)]))
-        continue
-    p = purged.match(line)
-    if p:
-        name = re.sub(r'\s+', ' ', p.group(1)).strip()
-        if name:
-            print('\t'.join([name, '[Purged]', '0', '0']))
-PY
-)"
-}
+# the boundary ROADMAP.md draws ("AccurateRip … permanently consumer-side").
+# Source is the DiscImageCreator TSV mirror: "VENDOR - MODEL <TAB> offset <TAB>
+# n <TAB> pct%", tab-delimited (no HTML parse, no bot-blocking — needs only curl).
 
 # accuraterip_offset <drive-json> — echo this drive's AccurateRip read offset
-# ("+6", "[Purged]"), or nothing if the drive is unlisted. The DB is fetched
-# once per run and cached. Needs curl + python3.
+# ("+6"), or nothing if the drive is unlisted. The DB is fetched once and cached.
 accuraterip_offset() {
-    local vendor product ar_vendor key raw
+    local vendor product ar_vendor key
     vendor=$(printf '%s'  "$1" | jq -r '.vendor  // ""')
     product=$(printf '%s' "$1" | jq -r '.product // ""')
     [ -n "$product" ] || return 1
-    # AccurateRip renames three vendors on its list (stated in the DB header).
+    # AccurateRip lists the normalized vendor, not the raw INQUIRY string.
     case "$vendor" in
         HL-DT-ST) ar_vendor="LG Electronics" ;;
         JLMS)     ar_vendor="Lite-ON" ;;
@@ -920,10 +829,8 @@ accuraterip_offset() {
     esac
     key="$ar_vendor - $product"                  # AR name column is "VENDOR - MODEL"
     if [ ! -s "$AR_DB_CACHE" ]; then
-        raw=$(curl -fsSL -A "$AR_UA" -H "Accept: text/html,*/*" "$AR_OFFSET_URL" 2>/dev/null) \
-            || raw=$(curl -fsSL -A "$AR_UA" "$AR_MIRROR_URL" 2>/dev/null) || return 2
-        [ -n "$raw" ] || return 2
-        printf '%s' "$raw" | ar_normalize >"$AR_DB_CACHE" 2>/dev/null || return 2
+        curl -fsSL "$AR_OFFSET_URL" >"$AR_DB_CACHE" 2>/dev/null || return 2
+        [ -s "$AR_DB_CACHE" ] || return 2
     fi
     awk -F'\t' -v key="$key" '
         function norm(s){ s=tolower(s); gsub(/[ \t]+/," ",s); gsub(/^ +| +$/,"",s); return s }
@@ -936,7 +843,7 @@ accuraterip_offset() {
 offset_and_fingerprint() {
     local off="" fp
     fp=$(fingerprint "$1")
-    if have curl && have python3; then off=$(accuraterip_offset "$2" || true); fi
+    if have curl; then off=$(accuraterip_offset "$2" || true); fi
     case "$off" in
         "")         log "AccurateRip offset: unlisted — measure: whipper offset find" ;;
         "[Purged]") log "AccurateRip offset: [Purged] — no stable offset; measure 3 key discs" ;;
@@ -968,11 +875,10 @@ drive_report() {                            # drive_report <selector>
     printf 'Drive: %s %s   (rev %s, firmware %s)\n' "$vendor" "$product" "$revision" "$fw"
     printf '  serial: %s    interconnect: %s    protection: %s\n' "$serial" "$inter" "${caps:-none}"
 
-    if have curl && have python3; then off=$(accuraterip_offset "$d" 2>/dev/null || true); fi
+    if have curl; then off=$(accuraterip_offset "$d" 2>/dev/null || true); fi
     case "${off:-}" in
-        "")         printf '  AccurateRip read offset: unlisted (measure: whipper offset find)\n' ;;
-        "[Purged]") printf '  AccurateRip read offset: [Purged]\n' ;;
-        *)          printf '  AccurateRip read offset: %s samples (auto-resolved)\n' "$off" ;;
+        "") printf '  AccurateRip read offset: unlisted (measure: whipper offset find)\n' ;;
+        *)  printf '  AccurateRip read offset: %s samples (auto-resolved)\n' "$off" ;;
     esac
 
     printf '  Lookup keys for the human-only DBs (no public machine-readable list — paste these):\n'
@@ -1124,9 +1030,8 @@ inventory_append() {
 # metadata + drive identity + fingerprint + a sha256 of EVERY output file in
 # the dir (the redumper .bin/.cue/.log, the .mkv titles, the tracklist). This
 # is the directory twin of write_sidecar's beside-the-.iso record, so all three
-# rip branches leave the same checksummed provenance. Honors SIDECAR + DRY_RUN.
+# rip branches leave the same checksummed provenance.
 write_manifest() {
-    [ "$SIDECAR" = 1 ] || return 0
     local meta="$1" drive="$2" dir="$3" action="$4"
     if [ "${DRY_RUN:-0}" = 1 ]; then log "manifest -> $dir/manifest.json (sha256 of each output)"; return 0; fi
     [ -d "$dir" ] || return 0
@@ -1155,7 +1060,6 @@ write_manifest() {
 # provenance record beside the image: mos's full metadata + drive identity +
 # the image's own sha256 (skipped in DRY_RUN; it would read the whole image).
 write_sidecar() {
-    [ "$SIDECAR" = 1 ] || return 0
     local sha="(dry-run)"
     if [ "${DRY_RUN:-0}" != 1 ] && [ -f "$3" ]; then sha=$(sha256 <"$3"); fi
     local doc
@@ -1171,23 +1075,6 @@ write_sidecar() {
 write_text_file() {
     if [ "${DRY_RUN:-0}" = 1 ]; then log "write -> $1"; cat >/dev/null
     else cat >"$1"; fi
-}
-
-# Optional `mos tray` lifecycle. Locking an IDLE drive during a rip is the one
-# thing no FOSS ripper does (they rely on the disc being busy) — it turns a
-# stray operator eject into a reported event instead of a retraction mid-read,
-# which is exactly what an autoloader robot wants. Eject-when-done is the
-# universal "this disc is finished, swap it" signal.
-tray_lock()  { [ "$LOCK_DURING_RIP" = 1 ] || return 0; run "$MOS" tray lock  "$1" || true; }
-tray_eject() { [ "$EJECT_WHEN_DONE" = 1 ] || return 0; run "$MOS" tray eject "$1" || true; }
-
-# notify <event> <detail> — fire the user's NOTIFY_CMD hook (ARM's bash_notify
-# pattern), e.g. NOTIFY_CMD=terminal-notifier or a curl to ntfy.sh. Called as
-# `$NOTIFY_CMD <event> <detail>`; no-op when unset. Best-effort, never fatal.
-notify() {
-    [ -n "${NOTIFY_CMD:-}" ] || return 0
-    if [ "${DRY_RUN:-0}" = 1 ]; then log "notify: $1 — $2"; return 0; fi
-    "$NOTIFY_CMD" "$1" "$2" >/dev/null 2>&1 || true
 }
 
 # protection_note <metadata-json> — surface what the disc/drive say about
