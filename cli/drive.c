@@ -15,6 +15,7 @@
  * doc/research/2026-06-21-optical-serial-vpd80-vs-0108h.md.
  */
 #include "common.h"
+#include "color.h"
 
 #include <string.h>
 #include <sysexits.h>
@@ -22,7 +23,8 @@
 typedef struct {
     int64_t     bsd_unit;
     uint64_t    registry_id;
-    const char *vendor;       /* borrowed from the handle; NULL = absent */
+    const char *vendor;       /* friendly community name (mos_vendor_friendly_name); NULL = absent */
+    const char *vendor_oem;   /* raw SCSI INQUIRY bytes; NULL = absent */
     const char *product;
     const char *revision;
     const char *serial;       /* borrowed; NULL = unavailable (see header) */
@@ -44,8 +46,11 @@ static void emit_json(const drive_doc *d)
             (unsigned long long)d->registry_id);
 
     fputs(",\n  \"vendor\": ", stdout);
-    if (d->vendor)   mos_cli_json_str(stdout, d->vendor);
-    else             fputs("null", stdout);
+    if (d->vendor)     mos_cli_json_str(stdout, d->vendor);
+    else               fputs("null", stdout);
+    fputs(",\n  \"vendor_oem\": ", stdout);
+    if (d->vendor_oem) mos_cli_json_str(stdout, d->vendor_oem);
+    else               fputs("null", stdout);
     fputs(",\n  \"product\": ", stdout);
     if (d->product)  mos_cli_json_str(stdout, d->product);
     else             fputs("null", stdout);
@@ -218,16 +223,23 @@ static void emit_human(const drive_doc *d)
     pairs[n++] = (mos_cli_human_pair){ "Registry ID",
                                        d->registry_id ? reg_buf : NULL };
 
+    /* vendor_oem holds the raw bytes for escaping; vendor holds the friendly name. */
     char v_esc[MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP)];
     char p_esc[MOS_CLI_ESC_CAP(MOS_CLI_PRODUCT_CAP)];
     char r_esc[MOS_CLI_ESC_CAP(MOS_CLI_REVISION_CAP)];
     char s_esc[MOS_CLI_ESC_CAP(MOS_CLI_SERIAL_CAP)];
-    (void)mos_safe_ascii(d->vendor,   v_esc, sizeof v_esc);
-    (void)mos_safe_ascii(d->product,  p_esc, sizeof p_esc);
-    (void)mos_safe_ascii(d->revision, r_esc, sizeof r_esc);
-    (void)mos_safe_ascii(d->serial,   s_esc, sizeof s_esc);
-    pairs[n++] = (mos_cli_human_pair){ "Vendor",  d->vendor   ? v_esc : NULL };
-    pairs[n++] = (mos_cli_human_pair){ "Product", d->product  ? p_esc : NULL };
+    (void)mos_safe_ascii(d->vendor_oem, v_esc, sizeof v_esc);
+    (void)mos_safe_ascii(d->product,    p_esc, sizeof p_esc);
+    (void)mos_safe_ascii(d->revision,   r_esc, sizeof r_esc);
+    (void)mos_safe_ascii(d->serial,     s_esc, sizeof s_esc);
+    /* "Friendly (OEM)" when a mapping exists, else just the OEM string. */
+    char vend_row[MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP) + MOS_CLI_VENDOR_FRIENDLY_CAP + 4];
+    if (d->vendor && d->vendor_oem && strcmp(d->vendor, d->vendor_oem) != 0)
+        snprintf(vend_row, sizeof vend_row, "%s (%s)", d->vendor, v_esc);
+    else if (d->vendor_oem)
+        snprintf(vend_row, sizeof vend_row, "%s", v_esc);
+    pairs[n++] = (mos_cli_human_pair){ "Vendor",  d->vendor_oem ? vend_row : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Product", d->product    ? p_esc    : NULL };
 
     /* Firmware = version (PRODUCT_REVISION_LEVEL) with the creation date in
        parentheses when present ("1.00 (2019-01-07T13:20:43Z)"), just the
@@ -323,21 +335,36 @@ static void emit_human(const drive_doc *d)
                                        mos_drive_caps_write_protect(d->caps)
                                            ? wp_buf : NULL };
 
-    /* Supported profiles, comma-joined names (unknown code → hex). 768 holds
-       the realistic set several times over; a pathological overflow stops at
-       what fit (the --json array is the complete record either way). */
+    /* Supported profiles, comma-joined marketing labels (unknown code → hex).
+       768 holds the realistic set several times over; a pathological overflow
+       stops at what fit (the --json array is the complete record either way).
+       On a TTY the string is truncated to the terminal width with "...". */
     char prof_buf[768];
     uint8_t pcount = mos_drive_caps_profile_count(d->caps);
     size_t poff = 0;
     for (uint8_t i = 0; i < pcount; i++) {
         uint16_t code = mos_drive_caps_profile_code(d->caps, i);
-        const char *name = mos_profile_name(code);
+        const char *label = mos_cli_profile_label(code);
         char hex[8];
-        if (!name) { snprintf(hex, sizeof hex, "0x%04x", code); name = hex; }
+        if (!label) { snprintf(hex, sizeof hex, "0x%04x", code); label = hex; }
         int w = snprintf(prof_buf + poff, sizeof prof_buf - poff, "%s%s",
-                         i ? ", " : "", name);
+                         i ? ", " : "", label);
         if (w < 0 || (size_t)w >= sizeof prof_buf - poff) break;
         poff += (size_t)w;
+    }
+    if (pcount > 0) {
+        /* Longest key in this block is "Error Recovery" (14 chars); values
+           start at column 17 (14 + ":  "). Truncate at terminal width. */
+        int cols = mos_cli_term_cols();
+        if (cols > 0) {
+            int avail = cols - 17 - 3;  /* leave room for "..." */
+            if (avail > 10 && (int)poff > avail) {
+                prof_buf[avail]     = '.';
+                prof_buf[avail + 1] = '.';
+                prof_buf[avail + 2] = '.';
+                prof_buf[avail + 3] = '\0';
+            }
+        }
     }
     pairs[n++] = (mos_cli_human_pair){ "Profiles", pcount ? prof_buf : NULL };
 
@@ -446,9 +473,12 @@ int mos_cli_run_drive(void)
     if (mos_query_drive_inquiry(h, &inq) == MOS_OK) d.inquiry = inq;
 
     /* Identity: fresh from the drive when the raw INQUIRY succeeded, else the
-       DiscRecording directory cache (the zero-command source used elsewhere). */
-    d.vendor   = mos_drive_inquiry_vendor(inq);
-    if (!d.vendor)   d.vendor   = mos_handle_vendor(h);
+       DiscRecording directory cache (the zero-command source used elsewhere).
+       vendor_oem = raw SCSI bytes; vendor = friendly community name (or raw). */
+    d.vendor_oem = mos_drive_inquiry_vendor(inq);
+    if (!d.vendor_oem) d.vendor_oem = mos_handle_vendor(h);
+    d.vendor   = d.vendor_oem ? mos_vendor_friendly_name(d.vendor_oem) : NULL;
+    if (!d.vendor) d.vendor = d.vendor_oem;
     d.product  = mos_drive_inquiry_product(inq);
     if (!d.product)  d.product  = mos_handle_product(h);
     d.revision = mos_drive_inquiry_revision(inq);

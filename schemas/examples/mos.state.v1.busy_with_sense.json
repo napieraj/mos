@@ -6,6 +6,7 @@
   "media_type": "bd_re",
   "writable": true,
   "vendor": "HL-DT-ST",
+  "vendor_oem": "HL-DT-ST",
   "product": "BD-RE BH16NS55",
   "sense": {
     "key": "0x06",

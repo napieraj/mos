@@ -12,6 +12,7 @@
     "max_write_kbps": 17996
   },
   "vendor": "HL-DT-ST",
+  "vendor_oem": "HL-DT-ST",
   "product": "BD-RE WH16NS60",
   "revision": "1.00",
   "registry_id": 4295032831,

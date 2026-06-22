@@ -23,6 +23,7 @@
           "bsd_node",
           "registry_id",
           "vendor",
+          "vendor_oem",
           "product",
           "revision"
         ],
@@ -75,6 +76,12 @@
             "minimum": 0
           },
           "vendor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vendor_oem": {
             "type": [
               "string",
               "null"

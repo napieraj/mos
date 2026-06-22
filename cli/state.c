@@ -1,6 +1,7 @@
 /* cli/state.c — the state command (the default verb; also the target of
  * a bare drive selector, e.g. `mos 2` / `mos disk4`). */
 #include "common.h"
+#include "color.h"
 
 #include <string.h>
 #include <sysexits.h>
@@ -46,7 +47,17 @@ static void emit_human(const mos_state_result *r, int index1,
         }
     }
 
-    const char *state = mos_state_description(mos_state_result_state(r));
+    const char *state_raw = mos_state_description(mos_state_result_state(r));
+    char state_val[48];
+    const char *state;
+    if (mos_cli_color_enabled()) {
+        const char *open = mos_cli_state_open(state_raw);
+        snprintf(state_val, sizeof state_val, "%s%s%s",
+                 open, state_raw, *open ? "\033[0m" : "");
+        state = state_val;
+    } else {
+        state = state_raw;
+    }
     pairs[n++] = (mos_cli_human_pair){ "State", state };
 
     uint8_t sk, asc, ascq;
@@ -76,21 +87,30 @@ static void emit_human(const mos_state_result *r, int index1,
     char        media_buf[64];
     const char *media_val  = NULL;
     if (mos_cli_profile_present(profile)) {
-        const char *pn = mos_profile_name(profile);
-        const char *pc = mos_profile_class(profile);
+        const char *pn_raw = mos_profile_name(profile);
+        const char *pc_raw = mos_profile_class(profile);
+        /* Use marketing labels (mos_cli_profile_label / mos_cli_class_label)
+           for the human view; fall back to raw tokens when no label exists. */
+        const char *pn = mos_cli_profile_label(profile);
+        if (!pn) pn = pn_raw;
+        const char *pc = mos_cli_class_label(pc_raw);
+        if (!pc) pc = pc_raw;
         if (pn && pc) {
             snprintf(media_buf, sizeof media_buf, "%s — %s", pc, pn);
             media_val = media_buf;
         } else if (pn) {
             media_val = pn;
-        } else if (media_type) {           /* unnamed code → prefer the named Type */
-            media_val = media_type;
+        } else if (media_type) {
+            /* unnamed profile code → prefer the human media_type label */
+            const char *mtl = mos_cli_media_type_label(media_type);
+            media_val = mtl ? mtl : media_type;
         } else {
             snprintf(media_buf, sizeof media_buf, "0x%04x", profile);
             media_val = media_buf;
         }
-    } else if (media_type) {               /* not READY → kernel Type is the only source */
-        media_val = media_type;
+    } else if (media_type) {
+        const char *mtl = mos_cli_media_type_label(media_type);
+        media_val = mtl ? mtl : media_type;
     }
     if (media_val)
         pairs[n++] = (mos_cli_human_pair){ "Media", media_val };
@@ -142,7 +162,14 @@ static void emit_human(const mos_state_result *r, int index1,
     (void)mos_safe_ascii(v,  v_esc,  sizeof v_esc);
     (void)mos_safe_ascii(p,  p_esc,  sizeof p_esc);
     (void)mos_safe_ascii(rv, rv_esc, sizeof rv_esc);
-    pairs[n++] = (mos_cli_human_pair){ "Vendor",  v  ? v_esc  : NULL };
+    /* Vendor: "Friendly (OEM)" when a mapping exists, else raw OEM string. */
+    char vend_row[MOS_CLI_ESC_CAP(MOS_CLI_VENDOR_CAP) + MOS_CLI_VENDOR_FRIENDLY_CAP + 4];
+    const char *vfr = v ? mos_vendor_friendly_name(v) : NULL;
+    if (v && vfr)
+        snprintf(vend_row, sizeof vend_row, "%s (%s)", vfr, v_esc);
+    else if (v)
+        snprintf(vend_row, sizeof vend_row, "%s", v_esc);
+    pairs[n++] = (mos_cli_human_pair){ "Vendor",  v  ? vend_row : NULL };
     pairs[n++] = (mos_cli_human_pair){ "Product", p  ? p_esc  : NULL };
     pairs[n++] = (mos_cli_human_pair){ "Firmware",     rv ? rv_esc : NULL };
 
@@ -236,7 +263,15 @@ static void emit_json(const mos_state_result *r, int index1,
     }
 
     if (vendor && *vendor) {
-        fputs(",\n  \"vendor\": ", stdout);
+        const char *vfr = mos_vendor_friendly_name(vendor);
+        if (vfr) {
+            fputs(",\n  \"vendor\": ", stdout);
+            mos_cli_json_str(stdout, vfr);
+        } else {
+            fputs(",\n  \"vendor\": ", stdout);
+            mos_cli_json_str(stdout, vendor);
+        }
+        fputs(",\n  \"vendor_oem\": ", stdout);
         mos_cli_json_str(stdout, vendor);
     }
     if (product && *product) {

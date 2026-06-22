@@ -62,4 +62,32 @@ bool mos_cli_human_table(FILE *f,
                      size_t nrows, size_t ncols,
                      const bool *right_align);
 
+/* Extended table: `cells` provides PLAIN strings used for column-width
+   calculation; `display_cells` (may be NULL, or may have NULL entries)
+   provides the strings actually rendered — ANSI-coded values or UTF-8
+   glyphs whose byte length exceeds their display width. Padding is
+   always computed from the plain cell's strlen, not the display string's.
+   When display_cells is NULL the behavior is identical to
+   mos_cli_human_table. */
+bool mos_cli_human_table_ex(FILE *f,
+                     const char *const *headers,
+                     const char *const *cells,
+                     const char *const *display_cells,
+                     size_t nrows, size_t ncols,
+                     const bool *right_align);
+
+/* Human-readable labels for human views only — JSON keeps the internal
+   snake_case tokens and raw hex codes for machine parsing.
+   Return NULL for unknown codes/tokens (caller renders hex or passes through). */
+
+/* MMC profile code → marketing label ("BD-R", "DVD+RW DL", ...). CD/DVD/BD only;
+   MO, non-removable, removable disk, and HD DVD not labelled (return NULL). */
+const char *mos_cli_profile_label(uint16_t code);
+
+/* Media-class token → short label ("cd" → "CD", "hd_dvd" → "HD DVD"). */
+const char *mos_cli_class_label(const char *token);
+
+/* IOKit media-type token → label ("bd_r" → "BD-R", "cd_rom" → "CD-ROM"). */
+const char *mos_cli_media_type_label(const char *token);
+
 #endif /* MOS_CLI_HUMAN_H */

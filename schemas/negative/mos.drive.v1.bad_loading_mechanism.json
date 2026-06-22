@@ -2,6 +2,7 @@
   "schema": "mos.drive.v1",
   "registry_id": 4295021843,
   "vendor": "PIONEER",
+  "vendor_oem": "PIONEER",
   "product": "BD-RW BDR-XS07",
   "revision": "1.01",
   "serial": null,

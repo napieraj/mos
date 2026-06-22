@@ -116,8 +116,9 @@ static inline void mos_cli_list_volume_cell(const char *path,
 
 /* SPC-4 identity field widths (+ NUL) and the mos_safe_ascii worst case
    (every byte -> \xNN, 4x) — shared by state and list emitters. */
-#define MOS_CLI_VENDOR_CAP    9
-#define MOS_CLI_PRODUCT_CAP  17
+#define MOS_CLI_VENDOR_CAP          9   /* raw SCSI field (8 chars + NUL) */
+#define MOS_CLI_VENDOR_FRIENDLY_CAP 16  /* friendly community name (+ NUL) */
+#define MOS_CLI_PRODUCT_CAP        17
 #define MOS_CLI_REVISION_CAP  5
 /* Drive serial (Logical Unit Serial Number feature 0108h): variable-width
    ASCII, capped to the mos_drive_caps.serial buffer; matches src/mos_pure.h. */
@@ -127,9 +128,12 @@ static inline void mos_cli_list_volume_cell(const char *path,
 typedef struct {
     char     state[24];
     char     bsd_node[24];        /* "" == none */
-    /* RAW identity bytes (trailing-stripped). JSON byte-faithful; table
-       escapes at emit. */
-    char     vendor[MOS_CLI_VENDOR_CAP];
+    /* Identity: vendor holds the friendly community name (mos_vendor_friendly_name),
+       falling back to the raw SCSI bytes when no mapping exists.
+       vendor_oem holds the raw SCSI bytes always.
+       JSON emits both; the human table shows only vendor. */
+    char     vendor[MOS_CLI_VENDOR_FRIENDLY_CAP];
+    char     vendor_oem[MOS_CLI_VENDOR_CAP];
     char     product[MOS_CLI_PRODUCT_CAP];
     char     revision[MOS_CLI_REVISION_CAP];
     /* Mounted volume name, RAW disc-controlled bytes ("" = unmounted/

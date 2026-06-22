@@ -1,9 +1,9 @@
         BSD:  /dev/disk4
 Registry ID:  4294967587
       State:  ready
-      Media:  cd — cd_rom
+      Media:  CD — CD-ROM
      Speeds:  read ~50.0× CD (7.7 MB/s), write ~50.0× CD (7.7 MB/s) (max)
      Volume:  Audio CD
-     Vendor:  HL-DT-ST
+     Vendor:  LG (HL-DT-ST)
     Product:  BD-RE WH16NS40
    Firmware:  1.05
