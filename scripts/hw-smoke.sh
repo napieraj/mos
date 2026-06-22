@@ -18,7 +18,9 @@
 # Usage:
 #   scripts/hw-smoke.sh                 # interactive menu (recommended)
 #   scripts/hw-smoke.sh <section>       # run one section non-interactively
-#       sections: static empty tray disc watch errors all
+#       sections: static empty tray disc watch errors capture all
+#   SMOKE_CAPTURE_DIR=/path scripts/hw-smoke.sh capture   # where .bin fixtures land
+#   MOS_SCRUB_SALT=secret  scripts/hw-smoke.sh capture    # salt the serial scrub
 #   MOS=/path/to/mos scripts/hw-smoke.sh         # force a specific binary
 #   SMOKE_NONINTERACTIVE=1 scripts/hw-smoke.sh all   # assume "ready" at prompts
 #   SMOKE_INSTALL_DEPS=0 scripts/hw-smoke.sh     # don't auto-install python deps
@@ -99,7 +101,7 @@ expect_any() {  # expect_any "desc" pat1 pat2 ...; PASS if any pattern matches O
 # Schemas are self-contained, so we validate each document against its single
 # schema file with Draft202012Validator + FormatChecker — the exact mechanism
 # schemas/validate.py and CI use (no deprecated RefResolver).
-HAVE_SCHEMA=0; VALIDATOR=""; FIELD=""
+HAVE_PY=0; HAVE_SCHEMA=0; VALIDATOR=""; FIELD=""
 have_deps() {
     command -v python3 >/dev/null 2>&1 \
         && python3 -c 'import jsonschema, rfc3339_validator' >/dev/null 2>&1
@@ -124,11 +126,27 @@ bootstrap_deps() {
     fi
 }
 setup_validator() {
+    # FIELD (JSON field extractor) needs only python3 stdlib — set it up whenever
+    # python3 is present, independent of the jsonschema stack, so the field reads
+    # and the capture decode work even when schema validation can't.
+    if command -v python3 >/dev/null 2>&1; then
+        HAVE_PY=1
+        FIELD="$(mktemp -t mos_field.XXXXXX)"
+        cat > "$FIELD" <<'PY'
+import sys, json
+try: d = json.load(sys.stdin)
+except Exception: sys.exit(1)
+for k in sys.argv[1:]:
+    if isinstance(d, dict) and k in d: d = d[k]
+    else: sys.exit(1)
+print("" if d is None else d)
+PY
+    fi
     bootstrap_deps
-    have_deps || { info "no python3/jsonschema/rfc3339-validator — schema checks SKIP"; return; }
-    HAVE_SCHEMA=1
-    VALIDATOR="$(mktemp -t mos_validate.XXXXXX)"
-    cat > "$VALIDATOR" <<'PY'
+    if have_deps; then
+        HAVE_SCHEMA=1
+        VALIDATOR="$(mktemp -t mos_validate.XXXXXX)"
+        cat > "$VALIDATOR" <<'PY'
 import sys, json
 from jsonschema import Draft202012Validator, FormatChecker
 sdir, name = sys.argv[1], sys.argv[2]
@@ -146,16 +164,9 @@ for e in errs[:6]:
     print("%s (at %s)" % (e.message, list(e.path)), file=sys.stderr)
 sys.exit(1 if errs else 0)
 PY
-    FIELD="$(mktemp -t mos_field.XXXXXX)"
-    cat > "$FIELD" <<'PY'
-import sys, json
-try: d = json.load(sys.stdin)
-except Exception: sys.exit(1)
-for k in sys.argv[1:]:
-    if isinstance(d, dict) and k in d: d = d[k]
-    else: sys.exit(1)
-print("" if d is None else d)
-PY
+    else
+        info "no python3/jsonschema/rfc3339-validator — schema checks SKIP"
+    fi
 }
 json_field() { [ -n "$FIELD" ] && printf '%s' "$1" | python3 "$FIELD" "${@:2}" 2>/dev/null; }
 
@@ -221,6 +232,178 @@ stop_watch() {
     n=0; while [ "$n" -lt 10 ]; do kill -0 "$p" 2>/dev/null || break; sleep 0.5; n=$((n+1)); done
     kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null
     wait "$p" 2>/dev/null
+}
+
+# ---- fixture capture (mos probe --capture) -----------------------------------
+# Sanitized vendor+product token for fixture filenames (e.g. HL-DT-ST_BD-RE_WH16NS60).
+drive_model() {
+    p=""
+    [ -n "$FIELD" ] && p="$("$MOS" drive --json 2>/dev/null | python3 "$FIELD" product 2>/dev/null)"
+    [ -z "$p" ] && p="$(list_field product 2>/dev/null)"
+    [ -z "$p" ] && p="drive"
+    v=""
+    [ -n "$FIELD" ] && v="$("$MOS" drive --json 2>/dev/null | python3 "$FIELD" vendor 2>/dev/null)"
+    printf '%s_%s' "${v:-x}" "$p" | tr ' /' '__' | tr -dc 'A-Za-z0-9_.-'
+}
+
+# A probe-usable selector: diskN when media is present, else the list Index
+# (probe takes index or BSD, never registry_id).
+capture_selector() {
+    bn="$(list_field bsd_node 2>/dev/null)"
+    if [ -n "${bn:-}" ] && [ "$bn" != null ]; then printf '%s' "${bn##*/}"; return; fi
+    ix="$(list_field index 2>/dev/null)"; [ -z "$ix" ] && ix=1
+    printf '%s' "$ix"
+}
+
+# Disc-type label for tracking + filenames. Sets DISC_TYPE; returns 1 = "done".
+DISC_TYPE=""; DISC_TYPES_DONE=""
+ask_disc_type() {
+    if [ "${SMOKE_NONINTERACTIVE:-0}" = 1 ]; then DISC_TYPE="${DISC_TYPE:-disc}"; return 1; fi
+    printf '\n%sWhich disc is loaded?%s  (used for fixture names + tracking)\n' "$B" "$Z"
+    cat <<EOF
+   1) uhd_bd   2) bd      3) mdisc    4) audio_cd
+   5) dvd      6) cd      7) blank_bd  8) other (type a label)
+   d) done with discs
+EOF
+    printf '%s> %s' "$D" "$Z"; read -r t || t=d
+    case "$t" in
+        1) DISC_TYPE='uhd_bd' ;; 2) DISC_TYPE='bd' ;; 3) DISC_TYPE='mdisc' ;;
+        4) DISC_TYPE='audio_cd' ;; 5) DISC_TYPE='dvd' ;; 6) DISC_TYPE='cd' ;;
+        7) DISC_TYPE='blank_bd' ;;
+        8) printf '   label: '; read -r DISC_TYPE
+           DISC_TYPE="$(printf '%s' "$DISC_TYPE" | tr ' /' '__' | tr -dc 'A-Za-z0-9_.-')"
+           [ -z "$DISC_TYPE" ] && DISC_TYPE=other ;;
+        d|D|"") return 1 ;;
+        *) DISC_TYPE=other ;;
+    esac
+    return 0
+}
+
+# capture_run <disctype> <state> <outdir> <model>
+# Run `mos probe --capture <sel>`, save the NDJSON manifest, decode each
+# command's reply hex into <command>_<disctype>_<state>_<model>.bin, and verify
+# every .bin against the manifest's sha256. ok:false / empty-reply lines (BUSY on
+# a mounted disc, no-media, CHECK CONDITION on the wrong medium) are recorded in
+# the manifest and reported, not written as .bin.
+capture_run() {
+    cdt="$1"; cstate="$2"; cout="$3"; cmodel="$4"
+    sel="$(capture_selector)"
+    ndj="$cout/capture_${cdt}_${cstate}_${cmodel}.ndjson"
+    printf '%s   $ mos probe --capture %s   (%s / %s)%s\n' "$D" "$sel" "$cdt" "$cstate" "$Z"
+    "$MOS" probe --capture "$sel" >"$ndj" 2>/dev/null
+    if ! grep -q 'mos.capture.v0' "$ndj" 2>/dev/null; then
+        if grep -qi 'not built' "$ndj" 2>/dev/null; then
+            bad "capture $cdt/$cstate: probe not built in (configure -DMOS_CLI_PROBE=ON)"
+        else
+            bad "capture $cdt/$cstate: no mos.capture.v0 output (see $ndj)"
+        fi
+        return
+    fi
+    out="$(python3 - "$ndj" "$cout" "$cdt" "$cstate" "$cmodel" <<'PY'
+import sys, json, hashlib, os
+ndj, outdir, dt, state, model = sys.argv[1:6]
+wrote=empty=err=mism=0
+for line in open(ndj):
+    line=line.strip()
+    if not line: continue
+    try: d=json.loads(line)
+    except Exception: continue
+    if d.get("schema")!="mos.capture.v0": continue
+    cmd=d.get("command","cmd"); sn=d.get("sense",{}) or {}
+    if not d.get("ok"):
+        print("  . %-24s error=%s"%(cmd,d.get("error"))); err+=1; continue
+    reply=d.get("reply","") or ""
+    if not reply:
+        print("  . %-24s no data (sense %s/%s/%s)"%(cmd,sn.get("sk"),sn.get("asc"),sn.get("ascq"))); empty+=1; continue
+    raw=bytes.fromhex(reply)
+    fn=os.path.join(outdir,"%s_%s_%s_%s.bin"%(cmd,dt,state,model))
+    open(fn,"wb").write(raw)
+    exp=d.get("sha256","") or ""
+    got=hashlib.sha256(raw).hexdigest()
+    if exp and got!=exp:
+        print("  ! %-24s %5d B  SHA MISMATCH -> %s"%(cmd,len(raw),os.path.basename(fn))); mism+=1
+    else:
+        print("  + %-24s %5d B  sha-ok -> %s"%(cmd,len(raw),os.path.basename(fn))); wrote+=1
+print("SUMMARY %d written, %d no-data, %d error, %d sha-mismatch"%(wrote,empty,err,mism))
+PY
+)"
+    printf '%s\n' "$out" | sed 's/^/     /'
+    mism="$(printf '%s' "$out" | sed -n 's/.*, \([0-9]*\) sha-mismatch/\1/p')"
+    if [ "${mism:-0}" -gt 0 ]; then bad "capture $cdt/$cstate: $mism sha mismatch (see $ndj)"
+    else ok "capture $cdt/$cstate → $(basename "$ndj") + .bin files"; fi
+}
+
+# Scrub the drive serial out of every captured fixture. The serial appears in
+# several replies for some drive families (GET CONFIGURATION feature 0108h, the
+# standard INQUIRY vendor tail, and VPD 0x80 when populated), so we grab the
+# canonical serial ONCE (mos drive --json .serial) and do a localized,
+# same-length substring replace wherever those bytes appear in any .bin (and the
+# .ndjson reply hex). The replacement is a deterministic FALSE serial derived
+# from sha256(salt+serial): reverse-validatable (recompute the hash from your
+# real serial to confirm) but not invertible (SHA-256 preimage resistance). Set a
+# secret MOS_SCRUB_SALT for brute-force resistance (serials are low-entropy).
+scrub_serials() {
+    sout="$1"
+    [ "$HAVE_PY" = 1 ] || { skp "serial scrub" "needs python3"; return; }
+    real="$("$MOS" drive --json 2>/dev/null | python3 "$FIELD" serial 2>/dev/null)"
+    if [ -z "$real" ]; then info "no drive serial reported — nothing to scrub"; return; fi
+    out="$(python3 - "$sout" "$real" "${MOS_SCRUB_SALT:-}" <<'PY'
+import sys, os, json, hashlib, glob
+outdir, real, salt = sys.argv[1], sys.argv[2], sys.argv[3]
+ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+buf = hashlib.sha256((salt + real).encode()).digest()
+while len(buf) < len(real):           # tile for serials longer than 32 bytes
+    buf += hashlib.sha256(buf).digest()
+false = "".join(ALPHA[b % len(ALPHA)] for b in buf[:len(real)])
+sha_hex = hashlib.sha256((salt + real).encode()).hexdigest()
+real_b, false_b = real.encode(), false.encode()
+real_hex, false_hex = real_b.hex(), false_b.hex()
+nbin = nman = hits = 0
+for fn in glob.glob(os.path.join(outdir, "*.bin")):
+    data = open(fn, "rb").read()
+    c = data.count(real_b)
+    if c:
+        open(fn, "wb").write(data.replace(real_b, false_b)); nbin += 1; hits += c
+for fn in glob.glob(os.path.join(outdir, "*.ndjson")):
+    changed = False; lines = []
+    for line in open(fn):
+        s = line.rstrip("\n")
+        try: d = json.loads(s)
+        except Exception: d = None
+        if d and d.get("schema") == "mos.capture.v0" and isinstance(d.get("reply"), str) \
+           and real_hex in d["reply"]:
+            d["reply"] = d["reply"].replace(real_hex, false_hex)
+            d["sha256"] = hashlib.sha256(bytes.fromhex(d["reply"])).hexdigest()
+            d["serial_scrubbed"] = True
+            s = json.dumps(d); changed = True
+        lines.append(s)
+    if changed:
+        open(fn, "w").write("\n".join(lines) + "\n"); nman += 1
+note = os.path.join(outdir, "SERIAL-SCRUB.txt")
+salt_line = "yes" if salt else "no (set MOS_SCRUB_SALT for brute-force resistance)"
+open(note, "w").write(
+    "Serial scrub — the real drive serial was replaced in every captured fixture\n"
+    "with a deterministic false serial of the same length.\n\n"
+    f"false_serial : {false}\n"
+    f"serial_sha256: {sha_hex}\n"
+    f"salt_used    : {salt_line}\n\n"
+    "Reverse-validate (prove the false serial corresponds to YOUR real serial\n"
+    "without revealing it): recompute the hash from your real serial + same salt\n"
+    "    printf '%s' \"$MOS_SCRUB_SALT<REAL_SERIAL>\" | shasum -a 256\n"
+    "and confirm it equals serial_sha256 above. false_serial is base36 over the\n"
+    "sha256 bytes, so it is reproducible from the hash; the real serial is NOT\n"
+    "derivable from it (SHA-256 preimage resistance). Serials are low-entropy —\n"
+    "use a SECRET MOS_SCRUB_SALT to resist brute force.\n")
+print(f"scrubbed {hits} occurrence(s) across {nbin} .bin and {nman} manifest(s)")
+print(f"false_serial={false}  serial_sha256={sha_hex[:16]}…")
+PY
+)"
+    printf '%s\n' "$out" | sed 's/^/     /'
+    if printf '%s' "$out" | grep -q 'scrubbed 0 '; then
+        info "serial '$real' not found in any .bin (already absent) — nothing changed"
+    else
+        ok "serial scrubbed from fixtures (false serial recorded in SERIAL-SCRUB.txt)"
+    fi
 }
 
 # ---- cleanup: never leave the tray locked or open ----------------------------
@@ -492,6 +675,73 @@ phase_watch() {
     fi
 }
 
+phase_capture() {
+    hdr "CAPTURE — raw MMC hex fixtures (mos probe --capture)"
+    if [ "$HAVE_PY" != 1 ]; then skp "capture" "needs python3 to decode hex → .bin"; return; fi
+
+    outdir="${SMOKE_CAPTURE_DIR:-$HERE/hw-captures}"
+    mkdir -p "$outdir" || { bad "capture: cannot create $outdir"; return; }
+    model="$(drive_model)"
+    info "model token : $model"
+    info "output dir  : $outdir   (override with SMOKE_CAPTURE_DIR=)"
+    info "These are STAGED captures — review, then file chosen .bin into tests/fixtures/"
+    info "per tests/fixtures/README.md (a hardware capture is a reviewed deliverable,"
+    info "not auto-canonical: AGENTS.md hardware-role ADR). Every .bin is sha256-verified."
+    info "Note: capture self-gates on exclusive access — a MOUNTED disc records BUSY;"
+    info "the rich replies come from the auto-unmounted pass. 'loading' is a timing"
+    info "transient — use 'mos probe <drive>' (the notification stream) for that."
+
+    # 1) empty / open baseline: INQUIRY + GET CONFIGURATION return data with no
+    #    media; the media commands record their no-media sense.
+    if step "EMPTY-DRIVE capture: eject the tray / remove any disc, then continue."; then
+        "$MOS" tray eject >/dev/null 2>&1
+        st="$(current_state)"
+        capture_run baseline "${st:-empty}" "$outdir" "$model"
+    fi
+
+    # 2) per-disc-type: insert → capture MOUNTED (records the BUSY gate) → unmount
+    #    → capture UNMOUNTED (the productive replies) → eject to prep the swap.
+    while : ; do
+        [ "${SMOKE_NONINTERACTIVE:-0}" = 1 ] && break
+        ask_disc_type || break
+        if ! step "Insert the '$DISC_TYPE' disc and let it settle (mount is fine)."; then continue; fi
+
+        # wait briefly for the drive to leave the loading window
+        i=0; while [ $i -lt 12 ]; do
+            case "$(current_state)" in *ready*|*open*|*empty*|*unreadable*|*fault*) break ;; esac
+            sleep 0.5; i=$((i+1))
+        done
+
+        # MOUNTED pass (as inserted) — records the exclusive-access BUSY behavior
+        capture_run "$DISC_TYPE" mounted "$outdir" "$model"
+
+        # UNMOUNTED pass — the canonical fixtures. Unmount the filesystem; the disc
+        # stays in the drive (diskutil unmountDisk, not eject).
+        bn="$(list_field bsd_node 2>/dev/null)"
+        if [ -n "${bn:-}" ] && [ "$bn" != null ]; then
+            if diskutil unmountDisk "${bn##*/}" >/dev/null 2>&1; then info "unmounted ${bn##*/} (disc still loaded)"
+            else info "could not unmount ${bn##*/} — the unmounted pass may also report BUSY"; fi
+        fi
+        capture_run "$DISC_TYPE" unmounted "$outdir" "$model"
+
+        DISC_TYPES_DONE="$DISC_TYPES_DONE $DISC_TYPE"
+        info "disc types captured:${DISC_TYPES_DONE}"
+        "$MOS" tray eject >/dev/null 2>&1 && info "ejected — ready for the next disc"
+    done
+
+    # Scrub the drive serial out of every captured fixture before it can be filed.
+    scrub_serials "$outdir"
+
+    hdr "CAPTURE OUTPUT"
+    if command -v find >/dev/null 2>&1; then
+        nbin=$(find "$outdir" -name '*.bin' 2>/dev/null | wc -l | tr -d ' ')
+        nman=$(find "$outdir" -name '*.ndjson' 2>/dev/null | wc -l | tr -d ' ')
+        info "$nbin .bin fixture(s) + $nman NDJSON manifest(s) in $outdir"
+    fi
+    info "file chosen ones as tests/fixtures/<command>_<state>_<model>.bin with a dated"
+    info "README entry; the NDJSON carries the sha256 + parsed sense for provenance."
+}
+
 # =============================================================================
 banner() {
     printf '%smos hardware smoke test%s\n' "$B" "$Z"
@@ -519,6 +769,7 @@ run_section() {
     case "$1" in
         static) phase_static ;; errors) phase_errors ;; empty) phase_empty ;;
         tray)   phase_tray ;;   disc)   phase_disc ;;   watch) phase_watch ;;
+        capture) phase_capture ;;
         all)    phase_static; phase_errors; phase_empty; phase_tray; phase_disc; phase_watch ;;
     esac
 }
@@ -533,17 +784,19 @@ menu() {
    4) tray     eject / close / lock / unlock / --force (no disc)
    5) disc     insert a disc — adaptive loading/ready/enrichment checks
    6) watch    event stream + watch/eject contention
-   a) all      run 1–6 in order
+   7) capture  raw MMC hex → .bin fixtures, per disc type, serial-scrubbed
+   a) all      run 1–6 in order (capture is separate, run it explicitly)
    s) summary so far     q) quit
 EOF
         printf '%s> %s' "$D" "$Z"; read -r pick || pick=q
         case "$pick" in
             1) phase_static ;; 2) phase_errors ;; 3) phase_empty ;;
             4) phase_tray ;; 5) phase_disc ;; 6) phase_watch ;;
+            7) phase_capture ;;
             a|A) run_section all ;;
             s|S) summary ;;
             q|Q) break ;;
-            *) info "pick 1–6, a, s, or q" ;;
+            *) info "pick 1–7, a, s, or q" ;;
         esac
     done
 }
@@ -554,7 +807,7 @@ banner
 
 ARG="${1:-}"
 case "$ARG" in
-    static|errors|empty|tray|disc|watch|all)
+    static|errors|empty|tray|disc|watch|capture|all)
         run_section "$ARG"; summary; [ "$FAIL" -eq 0 ] ;;
     "")
         if [ "${SMOKE_NONINTERACTIVE:-0}" = 1 ]; then
@@ -563,5 +816,5 @@ case "$ARG" in
             menu; summary; [ "$FAIL" -eq 0 ]
         fi ;;
     *)
-        echo "unknown section '$ARG' (static|empty|tray|disc|watch|errors|all)" >&2; exit 2 ;;
+        echo "unknown section '$ARG' (static|empty|tray|disc|watch|errors|capture|all)" >&2; exit 2 ;;
 esac
