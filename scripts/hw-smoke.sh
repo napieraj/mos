@@ -259,18 +259,19 @@ stop_watch() {
 
 # ---- fixture capture (mos probe --capture) -----------------------------------
 # Sanitized vendor+product token for fixture filenames (e.g. HL-DT-ST_BD-RE_WH16NS60).
-# Short model token for filenames. Product strings carry a class prefix that is
-# noise for identity, and INQUIRY fields are space-padded with arbitrary runs:
-# "BD-RE  WH16NS60   " -> "WH16NS60". awk '{print $NF}' takes the last whitespace-
-# delimited field, robust to multiple/leading/trailing spaces. Falls back to the
-# whole product then "drive".
+# Short model token for filenames. The model identifier is always the LAST
+# whitespace-separated token of the product string, across every optical-drive
+# family (validated in tests/drive_model_cases.sh: LG/Pioneer/ASUS/Panasonic/
+# Samsung/Lite-On/HP/Sony/Plextor/TEAC, incl. prefix-less "DVD-E616P2", two-word
+# types "DVD A"/"DVD RW", multi-hyphen "BDR-XD08UMB-S", and space-padded INQUIRY).
+# `awk 'NF { print $NF }'` — the NF guard emits nothing on empty/blank input.
 drive_model() {
     p=""
     [ -n "$FIELD" ] && p="$("$MOS" drive --json 2>/dev/null | python3 "$FIELD" product 2>/dev/null)"
     [ -z "$p" ] && p="$(list_field product 2>/dev/null)"
     [ -z "$p" ] && p="drive"
-    last="$(printf '%s' "$p" | awk '{print $NF}')"   # last field; collapses any whitespace runs
-    [ -z "$last" ] && last="$p"
+    last="$(printf '%s\n' "$p" | awk 'NF { print $NF }')"
+    [ -z "$last" ] && last="drive"
     printf '%s' "$last" | tr -dc 'A-Za-z0-9._-'
 }
 
@@ -284,12 +285,36 @@ mos_ver() {
 }
 
 # Vendor token for the capture subdirectory (HL-DT-ST, Pioneer, …), sanitized.
+# Resolve an INQUIRY vendor string to the name the community / MakeMKV / forums /
+# AccurateRip actually use — nobody calls an LG drive "HL-DT-ST". The joint-venture
+# and OEM brand-holder strings are the ones that differ; everything else (LG,
+# Pioneer, ASUS, Sony, …) passes through. Validated in tests/drive_model_cases.sh.
+#   HL-DT-ST  Hitachi-LG Data Storage          -> LG
+#   MATSHITA  Matsushita (Panasonic)           -> Panasonic
+#   TSSTcorp  Toshiba-Samsung Storage Tech     -> Samsung
+#   PLDS      Philips & Lite-On Digital Sol.   -> Lite-On
+#   Slimtype  Lite-On slim brand               -> Lite-On
+vendor_canonical() {
+    # normalize: uppercase, drop spaces/dots/dashes/underscores, for matching
+    key="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -d ' ._-')"
+    case "$key" in
+        HLDTST)                       printf 'LG' ;;
+        MATSHITA|MATSUSHITA)          printf 'Panasonic' ;;
+        TSSTCORP|TOSHIBASAMSUNG)      printf 'Samsung' ;;
+        PLDS|SLIMTYPE|PHILIPSLITEON)  printf 'Lite-On' ;;
+        LITEON)                       printf 'Lite-On' ;;
+        SONYNEC|SONYOPTIARC)          printf 'Optiarc' ;;
+        *)                            printf '%s' "$1" ;;   # already a brand
+    esac
+}
+
 drive_vendor() {
     v=""
     [ -n "$FIELD" ] && v="$("$MOS" drive --json 2>/dev/null | python3 "$FIELD" vendor 2>/dev/null)"
     [ -z "$v" ] && v="$(list_field vendor 2>/dev/null)"
     [ -z "$v" ] && v="unknown"
-    printf '%s' "$v" | tr ' /' '__' | tr -dc 'A-Za-z0-9._-'
+    v="$(printf '%s' "$v" | awk '{$1=$1};1')"   # trim/collapse whitespace
+    printf '%s' "$(vendor_canonical "$v")" | tr ' /' '__' | tr -dc 'A-Za-z0-9._-'
 }
 
 # Firmware revision token for filenames — fixtures are firmware-specific, so the
