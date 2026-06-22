@@ -10,19 +10,33 @@ A disc-pile dispatcher. A finalized M-DISC, an audio CD, a blank BD-R, a
 movie DVD, and a data backup can come off the same spindle; one
 `mos metadata --json` read per disc routes each to the right tool:
 
+The file is laid out so the **delegation reads first** — config, then `main`
+and the `ingest_*` branch dispatchers (the "what mos says → what tool runs"
+logic), then the helper functions the branches call. Read top-down to see the
+routing; drop into a helper when you care how a step works.
+
 | Disc | How `mos` identifies it | Action |
 |------|-------------------------|--------|
-| **Audio CD** | `disc.class == "cd"` with audio tracks (`toc.tracks[].data == false`) | MusicBrainz Disc ID (computed from the TOC `mos` emits) → release lookup; the drive's **AccurateRip read offset** (looked up from the `mos drive` identity) logged with the disc TOC fingerprint; then a byte-perfect [`redumper`](https://github.com/superg/redumper) dump. Pre-emphasised tracks (`toc.tracks[].pre_emphasis`) are flagged so they're preserved/de-emphasised, not ripped bright |
-| **Blank / appendable** | `disc.disc_info.status` is `blank`/`appendable` | report "ready to write" + the current write features (`mos features`) |
-| **Video DVD/BD** | class `dvd`/`bd`, mounted with `VIDEO_TS`/`BDMV` **or** unmounted | `makemkvcon -r` (robot mode) confirms it has rippable titles and reads the disc name, which names the output dir; then it decrypts + rips. No titles → it's data, not a movie, so it falls through to the archive branch |
+| **Audio CD** | `disc.class == "cd"` with audio tracks (`toc.tracks[].data == false`) | MusicBrainz Disc ID (computed from the TOC `mos` emits) → **release lookup**: artist / album / year / tracklist name the rip `Artist/Album (Year)/` and land a `tracklist.txt` + the raw `musicbrainz.json` beside it. The match is **cross-checked** against the disc — every track's TOC length vs MusicBrainz's, within `LENGTH_TOLERANCE` — and a mismatch drops a `NEEDS_REVIEW.txt` rather than mis-tagging. CD-TEXT (`disc.cdtext`) is the offline fallback name. The drive's **AccurateRip read offset** is logged with the TOC fingerprint; then a byte-perfect [`redumper`](https://github.com/superg/redumper) dump. Pre-emphasised tracks (`toc.tracks[].pre_emphasis`) are flagged |
+| **Blank / appendable** | `disc.disc_info.status` is `blank`/`appendable` | report "ready to write" + the current write features (`mos features`); for a blank CD-R/RW, the **ATIP** pre-groove maker code + type (`disc.atip`) |
+| **Video DVD/BD** | class `dvd`/`bd`, mounted with `VIDEO_TS`/`BDMV` **or** unmounted | `makemkvcon -r info` is parsed in full — every title's **duration, chapter count, size and output name** — the **main feature** (longest title) is identified, the **disc name becomes the output dir**, and a `titles.tsv` manifest is written; then it decrypts + rips (`MOVIE_MODE=main` rips just the longest). No titles → it's data, not a movie, so it falls through to the archive branch. Dual-layer break (`physical.end_sector_l0`) and protection/region are surfaced |
 | **Data / archive disc** (incl. M-DISC) | a mounted data volume with no video layout; M-DISC is the registered `MILLEN`/`MR1` manufacturer ID | error-tolerant 1:1 image with [`ddrescue`](https://www.gnu.org/software/ddrescue/), verified against `mos capacity` |
 
 Beyond routing, it uses `mos` as more than a classifier:
 
+- a real **MusicBrainz release lookup** (`inc=artist-credits+recordings`,
+  rate-limited to the service's 1 req/s) parsed into artist / album / year /
+  tracklist — and a **length cross-check** that catches a fuzzy `toc=` match or
+  the wrong disc of a multi-disc set before it mistags the rip;
+- a full **`makemkvcon -r info` parse** (the stable `apdefs.h` attribute ids:
+  `2` name, `8` chapters, `9` duration, `11` bytes, `27` output name) into a
+  ranked title table + a `titles.tsv` manifest, so a box set and a single movie
+  are both handled;
 - an append-only **inventory** (JSONL) keyed by the drive's durable **serial**
   (`mos drive`) plus a **sha256 of mos's closed `disc` fingerprint subtree** —
   the one dedup key that works even for Blu-ray, where no standard disc ID
-  exists. `./disc-ingest.sh fingerprint <drive>` prints just that hash;
+  exists. The row carries the resolved title (artist/album, or disc name +
+  main title). `./disc-ingest.sh fingerprint <drive>` prints just that hash;
 - a per-archive **sidecar manifest** (`<image>.mos.json` + `.sha256`) — the
   `mos metadata` + drive identity + image checksum an archivist keeps beside
   the `.iso`;
@@ -62,16 +76,23 @@ what a drive can tell you:
 ./disc-ingest.sh                 # follow `mos watch`: act on every disc that
                                  #   turns ready, hot-plug included
 ./disc-ingest.sh 1 disk6         # one-shot on the given drive selector(s)
+./disc-ingest.sh identify 4      # full plan, read-only — no rip, no writes
 mos list --json | jq -r '.drives[].registry_id' | ./disc-ingest.sh -
 DRY_RUN=1 ./disc-ingest.sh 1     # print the command each branch WOULD run
 ```
+
+`identify` (and `DRY_RUN=1`) still run the **read-only** probes — the
+MusicBrainz lookup and `makemkvcon -r info` — so the printed plan is the real
+one (resolved title, title table, length cross-check); only the writes and the
+rip itself are suppressed.
 
 Set `MB_USER_AGENT` to a string with a **real contact** before hitting
 MusicBrainz — the service rejects a bare `curl` user agent and rate-limits to
 one request a second. Other config (environment overrides): `RIPS_DIR` /
 `ARCHIVE_DIR` (output roots), `INVENTORY` (JSONL path; empty disables),
 `SIDECAR=1`, `EJECT_WHEN_DONE=0`, `LOCK_DURING_RIP=0`, `MINLENGTH=120`
-(makemkvcon title filter, seconds).
+(makemkvcon title filter, seconds), `MOVIE_MODE=all` (or `main` for the longest
+title only), `LENGTH_TOLERANCE=5` (per-track TOC-vs-MusicBrainz slack, seconds).
 
 ### Dependencies
 
