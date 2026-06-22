@@ -119,6 +119,16 @@ expect_any() {  # expect_any "desc" pat1 pat2 ...; PASS if any pattern matches O
     for p in "$@"; do printf '%s' "$OUT" | grep -qi -- "$p" && { ok "$d"; return; }; done
     bad "$d (none of: $*)"
 }
+# expect_outcome <wanted> <desc>: PASS only if the tray Outcome is exactly <wanted>
+# (human "Outcome: X" or JSON "outcome":"X"). A tray verb that the drive ANSWERS —
+# including refused_locked/refused_other — exits 0 by design (only transport
+# failures are non-zero), so exit code and the presence of an "Outcome:" line do
+# NOT mean the action succeeded; the outcome value does. On mismatch the report
+# shows the actual outcome.
+expect_outcome() {
+    if printf '%s' "$OUT" | grep -Eqi "outcome\"?[: ]+\"?$1\b"; then ok "$2"
+    else bad "$2 — actual: $(printf '%s' "$OUT" | grep -i outcome | head -1 | tr -s ' ' | sed 's/^ *//')"; fi
+}
 
 # ---- schema validation (python3 + jsonschema, matching CI) -------------------
 # Schemas are self-contained, so we validate each document against its single
@@ -645,22 +655,22 @@ phase_tray() {
     hdr "TRAY CONTROL — no disc"
     step "Empty drive, tray closed. Walks eject/close/lock/unlock and --force." || return
 
-    run tray eject;  expect_text 'eject|done|outcome' "tray eject → done"
+    run tray eject;  expect_outcome 'done' "tray eject → done"
     inspect_state; case "$STATE" in *open*|*empty*) ok "after eject: open/empty ($STATE)" ;; *) info "state: $STATE" ;; esac
-    run tray close;  expect_text 'close|done|outcome' "tray close → done"
+    run tray close;  expect_outcome 'done' "tray close → done"
     check_doc mos.tray.v1 "tray close --json" "$("$MOS" tray close --json 2>/dev/null)"
 
     info "lock = the basic Prevent (hard removal block); unlock clears BOTH states."
     info "On an empty drive the lock is a COLD lock — the default eject is refused,"
     info "and --force clears it. (--persistent is gone: lock is always the basic Prevent.)"
-    run tray lock;          expect_text 'lock|done|outcome' "tray lock → done"
-    run tray eject;         expect_any "eject of a COLD-locked tray → refused_locked" 'refused_locked' '53/02'
-    run tray unlock;        expect_text 'unlock|done|outcome' "tray unlock → done"
-    run tray eject;         expect_text 'eject|done|outcome' "eject after unlock → done"
+    run tray lock;          expect_outcome 'done' "tray lock → done"
+    run tray eject;         expect_outcome 'refused_locked' "eject of a COLD-locked tray → refused_locked"
+    run tray unlock;        expect_outcome 'done' "tray unlock → done"
+    run tray eject;         expect_outcome 'done' "eject after unlock → done"
     run tray close
 
-    run tray lock;          expect_text 'lock|done|outcome' "re-lock for the --force test"
-    run tray eject --force; expect_any "eject --force clears the cold lock" 'done' 'outcome'
+    run tray lock;          expect_outcome 'done' "re-lock for the --force test"
+    run tray eject --force; expect_outcome 'done' "eject --force clears the cold lock → done"
     info "--force cleared the COLD Prevent lock then ejected; it never forces the filesystem."
     run tray close
 }
@@ -738,7 +748,7 @@ phase_disc() {
 
         # 4) graceful eject of an idle mounted disc
         if step "Close anything using the disc — I'll test a GRACEFUL eject (unmount+eject)."; then
-            run tray eject; expect_any "graceful eject of a mounted disc" 'done' 'outcome'
+            run tray eject; expect_outcome 'done' "graceful eject of a mounted disc → done"
             info "mounted → mos unmounts gracefully then ejects; a BUSY fs would surface MOS_ERR_BUSY."
             run tray close
         fi
@@ -802,10 +812,16 @@ phase_watch() {
         "$MOS" watch >/dev/null 2>&1 & wpid=$!
         sleep 2
         run tray eject
-        if [ "$RC" = 0 ]; then ok "eject succeeded under a concurrent watch (contention reduced)"
-        elif printf '%s' "$OUT" | grep -qi 'exclusive'; then
+        # The contention question is specifically EXCLUSIVE_ACCESS vs a concurrent
+        # watch. refused_locked exits 0 (an answered refusal) but is NOT a
+        # successful eject — only Outcome: done is. Distinguish all three.
+        if printf '%s' "$OUT" | grep -qi 'exclusive'; then
             bad "eject lost to watch (EXCLUSIVE_ACCESS) — residual empty-drive GESN window"
-        else info "eject non-zero ($RC) for a non-contention reason — inspect above"; fi
+        elif printf '%s' "$OUT" | grep -Eqi 'outcome"?[: ]+"?done\b'; then
+            ok "eject succeeded (Outcome: done) under a concurrent watch — no exclusive-access contention"
+        else
+            skp "watch/eject contention" "no EXCLUSIVE_ACCESS, but eject did not succeed — $(printf '%s' "$OUT" | grep -i outcome | head -1 | tr -s ' ' | sed 's/^ *//') (e.g. a locked tray or mounted disc; not a contention result)"
+        fi
         stop_watch "$wpid"
         "$MOS" tray close >/dev/null 2>&1
     fi
