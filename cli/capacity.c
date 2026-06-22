@@ -143,6 +143,14 @@ static void emit_human(const capacity_doc *d)
     }
     pairs[n++] = (mos_cli_human_pair){ "Media", d->have_media ? media_buf : NULL };
 
+    /* Recordable and Formattable are disc-class-gated content rows, not core
+       drive facts: a pressed/ROM disc is never formattable, a non-recordable
+       disc has no append space. Like the metadata verb's CD-Text/TOC/Track
+       rows (and unlike BSD/Media above, which always show — identity and the
+       headline size), an inapplicable view is SUPPRESSED rather than rendered
+       as a bare "-". (The all-three-absent empty-drive case is handled by the
+       early return; here at least one view is present.) */
+
     /* "free 4294967295 blocks, NWA 4294967295, track 4294967295" -> 56. */
     char rec_buf[64];
     if (d->have_recordable) {
@@ -154,9 +162,8 @@ static void emit_human(const capacity_doc *d)
         if (off > 0 && (size_t)off < sizeof rec_buf)
             snprintf(rec_buf + off, sizeof rec_buf - (size_t)off,
                      ", track %u", d->track_size);
+        pairs[n++] = (mos_cli_human_pair){ "Recordable", rec_buf };
     }
-    pairs[n++] = (mos_cli_human_pair){ "Recordable",
-                                       d->have_recordable ? rec_buf : NULL };
 
     /* "unformatted, 11826176 blocks × 2048 B, 3 format options" -> ~58. */
     char fmt_buf[80];
@@ -169,9 +176,8 @@ static void emit_human(const capacity_doc *d)
             snprintf(fmt_buf + off, sizeof fmt_buf - (size_t)off,
                      ", %u format option%s", d->fmt_count,
                      d->fmt_count == 1 ? "" : "s");
+        pairs[n++] = (mos_cli_human_pair){ "Formattable", fmt_buf };
     }
-    pairs[n++] = (mos_cli_human_pair){ "Formattable",
-                                       d->have_formattable ? fmt_buf : NULL };
 
     (void)mos_cli_human_block(stdout, pairs, n);
 }
