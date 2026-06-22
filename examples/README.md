@@ -34,6 +34,16 @@ Beyond routing, it uses `mos` as more than a classifier:
   touches the drive; this is the spotlight that mos's TOC *is* the identity
   primitive (the schemes differ only in framing — MusicBrainz/CDDB use LBA+150,
   AccurateRip uses raw LBAs);
+- **cover art + portable tags** for the audio rip, both keyed on the release
+  MBID mos's TOC resolved: the front cover from the **Cover Art Archive**
+  (`cover.jpg`, release-group fallback) and a per-track `NN.tags` file in
+  `metaflac --import-tags-from` format (the Vorbis-comment core + the
+  `MUSICBRAINZ_*` id set Picard round-trips);
+- a **`drive` report** (`./disc-ingest.sh drive <sel>`) — mos's drive identity
+  plus the community-DB **lookup keys + URLs** (LibreDrive/MakeMKV, UHD
+  crossflash, redump CD compat), honest that only AccurateRip's offset DB is
+  machine-readable (auto-resolved) while the rest are forum/wiki you paste the
+  key into; a coarse local table flags known UHD-capable models;
 - **protection prediction** before a multi-minute scan: `predict_protection`
   compares the disc's `copyright.protection_name` (`mos metadata`) against the
   **drive's** `protection` capability (`mos drive`), so an AACS disc in a
@@ -91,6 +101,7 @@ what a drive can tell you:
                                  #   turns ready, hot-plug included
 ./disc-ingest.sh 1 disk6         # one-shot on the given drive selector(s)
 ./disc-ingest.sh identify 4      # full plan, read-only — no rip, no writes
+./disc-ingest.sh drive 4         # drive identity + community-DB lookup keys
 mos list --json | jq -r '.drives[].registry_id' | ./disc-ingest.sh -
 DRY_RUN=1 ./disc-ingest.sh 1     # print the command each branch WOULD run
 ```
@@ -114,7 +125,9 @@ Every rip branch writes a **checksummed provenance record** (`SIDECAR=1`): a
 `manifest.json` inside an audio/movie rip dir (mos metadata + drive identity +
 fingerprint + sha256 of each output file), or `<image>.mos.json` beside an
 archived `.iso`. Audio rips also get `disc-ids.json`, `tracklist.txt`, the raw
-`musicbrainz.json`, and a `NEEDS_REVIEW.txt` when the length cross-check fails.
+`musicbrainz.json`, `cover.jpg`, per-track `NN.tags`, and a `NEEDS_REVIEW.txt`
+when the length cross-check fails. Cover art is toggled with `COVER_ART=1` /
+`COVER_SIZE=500`.
 
 ### Dependencies
 
