@@ -25,7 +25,7 @@ _mos()
     fi
 
     local subcommands="state list watch metadata drive features tray capacity probe"
-    local global_opts="-i --index --bsd --registry -j --json --color --no-color -h --help --version"
+    local global_opts="-i --index --bsd --registry -j --json --pairs --color --no-color -h --help --version"
 
     case "$prev" in
         -i|--index|--registry) return ;;

@@ -147,9 +147,9 @@ def comment_block(prefix):
 
 def gen_bash(verbs, actions, long_opts):
     globals_ = ["-i", "--index", "--bsd", "--registry", "-j", "--json",
-                "--color", "--no-color", "-h", "--help", "--version"]
+                "--pairs", "--color", "--no-color", "-h", "--help", "--version"]
     # Sanity: every global long opt we list must exist in the table.
-    for name in ("index", "bsd", "registry", "json", "color", "help", "version"):
+    for name in ("index", "bsd", "registry", "json", "pairs", "color", "help", "version"):
         if name not in long_opts:
             sys.exit(f"gen-cli-docs: expected long option --{name} missing")
     sub = " ".join(verbs)
@@ -302,6 +302,7 @@ _mos() {{
         '--bsd[BSD form selector]:bsd name:_mos_drives'
         '--registry[registry_id selector]:registry id:'
         '(-j --json)'{{-j,--json}}'[emit JSON output]'
+        '--pairs[flatten JSON to dotted key=value lines]'
         '--color[colorize human output]:when:(auto always never)'
         '--no-color[disable color (alias for --color never)]'
         '(-h --help)'{{-h,--help}}'[show help]'
@@ -402,6 +403,7 @@ complete -c mos -s i -l index   -d '1-based drive index' -x
 complete -c mos      -l bsd     -d 'BSD form selector' -a '(__fish_mos_list_drives)' -x
 complete -c mos      -l registry -d 'registry_id selector' -x
 complete -c mos -s j -l json    -d 'Emit JSON output'
+complete -c mos      -l pairs   -d 'Flatten JSON to key=value lines'
 complete -c mos      -l color   -d 'Colorize human output' -x -a 'auto always never'
 complete -c mos      -l no-color -d 'Disable color (alias for --color never)'
 complete -c mos -s h -l help    -d 'Show help'

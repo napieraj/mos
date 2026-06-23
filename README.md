@@ -92,6 +92,22 @@ disagree.
 Every one-shot verb takes `--json`; `watch` streams NDJSON. The per-document
 field reference is its schema under [`schemas/`](schemas/).
 
+For line-oriented consumers (`grep`/`awk`), add `--pairs` to any one-shot verb:
+it flattens the JSON document to dotted `key=value` lines, one scalar per line —
+nested objects join with `.`, arrays index with `[i]`:
+
+```sh
+$ mos state 1 --pairs
+schema="mos.state.v1"
+state="ready"
+speeds.max_read_kbps=35980
+speeds.descriptors[0].read_kbps=35980
+```
+
+String values keep their JSON quotes (so each line stays single-line and
+shell-safe). `--pairs` implies `--json` and applies to one-shot verbs only (not
+the streaming `watch`/`probe`).
+
 ### `state` (default) — what the drive is doing now
 
 States: `open`, `empty`, `empty_or_open`, `loading`, `ready`, `busy`,

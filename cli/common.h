@@ -24,6 +24,8 @@ extern uint64_t    opt_registry;  /* 0 = unset; set only positionally */
 extern const char *opt_tray_action; /* tray sub-verb eject|close|lock|unlock;
                                        NULL = missing. Parsed argv (opt_), positional. */
 extern bool        flag_json;
+extern bool        flag_pairs;     /* --pairs: flatten the JSON document to
+                                      dotted key=value lines (one-shot verbs) */
 extern bool        flag_force;     /* tray eject --force: also clear a Prevent
                                       LOCK in the way (never forces the fs) */
 extern bool        flag_dump;     /* probe --dump one-shot DR capture */

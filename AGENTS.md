@@ -2176,3 +2176,49 @@ whether a given drive populates Type 03h — a `mos probe --capture` GET
 PERFORMANCE reply is the standing falsifier, landing as a fixture + dated note,
 never a per-device special-case. The parser fails closed (count 0 / clamped) on
 a short or hostile reply.
+
+## ADR: `--pairs` key=value output — flatten the JSON document, don't build a
+## second emitter (2026-06-23, CLI ergonomics; feature survey U2)
+
+`mos --pairs` flattens a one-shot verb's JSON document to dotted `key=value`
+lines for grep/awk consumers (`speeds.descriptors[0].read_kbps=35980`). This
+records the design choice (maintainer-approved: dotted-key flatten) and why it
+adds no second source of truth. Origin: the deep-research feature survey
+(`doc/research/2026-06-23-feature-survey.md`, item U2).
+
+**Flatten, don't re-emit (the load-bearing decision).** mos has ONE JSON
+emitter per verb. `--pairs` does NOT add a parallel key=value emitter (which
+would be a second source to drift from the schema). Instead it forces
+`--json`, captures the verb's own JSON output, and runs it through a single pure
+flattener (`mos_cli_json_to_pairs`, `cli/io.c`). So the success documents
+(`mos.*.v1`) AND the failure envelope (`mos.error.v1`) flatten identically with
+zero per-verb work — every present/absent key, every enum, is exactly what the
+JSON path produced. New schema fields appear in `--pairs` automatically.
+
+**Capture without touching the verbs.** The verbs write to the global `stdout`;
+`run_with_pairs` (cli/main.c) redirects fd 1 onto a `tmpfile` (dup2) around
+`selected->run()`, restores it, slurps the captured JSON, and flattens to the
+real stdout. No verb signature changes (the alternative — threading a `FILE*`
+sink through all eight emitters — was rejected as a larger surface for no gain).
+A capture-setup failure falls back to running the verb normally (JSON straight
+through), so `--pairs` never loses output; an unflattenable capture emits the raw
+JSON rather than nothing.
+
+**Raw-span scalars (no decode).** The flattener emits each scalar's RAW JSON
+text — strings keep their quotes and escapes, numbers/true/false/null verbatim —
+so every line is single-line and shell-parseable and no value is ever
+mis-decoded (mos already ASCII-escapes device strings at JSON emit; re-decoding
+could reintroduce control bytes). Empty objects/arrays emit `key={}`/`key=[]` so
+a key is never silently lost.
+
+**One-shot only.** `--pairs` is rejected (EX_USAGE) for the NDJSON streamers
+(`watch`) and `probe`: a never-ending stream has no single document to flatten.
+The streaming analog (RS-framed `json-seq`, survey U3) is a separate, deferred
+item.
+
+**Scope / surface.** Pure flattener unit-tested in `tests/test_io.c` (it links
+into the non-Apple test build via `cli/io.c`); the capture wiring is macOS-CI-
+verified. `--pairs` is a global flag in the command table, so `gen-cli-docs.py`
+carries it into the man page + the three shell completions (the `--check` gate
+keeps them in lockstep). No library change, no schema change, no new command
+surface.
