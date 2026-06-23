@@ -372,6 +372,40 @@ jobs:
           path: build-dylib/libmos.dylib
           retention-days: 7
 
+  dylib-no-da:
+    name: Build dylib without DiskArbitration (macOS, Python ctypes)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0 (Node 24)
+        with:
+          persist-credentials: false
+
+      - name: Configure
+        run: |
+          cmake -B build-dylib-noda -DCMAKE_BUILD_TYPE=Release \
+            -DMOS_BUILD_DYLIB=ON -DMOS_USE_DISKARBITRATION=OFF
+
+      - name: Build libmos.dylib
+        run: cmake --build build-dylib-noda --target mos_dylib --parallel
+
+      - name: Verify no DiskArbitration linked
+        run: |
+          set -e
+          LIB=$(find build-dylib-noda -name "libmos.dylib" | head -1)
+          if otool -L "$LIB" | grep -i DiskArbitration; then
+            echo "ERROR: DiskArbitration linked despite MOS_USE_DISKARBITRATION=OFF"
+            exit 1
+          fi
+          MOS_DYLIB="$LIB" python3 -c "import ctypes, os; ctypes.CDLL(os.environ['MOS_DYLIB']); print('ctypes.CDLL loaded OK')"
+          echo "OK: no DiskArbitration, dylib loads with Python ctypes"
+
+      - name: Upload libmos.dylib (no DiskArbitration)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: libmos-dylib-macos-no-da
+          path: build-dylib-noda/libmos.dylib
+          retention-days: 7
+
   schemas:
     name: JSON Schema validation
     # Schema validation is pure Python — no IOKit needed. Runs on
