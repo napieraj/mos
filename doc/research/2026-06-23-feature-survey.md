@@ -307,6 +307,58 @@ makemkvcon LibreDrive Information panel.
 state — one raw CDB), F6 (READ SUB-CHANNEL MCN/ISRC — one raw CDB), X1
 (pure-TOC MusicBrainz/CDDB ids — crosses "permanently consumer-side").
 
+## Addendum (2026-06-23) — low-hanging fruit vs raw MMC, against the real SDK
+
+Classified against the actual `MMCDeviceInterface` vtable in the macOS **26.4**
+SDK (`IOKit.framework/.../scsi/SCSITaskLib.h`, maintainer-supplied). A feature
+is **low-hanging** if a convenience wrapper carries it (non-exclusive, no
+`ObtainExclusiveAccess`, no raw CDB authored by mos); it **requires raw MMC**
+if no wrapper exists, so it must go through `GetSCSITaskDeviceInterface` →
+`SCSITaskInterface` with exclusive access (a new entry on `mos_internal_raw_cdb`,
+raising the one-of-N raw count and re-raising the §5.5 invariant).
+
+**Full convenience inventory (the only wrappers that exist):** `Inquiry`
+(standard data only — EVPD/PAGE_CODE structurally absent), `TestUnitReady`,
+`GetPerformance`/`GetPerformanceV2` (DATA_TYPE + TYPE), `GetConfiguration`,
+`ModeSense10`, `SetWriteParametersModePage` (MODE SELECT — write),
+`GetTrayState` (sense-blind), `SetTrayState`, `ReadTableOfContents`,
+`ReadDiscInformation`/`V2` (DATA_TYPE), `ReadTrackInformation`/`V2`,
+`ReadDVDStructure`, `ReadDiscStructure` (MMC-5, MEDIA_TYPE → DVD **and** BD),
+`ReadFormatCapacities`, `SetCDSpeed`, `SetStreaming`, and the escape hatch
+`GetSCSITaskDeviceInterface`.
+
+### Low-hanging — convenience wrapper exists (no raw CDB, no new lock)
+
+| Item | Wrapper (SCSITaskLib.h) | Even cheaper? |
+|------|------------------------|----------------|
+| **F1** disc_id / barcode / OPC / app-code | `ReadDiscInformation` :846 | **Pure-parse** — mos *already issues* 0x51; decode more bytes of a reply already in hand. The lowest fruit on the list. |
+| **F3** page 0x2A extra bits (C2, BURN-Free, Mt-Rainier, write caps) | `ModeSense10` :731 | **Pure-parse** — mos already reads page 0x2A; decode more bits. |
+| **F7** decode select GET CONFIG features (0107h/0100h/0105h/…) | `GetConfiguration` :700 | **Pure-parse** — mos already walks RT=0. |
+| **F11** extended CD-TEXT fields | `ReadTableOfContents` :819 (FORMAT 0101b) | **Pure-parse** — mos already issues this format. |
+| **F9** CD-Extra / disc-mode derivation | `ReadTableOfContents` :819 | **Pure-compute** — from data already fetched. |
+| **F2** full GET PERFORMANCE descriptor list + write speeds | `GetPerformanceV2` :949 (DATA_TYPE+TYPE) | New *call(s)* (Type 03h etc.), but convenience — no lock. |
+| **F4** BD Spare Area Info / DDS | `ReadDiscStructure` :1035 (MEDIA_TYPE=BD) | New FORMAT codes, convenience — no lock. |
+| **X1** MusicBrainz / CDDB disc IDs | (none needed) | **Pure-compute** from TOC mos already has — but crosses the "third-party ids consumer-side" line. |
+
+### Requires raw MMC — no wrapper (→ `GetSCSITaskDeviceInterface`, exclusive access)
+
+| Item | Opcode | Why raw |
+|------|--------|---------|
+| **F5** REPORT KEY (region code, RPC phase, resets-remaining) | 0xA4 | No wrapper. Also crosses the explicit "mos does not issue REPORT KEY" line. |
+| **F6** READ SUB-CHANNEL (MCN / ISRC) | 0x42 | No wrapper. |
+| **F8** MECHANISM STATUS (fault / changer / slot) | 0xBD | No wrapper. |
+| **F10** READ BUFFER CAPACITY | 0x5C | No wrapper. |
+
+**Confirms existing doctrine:** the `Inquiry` wrapper (:609) takes only
+`SCSICmd_INQUIRY_StandardData` with `inqBufferSize` capped below its size — no
+EVPD, no PAGE_CODE — so VPD pages and the >36-byte version descriptors are
+unreachable via convenience (why mos's standard-INQUIRY path is already raw, and
+why the retired VPD-0x80 serial was raw). `GetTrayState` (:766) wraps GESN but
+is sense-blind, so the GESN tray probe and any `eject_requested` event remain
+raw (as today). **Net:** every Tier-1 *pure-parse/compute* item (F1, F3, F7,
+F9, F11) and the convenience-call items (F2, F4) are low-hanging; only F5, F6,
+F8, F10 require a new raw verb.
+
 ## Source index (selected)
 
 - Linux `include/uapi/linux/cdrom.h` (disc_information / track_information /
