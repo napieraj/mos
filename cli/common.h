@@ -26,6 +26,8 @@ extern const char *opt_tray_action; /* tray sub-verb eject|close|lock|unlock;
 extern bool        flag_json;
 extern bool        flag_pairs;     /* --pairs: flatten the JSON document to
                                       dotted key=value lines (one-shot verbs) */
+extern bool        flag_json_seq;  /* --json-seq: prefix each NDJSON stream line
+                                      with RS (0x1E) per RFC 7464 (watch only) */
 extern bool        flag_force;     /* tray eject --force: also clear a Prevent
                                       LOCK in the way (never forces the fs) */
 extern bool        flag_dump;     /* probe --dump one-shot DR capture */

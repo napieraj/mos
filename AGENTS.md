@@ -2222,3 +2222,30 @@ verified. `--pairs` is a global flag in the command table, so `gen-cli-docs.py`
 carries it into the man page + the three shell completions (the `--check` gate
 keeps them in lockstep). No library change, no schema change, no new command
 surface.
+
+## ADR: `--json-seq` — RFC 7464 RS-framing for the watch NDJSON stream
+## (2026-06-23, watch ergonomics; feature survey U3)
+
+`mos watch --json-seq` prefixes each emitted NDJSON line with an ASCII Record
+Separator (0x1E) per RFC 7464 (JSON Text Sequences), so a consumer can resync
+mid-stream — the journalctl `-o json-seq` convention. Origin: the deep-research
+feature survey (`doc/research/2026-06-23-feature-survey.md`, item U3).
+
+**Two chokepoints, one byte.** Watch emits exactly two line kinds, each through a
+single function in cli/common.c: the event line (`mos_cli_emit_watch_ndjson`) and
+the compact error envelope (`mos_cli_emit_unknown_and_fail`'s NDJSON branch).
+`--json-seq` writes the RS at the start of each, gated on the existing
+`compact`/NDJSON path — so error records in the stream are framed identically to
+events. No change to the JSON bytes themselves (the framing is a prefix), so the
+`mos.event.v1`/`mos.error.v1` schemas and fixtures are untouched.
+
+**Stream-only.** Rejected (EX_USAGE) for non-NDJSON verbs: a one-shot emits a
+single document, which RS-framing has nothing to delimit. So the flag is only
+ever live on `watch`, where both emit chokepoints live.
+
+**Scope / surface.** No library change, no schema change, no new command surface
+— a global flag in the table (so `gen-cli-docs.py` carries it into the man page +
+all three completions; the regex was widened to capture hyphenated long options).
+Pairs with `--pairs` as the two output-shaping flags from the survey's CLI angle:
+`--pairs` for one-shot grep/awk consumers, `--json-seq` for robust stream
+consumers.

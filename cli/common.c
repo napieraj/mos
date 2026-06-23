@@ -11,6 +11,7 @@ uint64_t    opt_registry = 0;     /* 0 = unset; >= 2^32+256 when set */
 const char *opt_tray_action = NULL; /* tray sub-verb; NULL = missing */
 bool        flag_json   = false;
 bool        flag_pairs  = false;  /* --pairs: flatten JSON output to key=value */
+bool        flag_json_seq = false; /* --json-seq: RFC 7464 RS-framed NDJSON (watch) */
 bool        flag_force  = false;  /* tray eject --force */
 bool        flag_dump   = false;  /* probe --dump one-shot DR capture */
 bool        flag_capture = false; /* probe --capture fixed-menu raw MMC capture */
@@ -103,6 +104,9 @@ int mos_cli_emit_unknown_and_fail(const char *context, mos_error err,
         const char *i2  = compact ? ""  : "  ";
         const char *i4  = compact ? ""  : "    ";
         const char *sp  = compact ? ""  : " ";
+        /* RFC 7464 json-seq: a compact (NDJSON-stream) line is prefixed with
+           an ASCII Record Separator so a consumer can resync mid-stream. */
+        if (compact && flag_json_seq) fputc('\x1e', stdout);
         fprintf(stdout, "{%s", nl);
         fprintf(stdout, "%s\"schema\":%s\"mos.error.v1\",%s", i2, sp, nl);
         if (dev_node && *dev_node) {
@@ -166,6 +170,8 @@ mos_cli_stdout_status mos_cli_emit_watch_ndjson(const mos_watch_event *e)
     uint8_t     sk, asc, ascq;
     mos_watch_event_sense(e, &sk, &asc, &ascq);
 
+    /* RFC 7464 json-seq: RS (0x1E) before each event line when --json-seq. */
+    if (flag_json_seq) fputc('\x1e', stdout);
     fputs("{", stdout);
     fputs("\"schema\":\"mos.event.v1\"", stdout);
     fputs(",\"event\":\"", stdout); fputs(kind, stdout); fputc('"', stdout);

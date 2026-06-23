@@ -176,6 +176,16 @@ One-shot verbs only \(em not the streaming
 or
 .BR probe .
 .TP
+.BR \-\-json-seq
+Prefix each
+.B watch
+NDJSON line with an ASCII Record Separator (0x1E) per
+.B RFC 7464
+(JSON Text Sequences), for resync-safe stream parsing. Applies only to the
+NDJSON stream
+.RB ( watch );
+a one-shot verb emits a single document, so the framing is rejected there.
+.TP
 .BR \-\-color " \fIWHEN\fR"
 Colorize human output:
 .B auto

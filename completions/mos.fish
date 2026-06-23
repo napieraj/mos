@@ -76,6 +76,7 @@ complete -c mos      -l bsd     -d 'BSD form selector' -a '(__fish_mos_list_driv
 complete -c mos      -l registry -d 'registry_id selector' -x
 complete -c mos -s j -l json    -d 'Emit JSON output'
 complete -c mos      -l pairs   -d 'Flatten JSON to key=value lines'
+complete -c mos      -l json-seq -d 'RFC 7464 RS-framed NDJSON (watch)'
 complete -c mos      -l color   -d 'Colorize human output' -x -a 'auto always never'
 complete -c mos      -l no-color -d 'Disable color (alias for --color never)'
 complete -c mos -s h -l help    -d 'Show help'

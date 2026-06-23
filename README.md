@@ -151,7 +151,8 @@ One `mos.event.v1` per line, errors included. With no drive it streams the whole
 bus — hot-plug arrivals as `device_appeared`, removals as `device_removed`, the
 stream continuing; a selector narrows to one drive. Events carry `media_type`,
 `writable`, and the durable `serial`, so a consumer can gate inserts without a
-second query.
+second query. Add `--json-seq` to frame the stream per RFC 7464 (each line
+prefixed with an ASCII Record Separator, 0x1E) for resync-safe parsing.
 
 ### `metadata` — what disc is this
 

@@ -99,6 +99,8 @@ void mos_cli_print_usage(FILE *f)
         "      --pairs       Flatten the JSON document to dotted key=value\n"
         "                    lines (e.g. speeds.max_read_kbps=35980), for\n"
         "                    grep/awk. One-shot verbs only (not watch/probe).\n"
+        "      --json-seq    RFC 7464: prefix each watch NDJSON line with RS\n"
+        "                    (0x1E) for resync-safe streaming. watch only.\n"
         "      --color WHEN  Colorize human output: auto (default; on when\n"
         "                    stdout is a tty and NO_COLOR/TERM=dumb are unset),\n"
         "                    always (force, e.g. piping to 'less -R'), never.\n"
@@ -154,6 +156,7 @@ enum {
     OPT_COLOR,
     OPT_NO_COLOR,
     OPT_PAIRS,
+    OPT_JSON_SEQ,
 #ifdef MOS_CLI_PROBE
     OPT_DUMP,
     OPT_CAPTURE,
@@ -179,6 +182,7 @@ static const struct option long_options[] = {
        NULL optarg. */
     { "json",    optional_argument, 0, 'j' },
     { "pairs",   no_argument,       0, OPT_PAIRS },
+    { "json-seq", no_argument,      0, OPT_JSON_SEQ },
     { "help",    no_argument,       0, 'h' },
     { "version", no_argument,       0, OPT_VERSION },
     { 0, 0, 0, 0 }
@@ -490,6 +494,9 @@ int main(int argc, char **argv)
             case OPT_PAIRS:
                 flag_pairs = true;
                 break;
+            case OPT_JSON_SEQ:
+                flag_json_seq = true;
+                break;
             case 'h':
                 if (verb_word_given)
                     mos_cli_print_command_help(stdout, selected);
@@ -599,6 +606,16 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 #endif
+
+    /* --json-seq (RFC 7464 RS framing) is for the NDJSON event stream: it
+       frames one object per line for resync. A one-shot document is a single
+       object, so the framing has nothing to delimit — reject it there. */
+    if (flag_json_seq && !(selected->flags & MOS_CLI_CMD_NDJSON)) {
+        fprintf(stderr, "%s: --json-seq applies only to the NDJSON stream "
+                        "(watch); %s emits a single document\n",
+                progname, selected->name);
+        return EX_USAGE;
+    }
 
 #ifdef MOS_CLI_PROBE
     /* Verb-vs-verb contradictions can't arise — verbs come only from the
