@@ -2344,3 +2344,80 @@ removed (one-of-four), no privilege change, no library behavior change — this 
 names only. The emit-fixture human goldens (macOS-only) were re-aligned for the
 label changes; `scripts/hw-smoke.sh` reads no renamed mos key (its `disc_type`/
 `revision` are its own operator-supplied ledger fields), so it was unchanged.
+
+## ADR: pre-freeze schema lock-in decisions; `event` joins `state` as a
+## second forward-compatible open axis (2026-06-23)
+
+A pre-tag review of what the first-tag schema freeze locks (the JSON-schema
+ADR's closed-field-set: any field add/rename/retype/remove, or any tightening
+of a closed enum, costs a new schema NAME after the tag). The six decisions
+below were taken so the freeze is deliberate. Only the first is a change; the
+rest confirm-and-record. The key framing: the freeze locks SHAPE; per the
+hardware-role ADR, hardware refines parser VALUES post-freeze without a v2, so
+"not yet hardware-validated" is not a freeze blocker — the spec-built parsers'
+bit positions/offsets are value bugs, fixable in place.
+
+**1 (the one change). `event` is now a second open axis — amends the
+JSON-schema ADR's "the one open axis within a version is the state / prev_state
+enum".** The `mos.event.v1` `event` enum joins `state`/`prev_state` as
+forward-compatible: future minor versions may ADD an event kind (an additive
+enum value + its own oneOf branch over the EXISTING field set) without a schema-
+name bump, and consumers MUST ignore an unrecognized event kind rather than
+reject the stream. Mechanism is identical to `state`'s and already half-present:
+the enum is drift-guarded against `cli/common.c event_kind_string()` in
+`validate.py`; this entry adds the consumer-tolerance description on the `event`
+property (mirroring the `state` enum's). **Caveat that keeps it honest:** the
+field set stays closed (`additionalProperties:false`), so a new kind needing a
+NEW field is still a v2 — only fieldless additive kinds ride the axis. Why: event
+*kinds* are exactly what grows (the `eject_requested` ROADMAP item; more later),
+the `state`-is-open precedent already blesses additive kind-enums, and this avoids
+forcing an `event.v2` for a simple additive kind. NOT building `eject_requested`
+now (it needs an edge-triggered GESN event-drain and is hardware-gated — rushing
+a hardware-dependent feature to beat the freeze is the over-engineering the
+doctrine forbids); the open axis is the insurance that lets it land post-tag.
+
+**2. Name LEAVEs accepted (no change).** The canonical T10/MMC/ripping terms
+stay: `c2_pointers`, `accurate_stream`, `adr`, `control`, the Error-Recovery
+`PER`/`DCR` value tokens, and the three deliberately-distinct `disc_type` fields
+(`disc_info.disc_type` int, `atip.disc_type` int, `disc_structure.disc_type_id`
+string). Renaming would make mos *less* recognizable to the peer-tool consumers
+(EAC, sg3_utils, libcdio) who read these exact fields.
+
+**3. `disc_id` stays `integer` (no change).** It is a true 32-bit numeric id, in
+JSON's safe-integer range, numerically comparable. `bar_code` is a string only
+because 8 bytes exceed 2^53 — a forced difference, not an inconsistency; making
+`disc_id` a hex string for cosmetic symmetry would forfeit numeric semantics.
+
+**4. The presence-convention split is intentional and is hereby the documented
+rule.** Same concept, two presence rules by DOCUMENT contract:
+- **`mos.state.v1` — core vs enrichment.** Core fields (`state`,
+  `current_profile`, `current_profile_name`) are required-and-nullable; the
+  ENRICHMENT fields (`media_class`, `media_type`, `writable`, `volume_name`,
+  `speeds`) are OPTIONAL/absent — present only when applicable, so a polled
+  consumer iterates the present keys. `media_class` is enrichment, so its
+  optional-absence is consistent with its siblings, not an oddity.
+- **`mos.metadata.v1.disc` — closed fingerprint.** Every key is required (present,
+  nullable when N/A) so the subtree is a stable, hashable fingerprint with a fixed
+  key set. So `media_class` is required-and-nullable here.
+Forcing uniformity was rejected: it would make `media_class` inconsistent with
+its own document's other enrichment fields (state) or break the fingerprint's
+closed-set guarantee (metadata).
+
+**5. Closed enum value-sets frozen as complete (no change).** Every enum except
+the two open axes (`state`/`prev_state`, and now `event`) fails closed to
+null/key-absent on an unknown value and is drift-guarded against its C table:
+`media_class {cd,dvd,bd,hd_dvd}` (the optical families are a closed HISTORICAL
+set — HD DVD is dead, no new class is coming), `interconnect` (5),
+`media_type`, `book_type`, `bg_format_name`, tray `outcome`/`action`. No
+speculative widening (the hardware-role ADR forbids it); a future out-of-set
+value fails closed (safe) and lands as a fixture + dated note, never a v1 break.
+
+**6. Schema names frozen; diagnostic formats stay out (no change).** The nine
+consumer documents freeze: `mos.{state,error,list,event,metadata,drive,capacity,
+features,tray}.v1`. `mos.probe.v0` / `mos.capture.v0` stay diagnostic and OUT of
+the freeze — they ship behind `MOS_CLI_PROBE` (default flips OFF at the tag) and
+must stay free to change; freezing them would contradict "not consumer surface."
+
+**Footprint.** Schema + docs only: the `event` property gains a description (enum
+byte-identical, drift guard still green), and this ADR records the lock-ins. No
+C change, no command surface, no raw-CDB count change, no dist/golden churn.
