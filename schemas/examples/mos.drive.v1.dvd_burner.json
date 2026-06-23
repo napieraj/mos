@@ -41,7 +41,11 @@
     "can_eject": true,
     "lock_supported": true,
     "locked": false,
-    "buffer_kb": 4096
+    "buffer_kb": 4096,
+    "buf_underrun": true,
+    "multisession": true,
+    "accurate_stream": true,
+    "c2_pointers": true
   },
   "error_recovery": {
     "awre": true,

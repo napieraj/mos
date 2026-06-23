@@ -1,0 +1,102 @@
+{
+  "schema": "mos.drive.v1",
+  "bsd_node": null,
+  "registry_id": 4295021843,
+  "vendor": "PIONEER",
+  "vendor_oem": "PIONEER",
+  "product": "BD-RW BDR-XS07",
+  "revision": "1.01",
+  "serial": "KL2G7942618WL",
+  "interconnect": "usb",
+  "interconnect_location": "external",
+  "protection": {
+    "aacs": null,
+    "css": {
+      "version": 1
+    },
+    "cprm": {
+      "version": 1
+    },
+    "securdisc": false,
+    "vcps": false
+  },
+  "write_protect": null,
+  "profiles": [
+    {
+      "code": "0x0008",
+      "name": "cd_rom"
+    },
+    {
+      "code": "0x0009",
+      "name": "cd_r"
+    },
+    {
+      "code": "0x000a",
+      "name": "cd_rw"
+    },
+    {
+      "code": "0x0010",
+      "name": "dvd_rom"
+    },
+    {
+      "code": "0x0011",
+      "name": "dvd_minus_r"
+    },
+    {
+      "code": "0x001a",
+      "name": "dvd_plus_rw"
+    },
+    {
+      "code": "0x001b",
+      "name": "dvd_plus_r"
+    },
+    {
+      "code": "0x0040",
+      "name": "bd_rom"
+    },
+    {
+      "code": "0x0041",
+      "name": "bd_r"
+    },
+    {
+      "code": "0x0043",
+      "name": "bd_re"
+    }
+  ],
+  "version": {
+    "code": 6,
+    "name": "spc_4"
+  },
+  "version_descriptors": [
+    {
+      "code": "0x00a0",
+      "name": "sam_5"
+    },
+    {
+      "code": "0x0460",
+      "name": "spc_4"
+    },
+    {
+      "code": "0x04e0",
+      "name": "mmc_6"
+    }
+  ],
+  "firmware_date": null,
+  "mechanical": {
+    "loading_mechanism": "tray",
+    "can_eject": true,
+    "lock_supported": true,
+    "locked": false,
+    "buffer_kb": 4096,
+    "buf_underrun": true,
+    "multisession": true,
+    "accurate_stream": true
+  },
+  "error_recovery": {
+    "awre": true,
+    "arre": true,
+    "per": false,
+    "dcr": false,
+    "read_retry_count": 20
+  }
+}

@@ -826,6 +826,12 @@ struct mos_mode_caps {
     bool     lock_supported;    /* page[6] bit 1 */
     bool     locked;            /* page[6] bit 2 (live state) */
     uint16_t buffer_kb;         /* page[12..13] BE, KB */
+    /* Read/rip capability bits from the same page (F3): */
+    bool     buf_underrun;      /* page[4] bit 7 (BUF — BURN-Free / buffer-
+                                   underrun-free recording) */
+    bool     multisession;      /* page[4] bit 6 (reads sessions > 1) */
+    bool     accurate_stream;   /* page[5] bit 1 (CD-DA stream is accurate) */
+    bool     c2_pointers;       /* page[5] bit 4 (C2 error pointers supported) */
 };
 
 struct mos_error_recovery {

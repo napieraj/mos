@@ -1007,6 +1007,15 @@ bool     mos_mode_caps_can_eject(const mos_mode_caps *m);
 bool     mos_mode_caps_lock_supported(const mos_mode_caps *m);
 bool     mos_mode_caps_locked(const mos_mode_caps *m);
 uint16_t mos_mode_caps_buffer_kb(const mos_mode_caps *m);
+/* Read/rip capability bits (page 0x2A). BURN-Free / buffer-underrun-free
+   recording, multisession read, accurate CD-DA stream, and C2-error-pointer
+   support — the latter three are the EAC/AccurateRip-relevant features.
+   NOTE: C2-pointer reliability is firmware-dependent; this reports the
+   drive's claim, not its accuracy. */
+bool     mos_mode_caps_buf_underrun(const mos_mode_caps *m);
+bool     mos_mode_caps_multisession(const mos_mode_caps *m);
+bool     mos_mode_caps_accurate_stream(const mos_mode_caps *m);
+bool     mos_mode_caps_c2_pointers(const mos_mode_caps *m);
 
 /* Loading-mechanism token: "caddy" / "tray" / "popup" / "changer_disc" /
    "changer_cartridge", or NULL for reserved/unknown codes. */

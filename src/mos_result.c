@@ -865,6 +865,26 @@ uint16_t mos_mode_caps_buffer_kb(const mos_mode_caps *m)
     return m ? m->buffer_kb : 0;
 }
 
+bool mos_mode_caps_buf_underrun(const mos_mode_caps *m)
+{
+    return m ? m->buf_underrun : false;
+}
+
+bool mos_mode_caps_multisession(const mos_mode_caps *m)
+{
+    return m ? m->multisession : false;
+}
+
+bool mos_mode_caps_accurate_stream(const mos_mode_caps *m)
+{
+    return m ? m->accurate_stream : false;
+}
+
+bool mos_mode_caps_c2_pointers(const mos_mode_caps *m)
+{
+    return m ? m->c2_pointers : false;
+}
+
 /* ---- mos_error_recovery accessors (mos_query_error_recovery) -------- */
 
 bool mos_error_recovery_awre(const mos_error_recovery *e)

@@ -181,7 +181,11 @@ survives replug where `registry_id` does not), content-protection *capability*,
 `write_protect` *capability* (the drive's Write Protect Feature 0004h bits —
 what it can report/change, not per-disc
 state), the supported-profile set, and the mechanical and error-recovery
-configuration.
+configuration. The `mechanical` block (page 0x2A) also carries the drive's
+read/rip capability bits — `buf_underrun` (BURN-Free), `multisession`,
+`accurate_stream`, and `c2_pointers` (the EAC/AccurateRip-relevant trio;
+C2-pointer support is a claim, not a reliability guarantee) — shown as a
+`Read Caps` row when any is set.
 Read-only — `mos` reports these, never changes them. (Read/write **speeds** are
 media-dependent, so they live on [`state`](#state-default--what-the-drive-is-doing-now)
 and [`watch`](#watch), not here.)

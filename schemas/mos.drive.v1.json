@@ -227,8 +227,8 @@
     },
     "mechanical": {
       "type": ["object", "null"],
-      "description": "MODE SENSE(10) page 0x2A (MM Capabilities & Mechanical Status) via the ModeSense10 convenience method — the mechanical facts GET CONFIGURATION cannot carry: loading-mechanism type, eject/lock support, the live media-locked bit, and the drive buffer size. Read-only (no MODE SELECT). null when the command failed or page 0x2A was absent. loading_mechanism and eject are kernel-confirmed (sr.c get_capabilities); buffer_kb and the lock bits are the standard MMC-3 page-2A positions with no in-repo capture yet (hardware falsifier per the ADR).",
-      "required": ["loading_mechanism", "can_eject", "lock_supported", "locked", "buffer_kb"],
+      "description": "MODE SENSE(10) page 0x2A (MM Capabilities & Mechanical Status) via the ModeSense10 convenience method — the mechanical facts GET CONFIGURATION cannot carry: loading-mechanism type, eject/lock support, the live media-locked bit, the drive buffer size, and the read/rip capability bits (BURN-Free, multisession, accurate CD-DA stream, C2 error pointers). Read-only (no MODE SELECT). null when the command failed or page 0x2A was absent. loading_mechanism and eject are kernel-confirmed (sr.c get_capabilities); buffer_kb, the lock bits, and the rip-cap bits are the standard MMC-3 page-2A positions with no in-repo capture yet (hardware falsifier per the ADR).",
+      "required": ["loading_mechanism", "can_eject", "lock_supported", "locked", "buffer_kb", "buf_underrun", "multisession", "accurate_stream", "c2_pointers"],
       "additionalProperties": false,
       "properties": {
         "loading_mechanism": {
@@ -251,6 +251,22 @@
           "type": "integer",
           "minimum": 0,
           "description": "Drive buffer size in KB (page[12..13])."
+        },
+        "buf_underrun": {
+          "type": "boolean",
+          "description": "Drive supports buffer-underrun-free recording / BURN-Free (page[4] bit 7, BUF)."
+        },
+        "multisession": {
+          "type": "boolean",
+          "description": "Drive can read multisession media — sessions > 1 (page[4] bit 6)."
+        },
+        "accurate_stream": {
+          "type": "boolean",
+          "description": "Drive's CD-DA read stream is accurate (page[5] bit 1) — an EAC/AccurateRip-relevant capability."
+        },
+        "c2_pointers": {
+          "type": "boolean",
+          "description": "Drive reports C2 error pointers (page[5] bit 4) — EAC/AccurateRip-relevant. NOTE: a claim of support, not a guarantee of accuracy; C2 reliability is firmware-dependent."
         }
       }
     },

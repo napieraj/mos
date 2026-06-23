@@ -2041,3 +2041,48 @@ across re-reads — each lands as a fixture + dated note with a generic gate, ne
 a per-device special-case. The layout is spec-built (MMC-6); a `mos probe
 --capture` READ DISC INFORMATION reply carrying DID_V/DBC_V is the standing
 falsifier.
+
+## ADR: page 0x2A read/rip capability bits surfaced on `mos drive` —
+## BURN-Free, multisession, accurate-stream, C2 pointers (2026-06-23,
+## pre-tag enrichment; feature survey F3)
+
+`mos.drive.v1.mechanical` gains four boolean bits decoded from the SAME MODE
+SENSE(10) page 0x2A read it already issues: `buf_underrun` (BUF/BURN-Free,
+page[4] bit7), `multisession` (page[4] bit6), `accurate_stream` (CD-DA stream
+accurate, page[5] bit1), `c2_pointers` (C2 error pointers, page[5] bit4). Origin:
+the deep-research feature survey (`doc/research/2026-06-23-feature-survey.md`,
+item F3), maintainer-approved.
+
+**Why it earns fields.** The accurate-stream + C2 pair are the drive features
+EAC/AccurateRip/whipper probe to choose a CD-ripping strategy — the strongest
+rip-consumer signal the survey found, and `mos drive` ("what IS this drive") is
+their home. BURN-Free and multisession round out the standard page-2A capability
+set.
+
+**Zero command-surface change.** Same `ModeSense10` convenience read of page
+0x2A `mos_query_mode_caps` already issues — decoded from bytes already in hand
+(p[4]/p[5] sit within the existing ≥12-byte page floor that the buffer-size field
+already requires, so no bounds change and no IOKit-shell change). No new command,
+no raw CDB (one-of-four untouched), no MODE SELECT (read-only — the layer-2
+carve-out for read-only optical mode pages is unchanged), no privilege change.
+
+**The C2 honesty caveat.** A drive's page-2A C2 bit is a CLAIM of support, not a
+guarantee of accuracy — the EAC/Hydrogenaudio sources note some firmware reports
+C2 incorrectly. mos reports the bit faithfully (the schema/header/README say so);
+it does not validate it, and it does NOT read C2 data (that is READ CD raw-sector
+territory, out of scope). This is the reporter-not-judge line: surface the claim,
+name its limit, judge nothing.
+
+**Placement / shape.** Pre-first-tag, so the fields land in `mos.drive.v1` in
+place (mutable-in-place), required booleans on the existing `mechanical` block
+(same page, same struct, same query — a second block would re-emit the same
+source). The human view adds a `Read Caps` row listing the set bits, shown only
+when at least one is set; an all-clear list is noise. Pinned by
+`modepage_caps_2a` (full set) and `modepage_caps_rip_bits_isolated_and_accessors`
+(per-bit isolation + accessors + NULL), with a `mechanical_missing_rip_cap`
+negative.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): the
+page-2A bit positions on a real capture (built to MMC-3 with the sr.c cross-check,
+no in-repo capture yet) and the real-world reliability of a drive's C2 claim —
+each lands as a fixture + dated note, never a per-device special-case.

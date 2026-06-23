@@ -148,6 +148,11 @@ code; this table is the citation, not the parse.
   Status); page 0x01 is the SPC Read/Write Error Recovery page. Sub-page
   format (SPF=1) has a 4-byte header with a BE16 length; 0x2A/0x01 are
   page_0 format. Read-only — no MODE SELECT.
+- **Page 0x2A read/rip caps:** BUF/BURN-Free page[4] bit7, Multisession
+  page[4] bit6, CD-DA stream accurate page[5] bit1, C2 error pointers
+  page[5] bit4 (all within the ≥12-byte page floor already required for the
+  buffer size). C2-pointer reliability is firmware-dependent — mos reports
+  the claim, not the accuracy.
 - **Cross-check:** page 0x2A offsets against Linux `sr.c`
   `get_capabilities`.
 
