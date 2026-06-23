@@ -359,8 +359,9 @@ static void emit_human(const drive_doc *d)
         for (size_t i = 0; i < sizeof cf / sizeof cf[0]; i++) {
             if (!cf[i].on) continue;
             int w = snprintf(cap_buf + co, sizeof cap_buf - co, "%s%s",
-                             co ? ", " : "", cf[i].tag);
-            if (w > 0 && (size_t)w < sizeof cap_buf - co) co += (size_t)w;
+                             have_cap ? ", " : "", cf[i].tag);
+            if (w < 0 || (size_t)w >= sizeof cap_buf - co) break;
+            co += (size_t)w;
             have_cap = true;
         }
     }
