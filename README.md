@@ -180,7 +180,10 @@ Disc-independent facts: identity, `serial` (the durable inventory key that
 survives replug where `registry_id` does not), content-protection *capability*,
 `write_protect` *capability* (the drive's Write Protect Feature 0004h bits —
 what it can report/change, not per-disc
-state), the supported-profile set, and the mechanical and error-recovery
+state), the supported-profile set, the `capabilities` block (curated presence
+of optional GET CONFIGURATION features — Real-Time Streaming 0107h, Power
+Management 0100h, Time-out 0105h — the named subset of what `mos features`
+dumps raw), and the mechanical and error-recovery
 configuration. The `mechanical` block (page 0x2A) also carries the drive's
 read/rip capability bits — `buf_underrun` (BURN-Free), `multisession`,
 `accurate_stream`, and `c2_pointers` (the EAC/AccurateRip-relevant trio;

@@ -123,6 +123,18 @@ static void emit_json(const drive_doc *d)
             fputs("null", stdout);
     }
 
+    /* capabilities: curated presence flags for optional features in the same
+       RT=0 walk. Always an object (false when absent), unlike write_protect. */
+    {
+        const mos_drive_caps *c = d->caps;
+        fprintf(stdout,
+                ",\n  \"capabilities\": {\"real_time_streaming\": %s, "
+                "\"power_management\": %s, \"timeout\": %s}",
+                mos_drive_caps_real_time_streaming(c) ? "true" : "false",
+                mos_drive_caps_power_management(c)     ? "true" : "false",
+                mos_drive_caps_timeout(c)              ? "true" : "false");
+    }
+
     /* Supported-profile list: array of {code, name}. Empty array when the
        Profile List feature was absent — a present-but-empty set, not null. */
     fputs(",\n  \"profiles\": [", stdout);
@@ -332,6 +344,27 @@ static void emit_human(const drive_doc *d)
     pairs[n++] = (mos_cli_human_pair){ "Write Protect",
                                        mos_drive_caps_write_protect(d->caps)
                                            ? wp_buf : NULL };
+
+    /* Capabilities (curated GET CONFIG feature presence): comma-joined list
+       of the optional features the drive advertises; NULL ("-") when none. */
+    char cap_buf[48];
+    bool have_cap = false;
+    if (d->caps) {
+        size_t co = 0;
+        const struct { bool on; const char *tag; } cf[] = {
+            { mos_drive_caps_real_time_streaming(d->caps), "real-time-streaming" },
+            { mos_drive_caps_power_management(d->caps),    "power-management"    },
+            { mos_drive_caps_timeout(d->caps),             "timeout"             },
+        };
+        for (size_t i = 0; i < sizeof cf / sizeof cf[0]; i++) {
+            if (!cf[i].on) continue;
+            int w = snprintf(cap_buf + co, sizeof cap_buf - co, "%s%s",
+                             co ? ", " : "", cf[i].tag);
+            if (w > 0 && (size_t)w < sizeof cap_buf - co) co += (size_t)w;
+            have_cap = true;
+        }
+    }
+    pairs[n++] = (mos_cli_human_pair){ "Capabilities", have_cap ? cap_buf : NULL };
 
     /* Supported profiles, comma-joined marketing labels (unknown code → hex).
        768 holds the realistic set several times over; a pathological overflow

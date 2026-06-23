@@ -357,6 +357,21 @@ bool mos_drive_caps_wp_dwp(const mos_drive_caps *c)
     return c ? c->write_protect.dwp : false;
 }
 
+bool mos_drive_caps_real_time_streaming(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.real_time_streaming : false;
+}
+
+bool mos_drive_caps_power_management(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.power_management : false;
+}
+
+bool mos_drive_caps_timeout(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.timeout : false;
+}
+
 uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)
 {
     return c ? c->profile_count : 0;

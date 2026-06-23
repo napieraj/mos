@@ -23,8 +23,7 @@
   "write_protect": null,
   "capabilities": {
     "real_time_streaming": true,
-    "power_management": true,
-    "timeout": true
+    "power_management": true
   },
   "profiles": [
     {

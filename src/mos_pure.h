@@ -387,10 +387,22 @@ typedef struct mos_write_protect {
     bool dwp;       /* supports the Disc Write Protect PAC on BD-R/-RE        */
 } mos_write_protect;
 
+/* Drive CAPABILITY presence from the RT=0 GET CONFIGURATION walk (F7) — the
+   curated, named subset of optional features mos surfaces on `mos drive`
+   (the same walk `mos features` dumps raw). Presence = the feature
+   descriptor is in the reply; these carry no further payload mos decodes.
+   MMC-6 feature numbers. */
+typedef struct mos_drive_capabilities {
+    bool real_time_streaming; /* 0107h — host-paced read/write performance   */
+    bool power_management;     /* 0100h — host/drive power management         */
+    bool timeout;              /* 0105h — bounded command timeouts            */
+} mos_drive_capabilities;
+
 /* Drive-static facts from a full (RT=0) GET CONFIGURATION response. */
 typedef struct mos_drive_caps {
     mos_drive_protection protection;
     mos_write_protect    write_protect;
+    mos_drive_capabilities capabilities;
     /* Supported-profile set from the Profile List feature (0x0000), drive-
        static (the per-descriptor CurrentP bit is media-dependent, ignored).
        64 covers a conformant max (one-byte Additional Length ⇒ ≤63 codes). */
@@ -432,6 +444,14 @@ void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
    state. Pure, no-OOB — fuzz/ASan-gated. */
 void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
                                             mos_drive_caps *out);
+
+/* Set out->capabilities presence flags from a full (RT=0) GET CONFIGURATION
+   reply: Real-Time Streaming (0107h), Power Management (0100h), Time-out
+   (0105h). Presence only — the descriptor being in the walk. Does NOT
+   zero-init (called after mos_internal_protection_from_config, which does).
+   Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_capabilities_from_config(const uint8_t *buf, size_t len,
+                                           mos_drive_caps *out);
 
 /* Decode the Profile List feature (0x0000) into out_codes[0..cap), setting
    *out_count. Each descriptor is 4 bytes: [0..1] Profile Number (BE),

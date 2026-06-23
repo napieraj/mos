@@ -2086,3 +2086,45 @@ negative.
 page-2A bit positions on a real capture (built to MMC-3 with the sr.c cross-check,
 no in-repo capture yet) and the real-world reliability of a drive's C2 claim —
 each lands as a fixture + dated note, never a per-device special-case.
+
+## ADR: curated capability presence surfaced on `mos drive` — Real-Time
+## Streaming / Power Management / Time-out (2026-06-23, pre-tag enrichment;
+## feature survey F7)
+
+`mos.drive.v1` gains a `capabilities` object — booleans for the PRESENCE of
+three optional features in the RT=0 GET CONFIGURATION walk: Real-Time Streaming
+(0107h), Power Management (0100h), Time-out (0105h)
+(`mos_internal_capabilities_from_config`, `src/mos_config.c`). Origin: the
+deep-research feature survey (`doc/research/2026-06-23-feature-survey.md`, item
+F7), maintainer-approved.
+
+**Why this is not redundant with `mos features`.** `mos features` dumps the raw
+feature list (code/current/version/persistent for EVERY descriptor). `mos drive`
+is the curated dashboard — and it ALREADY decodes protection (0106h/010Bh/010Dh/
+0113h/0110h), write_protect (0004h), firmware_date (010Ch), and serial (0108h)
+from the very same walk into named, dashboard-shaped facts. The `capabilities`
+block is the same move for three more notable optional features: a named subset
+a human/consumer reads at a glance, not a raw dump. The raw-vs-curated split is
+the existing, deliberate division between the two verbs.
+
+**Zero command-surface change.** Same non-exclusive `GetConfiguration` RT=0 walk
+`mos_query_drive_caps` already issues — presence is read with the existing
+`mos_internal_config_find_feature` helper, no payload decoded, no new command, no
+raw CDB (one-of-four untouched), no privilege change.
+
+**Shape.** Presence-only by deliberate scope — these features' payloads (e.g.
+Real-Time Streaming's WSPD/SCS/MP2A sub-bits, Time-out's Unit Length) are not
+decoded; a later entry can add payload detail if a consumer needs it. Pre-first-
+tag, so the block lands in `mos.drive.v1` in place (mutable-in-place), a non-null
+object (unlike protection/write_protect it never nulls — presence is always
+derivable from the walk, false when absent), three required booleans, with both
+examples carrying it and a `capabilities_missing_field` negative. Human view adds
+a `Capabilities` row (comma-joined present features, "-" when none). Pinned by
+`capabilities_from_config_presence_flags` and `capabilities_absent_features_are_false`
+(pure).
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): the
+exact feature codes a given drive advertises — the presence test is generic
+(find the descriptor in the walk), so a drive that omits any of the three simply
+reads false; no per-device branch. A capture showing an unexpected feature lands
+as a fixture + dated note and, at most, widens the curated set.

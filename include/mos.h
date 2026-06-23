@@ -517,6 +517,15 @@ bool    mos_drive_caps_wp_spwp(const mos_drive_caps *c);
 bool    mos_drive_caps_wp_wdcb(const mos_drive_caps *c);
 bool    mos_drive_caps_wp_dwp(const mos_drive_caps *c);
 
+/* Curated capability presence from the RT=0 GET CONFIGURATION walk — the
+   named subset `mos drive` surfaces (the same walk `mos features` dumps raw):
+   Real-Time Streaming (0107h, host-paced read/write performance), Power
+   Management (0100h), Time-out (0105h). Presence of the feature descriptor;
+   no further payload. NULL-tolerant (false). */
+bool    mos_drive_caps_real_time_streaming(const mos_drive_caps *c);
+bool    mos_drive_caps_power_management(const mos_drive_caps *c);
+bool    mos_drive_caps_timeout(const mos_drive_caps *c);
+
 /* Supported-profile set from the Profile List feature (0x0000) — the
    drive-static disc types this drive handles (the modern, BD-aware "what can
    this drive read/write", superseding the legacy page-0x2A media bits). The

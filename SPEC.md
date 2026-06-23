@@ -190,6 +190,11 @@ code; this table is the citation, not the parse.
     from this same RT=0 walk, populated where VPD 0x80 is empty (the WH16NS60
     finding — AGENTS.md serial-source ADR). Neighbours in the walk: 0109h Media
     Serial Number, 010Ah Disc Control Blocks.
+  - **Curated capability presence (`mos.drive.v1.capabilities`):** PRESENCE of
+    optional features in the same walk — **Real-Time Streaming 0107h**
+    (host-paced read/write performance), **Power Management 0100h**, **Time-out
+    0105h**. Presence only (no payload decode); the curated, named subset
+    `mos drive` surfaces from the walk `mos features` dumps raw.
 
 ### `src/mos_inqdata.c` — standard INQUIRY data (identity + version + descriptors)
 - **Spec:** SPC-4 §6.4.2, opcode 0x12 EVPD=0. VENDOR bytes 8-15, PRODUCT
