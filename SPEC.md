@@ -79,9 +79,11 @@ code; this table is the citation, not the parse.
   convenience method (DATA_TYPE + TYPE fields — confirmed in SCSITaskLib.h,
   added in Mac OS X 10.2), so NO raw CDB. (Supersedes the earlier note that
   TYPE 03h was unreachable: that was true of the obsolete `GetPerformance`
-  wrapper, which lacks the TYPE field; `GetPerformanceV2` has it.) Surfaced
-  on the one-shot `mos state`; the polled `mos watch` keeps only the scalar
-  max (speeds ADR hot-path budget).
+  wrapper, which lacks the TYPE field; `GetPerformanceV2` has it.) Gated by
+  `mos_query_drive_perf`'s `want_descriptors` arg — issued only on
+  `mos state --json` (where the list is emitted); the human view and the polled
+  `mos watch` pass false and pay only the two Type 00h reads (speeds ADR
+  hot-path budget).
 - **Human 1× multiple (cli/human.c `mos_cli_human_rate_x`):** the reported
   kB/s is scaled to the loaded medium's nominal 1× data rate for the human
   view only (JSON keeps raw kbps). Bases, by media class

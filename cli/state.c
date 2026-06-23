@@ -395,8 +395,11 @@ int mos_cli_run_state(void)
        a concurrent control verb. perf stays NULL on failure; the emitters gate
        on mos_drive_perf_have(). */
     const mos_drive_perf *perf = NULL;
+    /* The Type 03h descriptor list is emitted only by the JSON path, so only
+       fetch it when --json (and --pairs, which forces flag_json) is set; the
+       human view shows just the scalar max and skips the extra read. */
     if (mos_state_result_state(r) == MOS_STATE_READY)
-        (void)mos_query_drive_perf(h, &perf);
+        (void)mos_query_drive_perf(h, &perf, flag_json);
 
     if (flag_json) emit_json(r, index1, mounted ? volume : NULL, perf);
     else           emit_human(r, index1, opt_index > 0, opt_registry != 0,

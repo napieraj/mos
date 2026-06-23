@@ -273,7 +273,9 @@ static void watch_grab_speeds(mos_handle_t *h, mos_state_result *out,
         if (*media_id != out->media_id) {
             *max_read = 0; *max_write = 0; *count = 0;   /* forget prior disc */
             const mos_drive_perf *perf = NULL;
-            mos_error pe = mos_query_drive_perf(h, &perf);
+            /* watch emits only the scalar max/count (never the descriptor
+               list), so skip the Type 03h read — keeps the polled path lean. */
+            mos_error pe = mos_query_drive_perf(h, &perf, false);
             if (pe == MOS_OK && perf) {
                 *max_read  = mos_drive_perf_max_read_kbps(perf);
                 *max_write = mos_drive_perf_max_write_kbps(perf);

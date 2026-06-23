@@ -577,7 +577,8 @@ static mos_error mos_internal_get_perf(mos_handle_t *h, uint8_t write,
     return MOS_OK;
 }
 
-mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
+mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out,
+                               bool want_descriptors)
 {
     if (out) *out = NULL;
     if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
@@ -624,8 +625,10 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
            read + write speed. GetPerformanceV2 with TYPE=03h; a drive that
            declines (CHECK CONDITION) or lacks the V2 method simply leaves
            descriptor_count 0 (enrichment, never the gate). Within the same
-           S1/S2 coherence window as the Type 00h reads. */
-        {
+           S1/S2 coherence window as the Type 00h reads. Skipped entirely when
+           the caller will not emit the list (human `mos state`, `mos watch`),
+           so those paths pay only the two Type 00h reads. */
+        if (want_descriptors) {
             uint8_t         pb[2048] = {0};
             SCSITaskStatus  pst      = 0;
             SCSI_Sense_Data psd      = {0};

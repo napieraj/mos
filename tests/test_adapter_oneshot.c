@@ -342,7 +342,7 @@ TEST(adapter_perf_swap_between_discs_retries_coherent)
     mos_fake_set_media_swap_after_first_capture(4, 0x100000999ull);
 
     const mos_drive_perf *p = NULL;
-    EXPECT_EQ(MOS_OK, mos_query_drive_perf(h, &p));
+    EXPECT_EQ(MOS_OK, mos_query_drive_perf(h, &p, false));
     EXPECT(p != NULL);
     EXPECT(mos_drive_perf_have(p));
     EXPECT_EQ(5540u, mos_drive_perf_max_read_kbps(p));
@@ -366,7 +366,7 @@ TEST(adapter_perf_churn_refuses_mixed_observation)
     mos_fake_set_media_churn(true);
 
     const mos_drive_perf *p = NULL;
-    EXPECT_EQ(MOS_ERR_BUSY, mos_query_drive_perf(h, &p));
+    EXPECT_EQ(MOS_ERR_BUSY, mos_query_drive_perf(h, &p, false));
     EXPECT(p == NULL);
     mos_close(h);
     return 0;
@@ -398,7 +398,7 @@ TEST(adapter_perf_v2_descriptors_decode)
     EXPECT(h != NULL);
 
     const mos_drive_perf *p = NULL;
-    EXPECT_EQ(MOS_OK, mos_query_drive_perf(h, &p));
+    EXPECT_EQ(MOS_OK, mos_query_drive_perf(h, &p, true));
     EXPECT(p != NULL);
     EXPECT_EQ(1u, mos_drive_perf_descriptor_count(p));
     EXPECT_EQ(7212u, mos_drive_perf_descriptor_read_kbps(p, 0));
@@ -419,7 +419,7 @@ TEST(adapter_perf_v2_absent_leaves_no_descriptors)
     EXPECT(h != NULL);
 
     const mos_drive_perf *p = NULL;
-    EXPECT_EQ(MOS_OK, mos_query_drive_perf(h, &p));
+    EXPECT_EQ(MOS_OK, mos_query_drive_perf(h, &p, true));
     EXPECT(p != NULL);
     EXPECT(mos_drive_perf_have(p));
     EXPECT_EQ(5540u, mos_drive_perf_max_read_kbps(p));
@@ -1272,7 +1272,7 @@ TEST(adapter_drive_perf_non_good_status_is_io_error)
        the whole query with MOS_ERR_IO. */
     mos_fake_set_perf_reply(0x02 /*CHECK CONDITION*/, NULL, 0);
     const mos_drive_perf *pf = (const mos_drive_perf *)0x1;
-    EXPECT_EQ(MOS_ERR_IO, mos_query_drive_perf(h, &pf));
+    EXPECT_EQ(MOS_ERR_IO, mos_query_drive_perf(h, &pf, false));
     EXPECT(pf == NULL);
 
     mos_close(h);

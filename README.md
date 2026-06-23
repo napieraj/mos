@@ -122,9 +122,10 @@ On a READY disc the document also carries a `speeds` object — the loaded disc'
 max read/write (kB/s). Reading it never locks the drive or interrupts another
 program using it, so it is safe to poll. `watch` reads it once per disc (the
 value is fixed for a given disc), so a polling loop doesn't re-query it. The
-one-shot `mos state` additionally fills `speeds.descriptors` — the full GET
-PERFORMANCE Type 03h list of per-entry read/write speeds; `watch` omits it to
-keep the polled path cheap (just the scalar `max_*_kbps`).
+one-shot `mos state --json` additionally fills `speeds.descriptors` — the full
+GET PERFORMANCE Type 03h list of per-entry read/write speeds. The extra read is
+issued only when that list will be emitted: the human view and `watch` show just
+the scalar `max_*_kbps` and skip it.
 
 ### `list` — every attached drive
 

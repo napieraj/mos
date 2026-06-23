@@ -4552,7 +4552,8 @@ static mos_error mos_internal_get_perf(mos_handle_t *h, uint8_t write,
     return MOS_OK;
 }
 
-mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
+mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out,
+                               bool want_descriptors)
 {
     if (out) *out = NULL;
     if (!h || !h->mmc || !out) return MOS_ERR_INVALID_ARG;
@@ -4599,8 +4600,10 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
            read + write speed. GetPerformanceV2 with TYPE=03h; a drive that
            declines (CHECK CONDITION) or lacks the V2 method simply leaves
            descriptor_count 0 (enrichment, never the gate). Within the same
-           S1/S2 coherence window as the Type 00h reads. */
-        {
+           S1/S2 coherence window as the Type 00h reads. Skipped entirely when
+           the caller will not emit the list (human `mos state`, `mos watch`),
+           so those paths pay only the two Type 00h reads. */
+        if (want_descriptors) {
             uint8_t         pb[2048] = {0};
             SCSITaskStatus  pst      = 0;
             SCSI_Sense_Data psd      = {0};
@@ -8194,7 +8197,9 @@ static void watch_grab_speeds(mos_handle_t *h, mos_state_result *out,
         if (*media_id != out->media_id) {
             *max_read = 0; *max_write = 0; *count = 0;   /* forget prior disc */
             const mos_drive_perf *perf = NULL;
-            mos_error pe = mos_query_drive_perf(h, &perf);
+            /* watch emits only the scalar max/count (never the descriptor
+               list), so skip the Type 03h read — keeps the polled path lean. */
+            mos_error pe = mos_query_drive_perf(h, &perf, false);
             if (pe == MOS_OK && perf) {
                 *max_read  = mos_drive_perf_max_read_kbps(perf);
                 *max_write = mos_drive_perf_max_write_kbps(perf);

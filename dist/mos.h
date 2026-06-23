@@ -979,8 +979,15 @@ typedef struct mos_drive_perf mos_drive_perf;
  * not an error). A TRANSPORT failure on EITHER direction (device lost / exclusive
  * access lost) is fatal to the whole query and is returned, never flattened to a
  * zero speed.
+ *
+ * want_descriptors: when true, additionally issues GET PERFORMANCE Type 03h
+ * (Write Speed) via GetPerformanceV2 to fill the per-entry speed list
+ * (mos_drive_perf_descriptor_*). Pass false to skip that extra read when only
+ * the scalar max/count are consumed (the human `mos state` view and `mos watch`,
+ * which never emit the list) — descriptor_count is then 0.
  */
-mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out);
+mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out,
+                               bool want_descriptors);
 
 /* Accessors. NULL-tolerant (NULL reads as 0/false). The speeds are
    meaningful only when have is true (>= 1 descriptor). */
