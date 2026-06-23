@@ -1984,3 +1984,60 @@ no in-repo capture yet) — a `mos probe --capture` ATIP reply is the standing
 falsifier, landing as a fixture + dated note, never a per-device special-case.
 The pure parser fails closed on a short/hostile reply (atip null), so a
 non-conformant bridge degrades cleanly.
+
+## ADR: READ DISC INFORMATION extended identification surfaced on `mos metadata`
+## — disc_type, the 32-bit Disc ID, and the Disc Bar Code (2026-06-23,
+## pre-tag enrichment; feature survey F1)
+
+`mos.metadata.v1.disc.disc_info` gains three fields — `disc_type` (byte 8),
+`disc_id` (the writer-assigned 32-bit Disc Identification, bytes 12..15), and
+`bar_code` (bytes 24..31) — decoded in the existing pure parser
+(`mos_internal_disc_info_parse`, `src/mos_discinfo.c`) built to MMC-6 READ DISC
+INFORMATION (0x51, standard data type 000b). This records why it is in-doctrine
+and additive. Origin: the deep-research feature survey
+(`doc/research/2026-06-23-feature-survey.md`, item F1), maintainer-approved.
+
+**Why it earns fields.** `disc_id` is the one **content-independent per-disc
+fingerprint** reachable purely over MMC — unlike the MusicBrainz/AccurateRip/
+dvdid ids (permanently consumer-side, TOC/content-derived), it is the disc's
+own writer-assigned identity for recordable media, useful for "is this the same
+blank/burned disc" without reading a sector. `disc_type` and `bar_code` complete
+the standard-reply identification set.
+
+**Zero command-surface change — the lowest-cost class of enrichment.** This is a
+**pure-parse of a reply mos already issues**: `mos_query_disc_info` already reads
+the 34-byte READ DISC INFORMATION response into a fixed buffer (the buffer
+already spans bytes 24..31, so no IOKit-shell change), and the new fields are
+decoded from bytes already in hand. No new command, no raw CDB (the one-of-four
+count is untouched), no exclusive access, no new privilege. The READ DISC
+INFORMATION read stays the same non-exclusive `ReadDiscInformation` convenience
+call.
+
+**Validity gating is dual-keyed (input space, layer 4).** Each identifier is
+decoded only when BOTH its validity bit is set (byte 7: DID_V bit 7 for the Disc
+ID, DBC_V bit 6 for the Bar Code) AND the reply's device-reported Disc
+Information Length actually reaches the field. A drive that asserts validity over
+bytes it did not carry yields *not present* (`*_valid` false), never an OOB read
+— the device length can only shrink the trusted region (dual-length rule O-4),
+matching the parser's existing contract. `disc_type` is unconditional (within the
+≥12-byte floor). Pinned by `discinfo_decodes_disc_type_id_and_barcode`,
+`discinfo_id_barcode_gated_on_validity_bits`, and
+`discinfo_id_barcode_gated_on_declared_length` (pure).
+
+**Schema/placement.** Pre-first-tag, so the fields landed in `mos.metadata.v1`
+in place (mutable-in-place clause): required-and-nullable like the rest of the
+fingerprint subtree — `disc_type` integer, `disc_id` integer|null, `bar_code` a
+16-lowercase-hex string|null (a negative fixture pins the pattern). The human
+view surfaces a `Disc ID` row only when present (an absent id is the common case);
+`disc_type`/`bar_code` stay JSON-only (programmatic detail), the WBE precedent.
+The raw bar-code bytes are emitted faithfully; the 12-digit barcode *reading*, if
+any, is the consumer's to interpret (same posture as ATIP/disc_structure — mos
+reports the bytes, not a curated table).
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+drive that programs DID_V/DBC_V but truncates the field (handled by the
+declared-length gate → not present, fail closed), or one whose Disc ID is unstable
+across re-reads — each lands as a fixture + dated note with a generic gate, never
+a per-device special-case. The layout is spec-built (MMC-6); a `mos probe
+--capture` READ DISC INFORMATION reply carrying DID_V/DBC_V is the standing
+falsifier.

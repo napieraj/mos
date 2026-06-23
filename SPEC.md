@@ -23,9 +23,14 @@ code; this table is the citation, not the parse.
 
 ### `src/mos_discinfo.c` — READ DISC INFORMATION
 - **Spec:** MMC-6, opcode 0x51, standard data type 000b. First 12 bytes
-  decoded inline.
-- **Not decoded (bytes 12+):** Disc Identification, lead-in / lead-out
-  addresses, bar code, OPC table — informational, not the status.
+  decoded inline, plus the validity-gated identifiers below.
+- **Decoded identification:** Disc Type (byte 8); 32-bit Disc Identification
+  (bytes 12..15, gated on byte 7 DID_V bit 7); Disc Bar Code (bytes 24..31,
+  gated on byte 7 DBC_V bit 6). Each gate also requires the reply's declared
+  length to actually reach the field — a validity bit over uncarried bytes
+  yields not-present, never an OOB read (dual-length rule O-4).
+- **Not decoded:** lead-in / lead-out addresses (bytes 16..23) and the OPC
+  table (bytes 32+, variable) — informational, not the status.
 
 ### `src/mos_discstruct.c` — READ DISC STRUCTURE (Blu-ray DI)
 - **Spec:** MMC-5, opcode 0xAD, BD media type, format 0x00. The DI unit

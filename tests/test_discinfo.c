@@ -250,10 +250,100 @@ TEST(discinfo_complete_bdre_decodes_erasable)
     return 0;
 }
 
+/* --- F1: extended identification (disc_type, Disc ID, Disc Bar Code) ----- *
+ * disc_type (byte 8) is unconditional; disc_id (12..15, DID_V byte7 bit7)
+ * and bar_code (24..31, DBC_V byte7 bit6) are decoded only when both the
+ * validity bit is set AND the trusted region reaches the field. */
+
+/* A 34-byte reply with DID_V+DBC_V set, a CD-ROM-XA disc type, a known
+   Disc ID and Bar Code. Length 0x20=32 → trusted end = 34, reaching both. */
+static const uint8_t rdi_with_id_barcode[34] = {
+    0x00,0x20, 0x0E, 0x01, 0x01, 0x01, 0x01,
+    0xC0,                                   /* byte7: DID_V|DBC_V, bg=0 */
+    0x20,                                   /* byte8: disc_type = CD-ROM XA */
+    0x00,0x00,0x00,                         /* 9..11 */
+    0xDE,0xAD,0xBE,0xEF,                    /* 12..15: Disc ID */
+    0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00, /* 16..23: lead-in/out (undecoded) */
+    0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,  /* 24..31: Bar Code */
+    0x00,0x00,                              /* 32..33 */
+};
+
+TEST(discinfo_decodes_disc_type_id_and_barcode)
+{
+    mos_disc_info di;
+    EXPECT(mos_internal_disc_info_parse(rdi_with_id_barcode,
+                                        sizeof rdi_with_id_barcode, &di));
+    EXPECT_EQ(di.disc_type, 0x20);
+    EXPECT(di.disc_id_valid);
+    EXPECT_EQ(di.disc_id, 0xDEADBEEFu);
+    EXPECT(di.bar_code_valid);
+    EXPECT_EQ(di.bar_code[0], 0x01);
+    EXPECT_EQ(di.bar_code[7], 0x08);
+    return 0;
+}
+
+TEST(discinfo_id_barcode_gated_on_validity_bits)
+{
+    /* Same bytes carried, but DID_V/DBC_V clear → not decoded even though
+       the field bytes are present. disc_type still decodes (unconditional). */
+    uint8_t buf[34];
+    memcpy(buf, rdi_with_id_barcode, sizeof buf);
+    buf[7] = 0x00;                           /* clear DID_V and DBC_V */
+    mos_disc_info di;
+    EXPECT(mos_internal_disc_info_parse(buf, sizeof buf, &di));
+    EXPECT_EQ(di.disc_type, 0x20);
+    EXPECT(!di.disc_id_valid);
+    EXPECT_EQ(di.disc_id, 0u);
+    EXPECT(!di.bar_code_valid);
+    return 0;
+}
+
+TEST(discinfo_id_barcode_gated_on_declared_length)
+{
+    /* Validity bits set, but Disc Information Length declares only 14 bytes
+       (trusted end = 16) — reaches the Disc ID (needs 16) but NOT the Bar
+       Code (needs 32). A device claiming validity over bytes it did not
+       carry must yield bar_code_valid=false, never an OOB read (ASan). */
+    uint8_t buf[34];
+    memcpy(buf, rdi_with_id_barcode, sizeof buf);
+    buf[0] = 0x00; buf[1] = 14;              /* declared end = 16 */
+    mos_disc_info di;
+    EXPECT(mos_internal_disc_info_parse(buf, sizeof buf, &di));
+    EXPECT(di.disc_id_valid);
+    EXPECT_EQ(di.disc_id, 0xDEADBEEFu);
+    EXPECT(!di.bar_code_valid);              /* not carried by declared length */
+    return 0;
+}
+
+TEST(discinfo_extended_accessors_and_null_tolerance)
+{
+    mos_disc_info di;
+    EXPECT(mos_internal_disc_info_parse(rdi_with_id_barcode,
+                                        sizeof rdi_with_id_barcode, &di));
+    EXPECT_EQ(0x20,       mos_disc_info_disc_type(&di));
+    EXPECT(mos_disc_info_disc_id_present(&di));
+    EXPECT_EQ(0xDEADBEEFu, mos_disc_info_disc_id(&di));
+    EXPECT(mos_disc_info_bar_code_present(&di));
+    EXPECT(mos_disc_info_bar_code(&di) != NULL);
+    EXPECT_EQ(0x01, mos_disc_info_bar_code(&di)[0]);
+
+    /* NULL tolerance — every result accessor's contract. */
+    EXPECT_EQ(0,     mos_disc_info_disc_type(NULL));
+    EXPECT_EQ(false, mos_disc_info_disc_id_present(NULL));
+    EXPECT_EQ(0u,    mos_disc_info_disc_id(NULL));
+    EXPECT_EQ(false, mos_disc_info_bar_code_present(NULL));
+    EXPECT(mos_disc_info_bar_code(NULL) == NULL);
+    return 0;
+}
+
 void register_discinfo_tests(void)
 {
     RUN(discinfo_accessors_read_fixture_fields);
     RUN(discinfo_accessors_null_tolerant);
+    RUN(discinfo_decodes_disc_type_id_and_barcode);
+    RUN(discinfo_id_barcode_gated_on_validity_bits);
+    RUN(discinfo_id_barcode_gated_on_declared_length);
+    RUN(discinfo_extended_accessors_and_null_tolerance);
     RUN(discinfo_status_description_tokens);
     RUN(discinfo_blank_cdr_decodes_blank);
     RUN(discinfo_blank_bdr_decodes_blank);

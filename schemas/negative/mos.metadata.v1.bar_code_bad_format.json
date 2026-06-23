@@ -16,7 +16,7 @@
       "bg_format_name": "none",
       "disc_type": 0,
       "disc_id": 3735928559,
-      "bar_code": "0102030405060708"
+      "bar_code": "ZZZZ"
     },
     "disc_structure": null,
     "volume_name": null,
@@ -28,8 +28,16 @@
       "disc_sub_type": 2,
       "uru": true,
       "reference_speed": 1,
-      "lead_in": { "min": 97, "sec": 24, "frame": 1 },
-      "lead_out": { "min": 79, "sec": 59, "frame": 74 }
+      "lead_in": {
+        "min": 97,
+        "sec": 24,
+        "frame": 1
+      },
+      "lead_out": {
+        "min": 79,
+        "sec": 59,
+        "frame": 74
+      }
     }
   }
 }

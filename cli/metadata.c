@@ -123,6 +123,22 @@ static void emit_json(const metadata_doc *d)
                 mos_disc_info_last_track_last_session(d->di),
                 bg);
         if (bgn) mos_cli_json_str(stdout, bgn); else fputs("null", stdout);
+        fprintf(stdout, ", \"disc_type\": %u, \"disc_id\": ",
+                (unsigned)mos_disc_info_disc_type(d->di));
+        if (mos_disc_info_disc_id_present(d->di))
+            fprintf(stdout, "%lu",
+                    (unsigned long)mos_disc_info_disc_id(d->di));
+        else
+            fputs("null", stdout);
+        fputs(", \"bar_code\": ", stdout);
+        if (mos_disc_info_bar_code_present(d->di)) {
+            const uint8_t *bc = mos_disc_info_bar_code(d->di);
+            fputc('"', stdout);
+            for (int i = 0; i < 8; i++) fprintf(stdout, "%02x", bc[i]);
+            fputc('"', stdout);
+        } else {
+            fputs("null", stdout);
+        }
         fputs("}", stdout);
     } else {
         fputs("null", stdout);
@@ -383,6 +399,18 @@ static void emit_human(const metadata_doc *d)
                  bgs);
     }
     pairs[n++] = (mos_cli_human_pair){ "Disc", d->di ? di_buf : NULL };
+
+    /* Disc ID (READ DISC INFO bytes 12..15) — the writer-assigned per-disc
+       id, present only on recordable media that carries DID_V. Shown only
+       when present (an absent id is the common case, not worth a row);
+       disc_type and bar_code stay JSON-only (programmatic detail). */
+    char di_id_buf[16];
+    bool have_di_id = d->di && mos_disc_info_disc_id_present(d->di);
+    if (have_di_id)
+        snprintf(di_id_buf, sizeof di_id_buf, "%lu",
+                 (unsigned long)mos_disc_info_disc_id(d->di));
+    if (have_di_id)
+        pairs[n++] = (mos_cli_human_pair){ "Disc ID", di_id_buf };
 
     /* Media identity from disc structure (BD DI): disc type + the registered
        manufacturer/media code. Disc-controlled ASCII, so escape before the

@@ -165,7 +165,10 @@
             "sessions",
             "tracks",
             "bg_format",
-            "bg_format_name"
+            "bg_format_name",
+            "disc_type",
+            "disc_id",
+            "bar_code"
           ],
           "additionalProperties": false,
           "properties": {
@@ -205,6 +208,29 @@
                 null
               ],
               "description": "Stable token for bg_format (mos_bg_format_status_name), null only for an out-of-range code \u2014 drift-guarded in validate.py. The in-flight states (inactive/active) signal a disc that may not be reliably readable yet."
+            },
+            "disc_type": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255,
+              "description": "Disc Type (byte 8), raw: 0 = CD-DA/CD-ROM, 16 = CD-I, 32 = CD-ROM XA, 255 = undefined. A small device byte mos does not reclassify (mos_disc_info_disc_type)."
+            },
+            "disc_id": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 4294967295,
+              "description": "32-bit Disc Identification (bytes 12..15), the writer-assigned per-disc id for recordable media. null unless the reply's DID_V bit is set and the field was carried (mos_disc_info_disc_id_present)."
+            },
+            "bar_code": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9a-f]{16}$",
+              "description": "Disc Bar Code (bytes 24..31) as 16 lowercase hex digits, or null unless the reply's DBC_V bit is set and the field was carried. Raw bytes \u2014 the 12-digit barcode reading, if any, is the consumer's to interpret."
             }
           }
         },

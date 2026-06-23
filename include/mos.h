@@ -372,6 +372,21 @@ uint8_t         mos_disc_info_last_session_state(const mos_disc_info *d);
    format state of DVD+RW / BD-RE / Mount Rainier media. Map to a token
    with mos_bg_format_status_name(). */
 uint8_t         mos_disc_info_bg_format_status(const mos_disc_info *d);
+/* Disc Type, raw (byte 8): 0x00 CD-DA/CD-ROM, 0x10 CD-I, 0x20 CD-ROM XA,
+   0xFF undefined. Raw on purpose — a small device byte mos does not
+   reclassify. */
+uint8_t         mos_disc_info_disc_type(const mos_disc_info *d);
+/* 32-bit Disc Identification (bytes 12..15), the writer-assigned per-disc
+   id for recordable media. *_present is false (and *_value 0) unless the
+   reply's DID_V bit is set and the field was actually carried. */
+bool            mos_disc_info_disc_id_present(const mos_disc_info *d);
+uint32_t        mos_disc_info_disc_id(const mos_disc_info *d);
+/* Disc Bar Code (bytes 24..31). *_present is false unless DBC_V was set and
+   the field was carried. mos_disc_info_bar_code() returns a pointer to the
+   8 raw bytes (valid until the next mos_query_disc_info()/mos_close()), or
+   NULL when not present. */
+bool            mos_disc_info_bar_code_present(const mos_disc_info *d);
+const uint8_t  *mos_disc_info_bar_code(const mos_disc_info *d);
 
 /* "blank" / "appendable" / "complete" / "other". Stable lowercase
    tokens, same contract as mos_state_description(). */

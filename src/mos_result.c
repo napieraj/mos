@@ -213,6 +213,31 @@ uint8_t mos_disc_info_bg_format_status(const mos_disc_info *d)
     return d ? d->bg_format_status : 0;
 }
 
+uint8_t mos_disc_info_disc_type(const mos_disc_info *d)
+{
+    return d ? d->disc_type : 0;
+}
+
+bool mos_disc_info_disc_id_present(const mos_disc_info *d)
+{
+    return d ? d->disc_id_valid : false;
+}
+
+uint32_t mos_disc_info_disc_id(const mos_disc_info *d)
+{
+    return (d && d->disc_id_valid) ? d->disc_id : 0;
+}
+
+bool mos_disc_info_bar_code_present(const mos_disc_info *d)
+{
+    return d ? d->bar_code_valid : false;
+}
+
+const uint8_t *mos_disc_info_bar_code(const mos_disc_info *d)
+{
+    return (d && d->bar_code_valid) ? d->bar_code : NULL;
+}
+
 /* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
  * NULL- and range-tolerant; the entry index is bounded by track_count,
  * which the fail-closed parser proved covers exactly first..last. */

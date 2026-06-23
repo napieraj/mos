@@ -527,13 +527,27 @@ struct mos_disc_info {
                                             state — 0 none, 1 inactive,
                                             2 active, 3 complete (Linux
                                             CDM_MRW_* macros) */
+    uint8_t  disc_type;                  /* byte 8: 0x00 CD-DA/CD-ROM,
+                                            0x10 CD-I, 0x20 CD-ROM XA,
+                                            0xFF undefined */
+    bool     disc_id_valid;              /* byte 7 bit 7 (DID_V) AND bytes
+                                            12..15 present in trusted region */
+    uint32_t disc_id;                    /* bytes 12..15 (BE), valid iff
+                                            disc_id_valid — the writer-assigned
+                                            32-bit Disc Identification */
+    bool     bar_code_valid;             /* byte 7 bit 6 (DBC_V) AND bytes
+                                            24..31 present in trusted region */
+    uint8_t  bar_code[8];                /* bytes 24..31, valid iff bar_code_valid */
 };
 
 /* Decode a READ DISC INFORMATION (0x51, data type 000b) response into *out.
  * True only when the fixed numeric region (through byte 11) is present per
- * BOTH `len` and the reply's declared length. Address fields and
- * validity-gated identifiers are not decoded. Layout and safety contract
- * at the decoder (mos_discinfo.c). */
+ * BOTH `len` and the reply's declared length. disc_type (byte 8) is always
+ * decoded; the validity-gated 32-bit Disc Identification (bytes 12..15,
+ * DID_V) and Disc Bar Code (bytes 24..31, DBC_V) are decoded only when both
+ * their validity bit is set AND the trusted region reaches them — otherwise
+ * the *_valid flag is false. Lead-in/lead-out addresses remain undecoded.
+ * Layout and safety contract at the decoder (mos_discinfo.c). */
 bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
                                   mos_disc_info *out);
 
