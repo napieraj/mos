@@ -99,6 +99,7 @@ static struct {
     uint32_t ds_status;         uint8_t ds[4096]; size_t ds_len;
     uint32_t rti_status;        uint8_t rti[64];  size_t rti_len;
     uint32_t perf_status;       uint8_t perf[64]; size_t perf_len;
+    uint32_t perf_v2_status;    uint8_t perf_v2[64]; size_t perf_v2_len;
     bool     da_present;        /* DADiskCopyDescription returns a dict   */
     char     da_name[256];      /* VolumeName; "" = key absent            */
     char     da_path[1024];     /* VolumePath; "" = key absent (unmounted)*/
@@ -300,6 +301,14 @@ void mos_fake_set_perf_reply(uint32_t task_status,
     g.perf_status = task_status;
     g.perf_len = (len > sizeof g.perf) ? sizeof g.perf : len;
     if (bytes && g.perf_len) memcpy(g.perf, bytes, g.perf_len);
+}
+
+void mos_fake_set_perf_v2_reply(uint32_t task_status,
+                                const uint8_t *bytes, size_t len)
+{
+    g.perf_v2_status = task_status;
+    g.perf_v2_len = (len > sizeof g.perf_v2) ? sizeof g.perf_v2 : len;
+    if (bytes && g.perf_v2_len) memcpy(g.perf_v2, bytes, g.perf_v2_len);
 }
 
 void mos_fake_set_readtrackinfo_reply(uint32_t task_status,
@@ -574,6 +583,13 @@ static IOReturn mmc_GetPerformance(void *self, SCSICmdField2Bit TOLERANCE,
                                    void *buffer, SCSICmdField2Byte bufferSize,
                                    SCSITaskStatus *taskStatus,
                                    SCSI_Sense_Data *senseDataBuffer);
+static IOReturn mmc_GetPerformanceV2(void *self, SCSICmdField5Bit DATA_TYPE,
+                                     SCSICmdField4Byte STARTING_LBA,
+                                     SCSICmdField2Byte MAXIMUM_NUMBER_OF_DESCRIPTORS,
+                                     SCSICmdField1Byte TYPE,
+                                     void *buffer, SCSICmdField2Byte bufferSize,
+                                     SCSITaskStatus *taskStatus,
+                                     SCSI_Sense_Data *senseDataBuffer);
 static IOReturn mmc_ReadTrackInformation(void *self,
                                          SCSICmdField2Bit ADDRESS_NUMBER_TYPE,
                                          SCSICmdField4Byte LBA_TRACK_SESSION,
@@ -631,6 +647,7 @@ static void ensure_vtbls(void)
     g_mmc_vtbl.ReadDiscStructure         = mmc_ReadDiscStructure;
     g_mmc_vtbl.ReadTrackInformation      = mmc_ReadTrackInformation;
     g_mmc_vtbl.GetPerformance            = mmc_GetPerformance;
+    g_mmc_vtbl.GetPerformanceV2          = mmc_GetPerformanceV2;
     g_mmc_vtbl.ModeSense10               = mmc_ModeSense10;
     g_mmc_vtbl.GetSCSITaskDeviceInterface = mmc_GetSCSITaskDeviceInterface;
 
@@ -835,6 +852,26 @@ static IOReturn mmc_GetPerformance(void *self, SCSICmdField2Bit TOLERANCE,
         if (n) memcpy(buffer, g.perf, n);
     }
     if (taskStatus) *taskStatus = (SCSITaskStatus)g.perf_status;
+    return kIOReturnSuccess;
+}
+
+static IOReturn mmc_GetPerformanceV2(void *self, SCSICmdField5Bit DATA_TYPE,
+                                     SCSICmdField4Byte STARTING_LBA,
+                                     SCSICmdField2Byte MAXIMUM_NUMBER_OF_DESCRIPTORS,
+                                     SCSICmdField1Byte TYPE,
+                                     void *buffer, SCSICmdField2Byte bufferSize,
+                                     SCSITaskStatus *taskStatus,
+                                     SCSI_Sense_Data *senseDataBuffer)
+{
+    (void)self; (void)DATA_TYPE; (void)STARTING_LBA;
+    (void)MAXIMUM_NUMBER_OF_DESCRIPTORS; (void)TYPE; (void)senseDataBuffer;
+    if (buffer && bufferSize) {
+        size_t n = (g.perf_v2_len < (size_t)bufferSize)
+                       ? g.perf_v2_len : (size_t)bufferSize;
+        memset(buffer, 0, bufferSize);
+        if (n) memcpy(buffer, g.perf_v2, n);
+    }
+    if (taskStatus) *taskStatus = (SCSITaskStatus)g.perf_v2_status;
     return kIOReturnSuccess;
 }
 

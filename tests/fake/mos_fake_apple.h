@@ -91,6 +91,12 @@ void mos_fake_set_disc_structure_reply(uint32_t task_status,
    (read/write) get this buffer; mos_query_drive_perf folds them in. */
 void mos_fake_set_perf_reply(uint32_t task_status,
                              const uint8_t *bytes, size_t len);
+/* Script the GET PERFORMANCE Type 03h (Write Speed) reply read via
+   GetPerformanceV2 — the per-entry read/write speed list mos_query_drive_perf
+   folds into mos_drive_perf.descriptors. Default (unset) is GOOD + empty, so
+   a drive that does not populate Type 03h yields descriptor_count 0. */
+void mos_fake_set_perf_v2_reply(uint32_t task_status,
+                                const uint8_t *bytes, size_t len);
 /* Script the READ TRACK INFORMATION (0x52) reply — the recordable /
    append-state view mos_query_capacity folds in. Default (unset) is a
    zeroed GOOD reply, which the parser rejects (recordable absent). */

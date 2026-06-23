@@ -372,6 +372,62 @@ TEST(adapter_perf_churn_refuses_mixed_observation)
     return 0;
 }
 
+/* One GET PERFORMANCE Type 03h (Write Speed) descriptor: read 7212, write
+   5540 kB/s. 24 bytes = 8-byte header (Data Length 20) + one 16-byte Write
+   Speed Descriptor (read at [8..11], write at [12..15] of the descriptor). */
+static const uint8_t k_perf_v2_one[] = {
+    0,0,0,20,        /* Performance Data Length (BE) = bytes after byte 3   */
+    0,0,0,0,         /* reserved                                            */
+    0x00,            /* desc[0] capability bits (MRW/Exact/RDD/WRC)         */
+    0,0,0,           /* desc[1..3] reserved                                 */
+    0,0,0,0,         /* desc[4..7]  End LBA                                  */
+    0,0,0x1C,0x2C,   /* desc[8..11]  Read Speed  = 7212 kB/s                 */
+    0,0,0x15,0xA4,   /* desc[12..15] Write Speed = 5540 kB/s                 */
+};
+
+TEST(adapter_perf_v2_descriptors_decode)
+{
+    /* The Type 03h descriptor list folds into mos_drive_perf via
+       GetPerformanceV2 (best-effort, alongside the Type 00h max reads). */
+    mos_fake_reset();
+    mos_fake_set_perf_reply(0x00 /*GOOD*/, k_perf_5540, sizeof k_perf_5540);
+    mos_fake_set_perf_v2_reply(0x00 /*GOOD*/, k_perf_v2_one, sizeof k_perf_v2_one);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    const mos_drive_perf *p = NULL;
+    EXPECT_EQ(MOS_OK, mos_query_drive_perf(h, &p));
+    EXPECT(p != NULL);
+    EXPECT_EQ(1u, mos_drive_perf_descriptor_count(p));
+    EXPECT_EQ(7212u, mos_drive_perf_descriptor_read_kbps(p, 0));
+    EXPECT_EQ(5540u, mos_drive_perf_descriptor_write_kbps(p, 0));
+    mos_close(h);
+    return 0;
+}
+
+TEST(adapter_perf_v2_absent_leaves_no_descriptors)
+{
+    /* No Type 03h reply set (fake default GOOD + empty): the Type 00h max
+       still lands, descriptor_count is 0 — best-effort, never the gate. */
+    mos_fake_reset();
+    mos_fake_set_perf_reply(0x00 /*GOOD*/, k_perf_5540, sizeof k_perf_5540);
+
+    mos_error err = MOS_ERR_IO;
+    mos_handle_t *h = mos_open_by_index(1, &err);
+    EXPECT(h != NULL);
+
+    const mos_drive_perf *p = NULL;
+    EXPECT_EQ(MOS_OK, mos_query_drive_perf(h, &p));
+    EXPECT(p != NULL);
+    EXPECT(mos_drive_perf_have(p));
+    EXPECT_EQ(5540u, mos_drive_perf_max_read_kbps(p));
+    EXPECT_EQ(0u, mos_drive_perf_descriptor_count(p));
+    mos_close(h);
+    return 0;
+}
+
 TEST(adapter_physical_swap_between_discs_retries_coherent)
 {
     mos_fake_reset();
@@ -1238,6 +1294,8 @@ int main(void)
     RUN(adapter_media_churn_refuses_mixed_observation);
     RUN(adapter_perf_swap_between_discs_retries_coherent);
     RUN(adapter_perf_churn_refuses_mixed_observation);
+    RUN(adapter_perf_v2_descriptors_decode);
+    RUN(adapter_perf_v2_absent_leaves_no_descriptors);
     RUN(adapter_physical_swap_between_discs_retries_coherent);
     RUN(adapter_physical_churn_refuses_mixed_observation);
     RUN(adapter_disc_info_replays_fixtures);

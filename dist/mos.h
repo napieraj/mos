@@ -372,6 +372,21 @@ uint8_t         mos_disc_info_last_session_state(const mos_disc_info *d);
    format state of DVD+RW / BD-RE / Mount Rainier media. Map to a token
    with mos_bg_format_status_name(). */
 uint8_t         mos_disc_info_bg_format_status(const mos_disc_info *d);
+/* Disc Type, raw (byte 8): 0x00 CD-DA/CD-ROM, 0x10 CD-I, 0x20 CD-ROM XA,
+   0xFF undefined. Raw on purpose — a small device byte mos does not
+   reclassify. */
+uint8_t         mos_disc_info_disc_type(const mos_disc_info *d);
+/* 32-bit Disc Identification (bytes 12..15), the writer-assigned per-disc
+   id for recordable media. *_present is false (and *_value 0) unless the
+   reply's DID_V bit is set and the field was actually carried. */
+bool            mos_disc_info_disc_id_present(const mos_disc_info *d);
+uint32_t        mos_disc_info_disc_id(const mos_disc_info *d);
+/* Disc Bar Code (bytes 24..31). *_present is false unless DBC_V was set and
+   the field was carried. mos_disc_info_bar_code() returns a pointer to the
+   8 raw bytes (valid until the next mos_query_disc_info()/mos_close()), or
+   NULL when not present. */
+bool            mos_disc_info_bar_code_present(const mos_disc_info *d);
+const uint8_t  *mos_disc_info_bar_code(const mos_disc_info *d);
 
 /* "blank" / "appendable" / "complete" / "other". Stable lowercase
    tokens, same contract as mos_state_description(). */
@@ -501,6 +516,15 @@ bool    mos_drive_caps_wp_sswpp(const mos_drive_caps *c);
 bool    mos_drive_caps_wp_spwp(const mos_drive_caps *c);
 bool    mos_drive_caps_wp_wdcb(const mos_drive_caps *c);
 bool    mos_drive_caps_wp_dwp(const mos_drive_caps *c);
+
+/* Curated capability presence from the RT=0 GET CONFIGURATION walk — the
+   named subset `mos drive` surfaces (the same walk `mos features` dumps raw):
+   Real-Time Streaming (0107h, host-paced read/write performance), Power
+   Management (0100h), Time-out (0105h). Presence of the feature descriptor;
+   no further payload. NULL-tolerant (false). */
+bool    mos_drive_caps_real_time_streaming(const mos_drive_caps *c);
+bool    mos_drive_caps_power_management(const mos_drive_caps *c);
+bool    mos_drive_caps_timeout(const mos_drive_caps *c);
 
 /* Supported-profile set from the Profile List feature (0x0000) — the
    drive-static disc types this drive handles (the modern, BD-aware "what can
@@ -965,6 +989,15 @@ uint16_t mos_drive_perf_speed_count(const mos_drive_perf *p);
 uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p);
 uint32_t mos_drive_perf_max_write_kbps(const mos_drive_perf *p);
 
+/* GET PERFORMANCE Type 03h (Write Speed) descriptor list — each entry's
+   read + write speed (kB/s) for the loaded disc. _descriptor_count is the
+   number of entries; _descriptor_read_kbps / _descriptor_write_kbps return
+   entry i's speeds (0 for out-of-range i / NULL p). Populated on the
+   one-shot read; the polled watch keeps only the scalar max above. */
+uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p);
+uint32_t mos_drive_perf_descriptor_read_kbps(const mos_drive_perf *p, uint16_t i);
+uint32_t mos_drive_perf_descriptor_write_kbps(const mos_drive_perf *p, uint16_t i);
+
 /* ---- Mechanical + error-recovery (MODE SENSE) ------------------------ */
 
 /* Results of the two read-only MODE SENSE(10) page reads. Opaque,
@@ -992,6 +1025,15 @@ bool     mos_mode_caps_can_eject(const mos_mode_caps *m);
 bool     mos_mode_caps_lock_supported(const mos_mode_caps *m);
 bool     mos_mode_caps_locked(const mos_mode_caps *m);
 uint16_t mos_mode_caps_buffer_kb(const mos_mode_caps *m);
+/* Read/rip capability bits (page 0x2A). BURN-Free / buffer-underrun-free
+   recording, multisession read, accurate CD-DA stream, and C2-error-pointer
+   support — the latter three are the EAC/AccurateRip-relevant features.
+   NOTE: C2-pointer reliability is firmware-dependent; this reports the
+   drive's claim, not its accuracy. */
+bool     mos_mode_caps_buf_underrun(const mos_mode_caps *m);
+bool     mos_mode_caps_multisession(const mos_mode_caps *m);
+bool     mos_mode_caps_accurate_stream(const mos_mode_caps *m);
+bool     mos_mode_caps_c2_pointers(const mos_mode_caps *m);
 
 /* Loading-mechanism token: "caddy" / "tray" / "popup" / "changer_disc" /
    "changer_cartridge", or NULL for reserved/unknown codes. */

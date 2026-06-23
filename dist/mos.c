@@ -471,10 +471,22 @@ typedef struct mos_write_protect {
     bool dwp;       /* supports the Disc Write Protect PAC on BD-R/-RE        */
 } mos_write_protect;
 
+/* Drive CAPABILITY presence from the RT=0 GET CONFIGURATION walk (F7) — the
+   curated, named subset of optional features mos surfaces on `mos drive`
+   (the same walk `mos features` dumps raw). Presence = the feature
+   descriptor is in the reply; these carry no further payload mos decodes.
+   MMC-6 feature numbers. */
+typedef struct mos_drive_capabilities {
+    bool real_time_streaming; /* 0107h — host-paced read/write performance   */
+    bool power_management;     /* 0100h — host/drive power management         */
+    bool timeout;              /* 0105h — bounded command timeouts            */
+} mos_drive_capabilities;
+
 /* Drive-static facts from a full (RT=0) GET CONFIGURATION response. */
 typedef struct mos_drive_caps {
     mos_drive_protection protection;
     mos_write_protect    write_protect;
+    mos_drive_capabilities capabilities;
     /* Supported-profile set from the Profile List feature (0x0000), drive-
        static (the per-descriptor CurrentP bit is media-dependent, ignored).
        64 covers a conformant max (one-byte Additional Length ⇒ ≤63 codes). */
@@ -516,6 +528,14 @@ void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
    state. Pure, no-OOB — fuzz/ASan-gated. */
 void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
                                             mos_drive_caps *out);
+
+/* Set out->capabilities presence flags from a full (RT=0) GET CONFIGURATION
+   reply: Real-Time Streaming (0107h), Power Management (0100h), Time-out
+   (0105h). Presence only — the descriptor being in the walk. Does NOT
+   zero-init (called after mos_internal_protection_from_config, which does).
+   Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_capabilities_from_config(const uint8_t *buf, size_t len,
+                                           mos_drive_caps *out);
 
 /* Decode the Profile List feature (0x0000) into out_codes[0..cap), setting
    *out_count. Each descriptor is 4 bytes: [0..1] Profile Number (BE),
@@ -611,13 +631,27 @@ struct mos_disc_info {
                                             state — 0 none, 1 inactive,
                                             2 active, 3 complete (Linux
                                             CDM_MRW_* macros) */
+    uint8_t  disc_type;                  /* byte 8: 0x00 CD-DA/CD-ROM,
+                                            0x10 CD-I, 0x20 CD-ROM XA,
+                                            0xFF undefined */
+    bool     disc_id_valid;              /* byte 7 bit 7 (DID_V) AND bytes
+                                            12..15 present in trusted region */
+    uint32_t disc_id;                    /* bytes 12..15 (BE), valid iff
+                                            disc_id_valid — the writer-assigned
+                                            32-bit Disc Identification */
+    bool     bar_code_valid;             /* byte 7 bit 6 (DBC_V) AND bytes
+                                            24..31 present in trusted region */
+    uint8_t  bar_code[8];                /* bytes 24..31, valid iff bar_code_valid */
 };
 
 /* Decode a READ DISC INFORMATION (0x51, data type 000b) response into *out.
  * True only when the fixed numeric region (through byte 11) is present per
- * BOTH `len` and the reply's declared length. Address fields and
- * validity-gated identifiers are not decoded. Layout and safety contract
- * at the decoder (mos_discinfo.c). */
+ * BOTH `len` and the reply's declared length. disc_type (byte 8) is always
+ * decoded; the validity-gated 32-bit Disc Identification (bytes 12..15,
+ * DID_V) and Disc Bar Code (bytes 24..31, DBC_V) are decoded only when both
+ * their validity bit is set AND the trusted region reaches them — otherwise
+ * the *_valid flag is false. Lead-in/lead-out addresses remain undecoded.
+ * Layout and safety contract at the decoder (mos_discinfo.c). */
 bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
                                   mos_disc_info *out);
 
@@ -866,11 +900,21 @@ const char *mos_internal_interconnect_location_token(int code);
  * have is false when neither direction returned a descriptor (media-
  * dependent — data, not error). Spec-derived layout; a capture falsifies
  * per the hardware ADR. New fields append at the END. */
+#define MOS_PERF_DESC_CAP 16u   /* speed descriptors retained (F2) */
+
 struct mos_drive_perf {
     bool     have;              /* >= 1 descriptor in either direction */
     uint16_t speed_count;       /* read-direction descriptor count      */
     uint32_t max_read_kbps;     /* max performance, WRITE=0 reply       */
     uint32_t max_write_kbps;    /* max performance, WRITE=1 reply       */
+    /* GET PERFORMANCE Type 03h (Write Speed) descriptor list (F2): each
+       entry's read + write speed (kB/s). Disc-bound; populated on the
+       one-shot `mos state` path, NOT on the polled watch (hot-path cost —
+       the speeds ADR keeps watch to the scalars above). 0 when the drive
+       declined Type 03h or reported none. */
+    uint16_t descriptor_count;
+    uint32_t desc_read_kbps[MOS_PERF_DESC_CAP];
+    uint32_t desc_write_kbps[MOS_PERF_DESC_CAP];
 };
 
 /* Decode one Performance Data reply: max performance (kB/s) across its
@@ -880,6 +924,16 @@ struct mos_drive_perf {
  * two calls (WRITE=0 / WRITE=1). */
 bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
                                   uint32_t *max_kbps, uint16_t *count);
+
+/* Decode a GET PERFORMANCE Type 03h (Write Speed) reply into parallel
+ * read/write speed arrays (kB/s), up to `cap` entries; returns the count
+ * written. Each 16-byte Write Speed Descriptor carries Read Speed at [8..11]
+ * and Write Speed at [12..15] (BE). Same 8-byte header + device-length clamp
+ * as the Type 00h decode; pure, fixed-offset, no-OOB — fuzz/ASan-gated. */
+uint16_t mos_internal_perf_write_speeds_parse(const uint8_t *buf, size_t len,
+                                              uint32_t *read_kbps,
+                                              uint32_t *write_kbps,
+                                              uint16_t cap);
 
 /* ---- MODE SENSE(10) page decode (mos_modepage.c) ------------------- *
  *
@@ -896,6 +950,12 @@ struct mos_mode_caps {
     bool     lock_supported;    /* page[6] bit 1 */
     bool     locked;            /* page[6] bit 2 (live state) */
     uint16_t buffer_kb;         /* page[12..13] BE, KB */
+    /* Read/rip capability bits from the same page (F3): */
+    bool     buf_underrun;      /* page[4] bit 7 (BUF — BURN-Free / buffer-
+                                   underrun-free recording) */
+    bool     multisession;      /* page[4] bit 6 (reads sessions > 1) */
+    bool     accurate_stream;   /* page[5] bit 1 (CD-DA stream is accurate) */
+    bool     c2_pointers;       /* page[5] bit 4 (C2 error pointers supported) */
 };
 
 struct mos_error_recovery {
@@ -2090,6 +2150,21 @@ void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
     w->dwp   = (f.data[0] & 0x08u) != 0;
 }
 
+/* Contract in mos_pure.h. Curated capability-presence flags from the RT=0
+   walk: Real-Time Streaming (0107h), Power Management (0100h), Time-out
+   (0105h). Presence only (find), matching the SecurDisc/VCPS presence
+   pattern; no payload byte is decoded. Does NOT zero-init out. */
+void mos_internal_capabilities_from_config(const uint8_t *buf, size_t len,
+                                           mos_drive_caps *out)
+{
+    if (!out) return;
+    mos_drive_capabilities *c = &out->capabilities;
+    mos_config_feature f;
+    c->real_time_streaming = mos_internal_config_find_feature(buf, len, 0x0107, &f);
+    c->power_management     = mos_internal_config_find_feature(buf, len, 0x0100, &f);
+    c->timeout              = mos_internal_config_find_feature(buf, len, 0x0105, &f);
+}
+
 /* Contract in mos_pure.h. The Profile List feature (0x0000) payload is a
    sequence of 4-byte Profile Descriptors; we keep the drive-static set of
    Profile Numbers and ignore the per-descriptor CurrentP bit (which reflects
@@ -2527,7 +2602,11 @@ mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
  *   [9]    Number of Sessions (MSB)
  *   [10]   First Track Number in Last Session (MSB)
  *   [11]   Last Track Number in Last Session (MSB)
- *   (bytes 12+ : undecoded — see SPEC.md.)
+ *   [12..15] Disc Identification (BE) — valid iff byte7 DID_V (bit7)
+ *   [16..19] Last Session Lead-in Start (MSF)   — undecoded
+ *   [20..23] Last Possible Lead-out Start (MSF) — undecoded
+ *   [24..31] Disc Bar Code — valid iff byte7 DBC_V (bit6)
+ *   (bytes 32+ : reserved / OPC table — undecoded; see SPEC.md.)
  *
  * Safety contract (the device controls the length): `len` is the only
  * trusted ceiling; the Disc Information Length can only shrink the trusted
@@ -2564,6 +2643,30 @@ bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
     /* BG Format Status (byte 7 bits 1:0): background-format state of
        DVD+RW / BD-RE / Mount Rainier media. Values match Linux CDM_MRW_*. */
     out->bg_format_status = (uint8_t)(buf[7] & 0x03u);
+
+    /* Disc Type (byte 8) — always within the >=12 trusted floor. */
+    out->disc_type = buf[8];
+
+    /* Validity-gated identifiers. Each is decoded only when its validity bit
+       (byte 7) is set AND the trusted region (end) actually reaches the
+       field — the device-reported length can only shrink that region, so a
+       bit that claims validity over bytes the reply does not carry yields a
+       false *_valid, never an OOB read. */
+    out->disc_id_valid = false;
+    out->disc_id       = 0;
+    if ((buf[7] & 0x80u) && end >= 16) {            /* DID_V, bytes 12..15 */
+        out->disc_id = ((uint32_t)buf[12] << 24) | ((uint32_t)buf[13] << 16)
+                     | ((uint32_t)buf[14] <<  8) |  (uint32_t)buf[15];
+        out->disc_id_valid = true;
+    }
+
+    out->bar_code_valid = false;
+    for (size_t i = 0; i < sizeof out->bar_code; i++) out->bar_code[i] = 0;
+    if ((buf[7] & 0x40u) && end >= 32) {            /* DBC_V, bytes 24..31 */
+        for (size_t i = 0; i < 8; i++) out->bar_code[i] = buf[24 + i];
+        out->bar_code_valid = true;
+    }
+
     return true;
 }
 
@@ -3293,7 +3396,10 @@ bool mos_internal_inqdata_parse(const uint8_t *buf, size_t len,
  * Page 0x2A offsets (relative to page start): loading mechanism page[6]>>5
  * and eject page[6]&0x08 (sr.c cross-check in SPEC.md), buffer size
  * page[12..13] BE KB and lock bits page[6] bit1 supported / bit2 state
- * (MMC-3 page-2A). Page 0x01 is the canonical SPC Read/Write Error
+ * (MMC-3 page-2A). The read/rip capability bits ride the same page:
+ * BUF/BURN-Free page[4] bit7, Multisession page[4] bit6, CD-DA stream
+ * accurate page[5] bit1, C2 error pointers page[5] bit4 (MMC-3 page-2A;
+ * the EAC/AccurateRip-relevant trio). Page 0x01 is the canonical SPC R/W Error
  * Recovery page. A real MODE SENSE capture is a falsifier per the hardware
  * ADR, not a design input. No payload byte is ever used as an offset.
  */
@@ -3367,6 +3473,11 @@ bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
     out->lock_supported    = (p[6] & 0x02) != 0;
     out->locked            = (p[6] & 0x04) != 0;
     out->buffer_kb         = (uint16_t)((p[12] << 8) | p[13]);
+    /* Read/rip capability bits — bytes 4 and 5, well within the >=12 floor. */
+    out->buf_underrun      = (p[4] & 0x80) != 0;
+    out->multisession      = (p[4] & 0x40) != 0;
+    out->accurate_stream   = (p[5] & 0x02) != 0;
+    out->c2_pointers       = (p[5] & 0x10) != 0;
     out->have              = true;
     return true;
 }
@@ -3463,6 +3574,38 @@ bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
     if (max_kbps) *max_kbps = mx;
     if (count)    *count = (uint16_t)n;
     return true;
+}
+
+/* GET PERFORMANCE Type 03h (Write Speed) decode. Same header framing as
+ * Type 00h (8-byte header, device length clamps the trusted region), but the
+ * descriptors are Write Speed Descriptors:
+ *   desc[0]      capability bits (MRW/Exact/RDD/WRC) — not decoded here
+ *   desc[1..3]   reserved
+ *   desc[4..7]   End LBA
+ *   desc[8..11]  Read Speed  (kB/s, BE)
+ *   desc[12..15] Write Speed (kB/s, BE)
+ * Fills read_kbps[]/write_kbps[] up to cap; returns the number written. */
+uint16_t mos_internal_perf_write_speeds_parse(const uint8_t *buf, size_t len,
+                                              uint32_t *read_kbps,
+                                              uint32_t *write_kbps,
+                                              uint16_t cap)
+{
+    if (!buf || !read_kbps || !write_kbps || cap == 0 || len < GP_HDR)
+        return 0;
+
+    size_t declared = (size_t)mos_internal_gp_be32(&buf[0]) + 4u;
+    size_t end = (len < declared) ? len : declared;
+    if (end < GP_HDR) return 0;
+
+    size_t n = (end - GP_HDR) / GP_DESC;
+    if (n > cap) n = cap;
+
+    for (size_t i = 0; i < n; i++) {
+        const uint8_t *d = &buf[GP_HDR + i * GP_DESC];
+        read_kbps[i]  = mos_internal_gp_be32(&d[8]);
+        write_kbps[i] = mos_internal_gp_be32(&d[12]);
+    }
+    return (uint16_t)n;
 }
 
 /* ==== src/mos_physstruct.c ==== */
@@ -4044,6 +4187,8 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
        PRIMARY serial source, non-exclusive (no raw INQUIRY, no exclusive lock). */
     mos_internal_serial_from_config(buf, sizeof(buf),
                                     h->caps.serial, sizeof h->caps.serial);
+    /* Curated capability-presence flags (0107h/0100h/0105h) from the same walk. */
+    mos_internal_capabilities_from_config(buf, sizeof(buf), &h->caps);
     /* Current Profile (loaded medium) from the same RT=0 header — 0 when the
        field is absent/truncated or the tray is empty. Media-dependent; used
        only to name the loaded disc's class (e.g. speed 1x scaling). */
@@ -4450,6 +4595,30 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
         tmp.max_write_kbps   = wr_max;
         tmp.have             = (rd_cnt > 0);
 
+        /* Best-effort Type 03h (Write Speed) descriptor list — each entry's
+           read + write speed. GetPerformanceV2 with TYPE=03h; a drive that
+           declines (CHECK CONDITION) or lacks the V2 method simply leaves
+           descriptor_count 0 (enrichment, never the gate). Within the same
+           S1/S2 coherence window as the Type 00h reads. */
+        {
+            uint8_t         pb[2048] = {0};
+            SCSITaskStatus  pst      = 0;
+            SCSI_Sense_Data psd      = {0};
+            IOReturn prc = (*h->mmc)->GetPerformanceV2(
+                h->mmc,
+                (UInt8)0,                 /* DATA_TYPE (write speed: 0)     */
+                (UInt32)0,                /* STARTING_LBA                   */
+                (UInt16)MOS_PERF_DESC_CAP,/* MAXIMUM_NUMBER_OF_DESCRIPTORS  */
+                (UInt8)0x03,              /* TYPE = 03h (Write Speed)       */
+                pb, (UInt16)sizeof(pb),
+                &pst, &psd);
+            if (prc == kIOReturnSuccess && pst == kSCSITaskStatus_GOOD) {
+                tmp.descriptor_count = mos_internal_perf_write_speeds_parse(
+                    pb, sizeof(pb), tmp.desc_read_kbps, tmp.desc_write_kbps,
+                    MOS_PERF_DESC_CAP);
+            }
+        }
+
         mos_media_snapshot s2;
         mos_internal_capture_media_snapshot(h->svc, &s2);
         if (mos_internal_media_snapshot_coherent(&s1, &s2)) {
@@ -4736,6 +4905,31 @@ uint8_t mos_disc_info_bg_format_status(const mos_disc_info *d)
     return d ? d->bg_format_status : 0;
 }
 
+uint8_t mos_disc_info_disc_type(const mos_disc_info *d)
+{
+    return d ? d->disc_type : 0;
+}
+
+bool mos_disc_info_disc_id_present(const mos_disc_info *d)
+{
+    return d ? d->disc_id_valid : false;
+}
+
+uint32_t mos_disc_info_disc_id(const mos_disc_info *d)
+{
+    return (d && d->disc_id_valid) ? d->disc_id : 0;
+}
+
+bool mos_disc_info_bar_code_present(const mos_disc_info *d)
+{
+    return d ? d->bar_code_valid : false;
+}
+
+const uint8_t *mos_disc_info_bar_code(const mos_disc_info *d)
+{
+    return (d && d->bar_code_valid) ? d->bar_code : NULL;
+}
+
 /* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
  * NULL- and range-tolerant; the entry index is bounded by track_count,
  * which the fail-closed parser proved covers exactly first..last. */
@@ -4853,6 +5047,21 @@ bool mos_drive_caps_wp_wdcb(const mos_drive_caps *c)
 bool mos_drive_caps_wp_dwp(const mos_drive_caps *c)
 {
     return c ? c->write_protect.dwp : false;
+}
+
+bool mos_drive_caps_real_time_streaming(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.real_time_streaming : false;
+}
+
+bool mos_drive_caps_power_management(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.power_management : false;
+}
+
+bool mos_drive_caps_timeout(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.timeout : false;
 }
 
 uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)
@@ -5336,6 +5545,21 @@ uint32_t mos_drive_perf_max_write_kbps(const mos_drive_perf *p)
     return p ? p->max_write_kbps : 0;
 }
 
+uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p)
+{
+    return p ? p->descriptor_count : 0;
+}
+
+uint32_t mos_drive_perf_descriptor_read_kbps(const mos_drive_perf *p, uint16_t i)
+{
+    return (p && i < p->descriptor_count) ? p->desc_read_kbps[i] : 0;
+}
+
+uint32_t mos_drive_perf_descriptor_write_kbps(const mos_drive_perf *p, uint16_t i)
+{
+    return (p && i < p->descriptor_count) ? p->desc_write_kbps[i] : 0;
+}
+
 /* ---- mos_mode_caps accessors (mos_query_mode_caps) ----------------- */
 
 uint8_t mos_mode_caps_loading_mechanism(const mos_mode_caps *m)
@@ -5361,6 +5585,26 @@ bool mos_mode_caps_locked(const mos_mode_caps *m)
 uint16_t mos_mode_caps_buffer_kb(const mos_mode_caps *m)
 {
     return m ? m->buffer_kb : 0;
+}
+
+bool mos_mode_caps_buf_underrun(const mos_mode_caps *m)
+{
+    return m ? m->buf_underrun : false;
+}
+
+bool mos_mode_caps_multisession(const mos_mode_caps *m)
+{
+    return m ? m->multisession : false;
+}
+
+bool mos_mode_caps_accurate_stream(const mos_mode_caps *m)
+{
+    return m ? m->accurate_stream : false;
+}
+
+bool mos_mode_caps_c2_pointers(const mos_mode_caps *m)
+{
+    return m ? m->c2_pointers : false;
 }
 
 /* ---- mos_error_recovery accessors (mos_query_error_recovery) -------- */
