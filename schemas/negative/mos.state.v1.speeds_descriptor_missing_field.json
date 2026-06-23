@@ -13,8 +13,7 @@
     "max_write_kbps": 0,
     "descriptors": [
       {
-        "read_kbps": 35980,
-        "write_kbps": 0
+        "read_kbps": 35980
       }
     ]
   },

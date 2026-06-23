@@ -71,11 +71,17 @@ code; this table is the citation, not the parse.
   (`dvd_read_physical`, `dvd_read_copyright`, `base = &buf[4]`).
 
 ### `src/mos_perf.c` — GET PERFORMANCE
-- **Spec:** MMC-6, opcode 0xAC, Performance Data TYPE 00h; the Nominal
-  Performance Descriptor layout is built to spec.
-- **Out of scope:** TYPE 03h write-speed descriptors. Apple's
-  GetPerformance convenience method exposes TOLERANCE/WRITE/EXCEPT but not
-  the TYPE field, so TYPE 03h is unreachable without a raw CDB.
+- **Spec:** MMC-6, opcode 0xAC, Performance Data TYPE 00h (max read/write)
+  and TYPE 03h (Write Speed descriptor list); both layouts built to spec.
+- **TYPE 03h (Write Speed) — `mos.state.v1.speeds.descriptors` (F2):** each
+  16-byte Write Speed Descriptor carries Read Speed at [8..11] and Write
+  Speed at [12..15] (BE, kB/s). Reached via the `GetPerformanceV2`
+  convenience method (DATA_TYPE + TYPE fields — confirmed in SCSITaskLib.h,
+  added in Mac OS X 10.2), so NO raw CDB. (Supersedes the earlier note that
+  TYPE 03h was unreachable: that was true of the obsolete `GetPerformance`
+  wrapper, which lacks the TYPE field; `GetPerformanceV2` has it.) Surfaced
+  on the one-shot `mos state`; the polled `mos watch` keeps only the scalar
+  max (speeds ADR hot-path budget).
 - **Human 1× multiple (cli/human.c `mos_cli_human_rate_x`):** the reported
   kB/s is scaled to the loaded medium's nominal 1× data rate for the human
   view only (JSON keeps raw kbps). Bases, by media class

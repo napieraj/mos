@@ -249,10 +249,24 @@ static void emit_json(const mos_state_result *r, int index1,
     if (mos_drive_perf_have(perf)) {
         fprintf(stdout,
                 ",\n  \"speeds\": {\"speed_count\": %u, "
-                "\"max_read_kbps\": %u, \"max_write_kbps\": %u}",
+                "\"max_read_kbps\": %u, \"max_write_kbps\": %u",
                 mos_drive_perf_speed_count(perf),
                 mos_drive_perf_max_read_kbps(perf),
                 mos_drive_perf_max_write_kbps(perf));
+        /* Full Type 03h descriptor list — one-shot `mos state` only (the
+           speeds ADR keeps the polled watch to the scalars above). Optional
+           key: emitted only when the drive returned descriptors. */
+        uint16_t dc = mos_drive_perf_descriptor_count(perf);
+        if (dc > 0) {
+            fputs(", \"descriptors\": [", stdout);
+            for (uint16_t i = 0; i < dc; i++)
+                fprintf(stdout, "%s{\"read_kbps\": %u, \"write_kbps\": %u}",
+                        i ? ", " : "",
+                        mos_drive_perf_descriptor_read_kbps(perf, i),
+                        mos_drive_perf_descriptor_write_kbps(perf, i));
+            fputc(']', stdout);
+        }
+        fputc('}', stdout);
     }
 
     /* Mounted-volume name (DA one-shot). Present only when non-empty —

@@ -97,6 +97,27 @@
           "type": "integer",
           "minimum": 0,
           "description": "Maximum write performance across the WRITE=1 descriptors, in kB/s (kB = 1000 bytes); 0 on a read-only drive / non-writable medium."
+        },
+        "descriptors": {
+          "type": "array",
+          "description": "Full GET PERFORMANCE Type 03h (Write Speed) descriptor list for the loaded disc — each entry's read + write speed (kB/s). OPTIONAL: emitted by the one-shot `mos state`, OMITTED by the polled `mos watch` (which keeps only the scalar max_*_kbps above, per the speeds ADR hot-path budget). Absent when the drive declined Type 03h or reported none.",
+          "items": {
+            "type": "object",
+            "required": ["read_kbps", "write_kbps"],
+            "additionalProperties": false,
+            "properties": {
+              "read_kbps": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Descriptor read speed in kB/s (kB = 1000 bytes)."
+              },
+              "write_kbps": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Descriptor write speed in kB/s (kB = 1000 bytes); 0 for a read-only entry."
+              }
+            }
+          }
         }
       }
     },

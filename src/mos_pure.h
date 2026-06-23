@@ -816,11 +816,21 @@ const char *mos_internal_interconnect_location_token(int code);
  * have is false when neither direction returned a descriptor (media-
  * dependent — data, not error). Spec-derived layout; a capture falsifies
  * per the hardware ADR. New fields append at the END. */
+#define MOS_PERF_DESC_CAP 16u   /* speed descriptors retained (F2) */
+
 struct mos_drive_perf {
     bool     have;              /* >= 1 descriptor in either direction */
     uint16_t speed_count;       /* read-direction descriptor count      */
     uint32_t max_read_kbps;     /* max performance, WRITE=0 reply       */
     uint32_t max_write_kbps;    /* max performance, WRITE=1 reply       */
+    /* GET PERFORMANCE Type 03h (Write Speed) descriptor list (F2): each
+       entry's read + write speed (kB/s). Disc-bound; populated on the
+       one-shot `mos state` path, NOT on the polled watch (hot-path cost —
+       the speeds ADR keeps watch to the scalars above). 0 when the drive
+       declined Type 03h or reported none. */
+    uint16_t descriptor_count;
+    uint32_t desc_read_kbps[MOS_PERF_DESC_CAP];
+    uint32_t desc_write_kbps[MOS_PERF_DESC_CAP];
 };
 
 /* Decode one Performance Data reply: max performance (kB/s) across its
@@ -830,6 +840,16 @@ struct mos_drive_perf {
  * two calls (WRITE=0 / WRITE=1). */
 bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
                                   uint32_t *max_kbps, uint16_t *count);
+
+/* Decode a GET PERFORMANCE Type 03h (Write Speed) reply into parallel
+ * read/write speed arrays (kB/s), up to `cap` entries; returns the count
+ * written. Each 16-byte Write Speed Descriptor carries Read Speed at [8..11]
+ * and Write Speed at [12..15] (BE). Same 8-byte header + device-length clamp
+ * as the Type 00h decode; pure, fixed-offset, no-OOB — fuzz/ASan-gated. */
+uint16_t mos_internal_perf_write_speeds_parse(const uint8_t *buf, size_t len,
+                                              uint32_t *read_kbps,
+                                              uint32_t *write_kbps,
+                                              uint16_t cap);
 
 /* ---- MODE SENSE(10) page decode (mos_modepage.c) ------------------- *
  *

@@ -620,6 +620,30 @@ mos_error mos_query_drive_perf(mos_handle_t *h, const mos_drive_perf **out)
         tmp.max_write_kbps   = wr_max;
         tmp.have             = (rd_cnt > 0);
 
+        /* Best-effort Type 03h (Write Speed) descriptor list — each entry's
+           read + write speed. GetPerformanceV2 with TYPE=03h; a drive that
+           declines (CHECK CONDITION) or lacks the V2 method simply leaves
+           descriptor_count 0 (enrichment, never the gate). Within the same
+           S1/S2 coherence window as the Type 00h reads. */
+        {
+            uint8_t         pb[2048] = {0};
+            SCSITaskStatus  pst      = 0;
+            SCSI_Sense_Data psd      = {0};
+            IOReturn prc = (*h->mmc)->GetPerformanceV2(
+                h->mmc,
+                (UInt8)0,                 /* DATA_TYPE (write speed: 0)     */
+                (UInt32)0,                /* STARTING_LBA                   */
+                (UInt16)MOS_PERF_DESC_CAP,/* MAXIMUM_NUMBER_OF_DESCRIPTORS  */
+                (UInt8)0x03,              /* TYPE = 03h (Write Speed)       */
+                pb, (UInt16)sizeof(pb),
+                &pst, &psd);
+            if (prc == kIOReturnSuccess && pst == kSCSITaskStatus_GOOD) {
+                tmp.descriptor_count = mos_internal_perf_write_speeds_parse(
+                    pb, sizeof(pb), tmp.desc_read_kbps, tmp.desc_write_kbps,
+                    MOS_PERF_DESC_CAP);
+            }
+        }
+
         mos_media_snapshot s2;
         mos_internal_capture_media_snapshot(h->svc, &s2);
         if (mos_internal_media_snapshot_coherent(&s1, &s2)) {

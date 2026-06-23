@@ -853,6 +853,21 @@ uint32_t mos_drive_perf_max_write_kbps(const mos_drive_perf *p)
     return p ? p->max_write_kbps : 0;
 }
 
+uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p)
+{
+    return p ? p->descriptor_count : 0;
+}
+
+uint32_t mos_drive_perf_descriptor_read_kbps(const mos_drive_perf *p, uint16_t i)
+{
+    return (p && i < p->descriptor_count) ? p->desc_read_kbps[i] : 0;
+}
+
+uint32_t mos_drive_perf_descriptor_write_kbps(const mos_drive_perf *p, uint16_t i)
+{
+    return (p && i < p->descriptor_count) ? p->desc_write_kbps[i] : 0;
+}
+
 /* ---- mos_mode_caps accessors (mos_query_mode_caps) ----------------- */
 
 uint8_t mos_mode_caps_loading_mechanism(const mos_mode_caps *m)

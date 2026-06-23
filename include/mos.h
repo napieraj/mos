@@ -989,6 +989,15 @@ uint16_t mos_drive_perf_speed_count(const mos_drive_perf *p);
 uint32_t mos_drive_perf_max_read_kbps(const mos_drive_perf *p);
 uint32_t mos_drive_perf_max_write_kbps(const mos_drive_perf *p);
 
+/* GET PERFORMANCE Type 03h (Write Speed) descriptor list — each entry's
+   read + write speed (kB/s) for the loaded disc. _descriptor_count is the
+   number of entries; _descriptor_read_kbps / _descriptor_write_kbps return
+   entry i's speeds (0 for out-of-range i / NULL p). Populated on the
+   one-shot read; the polled watch keeps only the scalar max above. */
+uint16_t mos_drive_perf_descriptor_count(const mos_drive_perf *p);
+uint32_t mos_drive_perf_descriptor_read_kbps(const mos_drive_perf *p, uint16_t i);
+uint32_t mos_drive_perf_descriptor_write_kbps(const mos_drive_perf *p, uint16_t i);
+
 /* ---- Mechanical + error-recovery (MODE SENSE) ------------------------ */
 
 /* Results of the two read-only MODE SENSE(10) page reads. Opaque,

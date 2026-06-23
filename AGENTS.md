@@ -2128,3 +2128,51 @@ exact feature codes a given drive advertises — the presence test is generic
 (find the descriptor in the walk), so a drive that omits any of the three simply
 reads false; no per-device branch. A capture showing an unexpected feature lands
 as a fixture + dated note and, at most, widens the curated set.
+
+## ADR: GET PERFORMANCE Type 03h descriptor list on the one-shot `mos state`
+## (2026-06-23, narrows the speeds ADR's "scalars only" to the polled path;
+## feature survey F2)
+
+The speeds ADR (2026-06-21) put scalar `max_read_kbps`/`max_write_kbps`/
+`speed_count` on `state`/`event` and deliberately did NOT carry the descriptor
+list, citing hot-path cost and the watch event's no-pointer-re-home shape. This
+entry narrows that — it does not reverse it — by adding an OPTIONAL
+`speeds.descriptors` array (each entry's read + write speed, kB/s) to
+`mos.state.v1`, populated only on the **one-shot `mos state`** and OMITTED by the
+polled `mos watch`. Origin: the deep-research feature survey
+(`doc/research/2026-06-23-feature-survey.md`, item F2), maintainer-approved.
+
+**Why this honors the speeds ADR's intent rather than crossing it.** The ADR's
+load-bearing concern was the POLLED path (`mos watch`): keep each event cheap and
+free of variable-length re-homed data. That is preserved exactly — `mos watch`
+still emits only the scalars (cli/watch.c is untouched), and `event.v1`'s speeds
+object does NOT gain `descriptors` (its `additionalProperties:false` actively
+forbids it). The list rides only the deliberate one-shot, which the ADR itself
+already treats as the richer path ("one-shot `mos state` reads it per
+invocation"). So the hot path keeps the budget; the one-shot gains resolution.
+
+**Source: a convenience method, not a raw CDB.** Type 03h is read via
+`GetPerformanceV2` (DATA_TYPE + TYPE fields — confirmed in SCSITaskLib.h, "Added
+in Mac OS X 10.2"), non-exclusive, no lock. This also corrects a stale SPEC note
+that called Type 03h "unreachable without a raw CDB": that was true of the
+OBSOLETE `GetPerformance` wrapper (no TYPE field); `GetPerformanceV2` has it. So
+the one-of-four raw-CDB count is untouched, no exclusive access, no new
+privilege. The Type 03h read is best-effort enrichment within the same S1/S2
+media-coherence window as the existing Type 00h reads — a drive that declines it
+(CHECK CONDITION) leaves `descriptor_count` 0; never the gate.
+
+**Shape.** Optional key (the state idiom: present only when applicable), array of
+`{read_kbps, write_kbps}`, retained up to `MOS_PERF_DESC_CAP` (16 — no real drive
+lists more). Pre-first-tag, so it lands in `mos.state.v1` in place
+(mutable-in-place), with an example carrying it and a descriptor-missing-field
+negative. Human view unchanged (the scalar 1× line already summarizes; the list
+is a programmatic/JSON detail). Pinned by `perf_write_speeds_decode_list`,
+`perf_write_speeds_cap_and_hostile`, and `perf_descriptor_accessors_and_null`
+(pure).
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): the
+Write Speed Descriptor layout (built to MMC-6, no in-repo capture yet) and
+whether a given drive populates Type 03h — a `mos probe --capture` GET
+PERFORMANCE reply is the standing falsifier, landing as a fixture + dated note,
+never a per-device special-case. The parser fails closed (count 0 / clamped) on
+a short or hostile reply.

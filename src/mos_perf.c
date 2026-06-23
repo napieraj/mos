@@ -70,3 +70,35 @@ bool mos_internal_perf_data_parse(const uint8_t *buf, size_t len,
     if (count)    *count = (uint16_t)n;
     return true;
 }
+
+/* GET PERFORMANCE Type 03h (Write Speed) decode. Same header framing as
+ * Type 00h (8-byte header, device length clamps the trusted region), but the
+ * descriptors are Write Speed Descriptors:
+ *   desc[0]      capability bits (MRW/Exact/RDD/WRC) — not decoded here
+ *   desc[1..3]   reserved
+ *   desc[4..7]   End LBA
+ *   desc[8..11]  Read Speed  (kB/s, BE)
+ *   desc[12..15] Write Speed (kB/s, BE)
+ * Fills read_kbps[]/write_kbps[] up to cap; returns the number written. */
+uint16_t mos_internal_perf_write_speeds_parse(const uint8_t *buf, size_t len,
+                                              uint32_t *read_kbps,
+                                              uint32_t *write_kbps,
+                                              uint16_t cap)
+{
+    if (!buf || !read_kbps || !write_kbps || cap == 0 || len < GP_HDR)
+        return 0;
+
+    size_t declared = (size_t)mos_internal_gp_be32(&buf[0]) + 4u;
+    size_t end = (len < declared) ? len : declared;
+    if (end < GP_HDR) return 0;
+
+    size_t n = (end - GP_HDR) / GP_DESC;
+    if (n > cap) n = cap;
+
+    for (size_t i = 0; i < n; i++) {
+        const uint8_t *d = &buf[GP_HDR + i * GP_DESC];
+        read_kbps[i]  = mos_internal_gp_be32(&d[8]);
+        write_kbps[i] = mos_internal_gp_be32(&d[12]);
+    }
+    return (uint16_t)n;
+}
