@@ -6,7 +6,9 @@
         Serial:  -
     Protection:  none
  Write Protect:  -
+  Capabilities:  -
       Profiles:  -
      Standards:  -
     Mechanical:  -
+     Read Caps:  -
 Error Recovery:  -
