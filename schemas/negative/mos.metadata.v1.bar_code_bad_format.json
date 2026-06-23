@@ -6,8 +6,6 @@
   "disc": {
     "profile": "0x0009",
     "class": "cd",
-    "disc_mode": null,
-    "cd_extra": false,
     "toc": null,
     "disc_info": {
       "status": "blank",
@@ -18,7 +16,7 @@
       "bg_format_name": "none",
       "disc_type": 0,
       "disc_id": 3735928559,
-      "bar_code": "0102030405060708"
+      "bar_code": "ZZZZ"
     },
     "disc_structure": null,
     "volume_name": null,

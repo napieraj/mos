@@ -471,10 +471,22 @@ typedef struct mos_write_protect {
     bool dwp;       /* supports the Disc Write Protect PAC on BD-R/-RE        */
 } mos_write_protect;
 
+/* Drive CAPABILITY presence from the RT=0 GET CONFIGURATION walk (F7) — the
+   curated, named subset of optional features mos surfaces on `mos drive`
+   (the same walk `mos features` dumps raw). Presence = the feature
+   descriptor is in the reply; these carry no further payload mos decodes.
+   MMC-6 feature numbers. */
+typedef struct mos_drive_capabilities {
+    bool real_time_streaming; /* 0107h — host-paced read/write performance   */
+    bool power_management;     /* 0100h — host/drive power management         */
+    bool timeout;              /* 0105h — bounded command timeouts            */
+} mos_drive_capabilities;
+
 /* Drive-static facts from a full (RT=0) GET CONFIGURATION response. */
 typedef struct mos_drive_caps {
     mos_drive_protection protection;
     mos_write_protect    write_protect;
+    mos_drive_capabilities capabilities;
     /* Supported-profile set from the Profile List feature (0x0000), drive-
        static (the per-descriptor CurrentP bit is media-dependent, ignored).
        64 covers a conformant max (one-byte Additional Length ⇒ ≤63 codes). */
@@ -516,6 +528,14 @@ void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
    state. Pure, no-OOB — fuzz/ASan-gated. */
 void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
                                             mos_drive_caps *out);
+
+/* Set out->capabilities presence flags from a full (RT=0) GET CONFIGURATION
+   reply: Real-Time Streaming (0107h), Power Management (0100h), Time-out
+   (0105h). Presence only — the descriptor being in the walk. Does NOT
+   zero-init (called after mos_internal_protection_from_config, which does).
+   Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_capabilities_from_config(const uint8_t *buf, size_t len,
+                                           mos_drive_caps *out);
 
 /* Decode the Profile List feature (0x0000) into out_codes[0..cap), setting
    *out_count. Each descriptor is 4 bytes: [0..1] Profile Number (BE),
@@ -611,13 +631,27 @@ struct mos_disc_info {
                                             state — 0 none, 1 inactive,
                                             2 active, 3 complete (Linux
                                             CDM_MRW_* macros) */
+    uint8_t  disc_type;                  /* byte 8: 0x00 CD-DA/CD-ROM,
+                                            0x10 CD-I, 0x20 CD-ROM XA,
+                                            0xFF undefined */
+    bool     disc_id_valid;              /* byte 7 bit 7 (DID_V) AND bytes
+                                            12..15 present in trusted region */
+    uint32_t disc_id;                    /* bytes 12..15 (BE), valid iff
+                                            disc_id_valid — the writer-assigned
+                                            32-bit Disc Identification */
+    bool     bar_code_valid;             /* byte 7 bit 6 (DBC_V) AND bytes
+                                            24..31 present in trusted region */
+    uint8_t  bar_code[8];                /* bytes 24..31, valid iff bar_code_valid */
 };
 
 /* Decode a READ DISC INFORMATION (0x51, data type 000b) response into *out.
  * True only when the fixed numeric region (through byte 11) is present per
- * BOTH `len` and the reply's declared length. Address fields and
- * validity-gated identifiers are not decoded. Layout and safety contract
- * at the decoder (mos_discinfo.c). */
+ * BOTH `len` and the reply's declared length. disc_type (byte 8) is always
+ * decoded; the validity-gated 32-bit Disc Identification (bytes 12..15,
+ * DID_V) and Disc Bar Code (bytes 24..31, DBC_V) are decoded only when both
+ * their validity bit is set AND the trusted region reaches them — otherwise
+ * the *_valid flag is false. Lead-in/lead-out addresses remain undecoded.
+ * Layout and safety contract at the decoder (mos_discinfo.c). */
 bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
                                   mos_disc_info *out);
 
@@ -673,6 +707,19 @@ struct mos_cdtext {
     uint8_t track_count;
     char    track_titles[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
     char    track_performers[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
+    /* Extended album-level packs (block 0, single-byte), all off the SAME
+       0101b reply — 0x82 Songwriter, 0x83 Composer, 0x84 Arranger, 0x85
+       Message, and the 0x8E disc UPC/EAN (track-0 string). "" when absent. */
+    char    songwriter[MOS_CDTEXT_STR_CAP];
+    char    composer[MOS_CDTEXT_STR_CAP];
+    char    arranger[MOS_CDTEXT_STR_CAP];
+    char    message[MOS_CDTEXT_STR_CAP];
+    char    upc_ean[MOS_CDTEXT_STR_CAP];
+    /* Per-track ISRC from the 0x8E pack (track n; track 0 is the UPC/EAN
+       above). isrc_count is the highest track carrying an ISRC;
+       track_isrcs[n-1] is track n's ISRC ("" if absent). */
+    uint8_t isrc_count;
+    char    track_isrcs[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
 };
 
 /* Parse a CD-TEXT (format 0101b) reply into *out. True only when at least
@@ -896,6 +943,12 @@ struct mos_mode_caps {
     bool     lock_supported;    /* page[6] bit 1 */
     bool     locked;            /* page[6] bit 2 (live state) */
     uint16_t buffer_kb;         /* page[12..13] BE, KB */
+    /* Read/rip capability bits from the same page (F3): */
+    bool     buf_underrun;      /* page[4] bit 7 (BUF — BURN-Free / buffer-
+                                   underrun-free recording) */
+    bool     multisession;      /* page[4] bit 6 (reads sessions > 1) */
+    bool     accurate_stream;   /* page[5] bit 1 (CD-DA stream is accurate) */
+    bool     c2_pointers;       /* page[5] bit 4 (C2 error pointers supported) */
 };
 
 struct mos_error_recovery {
@@ -1595,12 +1648,15 @@ bool mos_internal_atip_parse(const uint8_t *buf, size_t len, mos_atip *out)
  * No payload byte is ever used as an offset or length.
  *
  * SCOPE — the album Title/Performer (the "which album is in the drive"
- * disambiguator, parallel to the mounted volume name) plus the per-track
- * TITLES and PERFORMERS, all from the FIRST language block (block 0) in
- * single-byte charset. Field types and language blocks NOT decoded are in
- * SPEC.md; a double-byte (DBCC) field reads as absent, never mis-decoded
- * as Latin-1. This is BEST-EFFORT DISPLAY TEXT, not a fail-closed
- * fingerprint: audio-CD dedup keys ride on the TOC (mos_internal_toc_parse).
+ * disambiguator, parallel to the mounted volume name), the per-track TITLES
+ * and PERFORMERS, and the extended album-level packs Songwriter (0x82),
+ * Composer (0x83), Arranger (0x84), Message (0x85) plus the 0x8E disc
+ * UPC/EAN and per-track ISRC — all from the FIRST language block (block 0)
+ * in single-byte charset, off the SAME 0101b reply (no extra command). Genre
+ * (0x87, binary code) and language blocks 1..7 are NOT decoded (SPEC.md); a
+ * double-byte (DBCC) field reads as absent, never mis-decoded as Latin-1.
+ * This is BEST-EFFORT DISPLAY TEXT, not a fail-closed fingerprint: audio-CD
+ * dedup keys ride on the TOC (mos_internal_toc_parse).
  *
  * Stream model (MMC / Red Book): within one (pack-type, block) the
  * per-track strings are NUL-separated and chopped across the 12-byte pack
@@ -1634,8 +1690,13 @@ bool mos_internal_atip_parse(const uint8_t *buf, size_t len, mos_atip *out)
 #define CDTEXT_TEXT_OFF   4u    /* text bytes within a pack: [4..15]      */
 #define CDTEXT_TEXT_LEN  12u
 
-#define CDTEXT_PACK_TITLE     0x80u
-#define CDTEXT_PACK_PERFORMER 0x81u
+#define CDTEXT_PACK_TITLE      0x80u
+#define CDTEXT_PACK_PERFORMER  0x81u
+#define CDTEXT_PACK_SONGWRITER 0x82u
+#define CDTEXT_PACK_COMPOSER   0x83u
+#define CDTEXT_PACK_ARRANGER   0x84u
+#define CDTEXT_PACK_MESSAGE    0x85u
+#define CDTEXT_PACK_UPC_ISRC   0x8Eu   /* track 0 = UPC/EAN, track n = ISRC */
 
 /* Bounded NUL-terminated copy into a fixed buffer (truncates past cap-1). */
 static void cdtext_copy(char *dst, size_t cap, const char *src)
@@ -1738,10 +1799,27 @@ bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
                        out->performer, sizeof out->performer,
                        out->track_performers, &out->track_count);
 
-    /* "have" gates useful identity: an empty result (no album field, no
-       per-track title) isn't identity. False → the adapter reports no
-       CD-TEXT (null), like the other media reads. */
-    out->have = out->title[0] || out->performer[0] || out->track_count > 0;
+    /* Extended album-level packs (track-0 strings only; tracks NULL). Same
+       generic block-0 single-byte decode, off the same already-fetched reply. */
+    cdtext_decode_type(buf, span, CDTEXT_PACK_SONGWRITER,
+                       out->songwriter, sizeof out->songwriter, NULL, NULL);
+    cdtext_decode_type(buf, span, CDTEXT_PACK_COMPOSER,
+                       out->composer, sizeof out->composer, NULL, NULL);
+    cdtext_decode_type(buf, span, CDTEXT_PACK_ARRANGER,
+                       out->arranger, sizeof out->arranger, NULL, NULL);
+    cdtext_decode_type(buf, span, CDTEXT_PACK_MESSAGE,
+                       out->message, sizeof out->message, NULL, NULL);
+    /* 0x8E carries the disc UPC/EAN at track 0 and a per-track ISRC at track n. */
+    cdtext_decode_type(buf, span, CDTEXT_PACK_UPC_ISRC,
+                       out->upc_ean, sizeof out->upc_ean,
+                       out->track_isrcs, &out->isrc_count);
+
+    /* "have" gates useful identity/metadata: an empty result isn't worth
+       emitting. False → the adapter reports no CD-TEXT (null), like the
+       other media reads. */
+    out->have = out->title[0] || out->performer[0] || out->track_count > 0 ||
+                out->songwriter[0] || out->composer[0] || out->arranger[0] ||
+                out->message[0] || out->upc_ean[0] || out->isrc_count > 0;
     return out->have;
 }
 
@@ -2088,6 +2166,21 @@ void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
     w->spwp  = (f.data[0] & 0x02u) != 0;
     w->wdcb  = (f.data[0] & 0x04u) != 0;
     w->dwp   = (f.data[0] & 0x08u) != 0;
+}
+
+/* Contract in mos_pure.h. Curated capability-presence flags from the RT=0
+   walk: Real-Time Streaming (0107h), Power Management (0100h), Time-out
+   (0105h). Presence only (find), matching the SecurDisc/VCPS presence
+   pattern; no payload byte is decoded. Does NOT zero-init out. */
+void mos_internal_capabilities_from_config(const uint8_t *buf, size_t len,
+                                           mos_drive_caps *out)
+{
+    if (!out) return;
+    mos_drive_capabilities *c = &out->capabilities;
+    mos_config_feature f;
+    c->real_time_streaming = mos_internal_config_find_feature(buf, len, 0x0107, &f);
+    c->power_management     = mos_internal_config_find_feature(buf, len, 0x0100, &f);
+    c->timeout              = mos_internal_config_find_feature(buf, len, 0x0105, &f);
 }
 
 /* Contract in mos_pure.h. The Profile List feature (0x0000) payload is a
@@ -2527,7 +2620,11 @@ mos_error mos_query_volume(mos_handle_t *h, bool *mounted,
  *   [9]    Number of Sessions (MSB)
  *   [10]   First Track Number in Last Session (MSB)
  *   [11]   Last Track Number in Last Session (MSB)
- *   (bytes 12+ : undecoded — see SPEC.md.)
+ *   [12..15] Disc Identification (BE) — valid iff byte7 DID_V (bit7)
+ *   [16..19] Last Session Lead-in Start (MSF)   — undecoded
+ *   [20..23] Last Possible Lead-out Start (MSF) — undecoded
+ *   [24..31] Disc Bar Code — valid iff byte7 DBC_V (bit6)
+ *   (bytes 32+ : reserved / OPC table — undecoded; see SPEC.md.)
  *
  * Safety contract (the device controls the length): `len` is the only
  * trusted ceiling; the Disc Information Length can only shrink the trusted
@@ -2564,6 +2661,30 @@ bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
     /* BG Format Status (byte 7 bits 1:0): background-format state of
        DVD+RW / BD-RE / Mount Rainier media. Values match Linux CDM_MRW_*. */
     out->bg_format_status = (uint8_t)(buf[7] & 0x03u);
+
+    /* Disc Type (byte 8) — always within the >=12 trusted floor. */
+    out->disc_type = buf[8];
+
+    /* Validity-gated identifiers. Each is decoded only when its validity bit
+       (byte 7) is set AND the trusted region (end) actually reaches the
+       field — the device-reported length can only shrink that region, so a
+       bit that claims validity over bytes the reply does not carry yields a
+       false *_valid, never an OOB read. */
+    out->disc_id_valid = false;
+    out->disc_id       = 0;
+    if ((buf[7] & 0x80u) && end >= 16) {            /* DID_V, bytes 12..15 */
+        out->disc_id = ((uint32_t)buf[12] << 24) | ((uint32_t)buf[13] << 16)
+                     | ((uint32_t)buf[14] <<  8) |  (uint32_t)buf[15];
+        out->disc_id_valid = true;
+    }
+
+    out->bar_code_valid = false;
+    for (size_t i = 0; i < sizeof out->bar_code; i++) out->bar_code[i] = 0;
+    if ((buf[7] & 0x40u) && end >= 32) {            /* DBC_V, bytes 24..31 */
+        for (size_t i = 0; i < 8; i++) out->bar_code[i] = buf[24 + i];
+        out->bar_code_valid = true;
+    }
+
     return true;
 }
 
@@ -3293,7 +3414,10 @@ bool mos_internal_inqdata_parse(const uint8_t *buf, size_t len,
  * Page 0x2A offsets (relative to page start): loading mechanism page[6]>>5
  * and eject page[6]&0x08 (sr.c cross-check in SPEC.md), buffer size
  * page[12..13] BE KB and lock bits page[6] bit1 supported / bit2 state
- * (MMC-3 page-2A). Page 0x01 is the canonical SPC Read/Write Error
+ * (MMC-3 page-2A). The read/rip capability bits ride the same page:
+ * BUF/BURN-Free page[4] bit7, Multisession page[4] bit6, CD-DA stream
+ * accurate page[5] bit1, C2 error pointers page[5] bit4 (MMC-3 page-2A;
+ * the EAC/AccurateRip-relevant trio). Page 0x01 is the canonical SPC R/W Error
  * Recovery page. A real MODE SENSE capture is a falsifier per the hardware
  * ADR, not a design input. No payload byte is ever used as an offset.
  */
@@ -3367,6 +3491,11 @@ bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
     out->lock_supported    = (p[6] & 0x02) != 0;
     out->locked            = (p[6] & 0x04) != 0;
     out->buffer_kb         = (uint16_t)((p[12] << 8) | p[13]);
+    /* Read/rip capability bits — bytes 4 and 5, well within the >=12 floor. */
+    out->buf_underrun      = (p[4] & 0x80) != 0;
+    out->multisession      = (p[4] & 0x40) != 0;
+    out->accurate_stream   = (p[5] & 0x02) != 0;
+    out->c2_pointers       = (p[5] & 0x10) != 0;
     out->have              = true;
     return true;
 }
@@ -4044,6 +4173,8 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
        PRIMARY serial source, non-exclusive (no raw INQUIRY, no exclusive lock). */
     mos_internal_serial_from_config(buf, sizeof(buf),
                                     h->caps.serial, sizeof h->caps.serial);
+    /* Curated capability-presence flags (0107h/0100h/0105h) from the same walk. */
+    mos_internal_capabilities_from_config(buf, sizeof(buf), &h->caps);
     /* Current Profile (loaded medium) from the same RT=0 header — 0 when the
        field is absent/truncated or the tray is empty. Media-dependent; used
        only to name the loaded disc's class (e.g. speed 1x scaling). */
@@ -4736,6 +4867,31 @@ uint8_t mos_disc_info_bg_format_status(const mos_disc_info *d)
     return d ? d->bg_format_status : 0;
 }
 
+uint8_t mos_disc_info_disc_type(const mos_disc_info *d)
+{
+    return d ? d->disc_type : 0;
+}
+
+bool mos_disc_info_disc_id_present(const mos_disc_info *d)
+{
+    return d ? d->disc_id_valid : false;
+}
+
+uint32_t mos_disc_info_disc_id(const mos_disc_info *d)
+{
+    return (d && d->disc_id_valid) ? d->disc_id : 0;
+}
+
+bool mos_disc_info_bar_code_present(const mos_disc_info *d)
+{
+    return d ? d->bar_code_valid : false;
+}
+
+const uint8_t *mos_disc_info_bar_code(const mos_disc_info *d)
+{
+    return (d && d->bar_code_valid) ? d->bar_code : NULL;
+}
+
 /* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
  * NULL- and range-tolerant; the entry index is bounded by track_count,
  * which the fail-closed parser proved covers exactly first..last. */
@@ -4776,6 +4932,29 @@ uint8_t mos_toc_track_control(const mos_toc *t, size_t i)
 uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i)
 {
     return (t && i < t->track_count) ? t->tracks[i].start_lba : 0;
+}
+
+/* Derived CD classification (pure; control bit 2 = data track, MMC Q-channel).
+   No new read — purely a function of the already-parsed TOC / session layout. */
+const char *mos_toc_disc_mode(const mos_toc *t)
+{
+    if (!t || t->track_count == 0) return NULL;
+    bool any_audio = false, any_data = false;
+    for (uint8_t i = 0; i < t->track_count; i++) {
+        if (t->tracks[i].control & 0x04u) any_data = true;
+        else                              any_audio = true;
+    }
+    if (any_audio && any_data) return "mixed";
+    return any_data ? "data" : "audio";
+}
+
+bool mos_cd_extra(const mos_toc *t, const mos_session_layout *s)
+{
+    if (!t || !s || t->track_count == 0) return false;
+    if (mos_session_layout_count(s) < 2) return false;          /* multisession */
+    bool first_audio = (t->tracks[0].control & 0x04u) == 0;
+    bool last_data   = (t->tracks[t->track_count - 1].control & 0x04u) != 0;
+    return first_audio && last_data;                            /* audio → data */
 }
 
 /* ---- mos_drive_caps accessors (mos_query_drive_caps) ----------------- */
@@ -4853,6 +5032,21 @@ bool mos_drive_caps_wp_wdcb(const mos_drive_caps *c)
 bool mos_drive_caps_wp_dwp(const mos_drive_caps *c)
 {
     return c ? c->write_protect.dwp : false;
+}
+
+bool mos_drive_caps_real_time_streaming(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.real_time_streaming : false;
+}
+
+bool mos_drive_caps_power_management(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.power_management : false;
+}
+
+bool mos_drive_caps_timeout(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.timeout : false;
 }
 
 uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)
@@ -4990,6 +5184,43 @@ const char *mos_cdtext_track_performer(const mos_cdtext *c, uint8_t track)
     if (!c || track < 1 || track > MOS_CDTEXT_MAX_TRACKS) return NULL;
     const char *p = c->track_performers[track - 1];
     return p[0] ? p : NULL;
+}
+
+const char *mos_cdtext_songwriter(const mos_cdtext *c)
+{
+    return (c && c->songwriter[0]) ? c->songwriter : NULL;
+}
+
+const char *mos_cdtext_composer(const mos_cdtext *c)
+{
+    return (c && c->composer[0]) ? c->composer : NULL;
+}
+
+const char *mos_cdtext_arranger(const mos_cdtext *c)
+{
+    return (c && c->arranger[0]) ? c->arranger : NULL;
+}
+
+const char *mos_cdtext_message(const mos_cdtext *c)
+{
+    return (c && c->message[0]) ? c->message : NULL;
+}
+
+const char *mos_cdtext_upc_ean(const mos_cdtext *c)
+{
+    return (c && c->upc_ean[0]) ? c->upc_ean : NULL;
+}
+
+uint8_t mos_cdtext_isrc_count(const mos_cdtext *c)
+{
+    return c ? c->isrc_count : 0;
+}
+
+const char *mos_cdtext_track_isrc(const mos_cdtext *c, uint8_t track)
+{
+    if (!c || track < 1 || track > MOS_CDTEXT_MAX_TRACKS) return NULL;
+    const char *s = c->track_isrcs[track - 1];
+    return s[0] ? s : NULL;
 }
 
 /* ---- mos_physical_structure accessors (mos_query_physical_structure) - *
@@ -5361,6 +5592,26 @@ bool mos_mode_caps_locked(const mos_mode_caps *m)
 uint16_t mos_mode_caps_buffer_kb(const mos_mode_caps *m)
 {
     return m ? m->buffer_kb : 0;
+}
+
+bool mos_mode_caps_buf_underrun(const mos_mode_caps *m)
+{
+    return m ? m->buf_underrun : false;
+}
+
+bool mos_mode_caps_multisession(const mos_mode_caps *m)
+{
+    return m ? m->multisession : false;
+}
+
+bool mos_mode_caps_accurate_stream(const mos_mode_caps *m)
+{
+    return m ? m->accurate_stream : false;
+}
+
+bool mos_mode_caps_c2_pointers(const mos_mode_caps *m)
+{
+    return m ? m->c2_pointers : false;
 }
 
 /* ---- mos_error_recovery accessors (mos_query_error_recovery) -------- */

@@ -6,6 +6,8 @@
   "disc": {
     "profile": "0x0008",
     "class": "cd",
+    "disc_mode": "audio",
+    "cd_extra": false,
     "toc": {
       "first_track": 1,
       "last_track": 2,
@@ -35,14 +37,22 @@
       "sessions": 1,
       "tracks": 2,
       "bg_format": 0,
-      "bg_format_name": "none"
+      "bg_format_name": "none",
+      "disc_type": 0,
+      "disc_id": null,
+      "bar_code": null
     },
     "disc_structure": null,
     "volume_name": null,
     "track_info": null,
     "cdtext": null,
     "session_layout": [
-      { "session": 1, "first_track": 1, "last_track": 2, "leadout_lba": 50000 }
+      {
+        "session": 1,
+        "first_track": 1,
+        "last_track": 2,
+        "leadout_lba": 50000
+      }
     ],
     "atip": null
   }

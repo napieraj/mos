@@ -387,10 +387,22 @@ typedef struct mos_write_protect {
     bool dwp;       /* supports the Disc Write Protect PAC on BD-R/-RE        */
 } mos_write_protect;
 
+/* Drive CAPABILITY presence from the RT=0 GET CONFIGURATION walk (F7) — the
+   curated, named subset of optional features mos surfaces on `mos drive`
+   (the same walk `mos features` dumps raw). Presence = the feature
+   descriptor is in the reply; these carry no further payload mos decodes.
+   MMC-6 feature numbers. */
+typedef struct mos_drive_capabilities {
+    bool real_time_streaming; /* 0107h — host-paced read/write performance   */
+    bool power_management;     /* 0100h — host/drive power management         */
+    bool timeout;              /* 0105h — bounded command timeouts            */
+} mos_drive_capabilities;
+
 /* Drive-static facts from a full (RT=0) GET CONFIGURATION response. */
 typedef struct mos_drive_caps {
     mos_drive_protection protection;
     mos_write_protect    write_protect;
+    mos_drive_capabilities capabilities;
     /* Supported-profile set from the Profile List feature (0x0000), drive-
        static (the per-descriptor CurrentP bit is media-dependent, ignored).
        64 covers a conformant max (one-byte Additional Length ⇒ ≤63 codes). */
@@ -432,6 +444,14 @@ void mos_internal_protection_from_config(const uint8_t *buf, size_t len,
    state. Pure, no-OOB — fuzz/ASan-gated. */
 void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
                                             mos_drive_caps *out);
+
+/* Set out->capabilities presence flags from a full (RT=0) GET CONFIGURATION
+   reply: Real-Time Streaming (0107h), Power Management (0100h), Time-out
+   (0105h). Presence only — the descriptor being in the walk. Does NOT
+   zero-init (called after mos_internal_protection_from_config, which does).
+   Pure, no-OOB — fuzz/ASan-gated. */
+void mos_internal_capabilities_from_config(const uint8_t *buf, size_t len,
+                                           mos_drive_caps *out);
 
 /* Decode the Profile List feature (0x0000) into out_codes[0..cap), setting
    *out_count. Each descriptor is 4 bytes: [0..1] Profile Number (BE),
@@ -527,13 +547,27 @@ struct mos_disc_info {
                                             state — 0 none, 1 inactive,
                                             2 active, 3 complete (Linux
                                             CDM_MRW_* macros) */
+    uint8_t  disc_type;                  /* byte 8: 0x00 CD-DA/CD-ROM,
+                                            0x10 CD-I, 0x20 CD-ROM XA,
+                                            0xFF undefined */
+    bool     disc_id_valid;              /* byte 7 bit 7 (DID_V) AND bytes
+                                            12..15 present in trusted region */
+    uint32_t disc_id;                    /* bytes 12..15 (BE), valid iff
+                                            disc_id_valid — the writer-assigned
+                                            32-bit Disc Identification */
+    bool     bar_code_valid;             /* byte 7 bit 6 (DBC_V) AND bytes
+                                            24..31 present in trusted region */
+    uint8_t  bar_code[8];                /* bytes 24..31, valid iff bar_code_valid */
 };
 
 /* Decode a READ DISC INFORMATION (0x51, data type 000b) response into *out.
  * True only when the fixed numeric region (through byte 11) is present per
- * BOTH `len` and the reply's declared length. Address fields and
- * validity-gated identifiers are not decoded. Layout and safety contract
- * at the decoder (mos_discinfo.c). */
+ * BOTH `len` and the reply's declared length. disc_type (byte 8) is always
+ * decoded; the validity-gated 32-bit Disc Identification (bytes 12..15,
+ * DID_V) and Disc Bar Code (bytes 24..31, DBC_V) are decoded only when both
+ * their validity bit is set AND the trusted region reaches them — otherwise
+ * the *_valid flag is false. Lead-in/lead-out addresses remain undecoded.
+ * Layout and safety contract at the decoder (mos_discinfo.c). */
 bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
                                   mos_disc_info *out);
 
@@ -589,6 +623,19 @@ struct mos_cdtext {
     uint8_t track_count;
     char    track_titles[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
     char    track_performers[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
+    /* Extended album-level packs (block 0, single-byte), all off the SAME
+       0101b reply — 0x82 Songwriter, 0x83 Composer, 0x84 Arranger, 0x85
+       Message, and the 0x8E disc UPC/EAN (track-0 string). "" when absent. */
+    char    songwriter[MOS_CDTEXT_STR_CAP];
+    char    composer[MOS_CDTEXT_STR_CAP];
+    char    arranger[MOS_CDTEXT_STR_CAP];
+    char    message[MOS_CDTEXT_STR_CAP];
+    char    upc_ean[MOS_CDTEXT_STR_CAP];
+    /* Per-track ISRC from the 0x8E pack (track n; track 0 is the UPC/EAN
+       above). isrc_count is the highest track carrying an ISRC;
+       track_isrcs[n-1] is track n's ISRC ("" if absent). */
+    uint8_t isrc_count;
+    char    track_isrcs[MOS_CDTEXT_MAX_TRACKS][MOS_CDTEXT_TRACK_TITLE_CAP];
 };
 
 /* Parse a CD-TEXT (format 0101b) reply into *out. True only when at least
@@ -812,6 +859,12 @@ struct mos_mode_caps {
     bool     lock_supported;    /* page[6] bit 1 */
     bool     locked;            /* page[6] bit 2 (live state) */
     uint16_t buffer_kb;         /* page[12..13] BE, KB */
+    /* Read/rip capability bits from the same page (F3): */
+    bool     buf_underrun;      /* page[4] bit 7 (BUF — BURN-Free / buffer-
+                                   underrun-free recording) */
+    bool     multisession;      /* page[4] bit 6 (reads sessions > 1) */
+    bool     accurate_stream;   /* page[5] bit 1 (CD-DA stream is accurate) */
+    bool     c2_pointers;       /* page[5] bit 4 (C2 error pointers supported) */
 };
 
 struct mos_error_recovery {

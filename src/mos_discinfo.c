@@ -20,7 +20,11 @@
  *   [9]    Number of Sessions (MSB)
  *   [10]   First Track Number in Last Session (MSB)
  *   [11]   Last Track Number in Last Session (MSB)
- *   (bytes 12+ : undecoded — see SPEC.md.)
+ *   [12..15] Disc Identification (BE) — valid iff byte7 DID_V (bit7)
+ *   [16..19] Last Session Lead-in Start (MSF)   — undecoded
+ *   [20..23] Last Possible Lead-out Start (MSF) — undecoded
+ *   [24..31] Disc Bar Code — valid iff byte7 DBC_V (bit6)
+ *   (bytes 32+ : reserved / OPC table — undecoded; see SPEC.md.)
  *
  * Safety contract (the device controls the length): `len` is the only
  * trusted ceiling; the Disc Information Length can only shrink the trusted
@@ -58,5 +62,29 @@ bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
     /* BG Format Status (byte 7 bits 1:0): background-format state of
        DVD+RW / BD-RE / Mount Rainier media. Values match Linux CDM_MRW_*. */
     out->bg_format_status = (uint8_t)(buf[7] & 0x03u);
+
+    /* Disc Type (byte 8) — always within the >=12 trusted floor. */
+    out->disc_type = buf[8];
+
+    /* Validity-gated identifiers. Each is decoded only when its validity bit
+       (byte 7) is set AND the trusted region (end) actually reaches the
+       field — the device-reported length can only shrink that region, so a
+       bit that claims validity over bytes the reply does not carry yields a
+       false *_valid, never an OOB read. */
+    out->disc_id_valid = false;
+    out->disc_id       = 0;
+    if ((buf[7] & 0x80u) && end >= 16) {            /* DID_V, bytes 12..15 */
+        out->disc_id = ((uint32_t)buf[12] << 24) | ((uint32_t)buf[13] << 16)
+                     | ((uint32_t)buf[14] <<  8) |  (uint32_t)buf[15];
+        out->disc_id_valid = true;
+    }
+
+    out->bar_code_valid = false;
+    for (size_t i = 0; i < sizeof out->bar_code; i++) out->bar_code[i] = 0;
+    if ((buf[7] & 0x40u) && end >= 32) {            /* DBC_V, bytes 24..31 */
+        for (size_t i = 0; i < 8; i++) out->bar_code[i] = buf[24 + i];
+        out->bar_code_valid = true;
+    }
+
     return true;
 }

@@ -6,6 +6,8 @@
   "disc": {
     "profile": "0x0041",
     "class": "bd",
+    "disc_mode": null,
+    "cd_extra": false,
     "toc": null,
     "disc_info": {
       "status": "blank",
@@ -13,7 +15,10 @@
       "sessions": 1,
       "tracks": 1,
       "bg_format": 0,
-      "bg_format_name": "none"
+      "bg_format_name": "none",
+      "disc_type": 0,
+      "disc_id": null,
+      "bar_code": null
     },
     "disc_structure": null,
     "volume_name": null,

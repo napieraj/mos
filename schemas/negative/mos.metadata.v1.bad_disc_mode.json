@@ -6,7 +6,7 @@
   "disc": {
     "profile": "0x0008",
     "class": "cd",
-    "disc_mode": "audio",
+    "disc_mode": "cd_extra",
     "cd_extra": false,
     "toc": {
       "first_track": 1,

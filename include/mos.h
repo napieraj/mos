@@ -372,6 +372,21 @@ uint8_t         mos_disc_info_last_session_state(const mos_disc_info *d);
    format state of DVD+RW / BD-RE / Mount Rainier media. Map to a token
    with mos_bg_format_status_name(). */
 uint8_t         mos_disc_info_bg_format_status(const mos_disc_info *d);
+/* Disc Type, raw (byte 8): 0x00 CD-DA/CD-ROM, 0x10 CD-I, 0x20 CD-ROM XA,
+   0xFF undefined. Raw on purpose — a small device byte mos does not
+   reclassify. */
+uint8_t         mos_disc_info_disc_type(const mos_disc_info *d);
+/* 32-bit Disc Identification (bytes 12..15), the writer-assigned per-disc
+   id for recordable media. *_present is false (and *_value 0) unless the
+   reply's DID_V bit is set and the field was actually carried. */
+bool            mos_disc_info_disc_id_present(const mos_disc_info *d);
+uint32_t        mos_disc_info_disc_id(const mos_disc_info *d);
+/* Disc Bar Code (bytes 24..31). *_present is false unless DBC_V was set and
+   the field was carried. mos_disc_info_bar_code() returns a pointer to the
+   8 raw bytes (valid until the next mos_query_disc_info()/mos_close()), or
+   NULL when not present. */
+bool            mos_disc_info_bar_code_present(const mos_disc_info *d);
+const uint8_t  *mos_disc_info_bar_code(const mos_disc_info *d);
 
 /* "blank" / "appendable" / "complete" / "other". Stable lowercase
    tokens, same contract as mos_state_description(). */
@@ -418,6 +433,12 @@ uint8_t  mos_toc_track_number(const mos_toc *t, size_t i);
 uint8_t  mos_toc_track_adr(const mos_toc *t, size_t i);
 uint8_t  mos_toc_track_control(const mos_toc *t, size_t i);
 uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i);
+
+/* Derived CD disc-mode — PURE, no command, from the parsed TOC control bits:
+   "audio" (every track audio), "data" (every track data), "mixed", or NULL
+   when the TOC carried no tracks. (CD-Extra: mos_cd_extra, by the session
+   layout, below.) */
+const char *mos_toc_disc_mode(const mos_toc *t);
 
 /* ---- Mounted volume (DiskArbitration-sourced) ------------------------ */
 
@@ -501,6 +522,15 @@ bool    mos_drive_caps_wp_sswpp(const mos_drive_caps *c);
 bool    mos_drive_caps_wp_spwp(const mos_drive_caps *c);
 bool    mos_drive_caps_wp_wdcb(const mos_drive_caps *c);
 bool    mos_drive_caps_wp_dwp(const mos_drive_caps *c);
+
+/* Curated capability presence from the RT=0 GET CONFIGURATION walk — the
+   named subset `mos drive` surfaces (the same walk `mos features` dumps raw):
+   Real-Time Streaming (0107h, host-paced read/write performance), Power
+   Management (0100h), Time-out (0105h). Presence of the feature descriptor;
+   no further payload. NULL-tolerant (false). */
+bool    mos_drive_caps_real_time_streaming(const mos_drive_caps *c);
+bool    mos_drive_caps_power_management(const mos_drive_caps *c);
+bool    mos_drive_caps_timeout(const mos_drive_caps *c);
 
 /* Supported-profile set from the Profile List feature (0x0000) — the
    drive-static disc types this drive handles (the modern, BD-aware "what can
@@ -683,6 +713,21 @@ uint8_t     mos_cdtext_track_count(const mos_cdtext *c);
 const char *mos_cdtext_track_title(const mos_cdtext *c, uint8_t track);
 const char *mos_cdtext_track_performer(const mos_cdtext *c, uint8_t track);
 
+/* Extended album-level CD-TEXT fields (packs 0x82-0x85) and the disc
+   UPC/EAN (0x8E track 0). NULL when absent/empty. Disc-controlled text;
+   escape before display. */
+const char *mos_cdtext_songwriter(const mos_cdtext *c);
+const char *mos_cdtext_composer(const mos_cdtext *c);
+const char *mos_cdtext_arranger(const mos_cdtext *c);
+const char *mos_cdtext_message(const mos_cdtext *c);
+const char *mos_cdtext_upc_ean(const mos_cdtext *c);
+
+/* Per-track ISRC (pack 0x8E, track n). mos_cdtext_isrc_count is the highest
+   track carrying an ISRC (0 = none); mos_cdtext_track_isrc returns track n's
+   ISRC (1-based), or NULL when absent/empty or out of range. */
+uint8_t     mos_cdtext_isrc_count(const mos_cdtext *c);
+const char *mos_cdtext_track_isrc(const mos_cdtext *c, uint8_t track);
+
 /* ---- Physical structure: DVD/HD-DVD ----------------- */
 
 /* Result of a physical-structure query. Opaque, handle-owned; valid
@@ -813,6 +858,13 @@ uint8_t  mos_session_layout_first_track(const mos_session_layout *s, uint8_t i);
 uint8_t  mos_session_layout_last_track(const mos_session_layout *s, uint8_t i);
 bool     mos_session_layout_have_leadout(const mos_session_layout *s, uint8_t i);
 uint32_t mos_session_layout_leadout_lba(const mos_session_layout *s, uint8_t i);
+
+/* Derived CD-Extra flag — PURE, no command. True for a Blue Book Enhanced CD:
+   a multisession disc (>=2 sessions in the layout) whose first TOC track is
+   audio and whose last is data (audio session(s) followed by a data session).
+   False without both a TOC and a >=2-session layout, or for any non-CD-Extra
+   shape. Pairs with mos_toc_disc_mode (which returns "mixed" for this disc). */
+bool     mos_cd_extra(const mos_toc *t, const mos_session_layout *s);
 
 /* ---- ATIP (CD-R/RW pre-groove identity) -------------- */
 
@@ -992,6 +1044,15 @@ bool     mos_mode_caps_can_eject(const mos_mode_caps *m);
 bool     mos_mode_caps_lock_supported(const mos_mode_caps *m);
 bool     mos_mode_caps_locked(const mos_mode_caps *m);
 uint16_t mos_mode_caps_buffer_kb(const mos_mode_caps *m);
+/* Read/rip capability bits (page 0x2A). BURN-Free / buffer-underrun-free
+   recording, multisession read, accurate CD-DA stream, and C2-error-pointer
+   support — the latter three are the EAC/AccurateRip-relevant features.
+   NOTE: C2-pointer reliability is firmware-dependent; this reports the
+   drive's claim, not its accuracy. */
+bool     mos_mode_caps_buf_underrun(const mos_mode_caps *m);
+bool     mos_mode_caps_multisession(const mos_mode_caps *m);
+bool     mos_mode_caps_accurate_stream(const mos_mode_caps *m);
+bool     mos_mode_caps_c2_pointers(const mos_mode_caps *m);
 
 /* Loading-mechanism token: "caddy" / "tray" / "popup" / "changer_disc" /
    "changer_cartridge", or NULL for reserved/unknown codes. */

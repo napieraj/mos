@@ -25,6 +25,8 @@ _mos() {
         '--bsd[BSD form selector]:bsd name:_mos_drives'
         '--registry[registry_id selector]:registry id:'
         '(-j --json)'{-j,--json}'[emit JSON output]'
+        '--pairs[flatten JSON to dotted key=value lines]'
+        '--json-seq[RFC 7464 RS-framed NDJSON stream (watch)]'
         '--color[colorize human output]:when:(auto always never)'
         '--no-color[disable color (alias for --color never)]'
         '(-h --help)'{-h,--help}'[show help]'

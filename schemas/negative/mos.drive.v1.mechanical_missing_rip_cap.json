@@ -21,11 +21,6 @@
     "vcps": false
   },
   "write_protect": null,
-  "capabilities": {
-    "real_time_streaming": true,
-    "power_management": true,
-    "timeout": true
-  },
   "profiles": [
     {
       "code": "0x0008",
@@ -95,8 +90,7 @@
     "buffer_kb": 4096,
     "buf_underrun": true,
     "multisession": true,
-    "accurate_stream": true,
-    "c2_pointers": true
+    "accurate_stream": true
   },
   "error_recovery": {
     "awre": true,

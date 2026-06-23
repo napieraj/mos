@@ -6,6 +6,8 @@
   "disc": {
     "profile": null,
     "class": null,
+    "disc_mode": null,
+    "cd_extra": false,
     "toc": null,
     "disc_info": null,
     "disc_structure": null,

@@ -7,7 +7,19 @@
 #define MOS_CLI_IO_H
 
 #include <stdio.h>
+#include <stdbool.h>
 #include <stdint.h>
+
+/* Flatten a JSON document (`json`, NUL-terminated) into dotted key=value
+ * lines on `out`, one scalar per line — the `--pairs` output mode. Nested
+ * objects join with '.', arrays index with [i] (e.g.
+ * `speeds.descriptors[0].read_kbps=35980`). Scalar values are emitted as
+ * their RAW JSON text: strings keep their quotes and escapes (so every line
+ * is single-line and shell-parseable), numbers/true/false/null verbatim.
+ * Empty objects/arrays emit `key={}` / `key=[]` so the key is not lost.
+ * Returns false on malformed JSON (the caller should fall back), true when
+ * the whole document parsed. Pure (no IOKit) — unit-tested in test_io.c. */
+bool mos_cli_json_to_pairs(const char *json, FILE *out);
 
 /* Write `s` as a complete double-quoted, escaped JSON string value, or
  * the literal `null` when s == NULL. The quotes are part of the output;

@@ -6,8 +6,6 @@
   "disc": {
     "profile": "0x0008",
     "class": "cd",
-    "disc_mode": "audio",
-    "cd_extra": false,
     "toc": {
       "first_track": 1,
       "last_track": 4,
@@ -73,8 +71,7 @@
         {
           "track": 1,
           "title": "So What",
-          "performer": null,
-          "isrc": "USSM15900001"
+          "performer": null
         },
         {
           "track": 2,

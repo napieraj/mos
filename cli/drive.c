@@ -123,6 +123,18 @@ static void emit_json(const drive_doc *d)
             fputs("null", stdout);
     }
 
+    /* capabilities: curated presence flags for optional features in the same
+       RT=0 walk. Always an object (false when absent), unlike write_protect. */
+    {
+        const mos_drive_caps *c = d->caps;
+        fprintf(stdout,
+                ",\n  \"capabilities\": {\"real_time_streaming\": %s, "
+                "\"power_management\": %s, \"timeout\": %s}",
+                mos_drive_caps_real_time_streaming(c) ? "true" : "false",
+                mos_drive_caps_power_management(c)     ? "true" : "false",
+                mos_drive_caps_timeout(c)              ? "true" : "false");
+    }
+
     /* Supported-profile list: array of {code, name}. Empty array when the
        Profile List feature was absent — a present-but-empty set, not null. */
     fputs(",\n  \"profiles\": [", stdout);
@@ -182,11 +194,17 @@ static void emit_json(const drive_doc *d)
         if (lm) mos_cli_json_str(stdout, lm); else fputs("null", stdout);
         fprintf(stdout,
                 ", \"can_eject\": %s, \"lock_supported\": %s, "
-                "\"locked\": %s, \"buffer_kb\": %u}",
+                "\"locked\": %s, \"buffer_kb\": %u, "
+                "\"buf_underrun\": %s, \"multisession\": %s, "
+                "\"accurate_stream\": %s, \"c2_pointers\": %s}",
                 mos_mode_caps_can_eject(d->caps_2a) ? "true" : "false",
                 mos_mode_caps_lock_supported(d->caps_2a) ? "true" : "false",
                 mos_mode_caps_locked(d->caps_2a) ? "true" : "false",
-                mos_mode_caps_buffer_kb(d->caps_2a));
+                mos_mode_caps_buffer_kb(d->caps_2a),
+                mos_mode_caps_buf_underrun(d->caps_2a) ? "true" : "false",
+                mos_mode_caps_multisession(d->caps_2a) ? "true" : "false",
+                mos_mode_caps_accurate_stream(d->caps_2a) ? "true" : "false",
+                mos_mode_caps_c2_pointers(d->caps_2a) ? "true" : "false");
     } else {
         fputs("null", stdout);
     }
@@ -327,6 +345,28 @@ static void emit_human(const drive_doc *d)
                                        mos_drive_caps_write_protect(d->caps)
                                            ? wp_buf : NULL };
 
+    /* Capabilities (curated GET CONFIG feature presence): comma-joined list
+       of the optional features the drive advertises; NULL ("-") when none. */
+    char cap_buf[48];
+    bool have_cap = false;
+    if (d->caps) {
+        size_t co = 0;
+        const struct { bool on; const char *tag; } cf[] = {
+            { mos_drive_caps_real_time_streaming(d->caps), "real-time-streaming" },
+            { mos_drive_caps_power_management(d->caps),    "power-management"    },
+            { mos_drive_caps_timeout(d->caps),             "timeout"             },
+        };
+        for (size_t i = 0; i < sizeof cf / sizeof cf[0]; i++) {
+            if (!cf[i].on) continue;
+            int w = snprintf(cap_buf + co, sizeof cap_buf - co, "%s%s",
+                             have_cap ? ", " : "", cf[i].tag);
+            if (w < 0 || (size_t)w >= sizeof cap_buf - co) break;
+            co += (size_t)w;
+            have_cap = true;
+        }
+    }
+    pairs[n++] = (mos_cli_human_pair){ "Capabilities", have_cap ? cap_buf : NULL };
+
     /* Supported profiles, comma-joined marketing labels (unknown code → hex).
        768 holds the realistic set several times over; a pathological overflow
        stops at what fit (the --json array is the complete record either way).
@@ -401,6 +441,30 @@ static void emit_human(const drive_doc *d)
                  mos_mode_caps_locked(d->caps_2a) ? ", locked" : "");
     }
     pairs[n++] = (mos_cli_human_pair){ "Mechanical", d->caps_2a ? mech_buf : NULL };
+
+    /* Read/rip capability bits (page 0x2A) — list the ones the drive claims.
+       C2/accurate-stream feed accurate CD ripping; BURN-Free is write-side.
+       Shown only when at least one is set (an all-clear list is noise). */
+    char rc_buf[64];
+    bool have_rc = false;
+    if (d->caps_2a) {
+        int off = 0;
+        const struct { bool on; const char *name; } rc[] = {
+            { mos_mode_caps_c2_pointers(d->caps_2a),     "C2" },
+            { mos_mode_caps_accurate_stream(d->caps_2a), "accurate-stream" },
+            { mos_mode_caps_buf_underrun(d->caps_2a),    "BURN-Free" },
+            { mos_mode_caps_multisession(d->caps_2a),    "multisession" },
+        };
+        for (size_t i = 0; i < sizeof rc / sizeof rc[0]; i++) {
+            if (!rc[i].on) continue;
+            int w = snprintf(rc_buf + off, sizeof rc_buf - (size_t)off,
+                             "%s%s", have_rc ? ", " : "", rc[i].name);
+            if (w < 0 || (size_t)w >= sizeof rc_buf - (size_t)off) break;
+            off += w;
+            have_rc = true;
+        }
+    }
+    pairs[n++] = (mos_cli_human_pair){ "Read Caps", have_rc ? rc_buf : NULL };
 
     char erec_buf[64];
     if (d->erec)

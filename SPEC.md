@@ -23,9 +23,14 @@ code; this table is the citation, not the parse.
 
 ### `src/mos_discinfo.c` — READ DISC INFORMATION
 - **Spec:** MMC-6, opcode 0x51, standard data type 000b. First 12 bytes
-  decoded inline.
-- **Not decoded (bytes 12+):** Disc Identification, lead-in / lead-out
-  addresses, bar code, OPC table — informational, not the status.
+  decoded inline, plus the validity-gated identifiers below.
+- **Decoded identification:** Disc Type (byte 8); 32-bit Disc Identification
+  (bytes 12..15, gated on byte 7 DID_V bit 7); Disc Bar Code (bytes 24..31,
+  gated on byte 7 DBC_V bit 6). Each gate also requires the reply's declared
+  length to actually reach the field — a validity bit over uncarried bytes
+  yields not-present, never an OOB read (dual-length rule O-4).
+- **Not decoded:** lead-in / lead-out addresses (bytes 16..23) and the OPC
+  table (bytes 32+, variable) — informational, not the status.
 
 ### `src/mos_discstruct.c` — READ DISC STRUCTURE (Blu-ray DI)
 - **Spec:** MMC-5, opcode 0xAD, BD media type, format 0x00. The DI unit
@@ -111,12 +116,16 @@ code; this table is the citation, not the parse.
 - **Spec:** MMC-3 §6.27 / Red Book CD-TEXT; 18-byte packs.
 - **Cross-check:** libcdio `lib/driver/cdtext.c` (CRC present, not
   verified, as in libcdio).
-- **Decoded:** album + per-track Title (0x80) and Performer (0x81), from
-  the first language block (block 0), single-byte charset.
-- **Not decoded:** other field types (songwriter / composer / arranger /
-  message / genre / ISRC / UPC / disc-id); language blocks 1..7;
-  double-byte (DBCC / MS-JIS) text — a DBCC field reads as absent rather
-  than mis-decoded as Latin-1.
+- **Decoded:** album + per-track Title (0x80) and Performer (0x81); album
+  Songwriter (0x82), Composer (0x83), Arranger (0x84), Message (0x85); the
+  disc UPC/EAN (0x8E track 0) and per-track ISRC (0x8E track n) — all from
+  the first language block (block 0), single-byte charset, off the SAME
+  already-issued 0101b reply (no extra command).
+- **Not decoded:** Genre (0x87, a binary genre code + text, distinct format);
+  disc-id (0x86); language blocks 1..7; double-byte (DBCC / MS-JIS) text — a
+  DBCC field reads as absent rather than mis-decoded as Latin-1. The
+  authoritative ISRC/UPC source is READ SUB-CHANNEL, which mos does not issue;
+  the 0x8E values here are the disc's own CD-TEXT declaration.
 
 ### `src/mos_atip.c` — READ TOC/PMA/ATIP format 0100b (ATIP)
 - **Spec:** MMC-6 r02g §6.25, Table 488 ("READ TOC/PMA/ATIP response data,
@@ -143,6 +152,11 @@ code; this table is the citation, not the parse.
   Status); page 0x01 is the SPC Read/Write Error Recovery page. Sub-page
   format (SPF=1) has a 4-byte header with a BE16 length; 0x2A/0x01 are
   page_0 format. Read-only — no MODE SELECT.
+- **Page 0x2A read/rip caps:** BUF/BURN-Free page[4] bit7, Multisession
+  page[4] bit6, CD-DA stream accurate page[5] bit1, C2 error pointers
+  page[5] bit4 (all within the ≥12-byte page floor already required for the
+  buffer size). C2-pointer reliability is firmware-dependent — mos reports
+  the claim, not the accuracy.
 - **Cross-check:** page 0x2A offsets against Linux `sr.c`
   `get_capabilities`.
 
@@ -180,6 +194,11 @@ code; this table is the citation, not the parse.
     from this same RT=0 walk, populated where VPD 0x80 is empty (the WH16NS60
     finding — AGENTS.md serial-source ADR). Neighbours in the walk: 0109h Media
     Serial Number, 010Ah Disc Control Blocks.
+  - **Curated capability presence (`mos.drive.v1.capabilities`):** PRESENCE of
+    optional features in the same walk — **Real-Time Streaming 0107h**
+    (host-paced read/write performance), **Power Management 0100h**, **Time-out
+    0105h**. Presence only (no payload decode); the curated, named subset
+    `mos drive` surfaces from the walk `mos features` dumps raw.
 
 ### `src/mos_inqdata.c` — standard INQUIRY data (identity + version + descriptors)
 - **Spec:** SPC-4 §6.4.2, opcode 0x12 EVPD=0. VENDOR bytes 8-15, PRODUCT

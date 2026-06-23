@@ -6,6 +6,8 @@
   "disc": {
     "profile": "0x0041",
     "class": "bd",
+    "disc_mode": "data",
+    "cd_extra": false,
     "toc": {
       "first_track": 1,
       "last_track": 1,
@@ -27,7 +29,10 @@
       "sessions": 1,
       "tracks": 1,
       "bg_format": 0,
-      "bg_format_name": "none"
+      "bg_format_name": "none",
+      "disc_type": 0,
+      "disc_id": null,
+      "bar_code": null
     },
     "disc_structure": {
       "disc_type": "BDR",

@@ -6,6 +6,8 @@
   "disc": {
     "profile": "0x0040",
     "class": "bd",
+    "disc_mode": "data",
+    "cd_extra": false,
     "toc": {
       "first_track": 1,
       "last_track": 1,

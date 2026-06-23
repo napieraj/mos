@@ -10,9 +10,11 @@
 #include <errno.h>
 #include <getopt.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sysexits.h>
+#include <unistd.h>
 
 /* The command table — the single source of truth for the verb surface.
    Each descriptor lives in its own cli/<verb>.c; this array fixes their
@@ -94,6 +96,11 @@ void mos_cli_print_usage(FILE *f)
         "  -j, --json        Emit JSON (mos.state.v1 / mos.error.v1 /\n"
         "                    mos.list.v1). watch is always NDJSON\n"
         "                    (mos.event.v1); --json is a no-op there.\n"
+        "      --pairs       Flatten the JSON document to dotted key=value\n"
+        "                    lines (e.g. speeds.max_read_kbps=35980), for\n"
+        "                    grep/awk. One-shot verbs only (not watch/probe).\n"
+        "      --json-seq    RFC 7464: prefix each watch NDJSON line with RS\n"
+        "                    (0x1E) for resync-safe streaming. watch only.\n"
         "      --color WHEN  Colorize human output: auto (default; on when\n"
         "                    stdout is a tty and NO_COLOR/TERM=dumb are unset),\n"
         "                    always (force, e.g. piping to 'less -R'), never.\n"
@@ -148,6 +155,8 @@ enum {
     OPT_FORCE,
     OPT_COLOR,
     OPT_NO_COLOR,
+    OPT_PAIRS,
+    OPT_JSON_SEQ,
 #ifdef MOS_CLI_PROBE
     OPT_DUMP,
     OPT_CAPTURE,
@@ -172,6 +181,8 @@ static const struct option long_options[] = {
        below rather than being silently discarded; bare --json gives a
        NULL optarg. */
     { "json",    optional_argument, 0, 'j' },
+    { "pairs",   no_argument,       0, OPT_PAIRS },
+    { "json-seq", no_argument,      0, OPT_JSON_SEQ },
     { "help",    no_argument,       0, 'h' },
     { "version", no_argument,       0, OPT_VERSION },
     { 0, 0, 0, 0 }
@@ -254,6 +265,61 @@ static bool reject_legacy_json_version(const char *v)
     mos_cli_safe_ascii(stderr, v);
     fputc('\n', stderr);
     return false;
+}
+
+/* --pairs dispatch: run a one-shot verb with JSON forced on, capturing its
+   stdout, then flatten the captured document to dotted key=value lines. The
+   verb's own JSON path (success mos.*.v1 or the mos.error.v1 envelope) is the
+   single source — we never build a second emitter. fd-level capture (dup2 onto
+   a tmpfile) leaves the verbs untouched: they keep writing to `stdout`.
+   Returns the verb's exit code, upgraded to EX_IOERR only if the real-stdout
+   flatten write fails. On a capture-setup failure we fall back to running the
+   verb normally (JSON straight through) so --pairs never loses output. */
+static int run_with_pairs(const mos_cli_command *selected)
+{
+    flag_json = true;
+
+    fflush(stdout);
+    int saved = dup(STDOUT_FILENO);
+    FILE *cap = tmpfile();
+    if (saved < 0 || !cap) {
+        if (cap) fclose(cap);
+        if (saved >= 0) close(saved);
+        return selected->run();          /* fall back: JSON straight through */
+    }
+    if (dup2(fileno(cap), STDOUT_FILENO) < 0) {
+        fclose(cap); close(saved);
+        return selected->run();
+    }
+
+    int rc = selected->run();            /* writes go to the tmpfile */
+    fflush(stdout);
+    dup2(saved, STDOUT_FILENO);          /* restore real stdout */
+    close(saved);
+
+    /* Slurp the captured JSON. */
+    char *json = NULL;
+    long n = 0;
+    if (fseek(cap, 0, SEEK_END) == 0 && (n = ftell(cap)) >= 0 &&
+        fseek(cap, 0, SEEK_SET) == 0) {
+        json = malloc((size_t)n + 1);
+        if (json) {
+            size_t got = fread(json, 1, (size_t)n, cap);
+            json[got] = '\0';
+        }
+    }
+    fclose(cap);
+    if (!json) return EX_IOERR;          /* captured but couldn't read back */
+
+    if (!mos_cli_json_to_pairs(json, stdout))
+        fputs(json, stdout);             /* not flattenable → raw JSON, never lose it */
+    free(json);
+
+    /* The verb already finalized the (captured) stdout; finalize the real one
+       now. Surface a real-stdout write failure, but never downgrade a verb
+       failure to success. */
+    int fin = mos_cli_finalize_oneshot_stdout(EX_OK);
+    return (rc == EX_OK) ? fin : rc;
 }
 
 int main(int argc, char **argv)
@@ -425,6 +491,12 @@ int main(int argc, char **argv)
                 if (!reject_legacy_json_version(optarg)) return EX_USAGE;
                 flag_json = true;
                 break;
+            case OPT_PAIRS:
+                flag_pairs = true;
+                break;
+            case OPT_JSON_SEQ:
+                flag_json_seq = true;
+                break;
             case 'h':
                 if (verb_word_given)
                     mos_cli_print_command_help(stdout, selected);
@@ -518,6 +590,33 @@ int main(int argc, char **argv)
         return EX_USAGE;
     }
 
+    /* --pairs flattens a single JSON document to dotted key=value lines. It
+       cannot apply to the NDJSON-streaming verbs (watch) — a never-ending
+       stream has no one document to flatten — nor to probe's plain/NDJSON
+       diagnostic output. */
+    if (flag_pairs && (selected->flags & MOS_CLI_CMD_NDJSON)) {
+        fprintf(stderr, "%s: --pairs does not apply to %s (it streams NDJSON; "
+                        "consume each line)\n", progname, selected->name);
+        return EX_USAGE;
+    }
+#ifdef MOS_CLI_PROBE
+    if (flag_pairs && (selected->flags & MOS_CLI_CMD_PROBE)) {
+        fprintf(stderr, "%s: --pairs does not apply to probe output\n",
+                progname);
+        return EX_USAGE;
+    }
+#endif
+
+    /* --json-seq (RFC 7464 RS framing) is for the NDJSON event stream: it
+       frames one object per line for resync. A one-shot document is a single
+       object, so the framing has nothing to delimit — reject it there. */
+    if (flag_json_seq && !(selected->flags & MOS_CLI_CMD_NDJSON)) {
+        fprintf(stderr, "%s: --json-seq applies only to the NDJSON stream "
+                        "(watch); %s emits a single document\n",
+                progname, selected->name);
+        return EX_USAGE;
+    }
+
 #ifdef MOS_CLI_PROBE
     /* Verb-vs-verb contradictions can't arise — verbs come only from the
        one-word dispatch. */
@@ -574,5 +673,6 @@ int main(int argc, char **argv)
        chain. */
     if (selected->flags & MOS_CLI_CMD_NDJSON) flag_json = true;
     mos_cli_selected = selected;
+    if (flag_pairs) return run_with_pairs(selected);
     return selected->run();
 }

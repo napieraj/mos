@@ -44,6 +44,8 @@
       "required": [
         "profile",
         "class",
+        "disc_mode",
+        "cd_extra",
         "toc",
         "disc_info",
         "volume_name",
@@ -72,6 +74,19 @@
             null
           ],
           "description": "Coarse media class derived from profile by mos_profile_class(); null when profile is null or classless. Same closed set as mos.state.v1 media_class (drift-guarded in validate.py)."
+        },
+        "disc_mode": {
+          "enum": [
+            "audio",
+            "data",
+            "mixed",
+            null
+          ],
+          "description": "DERIVED (no command) from the TOC track control bits (bit 2 = data track) via mos_toc_disc_mode(): 'audio' (every track audio), 'data' (every track data), 'mixed', or null when the TOC carried no tracks. A CD concept; for DVD/BD (a single data track) it reads 'data'."
+        },
+        "cd_extra": {
+          "type": "boolean",
+          "description": "DERIVED (no command) via mos_cd_extra(): true for a Blue Book Enhanced CD — a multisession disc (>=2 sessions in session_layout) whose first TOC track is audio and last is data. false otherwise (incl. non-CD, single-session, or absent TOC/layout)."
         },
         "toc": {
           "type": [
@@ -165,7 +180,10 @@
             "sessions",
             "tracks",
             "bg_format",
-            "bg_format_name"
+            "bg_format_name",
+            "disc_type",
+            "disc_id",
+            "bar_code"
           ],
           "additionalProperties": false,
           "properties": {
@@ -205,6 +223,29 @@
                 null
               ],
               "description": "Stable token for bg_format (mos_bg_format_status_name), null only for an out-of-range code \u2014 drift-guarded in validate.py. The in-flight states (inactive/active) signal a disc that may not be reliably readable yet."
+            },
+            "disc_type": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255,
+              "description": "Disc Type (byte 8), raw: 0 = CD-DA/CD-ROM, 16 = CD-I, 32 = CD-ROM XA, 255 = undefined. A small device byte mos does not reclassify (mos_disc_info_disc_type)."
+            },
+            "disc_id": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 4294967295,
+              "description": "32-bit Disc Identification (bytes 12..15), the writer-assigned per-disc id for recordable media. null unless the reply's DID_V bit is set and the field was carried (mos_disc_info_disc_id_present)."
+            },
+            "bar_code": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9a-f]{16}$",
+              "description": "Disc Bar Code (bytes 24..31) as 16 lowercase hex digits, or null unless the reply's DBC_V bit is set and the field was carried. Raw bytes \u2014 the 12-digit barcode reading, if any, is the consumer's to interpret."
             }
           }
         },
@@ -420,10 +461,15 @@
             "object",
             "null"
           ],
-          "description": "CD-TEXT, read via READ TOC/PMA/ATIP format 0101b through the ReadTableOfContents convenience method; null on non-CD media or a CD that publishes no CD-TEXT. The 'which album is in the drive' disambiguator (album title/performer) plus the per-track song titles (for rip file-naming). SCOPE: the FIRST language block's album Title/Performer and per-track TITLES in single-byte charset \u2014 a double-byte (DBCC) field reads null/absent rather than mis-decoded; per-track PERFORMER, the other CD-TEXT field types, and additional language blocks are not decoded (deferred). BEST-EFFORT DISPLAY TEXT, not a fingerprint: audio-CD dedup keys ride on disc.toc, the fail-closed identity primitive. All strings are disc-controlled bytes, emitted byte-faithfully under JSON string escaping; terminal quoting is the consumer's job. Required-and-nullable.",
+          "description": "CD-TEXT, read via READ TOC/PMA/ATIP format 0101b through the ReadTableOfContents convenience method; null on non-CD media or a CD that publishes no CD-TEXT. The 'which album is in the drive' disambiguator plus rip-naming metadata. SCOPE: the FIRST language block, single-byte charset \u2014 album Title/Performer/Songwriter/Composer/Arranger/Message (packs 0x80-0x85), the disc UPC/EAN (0x8E track 0), and per-track Title/Performer/ISRC (0x80/0x81/0x8E). A double-byte (DBCC) field reads null/absent rather than mis-decoded; Genre (0x87, binary code) and additional language blocks are not decoded (deferred, SPEC.md). BEST-EFFORT DISPLAY TEXT, not a fingerprint: audio-CD dedup keys ride on disc.toc, the fail-closed identity primitive; the authoritative ISRC/UPC source is READ SUB-CHANNEL, which mos does not issue. All strings are disc-controlled bytes, emitted byte-faithfully under JSON string escaping; terminal quoting is the consumer's job. Required-and-nullable.",
           "required": [
             "title",
             "performer",
+            "songwriter",
+            "composer",
+            "arranger",
+            "message",
+            "upc_ean",
             "tracks"
           ],
           "additionalProperties": false,
@@ -442,16 +488,52 @@
               ],
               "description": "Album performer (CD-TEXT pack type 0x81, track 0, block 0), or null when absent/empty or double-byte."
             },
+            "songwriter": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Album songwriter (CD-TEXT pack type 0x82, track 0, block 0), or null when absent/empty or double-byte."
+            },
+            "composer": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Album composer (CD-TEXT pack type 0x83, track 0, block 0), or null when absent/empty or double-byte."
+            },
+            "arranger": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Album arranger (CD-TEXT pack type 0x84, track 0, block 0), or null when absent/empty or double-byte."
+            },
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Album message (CD-TEXT pack type 0x85, track 0, block 0), or null when absent/empty or double-byte."
+            },
+            "upc_ean": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Disc UPC/EAN (CD-TEXT pack type 0x8E, track 0, block 0), or null when absent/empty. Raw disc-reported text; not validated as a barcode."
+            },
             "tracks": {
               "type": "array",
               "maxItems": 99,
-              "description": "Per-track CD-TEXT: song title (pack 0x80) and performer (pack 0x81), tracks 1..N, block 0. SPARSE and possibly empty: only tracks carrying a non-empty title OR performer appear, so track numbers may be non-contiguous and the array may be []. Within an entry, title and performer are independently nullable (a various-artists disc may carry a performer but no per-track title, or vice versa).",
+              "description": "Per-track CD-TEXT: song title (pack 0x80), performer (pack 0x81), and ISRC (pack 0x8E track n), tracks 1..N, block 0. SPARSE and possibly empty: only tracks carrying a non-empty title OR performer OR ISRC appear, so track numbers may be non-contiguous and the array may be []. Within an entry, title, performer and isrc are independently nullable.",
               "items": {
                 "type": "object",
                 "required": [
                   "track",
                   "title",
-                  "performer"
+                  "performer",
+                  "isrc"
                 ],
                 "additionalProperties": false,
                 "properties": {
@@ -474,6 +556,13 @@
                       "null"
                     ],
                     "description": "Track performer, or null when this track carried no (non-empty) performer."
+                  },
+                  "isrc": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Track ISRC from CD-TEXT pack 0x8E, or null when this track carried no (non-empty) ISRC. Raw disc-reported text (the authoritative ISRC source is READ SUB-CHANNEL, which mos does not issue)."
                   }
                 }
               }

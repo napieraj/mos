@@ -1984,3 +1984,301 @@ no in-repo capture yet) — a `mos probe --capture` ATIP reply is the standing
 falsifier, landing as a fixture + dated note, never a per-device special-case.
 The pure parser fails closed on a short/hostile reply (atip null), so a
 non-conformant bridge degrades cleanly.
+
+## ADR: READ DISC INFORMATION extended identification surfaced on `mos metadata`
+## — disc_type, the 32-bit Disc ID, and the Disc Bar Code (2026-06-23,
+## pre-tag enrichment; feature survey F1)
+
+`mos.metadata.v1.disc.disc_info` gains three fields — `disc_type` (byte 8),
+`disc_id` (the writer-assigned 32-bit Disc Identification, bytes 12..15), and
+`bar_code` (bytes 24..31) — decoded in the existing pure parser
+(`mos_internal_disc_info_parse`, `src/mos_discinfo.c`) built to MMC-6 READ DISC
+INFORMATION (0x51, standard data type 000b). This records why it is in-doctrine
+and additive. Origin: the deep-research feature survey
+(`doc/research/2026-06-23-feature-survey.md`, item F1), maintainer-approved.
+
+**Why it earns fields.** `disc_id` is the one **content-independent per-disc
+fingerprint** reachable purely over MMC — unlike the MusicBrainz/AccurateRip/
+dvdid ids (permanently consumer-side, TOC/content-derived), it is the disc's
+own writer-assigned identity for recordable media, useful for "is this the same
+blank/burned disc" without reading a sector. `disc_type` and `bar_code` complete
+the standard-reply identification set.
+
+**Zero command-surface change — the lowest-cost class of enrichment.** This is a
+**pure-parse of a reply mos already issues**: `mos_query_disc_info` already reads
+the 34-byte READ DISC INFORMATION response into a fixed buffer (the buffer
+already spans bytes 24..31, so no IOKit-shell change), and the new fields are
+decoded from bytes already in hand. No new command, no raw CDB (the one-of-four
+count is untouched), no exclusive access, no new privilege. The READ DISC
+INFORMATION read stays the same non-exclusive `ReadDiscInformation` convenience
+call.
+
+**Validity gating is dual-keyed (input space, layer 4).** Each identifier is
+decoded only when BOTH its validity bit is set (byte 7: DID_V bit 7 for the Disc
+ID, DBC_V bit 6 for the Bar Code) AND the reply's device-reported Disc
+Information Length actually reaches the field. A drive that asserts validity over
+bytes it did not carry yields *not present* (`*_valid` false), never an OOB read
+— the device length can only shrink the trusted region (dual-length rule O-4),
+matching the parser's existing contract. `disc_type` is unconditional (within the
+≥12-byte floor). Pinned by `discinfo_decodes_disc_type_id_and_barcode`,
+`discinfo_id_barcode_gated_on_validity_bits`, and
+`discinfo_id_barcode_gated_on_declared_length` (pure).
+
+**Schema/placement.** Pre-first-tag, so the fields landed in `mos.metadata.v1`
+in place (mutable-in-place clause): required-and-nullable like the rest of the
+fingerprint subtree — `disc_type` integer, `disc_id` integer|null, `bar_code` a
+16-lowercase-hex string|null (a negative fixture pins the pattern). The human
+view surfaces a `Disc ID` row only when present (an absent id is the common case);
+`disc_type`/`bar_code` stay JSON-only (programmatic detail), the WBE precedent.
+The raw bar-code bytes are emitted faithfully; the 12-digit barcode *reading*, if
+any, is the consumer's to interpret (same posture as ATIP/disc_structure — mos
+reports the bytes, not a curated table).
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): a
+drive that programs DID_V/DBC_V but truncates the field (handled by the
+declared-length gate → not present, fail closed), or one whose Disc ID is unstable
+across re-reads — each lands as a fixture + dated note with a generic gate, never
+a per-device special-case. The layout is spec-built (MMC-6); a `mos probe
+--capture` READ DISC INFORMATION reply carrying DID_V/DBC_V is the standing
+falsifier.
+
+## ADR: page 0x2A read/rip capability bits surfaced on `mos drive` —
+## BURN-Free, multisession, accurate-stream, C2 pointers (2026-06-23,
+## pre-tag enrichment; feature survey F3)
+
+`mos.drive.v1.mechanical` gains four boolean bits decoded from the SAME MODE
+SENSE(10) page 0x2A read it already issues: `buf_underrun` (BUF/BURN-Free,
+page[4] bit7), `multisession` (page[4] bit6), `accurate_stream` (CD-DA stream
+accurate, page[5] bit1), `c2_pointers` (C2 error pointers, page[5] bit4). Origin:
+the deep-research feature survey (`doc/research/2026-06-23-feature-survey.md`,
+item F3), maintainer-approved.
+
+**Why it earns fields.** The accurate-stream + C2 pair are the drive features
+EAC/AccurateRip/whipper probe to choose a CD-ripping strategy — the strongest
+rip-consumer signal the survey found, and `mos drive` ("what IS this drive") is
+their home. BURN-Free and multisession round out the standard page-2A capability
+set.
+
+**Zero command-surface change.** Same `ModeSense10` convenience read of page
+0x2A `mos_query_mode_caps` already issues — decoded from bytes already in hand
+(p[4]/p[5] sit within the existing ≥12-byte page floor that the buffer-size field
+already requires, so no bounds change and no IOKit-shell change). No new command,
+no raw CDB (one-of-four untouched), no MODE SELECT (read-only — the layer-2
+carve-out for read-only optical mode pages is unchanged), no privilege change.
+
+**The C2 honesty caveat.** A drive's page-2A C2 bit is a CLAIM of support, not a
+guarantee of accuracy — the EAC/Hydrogenaudio sources note some firmware reports
+C2 incorrectly. mos reports the bit faithfully (the schema/header/README say so);
+it does not validate it, and it does NOT read C2 data (that is READ CD raw-sector
+territory, out of scope). This is the reporter-not-judge line: surface the claim,
+name its limit, judge nothing.
+
+**Placement / shape.** Pre-first-tag, so the fields land in `mos.drive.v1` in
+place (mutable-in-place), required booleans on the existing `mechanical` block
+(same page, same struct, same query — a second block would re-emit the same
+source). The human view adds a `Read Caps` row listing the set bits, shown only
+when at least one is set; an all-clear list is noise. Pinned by
+`modepage_caps_2a` (full set) and `modepage_caps_rip_bits_isolated_and_accessors`
+(per-bit isolation + accessors + NULL), with a `mechanical_missing_rip_cap`
+negative.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): the
+page-2A bit positions on a real capture (built to MMC-3 with the sr.c cross-check,
+no in-repo capture yet) and the real-world reliability of a drive's C2 claim —
+each lands as a fixture + dated note, never a per-device special-case.
+
+## ADR: curated capability presence surfaced on `mos drive` — Real-Time
+## Streaming / Power Management / Time-out (2026-06-23, pre-tag enrichment;
+## feature survey F7)
+
+`mos.drive.v1` gains a `capabilities` object — booleans for the PRESENCE of
+three optional features in the RT=0 GET CONFIGURATION walk: Real-Time Streaming
+(0107h), Power Management (0100h), Time-out (0105h)
+(`mos_internal_capabilities_from_config`, `src/mos_config.c`). Origin: the
+deep-research feature survey (`doc/research/2026-06-23-feature-survey.md`, item
+F7), maintainer-approved.
+
+**Why this is not redundant with `mos features`.** `mos features` dumps the raw
+feature list (code/current/version/persistent for EVERY descriptor). `mos drive`
+is the curated dashboard — and it ALREADY decodes protection (0106h/010Bh/010Dh/
+0113h/0110h), write_protect (0004h), firmware_date (010Ch), and serial (0108h)
+from the very same walk into named, dashboard-shaped facts. The `capabilities`
+block is the same move for three more notable optional features: a named subset
+a human/consumer reads at a glance, not a raw dump. The raw-vs-curated split is
+the existing, deliberate division between the two verbs.
+
+**Zero command-surface change.** Same non-exclusive `GetConfiguration` RT=0 walk
+`mos_query_drive_caps` already issues — presence is read with the existing
+`mos_internal_config_find_feature` helper, no payload decoded, no new command, no
+raw CDB (one-of-four untouched), no privilege change.
+
+**Shape.** Presence-only by deliberate scope — these features' payloads (e.g.
+Real-Time Streaming's WSPD/SCS/MP2A sub-bits, Time-out's Unit Length) are not
+decoded; a later entry can add payload detail if a consumer needs it. Pre-first-
+tag, so the block lands in `mos.drive.v1` in place (mutable-in-place), a non-null
+object (unlike protection/write_protect it never nulls — presence is always
+derivable from the walk, false when absent), three required booleans, with both
+examples carrying it and a `capabilities_missing_field` negative. Human view adds
+a `Capabilities` row (comma-joined present features, "-" when none). Pinned by
+`capabilities_from_config_presence_flags` and `capabilities_absent_features_are_false`
+(pure).
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): the
+exact feature codes a given drive advertises — the presence test is generic
+(find the descriptor in the walk), so a drive that omits any of the three simply
+reads false; no per-device branch. A capture showing an unexpected feature lands
+as a fixture + dated note and, at most, widens the curated set.
+
+## ADR: `--pairs` key=value output — flatten the JSON document, don't build a
+## second emitter (2026-06-23, CLI ergonomics; feature survey U2)
+
+`mos --pairs` flattens a one-shot verb's JSON document to dotted `key=value`
+lines for grep/awk consumers (`speeds.max_read_kbps=35980`). This
+records the design choice (maintainer-approved: dotted-key flatten) and why it
+adds no second source of truth. Origin: the deep-research feature survey
+(`doc/research/2026-06-23-feature-survey.md`, item U2).
+
+**Flatten, don't re-emit (the load-bearing decision).** mos has ONE JSON
+emitter per verb. `--pairs` does NOT add a parallel key=value emitter (which
+would be a second source to drift from the schema). Instead it forces
+`--json`, captures the verb's own JSON output, and runs it through a single pure
+flattener (`mos_cli_json_to_pairs`, `cli/io.c`). So the success documents
+(`mos.*.v1`) AND the failure envelope (`mos.error.v1`) flatten identically with
+zero per-verb work — every present/absent key, every enum, is exactly what the
+JSON path produced. New schema fields appear in `--pairs` automatically.
+
+**Capture without touching the verbs.** The verbs write to the global `stdout`;
+`run_with_pairs` (cli/main.c) redirects fd 1 onto a `tmpfile` (dup2) around
+`selected->run()`, restores it, slurps the captured JSON, and flattens to the
+real stdout. No verb signature changes (the alternative — threading a `FILE*`
+sink through all eight emitters — was rejected as a larger surface for no gain).
+A capture-setup failure falls back to running the verb normally (JSON straight
+through), so `--pairs` never loses output; an unflattenable capture emits the raw
+JSON rather than nothing.
+
+**Raw-span scalars (no decode).** The flattener emits each scalar's RAW JSON
+text — strings keep their quotes and escapes, numbers/true/false/null verbatim —
+so every line is single-line and shell-parseable and no value is ever
+mis-decoded (mos already ASCII-escapes device strings at JSON emit; re-decoding
+could reintroduce control bytes). Empty objects/arrays emit `key={}`/`key=[]` so
+a key is never silently lost.
+
+**One-shot only.** `--pairs` is rejected (EX_USAGE) for the NDJSON streamers
+(`watch`) and `probe`: a never-ending stream has no single document to flatten.
+The streaming analog (RS-framed `json-seq`, survey U3) is a separate, deferred
+item.
+
+**Scope / surface.** Pure flattener unit-tested in `tests/test_io.c` (it links
+into the non-Apple test build via `cli/io.c`); the capture wiring is macOS-CI-
+verified. `--pairs` is a global flag in the command table, so `gen-cli-docs.py`
+carries it into the man page + the three shell completions (the `--check` gate
+keeps them in lockstep). No library change, no schema change, no new command
+surface.
+
+## ADR: `--json-seq` — RFC 7464 RS-framing for the watch NDJSON stream
+## (2026-06-23, watch ergonomics; feature survey U3)
+
+`mos watch --json-seq` prefixes each emitted NDJSON line with an ASCII Record
+Separator (0x1E) per RFC 7464 (JSON Text Sequences), so a consumer can resync
+mid-stream — the journalctl `-o json-seq` convention. Origin: the deep-research
+feature survey (`doc/research/2026-06-23-feature-survey.md`, item U3).
+
+**Two chokepoints, one byte.** Watch emits exactly two line kinds, each through a
+single function in cli/common.c: the event line (`mos_cli_emit_watch_ndjson`) and
+the compact error envelope (`mos_cli_emit_unknown_and_fail`'s NDJSON branch).
+`--json-seq` writes the RS at the start of each, gated on the existing
+`compact`/NDJSON path — so error records in the stream are framed identically to
+events. No change to the JSON bytes themselves (the framing is a prefix), so the
+`mos.event.v1`/`mos.error.v1` schemas and fixtures are untouched.
+
+**Stream-only.** Rejected (EX_USAGE) for non-NDJSON verbs: a one-shot emits a
+single document, which RS-framing has nothing to delimit. So the flag is only
+ever live on `watch`, where both emit chokepoints live.
+
+**Scope / surface.** No library change, no schema change, no new command surface
+— a global flag in the table (so `gen-cli-docs.py` carries it into the man page +
+all three completions; the regex was widened to capture hyphenated long options).
+Pairs with `--pairs` as the two output-shaping flags from the survey's CLI angle:
+`--pairs` for one-shot grep/awk consumers, `--json-seq` for robust stream
+consumers.
+
+## ADR: extended CD-TEXT off the already-issued 0101b reply — songwriter /
+## composer / arranger / message / disc UPC-EAN / per-track ISRC (2026-06-23,
+## zero-command enrichment; feature survey E5)
+
+`mos.metadata.v1.disc.cdtext` gains five album-level strings (Songwriter 0x82,
+Composer 0x83, Arranger 0x84, Message 0x85, and the disc UPC/EAN from 0x8E
+track 0) plus a per-track `isrc` (0x8E track n), decoded by the existing
+pack-type-generic `cdtext_decode_type` (`src/mos_cdtext.c`). This is the first
+of the "zero-command enrichment" class extracted after PR #131 (the F1/F3/F7
+pattern): facts decoded from a reply mos ALREADY fetches.
+
+**Zero new command — the defining constraint of this class.** mos already issues
+READ TOC/PMA/ATIP format 0101b for the existing Title/Performer (`mos_query_cdtext`,
+4612-byte buffer). The extended packs ride the SAME reply — `cdtext_decode_type`
+already took a `want_type`, so adding pack types is pure additional parsing: no
+new command, no raw CDB (one-of-four untouched), no exclusive access, no IOKit-
+shell change.
+
+**CD-only, best-effort, raw.** CD-TEXT is a CD construct; these are null on
+non-CD media and on CDs without CD-TEXT. Genre (0x87, a binary genre code +
+text — a different format) and language blocks 1..7 stay undecoded; a double-byte
+(DBCC) field reads absent, never mis-decoded. The 0x8E UPC/EAN and ISRC are the
+disc's own CD-TEXT *declaration* (display/lookup text) — NOT the authoritative
+subchannel values (READ SUB-CHANNEL is a raw CDB mos does not issue) — and mos
+ships no barcode/ISRC lookup table; database matching (MusicBrainz/Discogs by
+UPC or ISRC) is the consumer's, per the standing third-party-id line.
+
+**Shape.** Pre-first-tag, so the fields land in `mos.metadata.v1.cdtext` in place
+(mutable-in-place): album fields required-and-nullable like title/performer; the
+per-track `tracks[]` entry gains a required-nullable `isrc`, and the emitter
+iterates the union of the title/performer and ISRC track spans (their counts
+differ). Human view unchanged — the CD-TEXT row stays the title/performer + track
+count summary; the extended fields are JSON-only (the dashboard-vs-detail
+pattern). Pinned by `cdtext_decodes_extended_album_packs_and_isrc` and
+`cdtext_extended_packs_absent_leave_fields_empty` (pure), with a
+`cdtext_track_missing_isrc` negative.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR): the
+exact pack encodings on a real CD-TEXT disc (spec-built to MMC-3 §6.27 / Red
+Book, libcdio cross-check, no in-repo capture yet) — a `mos probe --capture`
+READ TOC 0101b reply is the standing falsifier, landing as a fixture + dated
+note, never a per-device special-case. The parser is bounds-safe (dual-length
+clamp; DBCC and short replies fail closed).
+
+## ADR: derived CD classification — disc_mode + cd_extra, no command
+## (2026-06-23, zero-command enrichment; feature survey E2)
+
+`mos.metadata.v1.disc` gains two DERIVED fields — `disc_mode` (audio / data /
+mixed, from the TOC track control bits) and `cd_extra` (Blue Book Enhanced CD,
+from the TOC + session layout) — computed by pure functions over data mos
+ALREADY parsed (`mos_toc_disc_mode`, `mos_cd_extra`; `src/mos_result.c`). The
+purest member of the zero-command class: no read at all, just a classification
+of the already-decoded `toc`/`session_layout`.
+
+**Zero command — a pure derivation.** Neither field issues anything. `disc_mode`
+folds the per-track control bit 2 (data vs audio, MMC Q-channel) into audio /
+data / mixed (null when the TOC carried no tracks). `cd_extra` is the canonical
+Enhanced-CD shape: a multisession disc (>=2 sessions in `session_layout`) whose
+first TOC track is audio and last is data. Both are pure functions of the
+`mos_toc` / `mos_session_layout` mos already builds — no new command, no raw
+CDB, no IOKit-shell change.
+
+**Scope / honesty.** `disc_mode` is a CD concept; for DVD/BD (a single data
+track in the TOC) it reads `data`, which is accurate if unremarkable. `cd_extra`
+is a heuristic on the audio-then-data session shape, not a Blue Book conformance
+check — it answers "looks like an Enhanced CD" for rip routing, nothing more.
+The data-vs-audio split itself is the canonical drutil-fails case mos exists to
+solve, here surfaced as a first-class field rather than left to the consumer.
+
+**Shape.** Pre-first-tag, so the fields land in `mos.metadata.v1.disc` in place
+(mutable-in-place): `disc_mode` a closed enum (audio/data/mixed/null),
+`cd_extra` a required boolean. Human view unchanged (the Profile/class row
+already conveys media class; these are JSON-only programmatic detail). Pinned by
+`toc_disc_mode_and_cd_extra` (pure), with a `bad_disc_mode` enum negative.
+
+**What hardware can falsify, never establish** (per the hardware-role ADR):
+nothing new to read — the inputs are the already-parsed TOC/session layout,
+themselves spec-built and separately falsifiable. A real CD-Extra capture would
+only confirm the `cd_extra` heuristic; a surprising control-bit pattern lands as
+a fixture against the TOC parser, not here.

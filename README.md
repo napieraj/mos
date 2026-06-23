@@ -92,6 +92,22 @@ disagree.
 Every one-shot verb takes `--json`; `watch` streams NDJSON. The per-document
 field reference is its schema under [`schemas/`](schemas/).
 
+For line-oriented consumers (`grep`/`awk`), add `--pairs` to any one-shot verb:
+it flattens the JSON document to dotted `key=value` lines, one scalar per line —
+nested objects join with `.`, arrays index with `[i]`:
+
+```sh
+$ mos state 1 --pairs
+schema="mos.state.v1"
+state="ready"
+speeds.max_read_kbps=35980
+speeds.max_write_kbps=0
+```
+
+String values keep their JSON quotes (so each line stays single-line and
+shell-safe). `--pairs` implies `--json` and applies to one-shot verbs only (not
+the streaming `watch`/`probe`).
+
 ### `state` (default) — what the drive is doing now
 
 States: `open`, `empty`, `empty_or_open`, `loading`, `ready`, `busy`,
@@ -132,7 +148,8 @@ One `mos.event.v1` per line, errors included. With no drive it streams the whole
 bus — hot-plug arrivals as `device_appeared`, removals as `device_removed`, the
 stream continuing; a selector narrows to one drive. Events carry `media_type`,
 `writable`, and the durable `serial`, so a consumer can gate inserts without a
-second query.
+second query. Add `--json-seq` to frame the stream per RFC 7464 (each line
+prefixed with an ASCII Record Separator, 0x1E) for resync-safe parsing.
 
 ### `metadata` — what disc is this
 
@@ -148,13 +165,21 @@ $ mos metadata 1
    Track:  -
 ```
 
-Profile and media class, completion state (`blank` / `appendable` / `complete`),
+Profile and media class, a derived `disc_mode` (`audio` / `data` / `mixed`,
+from the TOC control bits) and `cd_extra` flag (Blue Book Enhanced CD — both
+computed with no extra command), completion state (`blank` / `appendable` /
+`complete`),
 TOC, the registered disc-maker identity (e.g. `MILLEN`/`MR1` for Millenniata
 M-DISC; for CD-R/RW the raw `atip` pre-groove identity — lead-in M:S:F, disc
-type, capacity), CD-TEXT, and a CD `session_layout`. In `--json`, the `disc`
-object is a closed, hashable fingerprint subtree — third-party IDs (MusicBrainz,
-AccurateRip, dvdid) derive from it client-side (see
-[Shell integration](#shell-integration)).
+type, capacity), CD-TEXT (album title/performer/songwriter/composer/arranger/
+message + disc UPC/EAN, and per-track title/performer/ISRC), and a CD
+`session_layout`. The `disc_info` object also
+carries the recordable disc's own READ-DISC-INFORMATION identity: `disc_type`,
+the writer-assigned 32-bit `disc_id` (a per-disc id on media that programs DID_V;
+surfaced as a `Disc ID` row when present), and the raw `bar_code` (null unless
+DBC_V). In `--json`, the `disc` object is a closed, hashable fingerprint subtree
+— third-party IDs (MusicBrainz, AccurateRip, dvdid) derive from it client-side
+(see [Shell integration](#shell-integration)).
 
 ### `drive` — static drive facts
 
@@ -177,8 +202,15 @@ Disc-independent facts: identity, `serial` (the durable inventory key that
 survives replug where `registry_id` does not), content-protection *capability*,
 `write_protect` *capability* (the drive's Write Protect Feature 0004h bits —
 what it can report/change, not per-disc
-state), the supported-profile set, and the mechanical and error-recovery
-configuration.
+state), the supported-profile set, the `capabilities` block (curated presence
+of optional GET CONFIGURATION features — Real-Time Streaming 0107h, Power
+Management 0100h, Time-out 0105h — the named subset of what `mos features`
+dumps raw), and the mechanical and error-recovery
+configuration. The `mechanical` block (page 0x2A) also carries the drive's
+read/rip capability bits — `buf_underrun` (BURN-Free), `multisession`,
+`accurate_stream`, and `c2_pointers` (the EAC/AccurateRip-relevant trio;
+C2-pointer support is a claim, not a reliability guarantee) — shown as a
+`Read Caps` row when any is set.
 Read-only — `mos` reports these, never changes them. (Read/write **speeds** are
 media-dependent, so they live on [`state`](#state-default--what-the-drive-is-doing-now)
 and [`watch`](#watch), not here.)

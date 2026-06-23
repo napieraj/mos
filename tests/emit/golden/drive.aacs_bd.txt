@@ -6,7 +6,9 @@
         Serial:  -
     Protection:  AACS (v68, bus encryption)
  Write Protect:  -
+  Capabilities:  -
       Profiles:  -
      Standards:  -
     Mechanical:  -
+     Read Caps:  -
 Error Recovery:  -

@@ -213,6 +213,31 @@ uint8_t mos_disc_info_bg_format_status(const mos_disc_info *d)
     return d ? d->bg_format_status : 0;
 }
 
+uint8_t mos_disc_info_disc_type(const mos_disc_info *d)
+{
+    return d ? d->disc_type : 0;
+}
+
+bool mos_disc_info_disc_id_present(const mos_disc_info *d)
+{
+    return d ? d->disc_id_valid : false;
+}
+
+uint32_t mos_disc_info_disc_id(const mos_disc_info *d)
+{
+    return (d && d->disc_id_valid) ? d->disc_id : 0;
+}
+
+bool mos_disc_info_bar_code_present(const mos_disc_info *d)
+{
+    return d ? d->bar_code_valid : false;
+}
+
+const uint8_t *mos_disc_info_bar_code(const mos_disc_info *d)
+{
+    return (d && d->bar_code_valid) ? d->bar_code : NULL;
+}
+
 /* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
  * NULL- and range-tolerant; the entry index is bounded by track_count,
  * which the fail-closed parser proved covers exactly first..last. */
@@ -253,6 +278,29 @@ uint8_t mos_toc_track_control(const mos_toc *t, size_t i)
 uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i)
 {
     return (t && i < t->track_count) ? t->tracks[i].start_lba : 0;
+}
+
+/* Derived CD classification (pure; control bit 2 = data track, MMC Q-channel).
+   No new read — purely a function of the already-parsed TOC / session layout. */
+const char *mos_toc_disc_mode(const mos_toc *t)
+{
+    if (!t || t->track_count == 0) return NULL;
+    bool any_audio = false, any_data = false;
+    for (uint8_t i = 0; i < t->track_count; i++) {
+        if (t->tracks[i].control & 0x04u) any_data = true;
+        else                              any_audio = true;
+    }
+    if (any_audio && any_data) return "mixed";
+    return any_data ? "data" : "audio";
+}
+
+bool mos_cd_extra(const mos_toc *t, const mos_session_layout *s)
+{
+    if (!t || !s || t->track_count == 0) return false;
+    if (mos_session_layout_count(s) < 2) return false;          /* multisession */
+    bool first_audio = (t->tracks[0].control & 0x04u) == 0;
+    bool last_data   = (t->tracks[t->track_count - 1].control & 0x04u) != 0;
+    return first_audio && last_data;                            /* audio → data */
 }
 
 /* ---- mos_drive_caps accessors (mos_query_drive_caps) ----------------- */
@@ -330,6 +378,21 @@ bool mos_drive_caps_wp_wdcb(const mos_drive_caps *c)
 bool mos_drive_caps_wp_dwp(const mos_drive_caps *c)
 {
     return c ? c->write_protect.dwp : false;
+}
+
+bool mos_drive_caps_real_time_streaming(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.real_time_streaming : false;
+}
+
+bool mos_drive_caps_power_management(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.power_management : false;
+}
+
+bool mos_drive_caps_timeout(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.timeout : false;
 }
 
 uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)
@@ -467,6 +530,43 @@ const char *mos_cdtext_track_performer(const mos_cdtext *c, uint8_t track)
     if (!c || track < 1 || track > MOS_CDTEXT_MAX_TRACKS) return NULL;
     const char *p = c->track_performers[track - 1];
     return p[0] ? p : NULL;
+}
+
+const char *mos_cdtext_songwriter(const mos_cdtext *c)
+{
+    return (c && c->songwriter[0]) ? c->songwriter : NULL;
+}
+
+const char *mos_cdtext_composer(const mos_cdtext *c)
+{
+    return (c && c->composer[0]) ? c->composer : NULL;
+}
+
+const char *mos_cdtext_arranger(const mos_cdtext *c)
+{
+    return (c && c->arranger[0]) ? c->arranger : NULL;
+}
+
+const char *mos_cdtext_message(const mos_cdtext *c)
+{
+    return (c && c->message[0]) ? c->message : NULL;
+}
+
+const char *mos_cdtext_upc_ean(const mos_cdtext *c)
+{
+    return (c && c->upc_ean[0]) ? c->upc_ean : NULL;
+}
+
+uint8_t mos_cdtext_isrc_count(const mos_cdtext *c)
+{
+    return c ? c->isrc_count : 0;
+}
+
+const char *mos_cdtext_track_isrc(const mos_cdtext *c, uint8_t track)
+{
+    if (!c || track < 1 || track > MOS_CDTEXT_MAX_TRACKS) return NULL;
+    const char *s = c->track_isrcs[track - 1];
+    return s[0] ? s : NULL;
 }
 
 /* ---- mos_physical_structure accessors (mos_query_physical_structure) - *
@@ -838,6 +938,26 @@ bool mos_mode_caps_locked(const mos_mode_caps *m)
 uint16_t mos_mode_caps_buffer_kb(const mos_mode_caps *m)
 {
     return m ? m->buffer_kb : 0;
+}
+
+bool mos_mode_caps_buf_underrun(const mos_mode_caps *m)
+{
+    return m ? m->buf_underrun : false;
+}
+
+bool mos_mode_caps_multisession(const mos_mode_caps *m)
+{
+    return m ? m->multisession : false;
+}
+
+bool mos_mode_caps_accurate_stream(const mos_mode_caps *m)
+{
+    return m ? m->accurate_stream : false;
+}
+
+bool mos_mode_caps_c2_pointers(const mos_mode_caps *m)
+{
+    return m ? m->c2_pointers : false;
 }
 
 /* ---- mos_error_recovery accessors (mos_query_error_recovery) -------- */

@@ -506,6 +506,41 @@ TEST(track_info_accessors)
     return 0;
 }
 
+TEST(toc_disc_mode_and_cd_extra)
+{
+    /* disc_mode from the control bits (bit 2 = data track). */
+    mos_toc audio = { .first_track = 1, .last_track = 2, .track_count = 2,
+        .tracks = { { .track = 1, .control = 0x0 },
+                    { .track = 2, .control = 0x0 } } };
+    EXPECT(strcmp(mos_toc_disc_mode(&audio), "audio") == 0);
+
+    mos_toc data = { .first_track = 1, .last_track = 1, .track_count = 1,
+        .tracks = { { .track = 1, .control = 0x4 } } };
+    EXPECT(strcmp(mos_toc_disc_mode(&data), "data") == 0);
+
+    mos_toc mixed = { .first_track = 1, .last_track = 3, .track_count = 3,
+        .tracks = { { .track = 1, .control = 0x0 },
+                    { .track = 2, .control = 0x0 },
+                    { .track = 3, .control = 0x4 } } };
+    EXPECT(strcmp(mos_toc_disc_mode(&mixed), "mixed") == 0);
+
+    mos_toc empty = { .track_count = 0 };
+    EXPECT(mos_toc_disc_mode(&empty) == NULL);
+    EXPECT(mos_toc_disc_mode(NULL) == NULL);
+
+    /* cd_extra: audio-then-data across >=2 sessions. */
+    mos_session_layout multi  = { .count = 2,
+        .sessions = { { .session = 1 }, { .session = 2 } } };
+    mos_session_layout single = { .count = 1, .sessions = { { .session = 1 } } };
+    EXPECT(mos_cd_extra(&mixed, &multi));        /* the canonical Enhanced CD */
+    EXPECT(!mos_cd_extra(&mixed, &single));      /* single-session → not extra */
+    EXPECT(!mos_cd_extra(&audio, &multi));       /* no data session → not extra */
+    EXPECT(!mos_cd_extra(&data, &multi));        /* first track not audio       */
+    EXPECT(!mos_cd_extra(NULL, &multi));
+    EXPECT(!mos_cd_extra(&mixed, NULL));
+    return 0;
+}
+
 TEST(session_layout_accessors_and_bounds)
 {
     mos_session_layout s = {
@@ -680,6 +715,7 @@ void register_result_tests(void)
     RUN(watch_event_accessors_tolerate_null);
     RUN(disc_info_accessors);
     RUN(toc_accessors_and_bounds);
+    RUN(toc_disc_mode_and_cd_extra);
     RUN(drive_caps_accessors_and_bounds);
     RUN(drive_inquiry_accessors_and_bounds);
     RUN(feature_info_accessors);
