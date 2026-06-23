@@ -212,6 +212,8 @@ mos_error mos_query_drive_caps(mos_handle_t *h, const mos_drive_caps **out)
        PRIMARY serial source, non-exclusive (no raw INQUIRY, no exclusive lock). */
     mos_internal_serial_from_config(buf, sizeof(buf),
                                     h->caps.serial, sizeof h->caps.serial);
+    /* Curated capability-presence flags (0107h/0100h/0105h) from the same walk. */
+    mos_internal_capabilities_from_config(buf, sizeof(buf), &h->caps);
     /* Current Profile (loaded medium) from the same RT=0 header — 0 when the
        field is absent/truncated or the tray is empty. Media-dependent; used
        only to name the loaded disc's class (e.g. speed 1x scaling). */
@@ -499,7 +501,7 @@ mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out)
                 tmp.have_recordable = true;
                 tmp.nwa_valid     = mos_track_info_nwa_valid(t);
                 tmp.free_blocks   = mos_track_info_free_blocks(t);
-                tmp.next_writable = mos_track_info_next_writable(t);
+                tmp.next_writable_lba = mos_track_info_next_writable_lba(t);
                 tmp.track_size    = mos_track_info_track_size(t);
             } else if (te != MOS_ERR_IO) {
                 hard = te;

@@ -179,10 +179,25 @@ void mos_internal_write_protect_from_config(const uint8_t *buf, size_t len,
     if (!mos_internal_config_find_feature(buf, len, 0x0004, &f)) return;
     w->present = true;
     if (!f.data || f.data_len < 1) return;        /* present, no capability byte */
-    w->sswpp = (f.data[0] & 0x01u) != 0;
-    w->spwp  = (f.data[0] & 0x02u) != 0;
-    w->wdcb  = (f.data[0] & 0x04u) != 0;
-    w->dwp   = (f.data[0] & 0x08u) != 0;
+    w->software_write_protect = (f.data[0] & 0x01u) != 0;
+    w->persistent_write_protect  = (f.data[0] & 0x02u) != 0;
+    w->write_inhibit_dcb  = (f.data[0] & 0x04u) != 0;
+    w->disc_write_protect   = (f.data[0] & 0x08u) != 0;
+}
+
+/* Contract in mos_pure.h. Curated capability-presence flags from the RT=0
+   walk: Real-Time Streaming (0107h), Power Management (0100h), Time-out
+   (0105h). Presence only (find), matching the SecurDisc/VCPS presence
+   pattern; no payload byte is decoded. Does NOT zero-init out. */
+void mos_internal_capabilities_from_config(const uint8_t *buf, size_t len,
+                                           mos_drive_caps *out)
+{
+    if (!out) return;
+    mos_drive_capabilities *c = &out->capabilities;
+    mos_config_feature f;
+    c->real_time_streaming = mos_internal_config_find_feature(buf, len, 0x0107, &f);
+    c->power_management     = mos_internal_config_find_feature(buf, len, 0x0100, &f);
+    c->timeout              = mos_internal_config_find_feature(buf, len, 0x0105, &f);
 }
 
 /* Contract in mos_pure.h. The Profile List feature (0x0000) payload is a

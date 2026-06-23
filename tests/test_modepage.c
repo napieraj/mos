@@ -27,9 +27,13 @@ static size_t build_ms10(uint8_t *b, const uint8_t *page, size_t page_len)
 TEST(modepage_caps_2a)
 {
     /* page 0x2A: tray loader (1<<5=0x20), eject-capable (0x08), lock
-       supported (0x02) and currently locked (0x04); buffer 4096 KB. */
+       supported (0x02) and currently locked (0x04); buffer 4096 KB.
+       Read/rip caps: page[4] BUF (0x80) + Multisession (0x40); page[5]
+       accurate-stream (0x02) + C2 pointers (0x10). */
     uint8_t page[16] = {0};
     page[0] = 0x2A; page[1] = 14;           /* page length */
+    page[4] = 0x80 | 0x40;
+    page[5] = 0x02 | 0x10;
     page[6] = 0x20 | 0x08 | 0x02 | 0x04;
     page[12] = 0x10; page[13] = 0x00;       /* 0x1000 = 4096 KB */
 
@@ -44,9 +48,40 @@ TEST(modepage_caps_2a)
     EXPECT(m.lock_supported);
     EXPECT(m.locked);
     EXPECT(m.buffer_kb == 4096);
+    EXPECT(m.burn_free);
+    EXPECT(m.multisession);
+    EXPECT(m.accurate_stream);
+    EXPECT(m.c2_pointers);
     EXPECT(strcmp(mos_loading_mechanism_name(1), "tray") == 0);
     EXPECT(strcmp(mos_loading_mechanism_name(0), "caddy") == 0);
     EXPECT(mos_loading_mechanism_name(3) == NULL);   /* reserved */
+    return 0;
+}
+
+TEST(modepage_caps_rip_bits_isolated_and_accessors)
+{
+    /* Each rip-cap bit is isolated from its byte-mates, and the public
+       accessors read them (plus NULL tolerance). page[4]=0x80 sets BUF
+       only (not Multisession 0x40); page[5]=0x10 sets C2 only (not
+       accurate-stream 0x02). */
+    uint8_t page[16] = {0};
+    page[0] = 0x2A; page[1] = 14;
+    page[4] = 0x80;                          /* BUF, not Multisession */
+    page[5] = 0x10;                          /* C2, not accurate-stream */
+    uint8_t b[64];
+    size_t total = build_ms10(b, page, 16);
+
+    struct mos_mode_caps m;
+    EXPECT(mos_internal_mode_caps_parse(b, total, &m));
+    EXPECT(mos_mode_caps_burn_free(&m));
+    EXPECT(!mos_mode_caps_multisession(&m));
+    EXPECT(!mos_mode_caps_accurate_stream(&m));
+    EXPECT(mos_mode_caps_c2_pointers(&m));
+
+    EXPECT(!mos_mode_caps_burn_free(NULL));
+    EXPECT(!mos_mode_caps_multisession(NULL));
+    EXPECT(!mos_mode_caps_accurate_stream(NULL));
+    EXPECT(!mos_mode_caps_c2_pointers(NULL));
     return 0;
 }
 
@@ -141,6 +176,7 @@ TEST(modepage_fail_closed_on_hostile_buffers)
 void register_modepage_tests(void)
 {
     RUN(modepage_caps_2a);
+    RUN(modepage_caps_rip_bits_isolated_and_accessors);
     RUN(modepage_error_recovery_01);
     RUN(modepage_skips_block_descriptor_and_other_pages);
     RUN(modepage_fail_closed_on_hostile_buffers);

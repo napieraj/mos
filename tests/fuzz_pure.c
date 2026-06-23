@@ -473,10 +473,10 @@ static void fuzz_discstruct(uint64_t iters)
         if (mos_internal_bd_disc_id_parse(buf, len, &id)) {
             /* Accepted => every string NUL-terminated within its fixed buffer
                (no 0xA5 poison survived as an unterminated copy). */
-            if (id.disc_type[sizeof id.disc_type - 1] != 0 ||
+            if (id.disc_type_id[sizeof id.disc_type_id - 1] != 0 ||
                 id.manufacturer[sizeof id.manufacturer - 1] != 0 ||
                 id.media_type[sizeof id.media_type - 1] != 0 ||
-                id.revision[sizeof id.revision - 1] != 0) {
+                id.disc_revision[sizeof id.disc_revision - 1] != 0) {
                 fprintf(stderr, "FUZZ FAIL: disc_id field not terminated "
                         "(len=%zu)\n", len);
                 abort();

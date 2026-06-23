@@ -24,7 +24,10 @@
  * Page 0x2A offsets (relative to page start): loading mechanism page[6]>>5
  * and eject page[6]&0x08 (sr.c cross-check in SPEC.md), buffer size
  * page[12..13] BE KB and lock bits page[6] bit1 supported / bit2 state
- * (MMC-3 page-2A). Page 0x01 is the canonical SPC Read/Write Error
+ * (MMC-3 page-2A). The read/rip capability bits ride the same page:
+ * BUF/BURN-Free page[4] bit7, Multisession page[4] bit6, CD-DA stream
+ * accurate page[5] bit1, C2 error pointers page[5] bit4 (MMC-3 page-2A;
+ * the EAC/AccurateRip-relevant trio). Page 0x01 is the canonical SPC R/W Error
  * Recovery page. A real MODE SENSE capture is a falsifier per the hardware
  * ADR, not a design input. No payload byte is ever used as an offset.
  */
@@ -99,6 +102,11 @@ bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
     out->lock_supported    = (p[6] & 0x02) != 0;
     out->locked            = (p[6] & 0x04) != 0;
     out->buffer_kb         = (uint16_t)((p[12] << 8) | p[13]);
+    /* Read/rip capability bits — bytes 4 and 5, well within the >=12 floor. */
+    out->burn_free      = (p[4] & 0x80) != 0;
+    out->multisession      = (p[4] & 0x40) != 0;
+    out->accurate_stream   = (p[5] & 0x02) != 0;
+    out->c2_pointers       = (p[5] & 0x10) != 0;
     out->have              = true;
     return true;
 }

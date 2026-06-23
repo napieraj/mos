@@ -41,8 +41,8 @@
     },
     "recordable": {
       "type": ["object", "null"],
-      "description": "The recordable / append-state view from READ TRACK INFORMATION (0x52) for the first track. null when the drive did not answer 0x52 — an empty drive, or a pressed disc with no readable first track. For single-track pressed media track_size is effectively the disc capacity; for a blank/appendable recordable, next_writable (when non-null) is the append point and free_blocks the remaining space.",
-      "required": ["free_blocks", "next_writable", "track_size"],
+      "description": "The recordable / append-state view from READ TRACK INFORMATION (0x52) for the first track. null when the drive did not answer 0x52 — an empty drive, or a pressed disc with no readable first track. For single-track pressed media track_size is effectively the disc capacity; for a blank/appendable recordable, next_writable_lba (when non-null) is the append point and free_blocks the remaining space.",
+      "required": ["free_blocks", "next_writable_lba", "track_size"],
       "additionalProperties": false,
       "properties": {
         "free_blocks": {
@@ -50,7 +50,7 @@
           "minimum": 0,
           "description": "Free blocks remaining in the track (Track Information Block Free Blocks)."
         },
-        "next_writable": {
+        "next_writable_lba": {
           "type": ["integer", "null"],
           "minimum": 0,
           "description": "Next Writable Address (the append point), or null when the reply's NWA_V validity bit is clear (a closed/pressed track has no append point)."

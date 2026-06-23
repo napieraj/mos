@@ -1,9 +1,9 @@
-    BSD:  /dev/disk4
- Volume:  -
-   Path:  -
-Profile:  BD — BD-R
-   Disc:  complete, 1 session, 1 track
-  Media:  BDR  MILLEN/MR1 rev 0
-    TOC:  -
-  Track:  -
-CD-Text:  -
+     BSD:  /dev/disk4
+  Volume:  -
+    Path:  -
+ Profile:  BD — BD-R
+    Disc:  complete, 1 session, 1 track
+Media ID:  BDR  MILLEN/MR1 rev 0
+     TOC:  -
+   Track:  -
+ CD-TEXT:  -

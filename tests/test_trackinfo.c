@@ -55,7 +55,7 @@ TEST(trackinfo_appendable_track)
     EXPECT(t.blank);
     EXPECT(t.nwa_valid);
     EXPECT(!t.lra_valid);
-    EXPECT(t.next_writable == 12345);
+    EXPECT(t.next_writable_lba == 12345);
     EXPECT(t.free_blocks == 2000000);
     EXPECT(t.track_size == 2298496);
     return 0;
@@ -75,7 +75,7 @@ TEST(trackinfo_complete_track)
     EXPECT(!t.blank);
     EXPECT(t.lra_valid);
     EXPECT(!t.nwa_valid);
-    EXPECT(t.last_recorded == 2298495);
+    EXPECT(t.last_recorded_lba == 2298495);
     EXPECT(t.track_size == 2298496);
     EXPECT(t.track_start == 0);
     return 0;

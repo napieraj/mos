@@ -251,10 +251,57 @@ TEST(write_protect_from_0004h_decodes_capability_bits)
     mos_internal_protection_from_config(cfg, sizeof cfg, &c);   /* zero-inits */
     mos_internal_write_protect_from_config(cfg, sizeof cfg, &c);
     EXPECT(c.write_protect.present);
-    EXPECT(c.write_protect.sswpp);     /* 0x0B & 0x01 */
-    EXPECT(c.write_protect.spwp);      /* 0x0B & 0x02 */
-    EXPECT(!c.write_protect.wdcb);     /* 0x0B & 0x04 == 0 */
-    EXPECT(c.write_protect.dwp);       /* 0x0B & 0x08 */
+    EXPECT(c.write_protect.software_write_protect);     /* 0x0B & 0x01 */
+    EXPECT(c.write_protect.persistent_write_protect);      /* 0x0B & 0x02 */
+    EXPECT(!c.write_protect.write_inhibit_dcb);     /* 0x0B & 0x04 == 0 */
+    EXPECT(c.write_protect.disc_write_protect);       /* 0x0B & 0x08 */
+    return 0;
+}
+
+TEST(capabilities_from_config_presence_flags)
+{
+    /* RT=0 walk carrying Real-Time Streaming (0107h), Power Management
+       (0100h), and Time-out (0105h), each presence-only (Additional
+       Length 0). All three flags set. */
+    static const uint8_t cfg[] = {
+        0,0,0,20,  0,0, 0x00,0x00,
+        0x01,0x07, 0x00, 0x00,             /* 0107h Real-Time Streaming */
+        0x01,0x00, 0x00, 0x00,             /* 0100h Power Management     */
+        0x01,0x05, 0x00, 0x00,             /* 0105h Time-out             */
+    };
+    mos_drive_caps c;
+    mos_internal_protection_from_config(cfg, sizeof cfg, &c);   /* zero-inits */
+    mos_internal_capabilities_from_config(cfg, sizeof cfg, &c);
+    EXPECT(c.capabilities.real_time_streaming);
+    EXPECT(c.capabilities.power_management);
+    EXPECT(c.capabilities.timeout);
+
+    /* Accessors + NULL tolerance. */
+    EXPECT(mos_drive_caps_real_time_streaming(&c));
+    EXPECT(mos_drive_caps_power_management(&c));
+    EXPECT(mos_drive_caps_timeout(&c));
+    EXPECT(!mos_drive_caps_real_time_streaming(NULL));
+    EXPECT(!mos_drive_caps_power_management(NULL));
+    EXPECT(!mos_drive_caps_timeout(NULL));
+    return 0;
+}
+
+TEST(capabilities_absent_features_are_false)
+{
+    /* Only Power Management present → the other two flags stay false. */
+    static const uint8_t cfg[] = {
+        0,0,0,12,  0,0, 0x00,0x00,
+        0x01,0x00, 0x00, 0x00,             /* 0100h only */
+    };
+    mos_drive_caps c;
+    mos_internal_protection_from_config(cfg, sizeof cfg, &c);
+    mos_internal_capabilities_from_config(cfg, sizeof cfg, &c);
+    EXPECT(!c.capabilities.real_time_streaming);
+    EXPECT(c.capabilities.power_management);
+    EXPECT(!c.capabilities.timeout);
+
+    /* NULL out is safe. */
+    mos_internal_capabilities_from_config(cfg, sizeof cfg, NULL);
     return 0;
 }
 
@@ -277,8 +324,8 @@ TEST(write_protect_absent_and_truncated_fail_closed)
     mos_internal_protection_from_config(cfg_trunc, sizeof cfg_trunc, &c);
     mos_internal_write_protect_from_config(cfg_trunc, sizeof cfg_trunc, &c);
     EXPECT(c.write_protect.present);
-    EXPECT(!c.write_protect.sswpp);
-    EXPECT(!c.write_protect.dwp);
+    EXPECT(!c.write_protect.software_write_protect);
+    EXPECT(!c.write_protect.disc_write_protect);
 
     /* NULL out is safe. */
     mos_internal_write_protect_from_config(cfg_trunc, sizeof cfg_trunc, NULL);
@@ -1040,6 +1087,8 @@ void register_config_tests(void)
     RUN(aacs_caps_from_real_wh16ns40_capture);
     RUN(write_protect_from_0004h_decodes_capability_bits);
     RUN(write_protect_absent_and_truncated_fail_closed);
+    RUN(capabilities_from_config_presence_flags);
+    RUN(capabilities_absent_features_are_false);
     RUN(aacs_caps_decode_and_fail_closed);
     RUN(protection_all_schemes_decode);
     RUN(config_find_feature_returns_match_with_payload);

@@ -1,3 +1,3 @@
        BSD:  -
-     Media:  -
+      Size:  -
 Recordable:  free 11826176 blocks, NWA 0, track 11826176

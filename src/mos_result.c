@@ -213,6 +213,31 @@ uint8_t mos_disc_info_bg_format_status(const mos_disc_info *d)
     return d ? d->bg_format_status : 0;
 }
 
+uint8_t mos_disc_info_disc_type(const mos_disc_info *d)
+{
+    return d ? d->disc_type : 0;
+}
+
+bool mos_disc_info_disc_id_present(const mos_disc_info *d)
+{
+    return d ? d->disc_id_valid : false;
+}
+
+uint32_t mos_disc_info_disc_id(const mos_disc_info *d)
+{
+    return (d && d->disc_id_valid) ? d->disc_id : 0;
+}
+
+bool mos_disc_info_bar_code_present(const mos_disc_info *d)
+{
+    return d ? d->bar_code_valid : false;
+}
+
+const uint8_t *mos_disc_info_bar_code(const mos_disc_info *d)
+{
+    return (d && d->bar_code_valid) ? d->bar_code : NULL;
+}
+
 /* ---- mos_toc accessors (mos_query_toc) ------------------------------- *
  * NULL- and range-tolerant; the entry index is bounded by track_count,
  * which the fail-closed parser proved covers exactly first..last. */
@@ -253,6 +278,29 @@ uint8_t mos_toc_track_control(const mos_toc *t, size_t i)
 uint32_t mos_toc_track_start_lba(const mos_toc *t, size_t i)
 {
     return (t && i < t->track_count) ? t->tracks[i].start_lba : 0;
+}
+
+/* Derived CD classification (pure; control bit 2 = data track, MMC Q-channel).
+   No new read — purely a function of the already-parsed TOC / session layout. */
+const char *mos_toc_disc_mode(const mos_toc *t)
+{
+    if (!t || t->track_count == 0) return NULL;
+    bool any_audio = false, any_data = false;
+    for (uint8_t i = 0; i < t->track_count; i++) {
+        if (t->tracks[i].control & 0x04u) any_data = true;
+        else                              any_audio = true;
+    }
+    if (any_audio && any_data) return "mixed";
+    return any_data ? "data" : "audio";
+}
+
+bool mos_cd_extra(const mos_toc *t, const mos_session_layout *s)
+{
+    if (!t || !s || t->track_count == 0) return false;
+    if (mos_session_layout_count(s) < 2) return false;          /* multisession */
+    bool first_audio = (t->tracks[0].control & 0x04u) == 0;
+    bool last_data   = (t->tracks[t->track_count - 1].control & 0x04u) != 0;
+    return first_audio && last_data;                            /* audio → data */
 }
 
 /* ---- mos_drive_caps accessors (mos_query_drive_caps) ----------------- */
@@ -312,24 +360,39 @@ bool mos_drive_caps_write_protect(const mos_drive_caps *c)
     return c ? c->write_protect.present : false;
 }
 
-bool mos_drive_caps_wp_sswpp(const mos_drive_caps *c)
+bool mos_drive_caps_wp_software_write_protect(const mos_drive_caps *c)
 {
-    return c ? c->write_protect.sswpp : false;
+    return c ? c->write_protect.software_write_protect : false;
 }
 
-bool mos_drive_caps_wp_spwp(const mos_drive_caps *c)
+bool mos_drive_caps_wp_persistent_write_protect(const mos_drive_caps *c)
 {
-    return c ? c->write_protect.spwp : false;
+    return c ? c->write_protect.persistent_write_protect : false;
 }
 
-bool mos_drive_caps_wp_wdcb(const mos_drive_caps *c)
+bool mos_drive_caps_wp_write_inhibit_dcb(const mos_drive_caps *c)
 {
-    return c ? c->write_protect.wdcb : false;
+    return c ? c->write_protect.write_inhibit_dcb : false;
 }
 
-bool mos_drive_caps_wp_dwp(const mos_drive_caps *c)
+bool mos_drive_caps_wp_disc_write_protect(const mos_drive_caps *c)
 {
-    return c ? c->write_protect.dwp : false;
+    return c ? c->write_protect.disc_write_protect : false;
+}
+
+bool mos_drive_caps_real_time_streaming(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.real_time_streaming : false;
+}
+
+bool mos_drive_caps_power_management(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.power_management : false;
+}
+
+bool mos_drive_caps_timeout(const mos_drive_caps *c)
+{
+    return c ? c->capabilities.timeout : false;
 }
 
 uint8_t mos_drive_caps_profile_count(const mos_drive_caps *c)
@@ -416,9 +479,9 @@ uint8_t mos_feature_info_version(const mos_feature_info_t *f)
  * Borrowed strings into the handle-owned result; "" reads as NULL so the
  * emitters suppress empty fields. Disc-controlled bytes — the CLI escapes. */
 
-const char *mos_disc_id_disc_type(const mos_disc_id *d)
+const char *mos_disc_id_disc_type_id(const mos_disc_id *d)
 {
-    return (d && d->disc_type[0]) ? d->disc_type : NULL;
+    return (d && d->disc_type_id[0]) ? d->disc_type_id : NULL;
 }
 
 const char *mos_disc_id_manufacturer(const mos_disc_id *d)
@@ -431,9 +494,9 @@ const char *mos_disc_id_media_type(const mos_disc_id *d)
     return (d && d->media_type[0]) ? d->media_type : NULL;
 }
 
-const char *mos_disc_id_revision(const mos_disc_id *d)
+const char *mos_disc_id_disc_revision(const mos_disc_id *d)
 {
-    return (d && d->revision[0]) ? d->revision : NULL;
+    return (d && d->disc_revision[0]) ? d->disc_revision : NULL;
 }
 
 /* ---- mos_cdtext accessors (mos_query_cdtext) ----------------------- *
@@ -467,6 +530,43 @@ const char *mos_cdtext_track_performer(const mos_cdtext *c, uint8_t track)
     if (!c || track < 1 || track > MOS_CDTEXT_MAX_TRACKS) return NULL;
     const char *p = c->track_performers[track - 1];
     return p[0] ? p : NULL;
+}
+
+const char *mos_cdtext_songwriter(const mos_cdtext *c)
+{
+    return (c && c->songwriter[0]) ? c->songwriter : NULL;
+}
+
+const char *mos_cdtext_composer(const mos_cdtext *c)
+{
+    return (c && c->composer[0]) ? c->composer : NULL;
+}
+
+const char *mos_cdtext_arranger(const mos_cdtext *c)
+{
+    return (c && c->arranger[0]) ? c->arranger : NULL;
+}
+
+const char *mos_cdtext_message(const mos_cdtext *c)
+{
+    return (c && c->message[0]) ? c->message : NULL;
+}
+
+const char *mos_cdtext_upc_ean(const mos_cdtext *c)
+{
+    return (c && c->upc_ean[0]) ? c->upc_ean : NULL;
+}
+
+uint8_t mos_cdtext_isrc_count(const mos_cdtext *c)
+{
+    return c ? c->isrc_count : 0;
+}
+
+const char *mos_cdtext_track_isrc(const mos_cdtext *c, uint8_t track)
+{
+    if (!c || track < 1 || track > MOS_CDTEXT_MAX_TRACKS) return NULL;
+    const char *s = c->track_isrcs[track - 1];
+    return s[0] ? s : NULL;
 }
 
 /* ---- mos_physical_structure accessors (mos_query_physical_structure) - *
@@ -559,7 +659,7 @@ uint8_t mos_physical_structure_region(const mos_physical_structure *d)
 }
 
 /* ---- mos_track_info accessors (mos_query_track_info) ---------------- *
- * Plain values, NULL-tolerant. next_writable/last_recorded are valid only
+ * Plain values, NULL-tolerant. next_writable_lba/last_recorded_lba are valid only
  * when nwa_valid/lra_valid — the emitter gates on those. */
 
 uint16_t mos_track_info_track_number(const mos_track_info *t)
@@ -607,9 +707,9 @@ uint32_t mos_track_info_track_start(const mos_track_info *t)
     return t ? t->track_start : 0;
 }
 
-uint32_t mos_track_info_next_writable(const mos_track_info *t)
+uint32_t mos_track_info_next_writable_lba(const mos_track_info *t)
 {
-    return t ? t->next_writable : 0;
+    return t ? t->next_writable_lba : 0;
 }
 
 uint32_t mos_track_info_free_blocks(const mos_track_info *t)
@@ -622,9 +722,9 @@ uint32_t mos_track_info_track_size(const mos_track_info *t)
     return t ? t->track_size : 0;
 }
 
-uint32_t mos_track_info_last_recorded(const mos_track_info *t)
+uint32_t mos_track_info_last_recorded_lba(const mos_track_info *t)
 {
-    return t ? t->last_recorded : 0;
+    return t ? t->last_recorded_lba : 0;
 }
 
 /* ---- mos_session_layout accessors (mos_query_session_layout) -------- *
@@ -676,7 +776,7 @@ uint32_t mos_session_layout_leadout_lba(const mos_session_layout *s, uint8_t i)
 
 /* ---- mos_atip accessors (mos_query_atip) -------------------------- */
 
-bool    mos_atip_uru(const mos_atip *a)             { return a ? a->uru : false; }
+bool    mos_atip_unrestricted_use(const mos_atip *a)             { return a ? a->unrestricted_use : false; }
 uint8_t mos_atip_disc_type(const mos_atip *a)       { return a ? a->disc_type : 0; }
 uint8_t mos_atip_disc_sub_type(const mos_atip *a)   { return a ? a->disc_sub_type : 0; }
 uint8_t mos_atip_reference_speed(const mos_atip *a) { return a ? a->reference_speed : 0; }
@@ -690,7 +790,7 @@ uint8_t mos_atip_lead_out_frame(const mos_atip *a)  { return a ? a->lead_out_fra
 /* ---- mos_capacity accessors (mos_query_capacity) ------------------- *
  * Plain values, NULL-tolerant. Two independent halves: have_media_size
  * gates the kernel IOMedia size; have_recordable gates the READ TRACK
- * INFORMATION view, within which next_writable needs nwa_valid.
+ * INFORMATION view, within which next_writable_lba needs nwa_valid.
  * media_blocks is derived, never stored. */
 
 bool mos_capacity_have_media_size(const mos_capacity *c)
@@ -731,9 +831,9 @@ uint32_t mos_capacity_free_blocks(const mos_capacity *c)
     return c ? c->free_blocks : 0;
 }
 
-uint32_t mos_capacity_next_writable(const mos_capacity *c)
+uint32_t mos_capacity_next_writable_lba(const mos_capacity *c)
 {
-    return c ? c->next_writable : 0;
+    return c ? c->next_writable_lba : 0;
 }
 
 uint32_t mos_capacity_track_size(const mos_capacity *c)
@@ -838,6 +938,26 @@ bool mos_mode_caps_locked(const mos_mode_caps *m)
 uint16_t mos_mode_caps_buffer_kb(const mos_mode_caps *m)
 {
     return m ? m->buffer_kb : 0;
+}
+
+bool mos_mode_caps_burn_free(const mos_mode_caps *m)
+{
+    return m ? m->burn_free : false;
+}
+
+bool mos_mode_caps_multisession(const mos_mode_caps *m)
+{
+    return m ? m->multisession : false;
+}
+
+bool mos_mode_caps_accurate_stream(const mos_mode_caps *m)
+{
+    return m ? m->accurate_stream : false;
+}
+
+bool mos_mode_caps_c2_pointers(const mos_mode_caps *m)
+{
+    return m ? m->c2_pointers : false;
 }
 
 /* ---- mos_error_recovery accessors (mos_query_error_recovery) -------- */

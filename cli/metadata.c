@@ -64,15 +64,25 @@ static void emit_json(const metadata_doc *d)
     fputs(",\n  \"disc\": {\n", stdout);
 
     if (mos_cli_profile_present(d->profile))
-        fprintf(stdout, "    \"profile\": \"0x%04x\",\n", d->profile);
+        fprintf(stdout, "    \"current_profile\": \"0x%04x\",\n", d->profile);
     else
-        fputs("    \"profile\": null,\n", stdout);
+        fputs("    \"current_profile\": null,\n", stdout);
 
     const char *cls = mos_cli_profile_present(d->profile)
                           ? mos_profile_class(d->profile) : NULL;
-    fputs("    \"class\": ", stdout);
+    fputs("    \"media_class\": ", stdout);
     if (cls) mos_cli_json_str(stdout, cls);
     else     fputs("null", stdout);
+
+    /* Derived (no command): disc_mode from the TOC control bits, cd_extra
+       from the TOC + session layout. Both pure functions of data already in
+       hand. disc_mode is null when there is no TOC. */
+    const char *dmode = mos_toc_disc_mode(d->toc);
+    fputs(",\n    \"disc_mode\": ", stdout);
+    if (dmode) mos_cli_json_str(stdout, dmode);
+    else       fputs("null", stdout);
+    fprintf(stdout, ",\n    \"cd_extra\": %s",
+            mos_cd_extra(d->toc, d->sl) ? "true" : "false");
 
     fputs(",\n    \"toc\": ", stdout);
     if (d->toc) {
@@ -116,13 +126,29 @@ static void emit_json(const metadata_doc *d)
         fprintf(stdout,
                 "{\"status\": \"%s\", \"erasable\": %s, "
                 "\"sessions\": %u, \"tracks\": %u, "
-                "\"bg_format\": %u, \"bg_format_name\": ",
+                "\"bg_format_status\": %u, \"bg_format_name\": ",
                 mos_disc_status_description(mos_disc_info_status(d->di)),
                 mos_disc_info_erasable(d->di) ? "true" : "false",
                 mos_disc_info_session_count(d->di),
                 mos_disc_info_last_track_last_session(d->di),
                 bg);
         if (bgn) mos_cli_json_str(stdout, bgn); else fputs("null", stdout);
+        fprintf(stdout, ", \"disc_type\": %u, \"disc_id\": ",
+                (unsigned)mos_disc_info_disc_type(d->di));
+        if (mos_disc_info_disc_id_present(d->di))
+            fprintf(stdout, "%lu",
+                    (unsigned long)mos_disc_info_disc_id(d->di));
+        else
+            fputs("null", stdout);
+        fputs(", \"bar_code\": ", stdout);
+        if (mos_disc_info_bar_code_present(d->di)) {
+            const uint8_t *bc = mos_disc_info_bar_code(d->di);
+            fputc('"', stdout);
+            for (int i = 0; i < 8; i++) fprintf(stdout, "%02x", bc[i]);
+            fputc('"', stdout);
+        } else {
+            fputs("null", stdout);
+        }
         fputs("}", stdout);
     } else {
         fputs("null", stdout);
@@ -133,17 +159,17 @@ static void emit_json(const metadata_doc *d)
        each half null when absent. */
     fputs(",\n    \"disc_structure\": ", stdout);
     if (d->did || d->ps) {
-        const char *dt = d->did ? mos_disc_id_disc_type(d->did)   : NULL;
+        const char *dt = d->did ? mos_disc_id_disc_type_id(d->did)   : NULL;
         const char *mf = d->did ? mos_disc_id_manufacturer(d->did): NULL;
         const char *mt = d->did ? mos_disc_id_media_type(d->did)  : NULL;
-        const char *rv = d->did ? mos_disc_id_revision(d->did)    : NULL;
-        fputs("{\n      \"disc_type\": ", stdout);
+        const char *rv = d->did ? mos_disc_id_disc_revision(d->did)    : NULL;
+        fputs("{\n      \"disc_type_id\": ", stdout);
         if (dt) mos_cli_json_str(stdout, dt); else fputs("null", stdout);
         fputs(",\n      \"manufacturer_id\": ", stdout);
         if (mf) mos_cli_json_str(stdout, mf); else fputs("null", stdout);
         fputs(",\n      \"media_type_id\": ", stdout);
         if (mt) mos_cli_json_str(stdout, mt); else fputs("null", stdout);
-        fputs(",\n      \"revision\": ", stdout);
+        fputs(",\n      \"disc_revision\": ", stdout);
         if (rv) mos_cli_json_str(stdout, rv); else fputs("null", stdout);
 
         fputs(",\n      \"physical\": ", stdout);
@@ -199,7 +225,7 @@ static void emit_json(const metadata_doc *d)
                 "{\n      \"track_number\": %u, \"session_number\": %u, "
                 "\"track_mode\": %u, \"data_mode\": %u,\n      "
                 "\"blank\": %s, \"damage\": %s, \"track_start\": %u,\n      "
-                "\"next_writable\": ",
+                "\"next_writable_lba\": ",
                 mos_track_info_track_number(d->ti),
                 mos_track_info_session_number(d->ti),
                 mos_track_info_track_mode(d->ti),
@@ -208,15 +234,15 @@ static void emit_json(const metadata_doc *d)
                 mos_track_info_damage(d->ti) ? "true" : "false",
                 mos_track_info_track_start(d->ti));
         if (mos_track_info_nwa_valid(d->ti))
-            fprintf(stdout, "%u", mos_track_info_next_writable(d->ti));
+            fprintf(stdout, "%u", mos_track_info_next_writable_lba(d->ti));
         else
             fputs("null", stdout);
         fprintf(stdout, ", \"free_blocks\": %u, \"track_size\": %u,\n      "
-                "\"last_recorded\": ",
+                "\"last_recorded_lba\": ",
                 mos_track_info_free_blocks(d->ti),
                 mos_track_info_track_size(d->ti));
         if (mos_track_info_lra_valid(d->ti))
-            fprintf(stdout, "%u", mos_track_info_last_recorded(d->ti));
+            fprintf(stdout, "%u", mos_track_info_last_recorded_lba(d->ti));
         else
             fputs("null", stdout);
         fputs("\n    }", stdout);
@@ -235,20 +261,40 @@ static void emit_json(const metadata_doc *d)
         if (ti) mos_cli_json_str(stdout, ti); else fputs("null", stdout);
         fputs(",\n      \"performer\": ", stdout);
         if (pf) mos_cli_json_str(stdout, pf); else fputs("null", stdout);
-        /* Per-track title + performer, sparse: only tracks with at least one
-           are emitted (each field null when absent), empty array when none. */
+        /* Extended album-level packs, each required-and-nullable. */
+        static const struct { const char *key; const char *(*get)(const mos_cdtext *); } alb[] = {
+            { "songwriter", mos_cdtext_songwriter },
+            { "composer",   mos_cdtext_composer   },
+            { "arranger",   mos_cdtext_arranger   },
+            { "message",    mos_cdtext_message    },
+            { "upc_ean",    mos_cdtext_upc_ean    },
+        };
+        for (size_t i = 0; i < sizeof alb / sizeof alb[0]; i++) {
+            const char *v = alb[i].get(d->ct);
+            fprintf(stdout, ",\n      \"%s\": ", alb[i].key);
+            if (v) mos_cli_json_str(stdout, v); else fputs("null", stdout);
+        }
+        /* Per-track title + performer + ISRC, sparse: only tracks with at
+           least one are emitted (each field null when absent), empty array
+           when none. Iterate the union of the title/performer and ISRC track
+           spans (their counts can differ). */
         fputs(",\n      \"tracks\": [", stdout);
         uint8_t tc = mos_cdtext_track_count(d->ct);
+        uint8_t ic = mos_cdtext_isrc_count(d->ct);
+        uint8_t hi = tc > ic ? tc : ic;
         bool first = true;
-        for (uint8_t tn = 1; tn <= tc; tn++) {
+        for (uint8_t tn = 1; tn <= hi; tn++) {
             const char *tt = mos_cdtext_track_title(d->ct, tn);
             const char *tp = mos_cdtext_track_performer(d->ct, tn);
-            if (!tt && !tp) continue;
+            const char *ts = mos_cdtext_track_isrc(d->ct, tn);
+            if (!tt && !tp && !ts) continue;
             fprintf(stdout, "%s\n        {\"track\": %u, \"title\": ",
                     first ? "" : ",", tn);
             if (tt) mos_cli_json_str(stdout, tt); else fputs("null", stdout);
             fputs(", \"performer\": ", stdout);
             if (tp) mos_cli_json_str(stdout, tp); else fputs("null", stdout);
+            fputs(", \"isrc\": ", stdout);
+            if (ts) mos_cli_json_str(stdout, ts); else fputs("null", stdout);
             fputs("}", stdout);
             first = false;
         }
@@ -300,12 +346,12 @@ static void emit_json(const metadata_doc *d)
     fputs(",\n    \"atip\": ", stdout);
     if (d->atip) {
         fprintf(stdout,
-                "{\"disc_type\": %u, \"disc_sub_type\": %u, \"uru\": %s, "
+                "{\"disc_type\": %u, \"disc_sub_type\": %u, \"unrestricted_use\": %s, "
                 "\"reference_speed\": %u, "
                 "\"lead_in\": {\"min\": %u, \"sec\": %u, \"frame\": %u}, "
                 "\"lead_out\": {\"min\": %u, \"sec\": %u, \"frame\": %u}}",
                 mos_atip_disc_type(d->atip), mos_atip_disc_sub_type(d->atip),
-                mos_atip_uru(d->atip) ? "true" : "false",
+                mos_atip_unrestricted_use(d->atip) ? "true" : "false",
                 mos_atip_reference_speed(d->atip),
                 mos_atip_lead_in_min(d->atip), mos_atip_lead_in_sec(d->atip),
                 mos_atip_lead_in_frame(d->atip),
@@ -384,6 +430,18 @@ static void emit_human(const metadata_doc *d)
     }
     pairs[n++] = (mos_cli_human_pair){ "Disc", d->di ? di_buf : NULL };
 
+    /* Disc ID (READ DISC INFO bytes 12..15) — the writer-assigned per-disc
+       id, present only on recordable media that carries DID_V. Shown only
+       when present (an absent id is the common case, not worth a row);
+       disc_type and bar_code stay JSON-only (programmatic detail). */
+    char di_id_buf[16];
+    bool have_di_id = d->di && mos_disc_info_disc_id_present(d->di);
+    if (have_di_id)
+        snprintf(di_id_buf, sizeof di_id_buf, "%lu",
+                 (unsigned long)mos_disc_info_disc_id(d->di));
+    if (have_di_id)
+        pairs[n++] = (mos_cli_human_pair){ "Disc ID", di_id_buf };
+
     /* Media identity from disc structure (BD DI): disc type + the registered
        manufacturer/media code. Disc-controlled ASCII, so escape before the
        layout engine prints it verbatim. */
@@ -391,10 +449,10 @@ static void emit_human(const metadata_doc *d)
     char media_esc[MOS_CLI_ESC_CAP(64)];
     media_esc[0] = 0;
     if (d->did) {
-        const char *dt = mos_disc_id_disc_type(d->did);
+        const char *dt = mos_disc_id_disc_type_id(d->did);
         const char *mf = mos_disc_id_manufacturer(d->did);
         const char *mt = mos_disc_id_media_type(d->did);
-        const char *rv = mos_disc_id_revision(d->did);
+        const char *rv = mos_disc_id_disc_revision(d->did);
         snprintf(media_buf, sizeof media_buf, "%s%s%s/%s%s%s",
                  dt ? dt : "", dt ? "  " : "",
                  mf ? mf : "?", mt ? mt : "?",
@@ -421,7 +479,7 @@ static void emit_human(const metadata_doc *d)
         (void)mos_safe_ascii(media_buf, media_esc, sizeof media_esc);
     }
     pairs[n++] = (mos_cli_human_pair){
-        "Media", (d->did || (d->ps && mos_physical_structure_have_physical(d->ps))
+        "Media ID", (d->did || (d->ps && mos_physical_structure_have_physical(d->ps))
                   || d->atip)
                      ? media_esc : NULL };
 
@@ -459,7 +517,7 @@ static void emit_human(const metadata_doc *d)
                             ", %u blocks", mos_track_info_track_size(d->ti));
         if (off > 0 && (size_t)off < sizeof ti_buf && mos_track_info_nwa_valid(d->ti))
             snprintf(ti_buf + off, sizeof ti_buf - (size_t)off,
-                     ", NWA %u", mos_track_info_next_writable(d->ti));
+                     ", NWA %u", mos_track_info_next_writable_lba(d->ti));
     }
     pairs[n++] = (mos_cli_human_pair){ "Track", d->ti ? ti_buf : NULL };
 
@@ -492,7 +550,7 @@ static void emit_human(const metadata_doc *d)
         (void)mos_safe_ascii(cdt_buf, cdt_esc, sizeof cdt_esc);
     }
     pairs[n++] = (mos_cli_human_pair){
-        "CD-Text", (ct_title || ct_perf || cdt_ntracks) ? cdt_esc : NULL };
+        "CD-TEXT", (ct_title || ct_perf || cdt_ntracks) ? cdt_esc : NULL };
 
     /* Sessions: only the multi-session case earns a row — a single session is
        already covered by the TOC row's track range. Compact per-session track

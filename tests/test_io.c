@@ -163,10 +163,85 @@ TEST(cli_safe_ascii_renders_human_escapes)
     return 0;
 }
 
+/* ---- mos_cli_json_to_pairs: the --pairs dotted-key flattener ------------ */
+
+/* Flatten `json` and compare the captured output to `expect`. Returns 0 on
+   match, 1 on mismatch (printing both). */
+static int expect_pairs(const char *json, const char *expect)
+{
+    char *buf = NULL;
+    size_t len = 0;
+    FILE *f = open_memstream(&buf, &len);
+    if (!f) { fprintf(stderr, "\n    open_memstream failed\n"); return 1; }
+    bool ok = mos_cli_json_to_pairs(json, f);
+    fclose(f);
+    int bad = !ok || buf == NULL || strcmp(buf, expect) != 0;
+    if (bad)
+        fprintf(stderr, "\n    pairs mismatch\n    json: %s\n    want: %s\n    got:  %s\n",
+                json, expect, buf ? buf : "(null)");
+    free(buf);
+    return bad;
+}
+
+TEST(json_to_pairs_flattens_nested_objects_and_arrays)
+{
+    /* Top-level scalars, a nested object (dotted), and an array of objects
+       (indexed). Mirrors mos.state.v1's speeds shape. */
+    const char *json =
+        "{\n"
+        "  \"schema\": \"mos.state.v1\",\n"
+        "  \"state\": \"ready\",\n"
+        "  \"speeds\": {\"speed_count\": 1, \"max_read_kbps\": 35980,\n"
+        "    \"descriptors\": [{\"read_kbps\": 35980, \"write_kbps\": 0}]}\n"
+        "}";
+    const char *expect =
+        "schema=\"mos.state.v1\"\n"
+        "state=\"ready\"\n"
+        "speeds.speed_count=1\n"
+        "speeds.max_read_kbps=35980\n"
+        "speeds.descriptors[0].read_kbps=35980\n"
+        "speeds.descriptors[0].write_kbps=0\n";
+    return expect_pairs(json, expect);
+}
+
+TEST(json_to_pairs_scalars_and_empties)
+{
+    /* true/false/null verbatim; strings keep quotes+escapes (single-line,
+       shell-parseable); empty object/array keep their key. */
+    const char *json =
+        "{\"a\": true, \"b\": false, \"c\": null, "
+        "\"d\": \"x\\ny\", \"e\": {}, \"f\": []}";
+    const char *expect =
+        "a=true\n"
+        "b=false\n"
+        "c=null\n"
+        "d=\"x\\ny\"\n"
+        "e={}\n"
+        "f=[]\n";
+    return expect_pairs(json, expect);
+}
+
+TEST(json_to_pairs_rejects_malformed)
+{
+    /* Malformed input returns false (caller falls back) and NULL/NULL is
+       safe. A trailing-garbage document is rejected too. */
+    char *buf = NULL; size_t len = 0;
+    FILE *f = open_memstream(&buf, &len);
+    if (!f) return 1;
+    EXPECT(!mos_cli_json_to_pairs("{\"a\": ", f));        /* truncated */
+    EXPECT(!mos_cli_json_to_pairs("{\"a\": 1} trailing", f));
+    fclose(f); free(buf);
+    EXPECT(!mos_cli_json_to_pairs(NULL, stdout));
+    return 0;
+}
+
 void register_io_tests(void)
 {
     RUN(stdout_finalize_epipe_classifies_pipe_closed);
     RUN(stdout_finalize_other_error_classifies_write_error);
     RUN(cli_json_str_uses_malloc_path_beyond_stack);
     RUN(cli_safe_ascii_renders_human_escapes);
+    RUN(json_to_pairs_flattens_nested_objects_and_arrays);
+    RUN(json_to_pairs_scalars_and_empties);
+    RUN(json_to_pairs_rejects_malformed);
 }

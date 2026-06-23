@@ -292,8 +292,67 @@ TEST(cdtext_fail_closed_on_hostile_buffers)
     return 0;
 }
 
+TEST(cdtext_decodes_extended_album_packs_and_isrc)
+{
+    /* Songwriter/Composer/Arranger/Message are album-level (track 0); the
+       0x8E pack carries the disc UPC/EAN at track 0 and per-track ISRC at
+       tracks 1.. (a dense NUL-separated stream). All off the same reply. */
+    uint8_t b[4 + 8 * 18] = {0};
+    size_t off = 4;
+    off = put_pack(b, off, 0x82, 0, 0, 0x00, "Bill Evans");      /* songwriter */
+    off = put_pack(b, off, 0x83, 0, 1, 0x00, "Miles Davis");     /* composer   */
+    off = put_pack(b, off, 0x84, 0, 2, 0x00, "Gil Evans");       /* arranger   */
+    off = put_pack(b, off, 0x85, 0, 3, 0x00, "Remastered");      /* message    */
+    static const uint8_t upc_isrc[] =
+        "0602567" "\0" "USRC10001" "\0" "USRC10002";  /* UPC, ISRC1, ISRC2 */
+    off = put_stream(b, off, 0x8E, 0, upc_isrc, sizeof upc_isrc - 1);
+    finalize(b, off - 4);
+
+    struct mos_cdtext c;
+    EXPECT(mos_internal_cdtext_parse(b, off, &c));
+    EXPECT(c.have);
+    EXPECT(strcmp(c.songwriter, "Bill Evans") == 0);
+    EXPECT(strcmp(c.composer, "Miles Davis") == 0);
+    EXPECT(strcmp(c.arranger, "Gil Evans") == 0);
+    EXPECT(strcmp(c.message, "Remastered") == 0);
+    EXPECT(strcmp(c.upc_ean, "0602567") == 0);
+    EXPECT_EQ(c.isrc_count, 2);
+    EXPECT(strcmp(c.track_isrcs[0], "USRC10001") == 0);
+    EXPECT(strcmp(c.track_isrcs[1], "USRC10002") == 0);
+
+    /* Accessors + NULL/range tolerance. */
+    EXPECT(strcmp(mos_cdtext_songwriter(&c), "Bill Evans") == 0);
+    EXPECT(strcmp(mos_cdtext_upc_ean(&c), "0602567") == 0);
+    EXPECT_EQ(mos_cdtext_isrc_count(&c), 2);
+    EXPECT(strcmp(mos_cdtext_track_isrc(&c, 1), "USRC10001") == 0);
+    EXPECT(mos_cdtext_track_isrc(&c, 3) == NULL);     /* absent */
+    EXPECT(mos_cdtext_track_isrc(&c, 0) == NULL);     /* out of range */
+    EXPECT(mos_cdtext_composer(NULL) == NULL);
+    EXPECT(mos_cdtext_upc_ean(NULL) == NULL);
+    EXPECT_EQ(mos_cdtext_isrc_count(NULL), 0);
+    return 0;
+}
+
+TEST(cdtext_extended_packs_absent_leave_fields_empty)
+{
+    /* A Title-only disc: the extended fields stay "" and their accessors NULL. */
+    uint8_t b[4 + 18] = {0};
+    size_t off = put_pack(b, 4, 0x80, 0, 0, 0x00, "Kind of Blue");
+    finalize(b, off - 4);
+    struct mos_cdtext c;
+    EXPECT(mos_internal_cdtext_parse(b, off, &c));
+    EXPECT(c.have);
+    EXPECT(c.songwriter[0] == '\0' && c.composer[0] == '\0');
+    EXPECT(c.upc_ean[0] == '\0' && c.isrc_count == 0);
+    EXPECT(mos_cdtext_composer(&c) == NULL);
+    EXPECT(mos_cdtext_track_isrc(&c, 1) == NULL);
+    return 0;
+}
+
 void register_cdtext_tests(void)
 {
+    RUN(cdtext_decodes_extended_album_packs_and_isrc);
+    RUN(cdtext_extended_packs_absent_leave_fields_empty);
     RUN(cdtext_decodes_album_title_and_performer);
     RUN(cdtext_title_spans_two_packs);
     RUN(cdtext_decodes_per_track_titles);

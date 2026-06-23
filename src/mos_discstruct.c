@@ -65,9 +65,9 @@ bool mos_internal_bd_disc_id_parse(const uint8_t *buf, size_t len,
        type, drive returned something else) is refused, not read as identity. */
     if (buf[DI_SIG_HI] != 'D' || buf[DI_SIG_LO] != 'I') return false;
 
-    mos_internal_di_copy(&buf[DI_DISCTYPE], 3, out->disc_type);
+    mos_internal_di_copy(&buf[DI_DISCTYPE], 3, out->disc_type_id);
     mos_internal_di_copy(&buf[DI_MANUF],    6, out->manufacturer);
     mos_internal_di_copy(&buf[DI_MEDIA],    3, out->media_type);
-    mos_internal_di_copy(&buf[DI_REVISION], 1, out->revision);
+    mos_internal_di_copy(&buf[DI_REVISION], 1, out->disc_revision);
     return true;
 }

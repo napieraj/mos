@@ -52,7 +52,7 @@ bool mos_internal_atip_parse(const uint8_t *buf, size_t len, mos_atip *out)
     if (end < 15u) return false;
 
     out->reference_speed = (uint8_t)(buf[4] & 0x07u);
-    out->uru             = (buf[5] & 0x40u) != 0;
+    out->unrestricted_use             = (buf[5] & 0x40u) != 0;
     out->disc_type       = (uint8_t)((buf[6] >> 6) & 0x01u);
     out->disc_sub_type   = (uint8_t)((buf[6] >> 3) & 0x07u);
 

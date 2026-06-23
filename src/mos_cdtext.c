@@ -9,12 +9,15 @@
  * No payload byte is ever used as an offset or length.
  *
  * SCOPE — the album Title/Performer (the "which album is in the drive"
- * disambiguator, parallel to the mounted volume name) plus the per-track
- * TITLES and PERFORMERS, all from the FIRST language block (block 0) in
- * single-byte charset. Field types and language blocks NOT decoded are in
- * SPEC.md; a double-byte (DBCC) field reads as absent, never mis-decoded
- * as Latin-1. This is BEST-EFFORT DISPLAY TEXT, not a fail-closed
- * fingerprint: audio-CD dedup keys ride on the TOC (mos_internal_toc_parse).
+ * disambiguator, parallel to the mounted volume name), the per-track TITLES
+ * and PERFORMERS, and the extended album-level packs Songwriter (0x82),
+ * Composer (0x83), Arranger (0x84), Message (0x85) plus the 0x8E disc
+ * UPC/EAN and per-track ISRC — all from the FIRST language block (block 0)
+ * in single-byte charset, off the SAME 0101b reply (no extra command). Genre
+ * (0x87, binary code) and language blocks 1..7 are NOT decoded (SPEC.md); a
+ * double-byte (DBCC) field reads as absent, never mis-decoded as Latin-1.
+ * This is BEST-EFFORT DISPLAY TEXT, not a fail-closed fingerprint: audio-CD
+ * dedup keys ride on the TOC (mos_internal_toc_parse).
  *
  * Stream model (MMC / Red Book): within one (pack-type, block) the
  * per-track strings are NUL-separated and chopped across the 12-byte pack
@@ -49,8 +52,13 @@
 #define CDTEXT_TEXT_OFF   4u    /* text bytes within a pack: [4..15]      */
 #define CDTEXT_TEXT_LEN  12u
 
-#define CDTEXT_PACK_TITLE     0x80u
-#define CDTEXT_PACK_PERFORMER 0x81u
+#define CDTEXT_PACK_TITLE      0x80u
+#define CDTEXT_PACK_PERFORMER  0x81u
+#define CDTEXT_PACK_SONGWRITER 0x82u
+#define CDTEXT_PACK_COMPOSER   0x83u
+#define CDTEXT_PACK_ARRANGER   0x84u
+#define CDTEXT_PACK_MESSAGE    0x85u
+#define CDTEXT_PACK_UPC_ISRC   0x8Eu   /* track 0 = UPC/EAN, track n = ISRC */
 
 /* Bounded NUL-terminated copy into a fixed buffer (truncates past cap-1). */
 static void cdtext_copy(char *dst, size_t cap, const char *src)
@@ -153,9 +161,26 @@ bool mos_internal_cdtext_parse(const uint8_t *buf, size_t len,
                        out->performer, sizeof out->performer,
                        out->track_performers, &out->track_count);
 
-    /* "have" gates useful identity: an empty result (no album field, no
-       per-track title) isn't identity. False → the adapter reports no
-       CD-TEXT (null), like the other media reads. */
-    out->have = out->title[0] || out->performer[0] || out->track_count > 0;
+    /* Extended album-level packs (track-0 strings only; tracks NULL). Same
+       generic block-0 single-byte decode, off the same already-fetched reply. */
+    cdtext_decode_type(buf, span, CDTEXT_PACK_SONGWRITER,
+                       out->songwriter, sizeof out->songwriter, NULL, NULL);
+    cdtext_decode_type(buf, span, CDTEXT_PACK_COMPOSER,
+                       out->composer, sizeof out->composer, NULL, NULL);
+    cdtext_decode_type(buf, span, CDTEXT_PACK_ARRANGER,
+                       out->arranger, sizeof out->arranger, NULL, NULL);
+    cdtext_decode_type(buf, span, CDTEXT_PACK_MESSAGE,
+                       out->message, sizeof out->message, NULL, NULL);
+    /* 0x8E carries the disc UPC/EAN at track 0 and a per-track ISRC at track n. */
+    cdtext_decode_type(buf, span, CDTEXT_PACK_UPC_ISRC,
+                       out->upc_ean, sizeof out->upc_ean,
+                       out->track_isrcs, &out->isrc_count);
+
+    /* "have" gates useful identity/metadata: an empty result isn't worth
+       emitting. False → the adapter reports no CD-TEXT (null), like the
+       other media reads. */
+    out->have = out->title[0] || out->performer[0] || out->track_count > 0 ||
+                out->songwriter[0] || out->composer[0] || out->arranger[0] ||
+                out->message[0] || out->upc_ean[0] || out->isrc_count > 0;
     return out->have;
 }

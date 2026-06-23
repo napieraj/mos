@@ -260,7 +260,7 @@ track_size == disc capacity), a long-reply MSB fold, and hostile length
 cases. Offsets follow the kernel `struct track_information`
 (include/uapi/linux/cdrom.h): track_lsb@2, session_lsb@3, damage/track_mode
 byte 5, blank/data_mode byte 6, lra_v/nwa_v byte 7, then the BE32 fields
-track_start@8, next_writable@12, free_blocks@16, track_size@24,
+track_start@8, next_writable_lba@12, free_blocks@16, track_size@24,
 last_rec@28. The fixed-offset/dual-length no-OOB property is fuzz/ASan-
 gated (`tests/fuzz_pure.c` phase 10).
 

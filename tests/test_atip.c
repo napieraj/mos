@@ -33,7 +33,7 @@ TEST(atip_decodes_cdr_descriptor)
 {
     mos_atip a;
     EXPECT(mos_internal_atip_parse(atip_cdr, sizeof atip_cdr, &a));
-    EXPECT(a.uru);
+    EXPECT(a.unrestricted_use);
     EXPECT_EQ(a.disc_type, 0u);
     EXPECT_EQ(a.disc_sub_type, 2u);
     EXPECT_EQ(a.reference_speed, 1u);

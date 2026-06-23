@@ -42,8 +42,10 @@
       "type": "object",
       "description": "The fingerprint subtree. Fixed key set (additionalProperties: false + all keys required): a v1 consumer hashing the canonical serialization never sees a key this schema does not name.",
       "required": [
-        "profile",
-        "class",
+        "current_profile",
+        "media_class",
+        "disc_mode",
+        "cd_extra",
         "toc",
         "disc_info",
         "volume_name",
@@ -55,15 +57,15 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "profile": {
+        "current_profile": {
           "type": [
             "string",
             "null"
           ],
           "pattern": "^0x[0-9a-f]{4}$",
-          "description": "MMC current-profile code (lowercase 0xNNNN), or null when no profile was reported (drive not READY \u2014 the state core populates the profile only on READY to avoid stale-profile leakage; see mos.state.v1)."
+          "description": "MMC current-profile code (lowercase 0xNNNN), or null when no profile was reported (drive not READY \u2014 the state core populates the profile only on READY to avoid stale-profile leakage; see mos.state.v1). Same key as mos.state.v1 current_profile."
         },
-        "class": {
+        "media_class": {
           "enum": [
             "cd",
             "dvd",
@@ -71,7 +73,20 @@
             "hd_dvd",
             null
           ],
-          "description": "Coarse media class derived from profile by mos_profile_class(); null when profile is null or classless. Same closed set as mos.state.v1 media_class (drift-guarded in validate.py)."
+          "description": "Coarse media class derived from current_profile by mos_profile_class(); null when current_profile is null or classless. Same key and closed set as mos.state.v1 media_class (drift-guarded in validate.py)."
+        },
+        "disc_mode": {
+          "enum": [
+            "audio",
+            "data",
+            "mixed",
+            null
+          ],
+          "description": "DERIVED (no command) from the TOC track control bits (bit 2 = data track) via mos_toc_disc_mode(): 'audio' (every track audio), 'data' (every track data), 'mixed', or null when the TOC carried no tracks. A CD concept; for DVD/BD (a single data track) it reads 'data'."
+        },
+        "cd_extra": {
+          "type": "boolean",
+          "description": "DERIVED (no command) via mos_cd_extra(): true for a Blue Book Enhanced CD — a multisession disc (>=2 sessions in session_layout) whose first TOC track is audio and last is data. false otherwise (incl. non-CD, single-session, or absent TOC/layout)."
         },
         "toc": {
           "type": [
@@ -164,8 +179,11 @@
             "erasable",
             "sessions",
             "tracks",
-            "bg_format",
-            "bg_format_name"
+            "bg_format_status",
+            "bg_format_name",
+            "disc_type",
+            "disc_id",
+            "bar_code"
           ],
           "additionalProperties": false,
           "properties": {
@@ -190,7 +208,7 @@
               "minimum": 0,
               "description": "Last track number in the last session \u2014 the track count under MMC's from-1 numbering."
             },
-            "bg_format": {
+            "bg_format_status": {
               "type": "integer",
               "minimum": 0,
               "maximum": 3,
@@ -204,7 +222,30 @@
                 "complete",
                 null
               ],
-              "description": "Stable token for bg_format (mos_bg_format_status_name), null only for an out-of-range code \u2014 drift-guarded in validate.py. The in-flight states (inactive/active) signal a disc that may not be reliably readable yet."
+              "description": "Stable token for bg_format_status (mos_bg_format_status_name), null only for an out-of-range code \u2014 drift-guarded in validate.py. The in-flight states (inactive/active) signal a disc that may not be reliably readable yet."
+            },
+            "disc_type": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255,
+              "description": "Disc Type (byte 8), raw: 0 = CD-DA/CD-ROM, 16 = CD-I, 32 = CD-ROM XA, 255 = undefined. A small device byte mos does not reclassify (mos_disc_info_disc_type)."
+            },
+            "disc_id": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 4294967295,
+              "description": "32-bit Disc Identification (bytes 12..15), the writer-assigned per-disc id for recordable media. null unless the reply's DID_V bit is set and the field was carried (mos_disc_info_disc_id_present)."
+            },
+            "bar_code": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9a-f]{16}$",
+              "description": "Disc Bar Code (bytes 24..31) as 16 lowercase hex digits, or null unless the reply's DBC_V bit is set and the field was carried. Raw bytes \u2014 the 12-digit barcode reading, if any, is the consumer's to interpret."
             }
           }
         },
@@ -215,21 +256,21 @@
           ],
           "description": "Disc identity from the Blu-ray Disc Information (DI) structure, read via READ DISC STRUCTURE (0xAD, BD media type, format 0x00) through the ReadDiscStructure convenience method; null for non-BD media (the DI is Blu-ray-only) or when the drive did not return a DI. These are the REGISTERED manufacturer/media-code fields a drive reads to choose its write strategy. mos surfaces them faithfully and does NOT classify: e.g. manufacturer_id 'MILLEN' + media_type_id 'MR1' is Millenniata M-DISC BD, but the MILLEN->M-DISC mapping is the consumer's (same division as MusicBrainz ids). Fields are disc-controlled ASCII, fixed-width with trailing spaces stripped; required-and-nullable (a field empty on the disc reads null).",
           "required": [
-            "disc_type",
+            "disc_type_id",
             "manufacturer_id",
             "media_type_id",
-            "revision",
+            "disc_revision",
             "physical",
             "copyright"
           ],
           "additionalProperties": false,
           "properties": {
-            "disc_type": {
+            "disc_type_id": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "Disc Type Identifier (DI offset 8): 'BDR' (BD-R), 'BDW' (BD-RE), 'BDO' (BD-ROM) \u2014 the recordable class read from the disc's own structure, independent of the MMC profile."
+              "description": "Disc Type Identifier (DI offset 8): 'BDR' (BD-R), 'BDW' (BD-RE), 'BDO' (BD-ROM) \u2014 the recordable class read from the disc's own structure, independent of the MMC profile. Distinct from disc_info.disc_type (an integer CD byte)."
             },
             "manufacturer_id": {
               "type": [
@@ -245,12 +286,12 @@
               ],
               "description": "Media Type ID (DI offset 106, 3 bytes), e.g. 'MR1', 'CN2'."
             },
-            "revision": {
+            "disc_revision": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "Product Revision Number (DI offset 111, 1 byte), e.g. '0'."
+              "description": "Product Revision Number (DI offset 111, 1 byte), e.g. '0'. Named disc_revision to avoid collision with mos.drive.v1's firmware revision."
             },
             "physical": {
               "type": [
@@ -420,10 +461,15 @@
             "object",
             "null"
           ],
-          "description": "CD-TEXT, read via READ TOC/PMA/ATIP format 0101b through the ReadTableOfContents convenience method; null on non-CD media or a CD that publishes no CD-TEXT. The 'which album is in the drive' disambiguator (album title/performer) plus the per-track song titles (for rip file-naming). SCOPE: the FIRST language block's album Title/Performer and per-track TITLES in single-byte charset \u2014 a double-byte (DBCC) field reads null/absent rather than mis-decoded; per-track PERFORMER, the other CD-TEXT field types, and additional language blocks are not decoded (deferred). BEST-EFFORT DISPLAY TEXT, not a fingerprint: audio-CD dedup keys ride on disc.toc, the fail-closed identity primitive. All strings are disc-controlled bytes, emitted byte-faithfully under JSON string escaping; terminal quoting is the consumer's job. Required-and-nullable.",
+          "description": "CD-TEXT, read via READ TOC/PMA/ATIP format 0101b through the ReadTableOfContents convenience method; null on non-CD media or a CD that publishes no CD-TEXT. The 'which album is in the drive' disambiguator plus rip-naming metadata. SCOPE: the FIRST language block, single-byte charset \u2014 album Title/Performer/Songwriter/Composer/Arranger/Message (packs 0x80-0x85), the disc UPC/EAN (0x8E track 0), and per-track Title/Performer/ISRC (0x80/0x81/0x8E). A double-byte (DBCC) field reads null/absent rather than mis-decoded; Genre (0x87, binary code) and additional language blocks are not decoded (deferred, SPEC.md). BEST-EFFORT DISPLAY TEXT, not a fingerprint: audio-CD dedup keys ride on disc.toc, the fail-closed identity primitive; the authoritative ISRC/UPC source is READ SUB-CHANNEL, which mos does not issue. All strings are disc-controlled bytes, emitted byte-faithfully under JSON string escaping; terminal quoting is the consumer's job. Required-and-nullable.",
           "required": [
             "title",
             "performer",
+            "songwriter",
+            "composer",
+            "arranger",
+            "message",
+            "upc_ean",
             "tracks"
           ],
           "additionalProperties": false,
@@ -442,16 +488,52 @@
               ],
               "description": "Album performer (CD-TEXT pack type 0x81, track 0, block 0), or null when absent/empty or double-byte."
             },
+            "songwriter": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Album songwriter (CD-TEXT pack type 0x82, track 0, block 0), or null when absent/empty or double-byte."
+            },
+            "composer": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Album composer (CD-TEXT pack type 0x83, track 0, block 0), or null when absent/empty or double-byte."
+            },
+            "arranger": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Album arranger (CD-TEXT pack type 0x84, track 0, block 0), or null when absent/empty or double-byte."
+            },
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Album message (CD-TEXT pack type 0x85, track 0, block 0), or null when absent/empty or double-byte."
+            },
+            "upc_ean": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Disc UPC/EAN (CD-TEXT pack type 0x8E, track 0, block 0), or null when absent/empty. Raw disc-reported text; not validated as a barcode."
+            },
             "tracks": {
               "type": "array",
               "maxItems": 99,
-              "description": "Per-track CD-TEXT: song title (pack 0x80) and performer (pack 0x81), tracks 1..N, block 0. SPARSE and possibly empty: only tracks carrying a non-empty title OR performer appear, so track numbers may be non-contiguous and the array may be []. Within an entry, title and performer are independently nullable (a various-artists disc may carry a performer but no per-track title, or vice versa).",
+              "description": "Per-track CD-TEXT: song title (pack 0x80), performer (pack 0x81), and ISRC (pack 0x8E track n), tracks 1..N, block 0. SPARSE and possibly empty: only tracks carrying a non-empty title OR performer OR ISRC appear, so track numbers may be non-contiguous and the array may be []. Within an entry, title, performer and isrc are independently nullable.",
               "items": {
                 "type": "object",
                 "required": [
                   "track",
                   "title",
-                  "performer"
+                  "performer",
+                  "isrc"
                 ],
                 "additionalProperties": false,
                 "properties": {
@@ -474,6 +556,13 @@
                       "null"
                     ],
                     "description": "Track performer, or null when this track carried no (non-empty) performer."
+                  },
+                  "isrc": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Track ISRC from CD-TEXT pack 0x8E, or null when this track carried no (non-empty) ISRC. Raw disc-reported text (the authoritative ISRC source is READ SUB-CHANNEL, which mos does not issue)."
                   }
                 }
               }
@@ -485,7 +574,7 @@
             "object",
             "null"
           ],
-          "description": "READ TRACK INFORMATION (0x52) for the first track (the track containing LBA 0) via the ReadTrackInformation convenience method \u2014 the capacity / append-state surface; null when the drive did not answer. For a single-track pressed DVD/BD, track_size is effectively the disc capacity; for a blank/appendable recordable, next_writable (when not null) is the append point. Offsets per the kernel struct track_information (include/uapi/linux/cdrom.h). next_writable and last_recorded are null when their reply validity bit (NWA_V / LRA_V) is clear \u2014 meaningless otherwise.",
+          "description": "READ TRACK INFORMATION (0x52) for the first track (the track containing LBA 0) via the ReadTrackInformation convenience method \u2014 the capacity / append-state surface; null when the drive did not answer. For a single-track pressed DVD/BD, track_size is effectively the disc capacity; for a blank/appendable recordable, next_writable_lba (when not null) is the append point. Offsets per the kernel struct track_information (include/uapi/linux/cdrom.h). next_writable_lba and last_recorded_lba are null when their reply validity bit (NWA_V / LRA_V) is clear \u2014 meaningless otherwise.",
           "required": [
             "track_number",
             "session_number",
@@ -494,10 +583,10 @@
             "blank",
             "damage",
             "track_start",
-            "next_writable",
+            "next_writable_lba",
             "free_blocks",
             "track_size",
-            "last_recorded"
+            "last_recorded_lba"
           ],
           "additionalProperties": false,
           "properties": {
@@ -536,7 +625,7 @@
               "minimum": 0,
               "description": "Track Start Address (bytes 8..11)."
             },
-            "next_writable": {
+            "next_writable_lba": {
               "type": [
                 "integer",
                 "null"
@@ -554,7 +643,7 @@
               "minimum": 0,
               "description": "Track Size in blocks (bytes 24..27)."
             },
-            "last_recorded": {
+            "last_recorded_lba": {
               "type": [
                 "integer",
                 "null"
@@ -618,7 +707,7 @@
         "atip": {
           "type": ["object", "null"],
           "description": "Absolute Time In Pre-groove — the CD-R/RW manufacturer/media identity in the disc's pre-groove, read via READ TOC/PMA/ATIP Format=0100b (the convenience READ TOC mos already issues; MMC-6 §6.25, Table 488). CD RECORDABLE ONLY: null on pressed CD / DVD / BD (no ATIP) and on any disc whose drive answers the format with CHECK CONDITION. mos surfaces the RAW spec fields only; the MID-to-manufacturer NAME table is the Orange Book's (curated, consumer-side — mos ships no per-device identity table). Closed field set.",
-          "required": ["disc_type", "disc_sub_type", "uru", "reference_speed", "lead_in", "lead_out"],
+          "required": ["disc_type", "disc_sub_type", "unrestricted_use", "reference_speed", "lead_in", "lead_out"],
           "additionalProperties": false,
           "properties": {
             "disc_type": {
@@ -633,7 +722,7 @@
               "maximum": 7,
               "description": "ATIP byte 6 bits 5-3: the speed/class subdivision (raw; meaning per the Orange Book)."
             },
-            "uru": {
+            "unrestricted_use": {
               "type": "boolean",
               "description": "Unrestricted Use Disc bit (ATIP byte 5 bit 6) — derived from the Application Code; false marks a restricted-use (e.g. for-audio / authoring) disc."
             },
@@ -672,20 +761,20 @@
   },
   "allOf": [
     {
-      "title": "class is null when profile is null",
-      "description": "class is a pure function of profile; a class without a profile would be fabricated data.",
+      "title": "media_class is null when current_profile is null",
+      "description": "media_class is a pure function of current_profile; a class without a profile would be fabricated data.",
       "properties": {
         "disc": {
           "if": {
             "properties": {
-              "profile": {
+              "current_profile": {
                 "const": null
               }
             }
           },
           "then": {
             "properties": {
-              "class": {
+              "media_class": {
                 "const": null
               }
             }

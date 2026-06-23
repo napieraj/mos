@@ -4,12 +4,12 @@
   "captured_at": "2026-06-13T02:50:00.000Z",
   "volume_path": null,
   "disc": {
-    "profile": "0x0041",
-    "class": "bd",
+    "current_profile": "0x0041",
+    "media_class": "bd",
     "toc": null,
     "disc_info": null,
     "disc_structure": {
-      "disc_type": "BDR",
+      "disc_type_id": "BDR",
       "manufacturer_id": "MILLEN",
       "media_type_id": "MR1",
       "physical": null,

@@ -200,13 +200,13 @@ ingest_one() {
     eval "$(printf '%s' "$meta" | jq -r '@sh "
         node=\(.bsd_node // "")
         vol=\(.volume_path // "")
-        class=\(.disc.class // "")
-        profile=\(.disc.profile // "")
+        class=\(.disc.media_class // "")
+        profile=\(.disc.current_profile // "")
         status=\(.disc.disc_info.status // "")
         erasable=\(.disc.disc_info.erasable // false | tostring)
         manufacturer=\(.disc.disc_structure.manufacturer_id // "")
         mediaid=\(.disc.disc_structure.media_type_id // "")
-        disctype=\(.disc.disc_structure.disc_type // "")
+        disctype=\(.disc.disc_structure.disc_type_id // "")
         audio=\([.disc.toc.tracks[]? | select(.data == false)] | length)
         preemph=\([.disc.toc.tracks[]? | select(.pre_emphasis == true)] | length)
         sessions=\((.disc.session_layout // []) | length)
@@ -392,7 +392,7 @@ ingest_blank() {                            # <sel> <meta> <drive> <class> <prof
         printf '%s' "$meta" | jq -r '.disc.atip
             | "[disc-ingest] ATIP: \(if .disc_type==1 then "CD-RW" else "CD-R" end), "
               + "lead-in \(.lead_in.min):\(.lead_in.sec):\(.lead_in.frame) (maker code), "
-              + "\(if .uru then "unrestricted" else "restricted-use" end)"' >&2 || true
+              + "\(if .unrestricted_use then "unrestricted" else "restricted-use" end)"' >&2 || true
     fi
     inventory_append "$meta" "$drive_json" blank
 }
@@ -403,7 +403,7 @@ ingest_blank() {                            # <sel> <meta> <drive> <class> <prof
 # 1 if makemkvcon found no titles (so the caller falls through to data archive).
 ingest_video() {                            # <sel> <meta> <drive> <raw> <label>
     local sel="$1" meta="$2" drive_json="$3" raw="$4" label="$5" class
-    class=$(printf '%s' "$meta" | jq -r '.disc.class // ""')
+    class=$(printf '%s' "$meta" | jq -r '.disc.media_class // ""')
 
     protection_note "$meta"
     # Dual-layer DVD: the layer break (end_sector_l0) is where a one-pass image
@@ -982,7 +982,7 @@ makemkv_check_messages() {
 predict_protection() {
     local meta="$1" drive="$2" prot class d_aacs d_css
     prot=$(jq -r '.disc.disc_structure.copyright.protection_name // ""' <<<"$meta")
-    class=$(jq -r '.disc.class // ""' <<<"$meta")
+    class=$(jq -r '.disc.media_class // ""' <<<"$meta")
     d_aacs=$(jq -r 'if .protection.aacs == null then "no" else "yes" end' <<<"$drive")
     d_css=$(jq -r 'if .protection.css == null then "no" else "yes" end' <<<"$drive")
     case "$prot" in
@@ -1016,8 +1016,8 @@ inventory_append() {
             ts: $ts, action: $action, fingerprint: $fp,
             serial:      ($drive.serial // null),
             product:     ($drive.product // null),
-            class:       ($meta.disc.class // null),
-            profile:     ($meta.disc.profile // null),
+            class:       ($meta.disc.media_class // null),
+            profile:     ($meta.disc.current_profile // null),
             volume_name: ($meta.disc.volume_name // null),
             manufacturer:       ($meta.disc.disc_structure.manufacturer_id // null)
         } + $extra')

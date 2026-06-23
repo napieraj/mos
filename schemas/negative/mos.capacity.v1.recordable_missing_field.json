@@ -6,7 +6,7 @@
   "media_blocks": 12219392,
   "recordable": {
     "free_blocks": 0,
-    "next_writable": null
+    "next_writable_lba": null
   },
   "formattable": null
 }
