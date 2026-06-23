@@ -289,7 +289,16 @@ const char *mos_version_descriptor_name(uint16_t code)
  * shorter than the key correctly fails (NUL terminates s1 before the key
  * ends) while a vendor with a known prefix still resolves. Entries run
  * longest-first within each family so specific prefixes shadow shorter
- * catch-alls; first match wins. Returns NULL for unknown vendors. */
+ * catch-alls; first match wins. Returns NULL for unknown vendors.
+ *
+ * Scope: vendors of CD/DVD/BD *writers* that appear on macOS, curated against
+ * the AccurateRip drive database (the empirical universe of real-world INQUIRY
+ * strings). Reader-only / enterprise-OEM / defunct-vintage-writer brands and
+ * laptop-line rebadges are deliberately omitted — they resolve to NULL (no
+ * friendly name), which is the correct output for a vendor mos does not name.
+ * Every key is <= 8 chars (the INQUIRY VENDOR field is bytes 8-15); a longer
+ * key could never match. Don't re-add a brand without an INQUIRY string a Mac
+ * writer actually emits. */
 static int vendor_prefix_ci(const char *s, const char *key, size_t klen)
 {
     for (size_t i = 0; i < klen; i++) {
@@ -307,19 +316,11 @@ const char *mos_vendor_friendly_name(const char *vendor)
     static const struct { const char *key; const char *friendly; } lut[] = {
         /* ── LG / Hitachi-LG Data Storage ─────────────────────────────── */
         { "HL-DT-ST",       "LG"        },
-        { "HL-DT",          "LG"        },
-        { "HL",             "LG"        },
-        { "HLDS",           "LG"        },
-        { "GoldStar",       "LG"        },
-        { "LG Electronics", "LG"        },
-        { "LGHL",           "LG"        },
         { "LG",             "LG"        },
         /* ── Pioneer ──────────────────────────────────────────────────── */
         { "PIONEER",        "Pioneer"   },
-        { "PIODATA",        "Pioneer"   },
         /* ── Panasonic (MATSHITA = Matsushita Electric, rebranded 2008) ─ */
         { "MATSHITA",       "Panasonic" },
-        { "Panasonic",      "Panasonic" },
         /* ── Samsung / TSSTcorp ────────────────────────────────────────── */
         { "TSSTcorp",       "Samsung"   },
         { "SAMSUNG",        "Samsung"   },
@@ -328,67 +329,31 @@ const char *mos_vendor_friendly_name(const char *vendor)
         { "PBDS",           "Lite-On"   },
         { "JLMS",           "Lite-On"   },
         { "Slimtype",       "Lite-On"   },
-        { "SIimtype",       "Lite-On"   },
         { "LITE-ON",        "Lite-On"   },
         { "LITEON",         "Lite-On"   },
         /* ── Sony / Sony Optiarc ───────────────────────────────────────── */
         { "OPTIARC",        "Sony"      },
-        { "OPRIARC",        "Sony"      },
         { "SONY",           "Sony"      },
         /* ── Plextor ───────────────────────────────────────────────────── */
         { "PLEXTOR",        "Plextor"   },
-        { "PLEXTOB",        "Plextor"   },
         /* ── ASUS ──────────────────────────────────────────────────────── */
         { "ASUS",           "ASUS"      },
         /* ── NEC ───────────────────────────────────────────────────────── */
-        { "NECVMWar",       "NEC"       },
         { "NEC",            "NEC"       },
         /* ── Toshiba ───────────────────────────────────────────────────── */
         { "TOSHIBA",        "Toshiba"   },
-        { "dynabook",       "Toshiba"   },
-        /* ── Hitachi ───────────────────────────────────────────────────── */
-        { "HITACHI",        "Hitachi"   },
-        /* ── HP / Compaq ───────────────────────────────────────────────── */
-        { "COMPAQ",         "HP"        },
-        { "HPE",            "HP"        },
-        { "HP",             "HP"        },
-        /* ── TEAC ──────────────────────────────────────────────────────── */
-        { "TEAC",           "TEAC"      },
-        /* ── Yamaha ────────────────────────────────────────────────────── */
-        { "YAMAHA",         "Yamaha"    },
-        /* ── BenQ ──────────────────────────────────────────────────────── */
-        { "BENQ",           "BenQ"      },
         /* ── Philips ───────────────────────────────────────────────────── */
         { "PHILIPS",        "Philips"   },
-        /* ── Ricoh ─────────────────────────────────────────────────────── */
-        { "RICOH",          "Ricoh"     },
-        /* ── Mitsumi ───────────────────────────────────────────────────── */
-        { "MITSUMI",        "Mitsumi"   },
-        /* ── Kenwood ───────────────────────────────────────────────────── */
-        { "KENWOOD",        "Kenwood"   },
-        /* ── Sanyo ─────────────────────────────────────────────────────── */
-        { "SANYO",          "Sanyo"     },
-        /* ── Lenovo (ThinkPad sub-brand; acquired IBM PC division 2005) ── */
-        { "LENOVO",         "Lenovo"    },
-        { "ThinkPad",       "Lenovo"    },
-        /* ── IBM ───────────────────────────────────────────────────────── */
-        { "IBM",            "IBM"       },
+        /* ── TEAC ──────────────────────────────────────────────────────── */
+        { "TEAC",           "TEAC"      },
+        /* ── HP ────────────────────────────────────────────────────────── */
+        { "HP",             "HP"        },
         /* ── Buffalo ───────────────────────────────────────────────────── */
         { "BUFFALO",        "Buffalo"   },
         /* ── Verbatim ──────────────────────────────────────────────────── */
         { "VERBATIM",       "Verbatim"  },
-        /* ── Freecom ───────────────────────────────────────────────────── */
-        { "FREECOM",        "Freecom"   },
         /* ── LaCie ─────────────────────────────────────────────────────── */
         { "LACIE",          "LaCie"     },
-        /* ── Creative ──────────────────────────────────────────────────── */
-        { "CREATIVE",       "Creative"  },
-        /* ── Iomega ────────────────────────────────────────────────────── */
-        { "IOMEGA",         "Iomega"    },
-        /* ── Memorex ───────────────────────────────────────────────────── */
-        { "MEMOREX",        "Memorex"   },
-        /* ── TDK ───────────────────────────────────────────────────────── */
-        { "TDK",            "TDK"       },
     };
 
     for (size_t i = 0; i < sizeof lut / sizeof lut[0]; i++) {
