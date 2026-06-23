@@ -103,7 +103,7 @@ static void common_drive_setup(void)
    the recordable/append-state view mos_query_capacity folds in. 36-byte
    block, values written big-endian by shift. */
 static void build_tib(uint8_t b[36], bool blank, bool nwa_valid,
-                      uint32_t free_blocks, uint32_t next_writable,
+                      uint32_t free_blocks, uint32_t next_writable_lba,
                       uint32_t track_size)
 {
     memset(b, 0, 36);
@@ -112,8 +112,8 @@ static void build_tib(uint8_t b[36], bool blank, bool nwa_valid,
     b[3] = 1;                          /* Session Number LSB */
     if (blank)     b[6] |= 0x40;       /* byte 6 bit 6: blank */
     if (nwa_valid) b[7] |= 0x01;       /* byte 7 bit 0: NWA_V */
-    b[12] = (uint8_t)(next_writable >> 24); b[13] = (uint8_t)(next_writable >> 16);
-    b[14] = (uint8_t)(next_writable >> 8);  b[15] = (uint8_t)next_writable;
+    b[12] = (uint8_t)(next_writable_lba >> 24); b[13] = (uint8_t)(next_writable_lba >> 16);
+    b[14] = (uint8_t)(next_writable_lba >> 8);  b[15] = (uint8_t)next_writable_lba;
     b[16] = (uint8_t)(free_blocks >> 24);   b[17] = (uint8_t)(free_blocks >> 16);
     b[18] = (uint8_t)(free_blocks >> 8);    b[19] = (uint8_t)free_blocks;
     b[24] = (uint8_t)(track_size >> 24);    b[25] = (uint8_t)(track_size >> 16);

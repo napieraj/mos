@@ -518,10 +518,10 @@ bool    mos_drive_caps_vcps(const mos_drive_caps *c);
    bit), SPWP (supports set/release of Persistent Write Protect), WDCB
    (Write Inhibit DCB on DVD+RW), DWP (Disc Write Protect PAC on BD-R/-RE). */
 bool    mos_drive_caps_write_protect(const mos_drive_caps *c);
-bool    mos_drive_caps_wp_sswpp(const mos_drive_caps *c);
-bool    mos_drive_caps_wp_spwp(const mos_drive_caps *c);
-bool    mos_drive_caps_wp_wdcb(const mos_drive_caps *c);
-bool    mos_drive_caps_wp_dwp(const mos_drive_caps *c);
+bool    mos_drive_caps_wp_software_write_protect(const mos_drive_caps *c);
+bool    mos_drive_caps_wp_persistent_write_protect(const mos_drive_caps *c);
+bool    mos_drive_caps_wp_write_inhibit_dcb(const mos_drive_caps *c);
+bool    mos_drive_caps_wp_disc_write_protect(const mos_drive_caps *c);
 
 /* Curated capability presence from the RT=0 GET CONFIGURATION walk — the
    named subset `mos drive` surfaces (the same walk `mos features` dumps raw):
@@ -662,10 +662,10 @@ mos_error mos_query_disc_id(mos_handle_t *h, const mos_disc_id **out);
    ASCII (fixed-width, trailing spaces stripped); escape before display.
    disc_type is "BDR" (BD-R) / "BDW" (BD-RE) / "BDO" (BD-ROM) read from
    the disc's own structure, independent of the MMC profile. */
-const char *mos_disc_id_disc_type(const mos_disc_id *d);
+const char *mos_disc_id_disc_type_id(const mos_disc_id *d);
 const char *mos_disc_id_manufacturer(const mos_disc_id *d);
 const char *mos_disc_id_media_type(const mos_disc_id *d);
-const char *mos_disc_id_revision(const mos_disc_id *d);
+const char *mos_disc_id_disc_revision(const mos_disc_id *d);
 
 /* ---- CD-TEXT album identity ------------------------- */
 
@@ -800,7 +800,7 @@ typedef struct mos_track_info mos_track_info;
  * next writable address, free blocks, track size, last recorded address,
  * plus the track/data mode and blank/damage bits. For a single-track
  * pressed DVD/BD the track size is effectively the disc capacity; for a
- * blank/appendable recordable, next_writable (when valid) is the append
+ * blank/appendable recordable, next_writable_lba (when valid) is the append
  * point. Meaningful with media present and the unit ready; a drive that
  * rejects 0x52 returns MOS_ERR_IO. `out` REQUIRED (NULL =>
  * MOS_ERR_INVALID_ARG); on success *out is valid until the next query or
@@ -808,8 +808,8 @@ typedef struct mos_track_info mos_track_info;
  */
 mos_error mos_query_track_info(mos_handle_t *h, const mos_track_info **out);
 
-/* Accessors. NULL-tolerant (NULL reads as 0/false). next_writable is
-   meaningful only when nwa_valid is true; last_recorded only when
+/* Accessors. NULL-tolerant (NULL reads as 0/false). next_writable_lba is
+   meaningful only when nwa_valid is true; last_recorded_lba only when
    lra_valid is true — the consumer MUST check the validity accessor. */
 uint16_t mos_track_info_track_number(const mos_track_info *t);
 uint16_t mos_track_info_session_number(const mos_track_info *t);
@@ -820,10 +820,10 @@ bool     mos_track_info_damage(const mos_track_info *t);
 bool     mos_track_info_nwa_valid(const mos_track_info *t);
 bool     mos_track_info_lra_valid(const mos_track_info *t);
 uint32_t mos_track_info_track_start(const mos_track_info *t);
-uint32_t mos_track_info_next_writable(const mos_track_info *t);
+uint32_t mos_track_info_next_writable_lba(const mos_track_info *t);
 uint32_t mos_track_info_free_blocks(const mos_track_info *t);
 uint32_t mos_track_info_track_size(const mos_track_info *t);
-uint32_t mos_track_info_last_recorded(const mos_track_info *t);
+uint32_t mos_track_info_last_recorded_lba(const mos_track_info *t);
 
 /* ---- Session layout (CD-only, kernel-cached full-TOC) -- */
 
@@ -887,7 +887,7 @@ mos_error mos_query_atip(mos_handle_t *h, const mos_atip **out);
 /* Accessors. NULL-tolerant (NULL reads as 0/false). The lead-in M:S:F is the
    manufacturer/MID identity; the last-possible lead-out M:S:F is the nominal
    capacity. disc_type 0 = CD-R, 1 = CD-RW. Times are the raw spec bytes. */
-bool    mos_atip_uru(const mos_atip *a);
+bool    mos_atip_unrestricted_use(const mos_atip *a);
 uint8_t mos_atip_disc_type(const mos_atip *a);
 uint8_t mos_atip_disc_sub_type(const mos_atip *a);
 uint8_t mos_atip_reference_speed(const mos_atip *a);
@@ -933,8 +933,8 @@ mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out);
 /* Accessors. NULL-tolerant (NULL reads as 0/false). media_bytes /
    block_bytes are 0 when the whole-disk IOMedia node carries no size
    (blank/absent media); media_blocks is then 0. The recordable view
-   (free_blocks / next_writable / track_size) is meaningful only when
-   have_recordable is true, and next_writable only when nwa_valid. */
+   (free_blocks / next_writable_lba / track_size) is meaningful only when
+   have_recordable is true, and next_writable_lba only when nwa_valid. */
 bool     mos_capacity_have_media_size(const mos_capacity *c);
 uint64_t mos_capacity_media_bytes(const mos_capacity *c);
 uint32_t mos_capacity_block_bytes(const mos_capacity *c);
@@ -944,7 +944,7 @@ uint64_t mos_capacity_media_blocks(const mos_capacity *c);
 bool     mos_capacity_have_recordable(const mos_capacity *c);
 bool     mos_capacity_nwa_valid(const mos_capacity *c);
 uint32_t mos_capacity_free_blocks(const mos_capacity *c);
-uint32_t mos_capacity_next_writable(const mos_capacity *c);
+uint32_t mos_capacity_next_writable_lba(const mos_capacity *c);
 uint32_t mos_capacity_track_size(const mos_capacity *c);
 
 /* Formattable view from READ FORMAT CAPACITIES (0x23) — the capacities a
@@ -1049,7 +1049,7 @@ uint16_t mos_mode_caps_buffer_kb(const mos_mode_caps *m);
    support — the latter three are the EAC/AccurateRip-relevant features.
    NOTE: C2-pointer reliability is firmware-dependent; this reports the
    drive's claim, not its accuracy. */
-bool     mos_mode_caps_buf_underrun(const mos_mode_caps *m);
+bool     mos_mode_caps_burn_free(const mos_mode_caps *m);
 bool     mos_mode_caps_multisession(const mos_mode_caps *m);
 bool     mos_mode_caps_accurate_stream(const mos_mode_caps *m);
 bool     mos_mode_caps_c2_pointers(const mos_mode_caps *m);

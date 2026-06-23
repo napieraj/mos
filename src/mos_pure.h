@@ -286,7 +286,7 @@ bool mos_internal_cdtoc_parse(const uint8_t *buf, size_t len,
  * consumer-side (the per-device table the hardware-role ADR forbids).
  * MMC-6 r02g §6.25, Table 488. */
 typedef struct mos_atip {        /* tagged: mos.h forward-declares opaquely */
-    bool    uru;            /* Unrestricted Use Disc bit (byte5 bit6)          */
+    bool    unrestricted_use;            /* Unrestricted Use Disc bit (byte5 bit6)          */
     uint8_t disc_type;      /* byte6 bit6 (0 = CD-R, 1 = CD-RW)                */
     uint8_t disc_sub_type;  /* byte6 bits5-3 (speed/class subdivision)         */
     uint8_t reference_speed;/* byte4 bits2-0                                   */
@@ -381,10 +381,10 @@ typedef struct mos_drive_protection {
    descriptor payload byte 0: bit0 SSWPP, bit1 SPWP, bit2 WDCB, bit3 DWP. */
 typedef struct mos_write_protect {
     bool present;   /* feature 0004h present in the RT=0 walk                 */
-    bool sswpp;     /* supports the SWPP bit of the Timeout & Protect page    */
-    bool spwp;      /* supports set/release of Persistent Write Protect       */
-    bool wdcb;      /* supports the Write Inhibit DCB on DVD+RW               */
-    bool dwp;       /* supports the Disc Write Protect PAC on BD-R/-RE        */
+    bool software_write_protect;     /* supports the SWPP bit of the Timeout & Protect page    */
+    bool persistent_write_protect;      /* supports set/release of Persistent Write Protect       */
+    bool write_inhibit_dcb;      /* supports the Write Inhibit DCB on DVD+RW               */
+    bool disc_write_protect;       /* supports the Disc Write Protect PAC on BD-R/-RE        */
 } mos_write_protect;
 
 /* Drive CAPABILITY presence from the RT=0 GET CONFIGURATION walk (F7) — the
@@ -583,10 +583,10 @@ bool mos_internal_disc_info_parse(const uint8_t *buf, size_t len,
  * the consumer's. NUL-terminated, space-padding stripped; "" when DI
  * absent. New fields append at the END. */
 struct mos_disc_id {
-    char disc_type[4];      /* DI+8,   3 bytes + NUL: "BDR"/"BDW"/"BDO" */
+    char disc_type_id[4];   /* DI+8,   3 bytes + NUL: "BDR"/"BDW"/"BDO" */
     char manufacturer[7];   /* DI+100, 6 bytes + NUL */
     char media_type[4];     /* DI+106, 3 bytes + NUL */
-    char revision[2];       /* DI+111, 1 byte  + NUL */
+    char disc_revision[2];  /* DI+111, 1 byte  + NUL */
 };
 
 /* Parse a BD DI reply into *out. True only when the 'DI' signature is
@@ -694,7 +694,7 @@ bool mos_internal_copyright_mgmt_parse(const uint8_t *buf, size_t len,
  * The capacity / append-state surface of one track from READ TRACK
  * INFORMATION (0x52): track start, next writable address, free blocks,
  * track size, last recorded address, plus track/data mode and blank/damage
- * bits. next_writable / last_recorded are meaningful only when nwa_valid /
+ * bits. next_writable_lba / last_recorded_lba are meaningful only when nwa_valid /
  * lra_valid are set. All at CONSTANT offsets; the Track Information Length
  * header can only shrink the trusted region. New fields append at the END. */
 struct mos_track_info {
@@ -707,10 +707,10 @@ struct mos_track_info {
     bool     nwa_valid;        /* byte 7 bit 0 */
     bool     lra_valid;        /* byte 7 bit 1 */
     uint32_t track_start;      /* bytes 8..11  */
-    uint32_t next_writable;    /* bytes 12..15 (valid iff nwa_valid) */
+    uint32_t next_writable_lba;    /* bytes 12..15 (valid iff nwa_valid) */
     uint32_t free_blocks;      /* bytes 16..19 */
     uint32_t track_size;       /* bytes 24..27 */
-    uint32_t last_recorded;    /* bytes 28..31 (valid iff lra_valid) */
+    uint32_t last_recorded_lba;    /* bytes 28..31 (valid iff lra_valid) */
 };
 
 /* Parse a Track Information Block into *out. True only when the trusted
@@ -773,9 +773,9 @@ struct mos_capacity {
     uint64_t media_bytes;     /* kIOMediaSizeKey; 0 == no whole-disk size  */
     uint32_t block_bytes;     /* kIOMediaPreferredBlockSizeKey; 0 == none  */
     bool     have_recordable; /* READ TRACK INFORMATION answered           */
-    bool     nwa_valid;       /* next_writable meaningful (TI reply bit)    */
+    bool     nwa_valid;       /* next_writable_lba meaningful (TI reply bit)    */
     uint32_t free_blocks;     /* recordable free space (blocks)            */
-    uint32_t next_writable;   /* append point (valid iff nwa_valid)        */
+    uint32_t next_writable_lba;   /* append point (valid iff nwa_valid)        */
     uint32_t track_size;      /* first-track size (blocks); pressed-disc
                                  capacity for single-track media           */
     /* READ FORMAT CAPACITIES (0x23) — ReadFormatCapacities convenience read,
@@ -860,7 +860,7 @@ struct mos_mode_caps {
     bool     locked;            /* page[6] bit 2 (live state) */
     uint16_t buffer_kb;         /* page[12..13] BE, KB */
     /* Read/rip capability bits from the same page (F3): */
-    bool     buf_underrun;      /* page[4] bit 7 (BUF — BURN-Free / buffer-
+    bool     burn_free;      /* page[4] bit 7 (BUF — BURN-Free / buffer-
                                    underrun-free recording) */
     bool     multisession;      /* page[4] bit 6 (reads sessions > 1) */
     bool     accurate_stream;   /* page[5] bit 1 (CD-DA stream is accurate) */

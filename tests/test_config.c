@@ -251,10 +251,10 @@ TEST(write_protect_from_0004h_decodes_capability_bits)
     mos_internal_protection_from_config(cfg, sizeof cfg, &c);   /* zero-inits */
     mos_internal_write_protect_from_config(cfg, sizeof cfg, &c);
     EXPECT(c.write_protect.present);
-    EXPECT(c.write_protect.sswpp);     /* 0x0B & 0x01 */
-    EXPECT(c.write_protect.spwp);      /* 0x0B & 0x02 */
-    EXPECT(!c.write_protect.wdcb);     /* 0x0B & 0x04 == 0 */
-    EXPECT(c.write_protect.dwp);       /* 0x0B & 0x08 */
+    EXPECT(c.write_protect.software_write_protect);     /* 0x0B & 0x01 */
+    EXPECT(c.write_protect.persistent_write_protect);      /* 0x0B & 0x02 */
+    EXPECT(!c.write_protect.write_inhibit_dcb);     /* 0x0B & 0x04 == 0 */
+    EXPECT(c.write_protect.disc_write_protect);       /* 0x0B & 0x08 */
     return 0;
 }
 
@@ -324,8 +324,8 @@ TEST(write_protect_absent_and_truncated_fail_closed)
     mos_internal_protection_from_config(cfg_trunc, sizeof cfg_trunc, &c);
     mos_internal_write_protect_from_config(cfg_trunc, sizeof cfg_trunc, &c);
     EXPECT(c.write_protect.present);
-    EXPECT(!c.write_protect.sswpp);
-    EXPECT(!c.write_protect.dwp);
+    EXPECT(!c.write_protect.software_write_protect);
+    EXPECT(!c.write_protect.disc_write_protect);
 
     /* NULL out is safe. */
     mos_internal_write_protect_from_config(cfg_trunc, sizeof cfg_trunc, NULL);

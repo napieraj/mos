@@ -61,10 +61,10 @@ bool mos_internal_track_info_parse(const uint8_t *buf, size_t len,
     out->lra_valid      = (buf[7] >> 1) & 0x01;
     out->nwa_valid      = buf[7] & 0x01;
     out->track_start    = mos_internal_ti_be32(&buf[8]);
-    out->next_writable  = mos_internal_ti_be32(&buf[12]);
+    out->next_writable_lba  = mos_internal_ti_be32(&buf[12]);
     out->free_blocks    = mos_internal_ti_be32(&buf[16]);
     out->track_size     = mos_internal_ti_be32(&buf[24]);
-    out->last_recorded  = mos_internal_ti_be32(&buf[28]);
+    out->last_recorded_lba  = mos_internal_ti_be32(&buf[28]);
 
     /* MMC-6 longer reply carries the track/session high byte at 32/33;
        only when the trusted region reaches them. */

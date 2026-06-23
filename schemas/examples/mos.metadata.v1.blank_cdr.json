@@ -4,8 +4,8 @@
   "captured_at": "2026-06-21T20:14:05.000Z",
   "volume_path": null,
   "disc": {
-    "profile": "0x0009",
-    "class": "cd",
+    "current_profile": "0x0009",
+    "media_class": "cd",
     "disc_mode": null,
     "cd_extra": false,
     "toc": null,
@@ -14,7 +14,7 @@
       "erasable": false,
       "sessions": 1,
       "tracks": 1,
-      "bg_format": 0,
+      "bg_format_status": 0,
       "bg_format_name": "none",
       "disc_type": 0,
       "disc_id": 3735928559,
@@ -28,7 +28,7 @@
     "atip": {
       "disc_type": 0,
       "disc_sub_type": 2,
-      "uru": true,
+      "unrestricted_use": true,
       "reference_speed": 1,
       "lead_in": {
         "min": 97,

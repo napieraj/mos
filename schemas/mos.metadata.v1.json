@@ -42,8 +42,8 @@
       "type": "object",
       "description": "The fingerprint subtree. Fixed key set (additionalProperties: false + all keys required): a v1 consumer hashing the canonical serialization never sees a key this schema does not name.",
       "required": [
-        "profile",
-        "class",
+        "current_profile",
+        "media_class",
         "disc_mode",
         "cd_extra",
         "toc",
@@ -57,15 +57,15 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "profile": {
+        "current_profile": {
           "type": [
             "string",
             "null"
           ],
           "pattern": "^0x[0-9a-f]{4}$",
-          "description": "MMC current-profile code (lowercase 0xNNNN), or null when no profile was reported (drive not READY \u2014 the state core populates the profile only on READY to avoid stale-profile leakage; see mos.state.v1)."
+          "description": "MMC current-profile code (lowercase 0xNNNN), or null when no profile was reported (drive not READY \u2014 the state core populates the profile only on READY to avoid stale-profile leakage; see mos.state.v1). Same key as mos.state.v1 current_profile."
         },
-        "class": {
+        "media_class": {
           "enum": [
             "cd",
             "dvd",
@@ -73,7 +73,7 @@
             "hd_dvd",
             null
           ],
-          "description": "Coarse media class derived from profile by mos_profile_class(); null when profile is null or classless. Same closed set as mos.state.v1 media_class (drift-guarded in validate.py)."
+          "description": "Coarse media class derived from current_profile by mos_profile_class(); null when current_profile is null or classless. Same key and closed set as mos.state.v1 media_class (drift-guarded in validate.py)."
         },
         "disc_mode": {
           "enum": [
@@ -179,7 +179,7 @@
             "erasable",
             "sessions",
             "tracks",
-            "bg_format",
+            "bg_format_status",
             "bg_format_name",
             "disc_type",
             "disc_id",
@@ -208,7 +208,7 @@
               "minimum": 0,
               "description": "Last track number in the last session \u2014 the track count under MMC's from-1 numbering."
             },
-            "bg_format": {
+            "bg_format_status": {
               "type": "integer",
               "minimum": 0,
               "maximum": 3,
@@ -222,7 +222,7 @@
                 "complete",
                 null
               ],
-              "description": "Stable token for bg_format (mos_bg_format_status_name), null only for an out-of-range code \u2014 drift-guarded in validate.py. The in-flight states (inactive/active) signal a disc that may not be reliably readable yet."
+              "description": "Stable token for bg_format_status (mos_bg_format_status_name), null only for an out-of-range code \u2014 drift-guarded in validate.py. The in-flight states (inactive/active) signal a disc that may not be reliably readable yet."
             },
             "disc_type": {
               "type": "integer",
@@ -256,21 +256,21 @@
           ],
           "description": "Disc identity from the Blu-ray Disc Information (DI) structure, read via READ DISC STRUCTURE (0xAD, BD media type, format 0x00) through the ReadDiscStructure convenience method; null for non-BD media (the DI is Blu-ray-only) or when the drive did not return a DI. These are the REGISTERED manufacturer/media-code fields a drive reads to choose its write strategy. mos surfaces them faithfully and does NOT classify: e.g. manufacturer_id 'MILLEN' + media_type_id 'MR1' is Millenniata M-DISC BD, but the MILLEN->M-DISC mapping is the consumer's (same division as MusicBrainz ids). Fields are disc-controlled ASCII, fixed-width with trailing spaces stripped; required-and-nullable (a field empty on the disc reads null).",
           "required": [
-            "disc_type",
+            "disc_type_id",
             "manufacturer_id",
             "media_type_id",
-            "revision",
+            "disc_revision",
             "physical",
             "copyright"
           ],
           "additionalProperties": false,
           "properties": {
-            "disc_type": {
+            "disc_type_id": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "Disc Type Identifier (DI offset 8): 'BDR' (BD-R), 'BDW' (BD-RE), 'BDO' (BD-ROM) \u2014 the recordable class read from the disc's own structure, independent of the MMC profile."
+              "description": "Disc Type Identifier (DI offset 8): 'BDR' (BD-R), 'BDW' (BD-RE), 'BDO' (BD-ROM) \u2014 the recordable class read from the disc's own structure, independent of the MMC profile. Distinct from disc_info.disc_type (an integer CD byte)."
             },
             "manufacturer_id": {
               "type": [
@@ -286,12 +286,12 @@
               ],
               "description": "Media Type ID (DI offset 106, 3 bytes), e.g. 'MR1', 'CN2'."
             },
-            "revision": {
+            "disc_revision": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "Product Revision Number (DI offset 111, 1 byte), e.g. '0'."
+              "description": "Product Revision Number (DI offset 111, 1 byte), e.g. '0'. Named disc_revision to avoid collision with mos.drive.v1's firmware revision."
             },
             "physical": {
               "type": [
@@ -574,7 +574,7 @@
             "object",
             "null"
           ],
-          "description": "READ TRACK INFORMATION (0x52) for the first track (the track containing LBA 0) via the ReadTrackInformation convenience method \u2014 the capacity / append-state surface; null when the drive did not answer. For a single-track pressed DVD/BD, track_size is effectively the disc capacity; for a blank/appendable recordable, next_writable (when not null) is the append point. Offsets per the kernel struct track_information (include/uapi/linux/cdrom.h). next_writable and last_recorded are null when their reply validity bit (NWA_V / LRA_V) is clear \u2014 meaningless otherwise.",
+          "description": "READ TRACK INFORMATION (0x52) for the first track (the track containing LBA 0) via the ReadTrackInformation convenience method \u2014 the capacity / append-state surface; null when the drive did not answer. For a single-track pressed DVD/BD, track_size is effectively the disc capacity; for a blank/appendable recordable, next_writable_lba (when not null) is the append point. Offsets per the kernel struct track_information (include/uapi/linux/cdrom.h). next_writable_lba and last_recorded_lba are null when their reply validity bit (NWA_V / LRA_V) is clear \u2014 meaningless otherwise.",
           "required": [
             "track_number",
             "session_number",
@@ -583,10 +583,10 @@
             "blank",
             "damage",
             "track_start",
-            "next_writable",
+            "next_writable_lba",
             "free_blocks",
             "track_size",
-            "last_recorded"
+            "last_recorded_lba"
           ],
           "additionalProperties": false,
           "properties": {
@@ -625,7 +625,7 @@
               "minimum": 0,
               "description": "Track Start Address (bytes 8..11)."
             },
-            "next_writable": {
+            "next_writable_lba": {
               "type": [
                 "integer",
                 "null"
@@ -643,7 +643,7 @@
               "minimum": 0,
               "description": "Track Size in blocks (bytes 24..27)."
             },
-            "last_recorded": {
+            "last_recorded_lba": {
               "type": [
                 "integer",
                 "null"
@@ -707,7 +707,7 @@
         "atip": {
           "type": ["object", "null"],
           "description": "Absolute Time In Pre-groove — the CD-R/RW manufacturer/media identity in the disc's pre-groove, read via READ TOC/PMA/ATIP Format=0100b (the convenience READ TOC mos already issues; MMC-6 §6.25, Table 488). CD RECORDABLE ONLY: null on pressed CD / DVD / BD (no ATIP) and on any disc whose drive answers the format with CHECK CONDITION. mos surfaces the RAW spec fields only; the MID-to-manufacturer NAME table is the Orange Book's (curated, consumer-side — mos ships no per-device identity table). Closed field set.",
-          "required": ["disc_type", "disc_sub_type", "uru", "reference_speed", "lead_in", "lead_out"],
+          "required": ["disc_type", "disc_sub_type", "unrestricted_use", "reference_speed", "lead_in", "lead_out"],
           "additionalProperties": false,
           "properties": {
             "disc_type": {
@@ -722,7 +722,7 @@
               "maximum": 7,
               "description": "ATIP byte 6 bits 5-3: the speed/class subdivision (raw; meaning per the Orange Book)."
             },
-            "uru": {
+            "unrestricted_use": {
               "type": "boolean",
               "description": "Unrestricted Use Disc bit (ATIP byte 5 bit 6) — derived from the Application Code; false marks a restricted-use (e.g. for-audio / authoring) disc."
             },
@@ -761,20 +761,20 @@
   },
   "allOf": [
     {
-      "title": "class is null when profile is null",
-      "description": "class is a pure function of profile; a class without a profile would be fabricated data.",
+      "title": "media_class is null when current_profile is null",
+      "description": "media_class is a pure function of current_profile; a class without a profile would be fabricated data.",
       "properties": {
         "disc": {
           "if": {
             "properties": {
-              "profile": {
+              "current_profile": {
                 "const": null
               }
             }
           },
           "then": {
             "properties": {
-              "class": {
+              "media_class": {
                 "const": null
               }
             }

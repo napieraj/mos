@@ -10,5 +10,5 @@
       Profiles:  -
      Standards:  -
     Mechanical:  -
-     Read Caps:  -
+      Rip/Burn:  -
 Error Recovery:  -

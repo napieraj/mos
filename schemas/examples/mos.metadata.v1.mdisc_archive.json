@@ -4,8 +4,8 @@
   "captured_at": "2026-06-12T19:48:00.123Z",
   "volume_path": "/Volumes/FAMILY_ARCHIVE_2026",
   "disc": {
-    "profile": "0x0041",
-    "class": "bd",
+    "current_profile": "0x0041",
+    "media_class": "bd",
     "disc_mode": "data",
     "cd_extra": false,
     "toc": {
@@ -28,17 +28,17 @@
       "erasable": false,
       "sessions": 1,
       "tracks": 1,
-      "bg_format": 0,
+      "bg_format_status": 0,
       "bg_format_name": "none",
       "disc_type": 0,
       "disc_id": null,
       "bar_code": null
     },
     "disc_structure": {
-      "disc_type": "BDR",
+      "disc_type_id": "BDR",
       "manufacturer_id": "MILLEN",
       "media_type_id": "MR1",
-      "revision": "0",
+      "disc_revision": "0",
       "physical": null,
       "copyright": null
     },

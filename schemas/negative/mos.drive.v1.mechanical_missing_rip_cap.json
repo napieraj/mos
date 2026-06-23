@@ -88,7 +88,7 @@
     "lock_supported": true,
     "locked": false,
     "buffer_kb": 4096,
-    "buf_underrun": true,
+    "burn_free": true,
     "multisession": true,
     "accurate_stream": true
   },

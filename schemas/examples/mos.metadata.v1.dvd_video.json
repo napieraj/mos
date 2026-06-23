@@ -3,8 +3,8 @@
   "captured_at": "2026-06-13T03:10:00.000Z",
   "volume_path": null,
   "disc": {
-    "profile": "0x0010",
-    "class": "dvd",
+    "current_profile": "0x0010",
+    "media_class": "dvd",
     "disc_mode": "data",
     "cd_extra": false,
     "toc": {
@@ -24,10 +24,10 @@
     },
     "disc_info": null,
     "disc_structure": {
-      "disc_type": null,
+      "disc_type_id": null,
       "manufacturer_id": null,
       "media_type_id": null,
-      "revision": null,
+      "disc_revision": null,
       "physical": {
         "book_type": 0,
         "book_type_name": "dvd_rom",
@@ -59,10 +59,10 @@
       "blank": false,
       "damage": false,
       "track_start": 0,
-      "next_writable": null,
+      "next_writable_lba": null,
       "free_blocks": 0,
       "track_size": 2298496,
-      "last_recorded": 2298495
+      "last_recorded_lba": 2298495
     },
     "cdtext": null,
     "session_layout": null,

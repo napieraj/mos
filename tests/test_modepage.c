@@ -48,7 +48,7 @@ TEST(modepage_caps_2a)
     EXPECT(m.lock_supported);
     EXPECT(m.locked);
     EXPECT(m.buffer_kb == 4096);
-    EXPECT(m.buf_underrun);
+    EXPECT(m.burn_free);
     EXPECT(m.multisession);
     EXPECT(m.accurate_stream);
     EXPECT(m.c2_pointers);
@@ -73,12 +73,12 @@ TEST(modepage_caps_rip_bits_isolated_and_accessors)
 
     struct mos_mode_caps m;
     EXPECT(mos_internal_mode_caps_parse(b, total, &m));
-    EXPECT(mos_mode_caps_buf_underrun(&m));
+    EXPECT(mos_mode_caps_burn_free(&m));
     EXPECT(!mos_mode_caps_multisession(&m));
     EXPECT(!mos_mode_caps_accurate_stream(&m));
     EXPECT(mos_mode_caps_c2_pointers(&m));
 
-    EXPECT(!mos_mode_caps_buf_underrun(NULL));
+    EXPECT(!mos_mode_caps_burn_free(NULL));
     EXPECT(!mos_mode_caps_multisession(NULL));
     EXPECT(!mos_mode_caps_accurate_stream(NULL));
     EXPECT(!mos_mode_caps_c2_pointers(NULL));

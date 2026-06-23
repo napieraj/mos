@@ -36,10 +36,10 @@ TEST(discstruct_decodes_mdisc_bd_r)
 
     struct mos_disc_id id;
     EXPECT(mos_internal_bd_disc_id_parse(b, sizeof b, &id));
-    EXPECT(strcmp(id.disc_type, "BDR") == 0);
+    EXPECT(strcmp(id.disc_type_id, "BDR") == 0);
     EXPECT(strcmp(id.manufacturer, "MILLEN") == 0);
     EXPECT(strcmp(id.media_type, "MR1") == 0);
-    EXPECT(strcmp(id.revision, "0") == 0);
+    EXPECT(strcmp(id.disc_revision, "0") == 0);
     return 0;
 }
 
@@ -53,7 +53,7 @@ TEST(discstruct_decodes_ordinary_bd_re)
 
     struct mos_disc_id id;
     EXPECT(mos_internal_bd_disc_id_parse(b, sizeof b, &id));
-    EXPECT(strcmp(id.disc_type, "BDW") == 0);
+    EXPECT(strcmp(id.disc_type_id, "BDW") == 0);
     EXPECT(strcmp(id.manufacturer, "CMCMAG") == 0);
     EXPECT(strcmp(id.media_type, "CN2") == 0);
 
@@ -83,7 +83,7 @@ TEST(discstruct_fail_closed_on_hostile_buffers)
     build_di(b, "BDR", "MILLEN", "MR1", '0');
     b[0] = 0xFF; b[1] = 0xFF;                 /* declared ~64KB */
     EXPECT(!mos_internal_bd_disc_id_parse(b, 64, &id));   /* len < DI region */
-    EXPECT(id.disc_type[0] == 0);
+    EXPECT(id.disc_type_id[0] == 0);
 
     /* A declared length that SHRINKS below the identity region refuses
        even when the buffer physically holds it. */

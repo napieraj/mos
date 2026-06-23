@@ -4,8 +4,8 @@
   "captured_at": "2026-06-12T19:48:00.123Z",
   "volume_path": "/Volumes/Audio CD",
   "disc": {
-    "profile": "0x0008",
-    "class": "cd",
+    "current_profile": "0x0008",
+    "media_class": "cd",
     "disc_mode": "audio",
     "cd_extra": false,
     "toc": {
@@ -52,7 +52,7 @@
       "erasable": false,
       "sessions": 1,
       "tracks": 4,
-      "bg_format": 0,
+      "bg_format_status": 0,
       "bg_format_name": "none",
       "disc_type": 0,
       "disc_id": null,

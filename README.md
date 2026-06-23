@@ -160,7 +160,7 @@ $ mos metadata 1
     Path:  /Volumes/FAMILY_ARCHIVE_2026
  Profile:  bd — bd_r
     Disc:  complete, 1 session, 1 track
-   Media:  BDR  MILLEN/MR1 rev 0
+Media ID:  BDR  MILLEN/MR1 rev 0
      TOC:  tracks 1-1, lead-out LBA 11826176
    Track:  -
 ```
@@ -207,10 +207,10 @@ of optional GET CONFIGURATION features — Real-Time Streaming 0107h, Power
 Management 0100h, Time-out 0105h — the named subset of what `mos features`
 dumps raw), and the mechanical and error-recovery
 configuration. The `mechanical` block (page 0x2A) also carries the drive's
-read/rip capability bits — `buf_underrun` (BURN-Free), `multisession`,
+read/rip capability bits — `burn_free` (BURN-Free), `multisession`,
 `accurate_stream`, and `c2_pointers` (the EAC/AccurateRip-relevant trio;
 C2-pointer support is a claim, not a reliability guarantee) — shown as a
-`Read Caps` row when any is set.
+`Rip/Burn` row when any is set.
 Read-only — `mos` reports these, never changes them. (Read/write **speeds** are
 media-dependent, so they live on [`state`](#state-default--what-the-drive-is-doing-now)
 and [`watch`](#watch), not here.)

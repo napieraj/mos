@@ -158,9 +158,9 @@ def check_cli_enum_drift(here: Path) -> int:
                      enum_at(here / "mos.state.v1.json", "media_class")),
                     ("mos.event.v1.media_class",
                      enum_at(here / "mos.event.v1.json", "media_class")),
-                    ("mos.metadata.v1.disc.class",
+                    ("mos.metadata.v1.disc.media_class",
                      enum_at(here / "mos.metadata.v1.json",
-                             "disc", "class") - {None}))))
+                             "disc", "media_class") - {None}))))
 
     # switch_returns' case-arm regex cannot see this function's
     # `case MOS_DISC_OTHER: default:` fallback arm, so harvest every

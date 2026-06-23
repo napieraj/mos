@@ -4,8 +4,8 @@
   "captured_at": "2026-06-12T19:48:00.123Z",
   "volume_path": null,
   "disc": {
-    "profile": "0x0041",
-    "class": "bd",
+    "current_profile": "0x0041",
+    "media_class": "bd",
     "disc_mode": null,
     "cd_extra": false,
     "toc": null,
@@ -14,7 +14,7 @@
       "erasable": false,
       "sessions": 1,
       "tracks": 1,
-      "bg_format": 0,
+      "bg_format_status": 0,
       "bg_format_name": "none",
       "disc_type": 0,
       "disc_id": null,
@@ -30,10 +30,10 @@
       "blank": true,
       "damage": false,
       "track_start": 0,
-      "next_writable": 0,
+      "next_writable_lba": 0,
       "free_blocks": 11826176,
       "track_size": 11826176,
-      "last_recorded": null
+      "last_recorded_lba": null
     },
     "cdtext": null,
     "session_layout": null,

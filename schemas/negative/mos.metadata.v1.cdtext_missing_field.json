@@ -4,8 +4,8 @@
   "captured_at": "2026-06-14T03:25:00.000Z",
   "volume_path": "/Volumes/Audio CD",
   "disc": {
-    "profile": "0x0008",
-    "class": "cd",
+    "current_profile": "0x0008",
+    "media_class": "cd",
     "toc": null,
     "disc_info": null,
     "disc_structure": null,

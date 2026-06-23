@@ -685,10 +685,10 @@ TEST(adapter_disc_id_decodes_and_fails_closed)
 
     const mos_disc_id *id = NULL;
     EXPECT_EQ(MOS_OK, mos_query_disc_id(h, &id));
-    EXPECT(strcmp(mos_disc_id_disc_type(id), "BDR") == 0);
+    EXPECT(strcmp(mos_disc_id_disc_type_id(id), "BDR") == 0);
     EXPECT(strcmp(mos_disc_id_manufacturer(id), "MILLEN") == 0);
     EXPECT(strcmp(mos_disc_id_media_type(id), "MR1") == 0);
-    EXPECT(strcmp(mos_disc_id_revision(id), "0") == 0);
+    EXPECT(strcmp(mos_disc_id_disc_revision(id), "0") == 0);
 
     /* Non-BD media (no 'DI' structure): GOOD status but the decode refuses
        → MOS_ERR_IO, *out NULL. */

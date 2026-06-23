@@ -4,8 +4,8 @@
   "captured_at": "2026-06-12T19:48:00.123Z",
   "volume_path": "/Volumes/ARRIVAL",
   "disc": {
-    "profile": "0x0010",
-    "class": "dvd",
+    "current_profile": "0x0010",
+    "media_class": "dvd",
     "disc_mode": "data",
     "cd_extra": false,
     "toc": {

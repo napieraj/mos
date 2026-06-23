@@ -103,7 +103,7 @@ bool mos_internal_mode_caps_parse(const uint8_t *buf, size_t len,
     out->locked            = (p[6] & 0x04) != 0;
     out->buffer_kb         = (uint16_t)((p[12] << 8) | p[13]);
     /* Read/rip capability bits — bytes 4 and 5, well within the >=12 floor. */
-    out->buf_underrun      = (p[4] & 0x80) != 0;
+    out->burn_free      = (p[4] & 0x80) != 0;
     out->multisession      = (p[4] & 0x40) != 0;
     out->accurate_stream   = (p[5] & 0x02) != 0;
     out->c2_pointers       = (p[5] & 0x10) != 0;

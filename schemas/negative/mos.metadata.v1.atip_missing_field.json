@@ -5,8 +5,8 @@
   "captured_at": "2026-06-21T20:14:05.000Z",
   "volume_path": null,
   "disc": {
-    "profile": "0x0009",
-    "class": "cd",
+    "current_profile": "0x0009",
+    "media_class": "cd",
     "toc": null,
     "disc_info": null,
     "disc_structure": null,
@@ -17,7 +17,7 @@
     "atip": {
       "disc_type": 0,
       "disc_sub_type": 2,
-      "uru": true,
+      "unrestricted_use": true,
       "reference_speed": 1,
       "lead_in": { "min": 97, "sec": 24, "frame": 1 }
     }

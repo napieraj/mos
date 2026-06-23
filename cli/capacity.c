@@ -27,7 +27,7 @@ typedef struct {
     bool     have_recordable;
     bool     nwa_valid;
     uint32_t free_blocks;
-    uint32_t next_writable;
+    uint32_t next_writable_lba;
     uint32_t track_size;
     /* READ FORMAT CAPACITIES view (null when have_formattable is false). */
     bool     have_formattable;
@@ -68,9 +68,9 @@ static void emit_json(const capacity_doc *d)
 
     fputs(",\n  \"recordable\": ", stdout);
     if (d->have_recordable) {
-        fprintf(stdout, "{\"free_blocks\": %u, \"next_writable\": ",
+        fprintf(stdout, "{\"free_blocks\": %u, \"next_writable_lba\": ",
                 d->free_blocks);
-        if (d->nwa_valid) fprintf(stdout, "%u", d->next_writable);
+        if (d->nwa_valid) fprintf(stdout, "%u", d->next_writable_lba);
         else              fputs("null", stdout);
         fprintf(stdout, ", \"track_size\": %u}", d->track_size);
     } else {
@@ -141,7 +141,7 @@ static void emit_human(const capacity_doc *d)
         else
             snprintf(media_buf, sizeof media_buf, "%s", hb);
     }
-    pairs[n++] = (mos_cli_human_pair){ "Media", d->have_media ? media_buf : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Size", d->have_media ? media_buf : NULL };
 
     /* Recordable and Formattable are disc-class-gated content rows, not core
        drive facts: a pressed/ROM disc is never formattable, a non-recordable
@@ -158,7 +158,7 @@ static void emit_human(const capacity_doc *d)
                            d->free_blocks);
         if (off > 0 && (size_t)off < sizeof rec_buf && d->nwa_valid)
             off += snprintf(rec_buf + off, sizeof rec_buf - (size_t)off,
-                            ", NWA %u", d->next_writable);
+                            ", NWA %u", d->next_writable_lba);
         if (off > 0 && (size_t)off < sizeof rec_buf)
             snprintf(rec_buf + off, sizeof rec_buf - (size_t)off,
                      ", track %u", d->track_size);
@@ -238,7 +238,7 @@ int mos_cli_run_capacity(void)
     d.have_recordable = mos_capacity_have_recordable(c);
     d.nwa_valid       = mos_capacity_nwa_valid(c);
     d.free_blocks     = mos_capacity_free_blocks(c);
-    d.next_writable   = mos_capacity_next_writable(c);
+    d.next_writable_lba   = mos_capacity_next_writable_lba(c);
     d.track_size      = mos_capacity_track_size(c);
 
     d.have_formattable        = mos_capacity_have_formattable(c);

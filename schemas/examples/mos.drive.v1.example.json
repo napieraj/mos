@@ -25,10 +25,10 @@
     "vcps": false
   },
   "write_protect": {
-    "sswpp": true,
-    "spwp": true,
-    "wdcb": false,
-    "dwp": true
+    "software_write_protect": true,
+    "persistent_write_protect": true,
+    "write_inhibit_dcb": false,
+    "disc_write_protect": true
   },
   "capabilities": {
     "real_time_streaming": true,

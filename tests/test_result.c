@@ -364,24 +364,24 @@ TEST(feature_info_accessors)
 TEST(disc_id_accessors)
 {
     struct mos_disc_id d = {
-        .disc_type = "BDR", .manufacturer = "VERBAT",
-        .media_type = "IMe", .revision = "0",
+        .disc_type_id = "BDR", .manufacturer = "VERBAT",
+        .media_type = "IMe", .disc_revision = "0",
     };
-    EXPECT_STREQ(mos_disc_id_disc_type(&d), "BDR");
+    EXPECT_STREQ(mos_disc_id_disc_type_id(&d), "BDR");
     EXPECT_STREQ(mos_disc_id_manufacturer(&d), "VERBAT");
     EXPECT_STREQ(mos_disc_id_media_type(&d), "IMe");
-    EXPECT_STREQ(mos_disc_id_revision(&d), "0");
+    EXPECT_STREQ(mos_disc_id_disc_revision(&d), "0");
 
     struct mos_disc_id empty = {0};
-    EXPECT(mos_disc_id_disc_type(&empty) == NULL);
+    EXPECT(mos_disc_id_disc_type_id(&empty) == NULL);
     EXPECT(mos_disc_id_manufacturer(&empty) == NULL);
     EXPECT(mos_disc_id_media_type(&empty) == NULL);
-    EXPECT(mos_disc_id_revision(&empty) == NULL);
+    EXPECT(mos_disc_id_disc_revision(&empty) == NULL);
 
-    EXPECT(mos_disc_id_disc_type(NULL) == NULL);
+    EXPECT(mos_disc_id_disc_type_id(NULL) == NULL);
     EXPECT(mos_disc_id_manufacturer(NULL) == NULL);
     EXPECT(mos_disc_id_media_type(NULL) == NULL);
-    EXPECT(mos_disc_id_revision(NULL) == NULL);
+    EXPECT(mos_disc_id_disc_revision(NULL) == NULL);
     return 0;
 }
 
@@ -473,8 +473,8 @@ TEST(track_info_accessors)
     struct mos_track_info t = {
         .track_number = 1, .session_number = 1, .track_mode = 4, .data_mode = 1,
         .blank = false, .damage = false, .nwa_valid = true, .lra_valid = true,
-        .track_start = 0, .next_writable = 12345, .free_blocks = 100,
-        .track_size = 50000, .last_recorded = 49999,
+        .track_start = 0, .next_writable_lba = 12345, .free_blocks = 100,
+        .track_size = 50000, .last_recorded_lba = 49999,
     };
     EXPECT_EQ(mos_track_info_track_number(&t), 1);
     EXPECT_EQ(mos_track_info_session_number(&t), 1);
@@ -485,10 +485,10 @@ TEST(track_info_accessors)
     EXPECT_EQ(mos_track_info_nwa_valid(&t), true);
     EXPECT_EQ(mos_track_info_lra_valid(&t), true);
     EXPECT_EQ(mos_track_info_track_start(&t), 0u);
-    EXPECT_EQ(mos_track_info_next_writable(&t), 12345u);
+    EXPECT_EQ(mos_track_info_next_writable_lba(&t), 12345u);
     EXPECT_EQ(mos_track_info_free_blocks(&t), 100u);
     EXPECT_EQ(mos_track_info_track_size(&t), 50000u);
-    EXPECT_EQ(mos_track_info_last_recorded(&t), 49999u);
+    EXPECT_EQ(mos_track_info_last_recorded_lba(&t), 49999u);
 
     EXPECT_EQ(mos_track_info_track_number(NULL), 0);
     EXPECT_EQ(mos_track_info_session_number(NULL), 0);
@@ -499,10 +499,10 @@ TEST(track_info_accessors)
     EXPECT_EQ(mos_track_info_nwa_valid(NULL), false);
     EXPECT_EQ(mos_track_info_lra_valid(NULL), false);
     EXPECT_EQ(mos_track_info_track_start(NULL), 0u);
-    EXPECT_EQ(mos_track_info_next_writable(NULL), 0u);
+    EXPECT_EQ(mos_track_info_next_writable_lba(NULL), 0u);
     EXPECT_EQ(mos_track_info_free_blocks(NULL), 0u);
     EXPECT_EQ(mos_track_info_track_size(NULL), 0u);
-    EXPECT_EQ(mos_track_info_last_recorded(NULL), 0u);
+    EXPECT_EQ(mos_track_info_last_recorded_lba(NULL), 0u);
     return 0;
 }
 
@@ -588,7 +588,7 @@ TEST(capacity_accessors_and_derivation)
     struct mos_capacity c = {
         .media_bytes = 25025314816ULL, .block_bytes = 2048,
         .have_recordable = true, .nwa_valid = true,
-        .free_blocks = 1000, .next_writable = 500, .track_size = 12219392,
+        .free_blocks = 1000, .next_writable_lba = 500, .track_size = 12219392,
         .have_formattable = true,
         .formattable = {
             .cur_type = 2, .cur_blocks = 12219392, .cur_block_bytes = 2048,
@@ -603,7 +603,7 @@ TEST(capacity_accessors_and_derivation)
     EXPECT_EQ(mos_capacity_have_recordable(&c), true);
     EXPECT_EQ(mos_capacity_nwa_valid(&c), true);
     EXPECT_EQ(mos_capacity_free_blocks(&c), 1000u);
-    EXPECT_EQ(mos_capacity_next_writable(&c), 500u);
+    EXPECT_EQ(mos_capacity_next_writable_lba(&c), 500u);
     EXPECT_EQ(mos_capacity_track_size(&c), 12219392u);
     EXPECT_EQ(mos_capacity_have_formattable(&c), true);
     EXPECT_EQ(mos_capacity_format_type(&c), 2);
@@ -634,7 +634,7 @@ TEST(capacity_accessors_and_derivation)
     EXPECT_EQ(mos_capacity_have_recordable(NULL), false);
     EXPECT_EQ(mos_capacity_nwa_valid(NULL), false);
     EXPECT_EQ(mos_capacity_free_blocks(NULL), 0u);
-    EXPECT_EQ(mos_capacity_next_writable(NULL), 0u);
+    EXPECT_EQ(mos_capacity_next_writable_lba(NULL), 0u);
     EXPECT_EQ(mos_capacity_track_size(NULL), 0u);
     EXPECT_EQ(mos_capacity_have_formattable(NULL), false);
     EXPECT_EQ(mos_capacity_format_type(NULL), 0);

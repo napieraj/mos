@@ -114,11 +114,11 @@ static void emit_json(const drive_doc *d)
         fputs(",\n  \"write_protect\": ", stdout);
         if (mos_drive_caps_write_protect(c))
             fprintf(stdout,
-                    "{\"sswpp\": %s, \"spwp\": %s, \"wdcb\": %s, \"dwp\": %s}",
-                    mos_drive_caps_wp_sswpp(c) ? "true" : "false",
-                    mos_drive_caps_wp_spwp(c)  ? "true" : "false",
-                    mos_drive_caps_wp_wdcb(c)  ? "true" : "false",
-                    mos_drive_caps_wp_dwp(c)   ? "true" : "false");
+                    "{\"software_write_protect\": %s, \"persistent_write_protect\": %s, \"write_inhibit_dcb\": %s, \"disc_write_protect\": %s}",
+                    mos_drive_caps_wp_software_write_protect(c) ? "true" : "false",
+                    mos_drive_caps_wp_persistent_write_protect(c)  ? "true" : "false",
+                    mos_drive_caps_wp_write_inhibit_dcb(c)  ? "true" : "false",
+                    mos_drive_caps_wp_disc_write_protect(c)   ? "true" : "false");
         else
             fputs("null", stdout);
     }
@@ -195,13 +195,13 @@ static void emit_json(const drive_doc *d)
         fprintf(stdout,
                 ", \"can_eject\": %s, \"lock_supported\": %s, "
                 "\"locked\": %s, \"buffer_kb\": %u, "
-                "\"buf_underrun\": %s, \"multisession\": %s, "
+                "\"burn_free\": %s, \"multisession\": %s, "
                 "\"accurate_stream\": %s, \"c2_pointers\": %s}",
                 mos_mode_caps_can_eject(d->caps_2a) ? "true" : "false",
                 mos_mode_caps_lock_supported(d->caps_2a) ? "true" : "false",
                 mos_mode_caps_locked(d->caps_2a) ? "true" : "false",
                 mos_mode_caps_buffer_kb(d->caps_2a),
-                mos_mode_caps_buf_underrun(d->caps_2a) ? "true" : "false",
+                mos_mode_caps_burn_free(d->caps_2a) ? "true" : "false",
                 mos_mode_caps_multisession(d->caps_2a) ? "true" : "false",
                 mos_mode_caps_accurate_stream(d->caps_2a) ? "true" : "false",
                 mos_mode_caps_c2_pointers(d->caps_2a) ? "true" : "false");
@@ -324,14 +324,14 @@ static void emit_human(const drive_doc *d)
     /* Write Protect (0004h) capability: the supported flags, comma-joined;
        "supported" when the feature is present with no change-capability flags;
        NULL ("-") when the feature is absent. Capability, not per-disc state. */
-    char wp_buf[48];
+    char wp_buf[128];
     if (mos_drive_caps_write_protect(d->caps)) {
         size_t wo = 0;
         const struct { bool on; const char *tag; } wpf[] = {
-            { mos_drive_caps_wp_sswpp(d->caps), "SSWPP" },
-            { mos_drive_caps_wp_spwp(d->caps),  "SPWP"  },
-            { mos_drive_caps_wp_wdcb(d->caps),  "WDCB"  },
-            { mos_drive_caps_wp_dwp(d->caps),   "DWP"   },
+            { mos_drive_caps_wp_software_write_protect(d->caps),   "software-write-protect"   },
+            { mos_drive_caps_wp_persistent_write_protect(d->caps), "persistent-write-protect" },
+            { mos_drive_caps_wp_write_inhibit_dcb(d->caps),        "write-inhibit-dcb"        },
+            { mos_drive_caps_wp_disc_write_protect(d->caps),       "disc-write-protect"       },
         };
         for (size_t i = 0; i < 4; i++) {
             if (!wpf[i].on) continue;
@@ -452,7 +452,7 @@ static void emit_human(const drive_doc *d)
         const struct { bool on; const char *name; } rc[] = {
             { mos_mode_caps_c2_pointers(d->caps_2a),     "C2" },
             { mos_mode_caps_accurate_stream(d->caps_2a), "accurate-stream" },
-            { mos_mode_caps_buf_underrun(d->caps_2a),    "BURN-Free" },
+            { mos_mode_caps_burn_free(d->caps_2a),    "BURN-Free" },
             { mos_mode_caps_multisession(d->caps_2a),    "multisession" },
         };
         for (size_t i = 0; i < sizeof rc / sizeof rc[0]; i++) {
@@ -464,7 +464,7 @@ static void emit_human(const drive_doc *d)
             have_rc = true;
         }
     }
-    pairs[n++] = (mos_cli_human_pair){ "Read Caps", have_rc ? rc_buf : NULL };
+    pairs[n++] = (mos_cli_human_pair){ "Rip/Burn", have_rc ? rc_buf : NULL };
 
     char erec_buf[64];
     if (d->erec)

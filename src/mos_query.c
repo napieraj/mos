@@ -501,7 +501,7 @@ mos_error mos_query_capacity(mos_handle_t *h, const mos_capacity **out)
                 tmp.have_recordable = true;
                 tmp.nwa_valid     = mos_track_info_nwa_valid(t);
                 tmp.free_blocks   = mos_track_info_free_blocks(t);
-                tmp.next_writable = mos_track_info_next_writable(t);
+                tmp.next_writable_lba = mos_track_info_next_writable_lba(t);
                 tmp.track_size    = mos_track_info_track_size(t);
             } else if (te != MOS_ERR_IO) {
                 hard = te;

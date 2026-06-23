@@ -25,9 +25,9 @@
     "vcps": false
   },
   "write_protect": {
-    "sswpp": true,
-    "spwp": true,
-    "wdcb": false
+    "software_write_protect": true,
+    "persistent_write_protect": true,
+    "write_inhibit_dcb": false
   },
   "profiles": [
     {
@@ -120,5 +120,5 @@
   "firmware_date": "2019-01-07T13:20:43Z",
   "mechanical": null,
   "error_recovery": null,
-  "_comment": "write_protect is a closed object; dwp is required \u2014 a present feature always decodes all four capability bits."
+  "_comment": "write_protect is a closed object; disc_write_protect is required \u2014 a present feature always decodes all four capability bits."
 }

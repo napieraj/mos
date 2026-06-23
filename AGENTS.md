@@ -2282,3 +2282,65 @@ nothing new to read — the inputs are the already-parsed TOC/session layout,
 themselves spec-built and separately falsifiable. A real CD-Extra capture would
 only confirm the `cd_extra` heuristic; a surprising control-bit pattern lands as
 a fixture against the TOC parser, not here.
+
+## ADR: pre-tag naming pass — schema keys + human labels aligned for
+## consistency before the freeze (2026-06-23)
+
+A usability/consistency audit of the JSON schema field names AND the human-output
+row labels ran before the first tag gates the `mos.*.v1` schemas. The renames
+below landed in-place (the JSON-schema ADR's mutable-in-place clause: pre-tag,
+zero external consumers, so schemas + examples + negatives + emitters + the
+C↔schema drift guard + README + dist regenerated in one commit). This entry is
+the map from the names the earlier ADRs introduced to the names that ship; per
+append-don't-edit, the historical ADRs (F1 disc_info, F3 page-2A rip bits, F7
+curated capabilities, the write-protect 0004h, the ATIP, the drive identity)
+keep their original field names as the record — this addendum supersedes those
+names on the merits.
+
+**Real bugs / collisions fixed.**
+- `mos.drive.v1` `firmware_date` description referenced a nonexistent `firmware`
+  field; corrected to `revision` (the actual 4-char PRODUCT_REVISION_LEVEL key).
+- `mos.metadata.v1` had THREE `disc_type` fields with two types in one document:
+  `disc_info.disc_type` (integer, CD byte 8) and `atip.disc_type` (integer 0/1)
+  KEPT; `disc_structure.disc_type` (string 'BDR'/'BDW'/'BDO') → **`disc_type_id`**
+  (matches its sibling `media_type_id`, and a consumer can now type-dispatch).
+- `mos.metadata.v1` `disc_structure.revision` collided with `mos.drive.v1`'s
+  firmware `revision`; → **`disc_revision`**.
+
+**Cross-document consistency.**
+- `mos.metadata.v1` `disc.profile`/`disc.class` → **`current_profile`/`media_class`**,
+  matching `mos.state.v1`/`mos.event.v1` (the descriptions already said "same
+  closed set as mos.state.v1 media_class"; `class` was also a poor key). The
+  C↔schema drift guard (`validate.py`) now keys metadata's enum at `media_class`.
+- Human label "Media" meant three different things — media class (state, kept),
+  byte size (capacity → **"Size"**), disc-maker identity (metadata → **"Media ID"**).
+
+**Clarity renames.**
+- `mos.drive.v1` `mechanical.buf_underrun` (named like a defect, reports the
+  positive BURN-Free capability) → **`burn_free`**.
+- `mos.drive.v1` `write_protect` bits `sswpp`/`spwp`/`wdcb`/`dwp` → spelled out:
+  **`software_write_protect`/`persistent_write_protect`/`write_inhibit_dcb`/`disc_write_protect`**
+  (keys, struct fields, accessors, and human tags).
+- `mos.metadata.v1` `disc_info.bg_format` → **`bg_format_status`** (aligns the
+  wire key with the existing C field/accessor `bg_format_status` /
+  `mos_disc_info_bg_format_status`; `bg_format_name` is its token sibling).
+- `mos.metadata.v1` `atip.uru` → **`unrestricted_use`**.
+- `mos.metadata.v1` `track_info.next_writable`/`last_recorded` and
+  `mos.capacity.v1.next_writable` → **`*_lba`** (they are LBA values).
+- Human labels: drive "Read Caps" → **"Rip/Burn"** (it sat next to "Capabilities";
+  the bits are rip C2/accurate-stream + burn BURN-Free/multisession); metadata
+  "CD-Text" → **"CD-TEXT"** (canonical casing).
+
+**Deliberately LEFT (canonical spec/rip terms):** `c2_pointers`,
+`accurate_stream`, `adr`, `control`, the Error-Recovery `PER`/`DCR` value tokens;
+`disc_info.disc_type` and `atip.disc_type` (genuinely distinct integer fields);
+all verb and flag names (a verb/flag audit found no churn-worthy change — verbs
+stay digit-free per the bare-selector gate, the `mos_cli_` prefix and the
+bsd_unit/bsd_name/bsd_node ladder are adhered to); the `--bsd` selector flag
+(input-ergonomics, output-not-input).
+
+**Scope / footprint unchanged.** No command-surface change, no raw CDB added or
+removed (one-of-four), no privilege change, no library behavior change — this is
+names only. The emit-fixture human goldens (macOS-only) were re-aligned for the
+label changes; `scripts/hw-smoke.sh` reads no renamed mos key (its `disc_type`/
+`revision` are its own operator-supplied ledger fields), so it was unchanged.
