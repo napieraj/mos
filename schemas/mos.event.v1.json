@@ -20,6 +20,7 @@
       "const": "mos.event.v1"
     },
     "event": {
+      "description": "Watch event kind. This enum is an OPEN set within mos.event.v1: future minor versions may ADD event kinds (each as an additive enum value plus its own oneOf branch over the EXISTING field set), which is forward-compatible, not a schema-name-breaking change. Consumers MUST ignore any event kind they do not recognize (skip the line) rather than reject the stream. The list is enumerated here — and drift-guarded against cli/common.c event_kind_string() in validate.py — so fixtures catch typos, not to assert closure. Note the closure caveat: a new kind that needs a NEW field is still a schema-name bump (the field set is closed, additionalProperties:false); only fieldless additive kinds (reusing the existing field set) ride this open axis. This mirrors the mos.state.v1 `state` enum's open-axis rule.",
       "enum": [
         "snapshot",
         "state_changed",
